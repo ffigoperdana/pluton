@@ -239,18 +239,18 @@ export class StorageService {
 	 * need it re-pushed when the storage is edited.
 	 */
 	protected async resolveStorageSources(storageId: string): Promise<string[]> {
+		const sourceIds = new Set<string>(['main']);
 		const plansWithStorage = await this.planStore.getStoragePlans(storageId);
-		if (!plansWithStorage || plansWithStorage.length === 0) {
-			return [];
+		const replicationSources = await this.storageStore.getReplicationPlanSources(storageId);
+
+		for (const plan of plansWithStorage || []) {
+			if (plan.sourceId) sourceIds.add(plan.sourceId);
 		}
 
-		const sourceIds = new Set<string>();
-		for (const plan of plansWithStorage) {
-			if (plan.sourceId) {
-				sourceIds.add(plan.sourceId);
-			}
+		// A device that replicates to this storage also holds a config entry for it.
+		for (const sourceId of replicationSources) {
+			sourceIds.add(sourceId);
 		}
-
 		return [...sourceIds];
 	}
 

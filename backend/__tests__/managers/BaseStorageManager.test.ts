@@ -234,6 +234,7 @@ describe('BaseStorageManager', () => {
 				'us-west-2',
 				'timeout',
 				'30',
+				'--obscure',
 				'--non-interactive',
 			]);
 			expect(mockRunRcloneCommand).toHaveBeenNthCalledWith(2, ['lsd', 'test-remote:']);
@@ -262,6 +263,7 @@ describe('BaseStorageManager', () => {
 				'test-remote',
 				'region',
 				'us-west-2',
+				'--obscure',
 				'--non-interactive',
 			]);
 			expect(mockRunRcloneCommand).toHaveBeenNthCalledWith(2, ['lsd', 'test-remote:']);
@@ -269,6 +271,7 @@ describe('BaseStorageManager', () => {
 				'config',
 				'update',
 				'test-remote',
+				'--obscure',
 				'--non-interactive',
 				'region',
 				'us-east-1',

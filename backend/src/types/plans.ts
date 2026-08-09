@@ -168,6 +168,8 @@ export interface PlanReplicationSettings {
 	storages: PlanReplicationStorage[];
 }
 
+export type ReplicationPlanItem = PlanChildItem & { sourceId: string };
+
 export interface PlanBackupSettings {
 	interval: PlanInterval;
 	prune: PlanPrune;

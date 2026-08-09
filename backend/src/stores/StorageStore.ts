@@ -3,7 +3,7 @@ import { sql } from 'drizzle-orm/sql';
 import { DatabaseType } from '../db';
 import { Storage, NewStorage, storages, StorageFull } from '../db/schema/storages';
 import { providers } from '../utils/providers';
-import { PlanChildItem, PlanBackupSettings } from '../types/plans';
+import { PlanChildItem, PlanBackupSettings, ReplicationPlanItem } from '../types/plans';
 
 /**
  * StorageStore is a class for managing storage records in the database.
@@ -143,13 +143,23 @@ export class StorageStore {
 	}
 
 	/**
+	 * Returns the devices that own a plan replicating to the given storage.
+	 * These devices hold an rclone config entry for it and need it re-pushed on edit.
+	 */
+	async getReplicationPlanSources(storageId: string): Promise<string[]> {
+		const map = await this.getReplicationPlansForStorages([storageId]);
+		const plans = map.get(storageId) || [];
+		return [...new Set(plans.map(plan => plan.sourceId).filter(Boolean))];
+	}
+
+	/**
 	 * Returns plans that use a given storage for replication (inside settings.replication.storages).
 	 * Used to accurately count all plans associated with a storage.
 	 */
 	private async getReplicationPlansForStorages(
 		storageIds: string[]
-	): Promise<Map<string, PlanChildItem[]>> {
-		const result = new Map<string, PlanChildItem[]>();
+	): Promise<Map<string, ReplicationPlanItem[]>> {
+		const result = new Map<string, ReplicationPlanItem[]>();
 		if (storageIds.length === 0) return result;
 
 		// Query all plans that have replication settings
@@ -163,6 +173,7 @@ export class StorageStore {
 				method: true,
 				settings: true,
 				storageId: true,
+				sourceId: true,
 			},
 		});
 
@@ -184,6 +195,7 @@ export class StorageStore {
 								isActive: plan.isActive,
 								stats: plan.stats,
 								method: plan.method,
+								sourceId: plan.sourceId,
 							});
 							result.set(repStorage.storageId, existing);
 						}

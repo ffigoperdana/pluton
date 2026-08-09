@@ -232,6 +232,126 @@ describe('StorageService', () => {
 	});
 
 	// ----------------------------------------
+	// updateStorage
+	// ----------------------------------------
+	describe('updateStorage', () => {
+		const storageId = 'storage-to-update';
+		const existingStorage = {
+			id: storageId,
+			name: 'My SFTP',
+			type: 'sftp',
+			settings: { idle_timeout: '1m0s' },
+			credentials: { host: 'encrypted(example.com)', port: 'encrypted(22)' },
+		} as unknown as Storage;
+
+		const payload: Partial<Storage> = {
+			type: 'sftp',
+			authType: 'password',
+			settings: { idle_timeout: '1m0s' },
+			credentials: { host: 'example.com', port: '2222' },
+			tags: [],
+		};
+
+		beforeEach(() => {
+			mockStorageStore.getById.mockResolvedValue(existingStorage);
+			mockStorageStore.update.mockImplementation((id, data) =>
+				Promise.resolve({ id, ...data } as Storage)
+			);
+			mockPlanStore.getStoragePlans.mockResolvedValue([]);
+			mockStorageStore.getReplicationPlanSources = jest.fn().mockResolvedValue([]);
+			mockLocalStrategy.updateRemoteStorage = jest
+				.fn()
+				.mockResolvedValue({ success: true, result: 'OK' });
+			mockRemoteStrategy.updateRemoteStorage = jest
+				.fn()
+				.mockResolvedValue({ success: true, result: 'OK' });
+		});
+
+		it('pushes the config to main even when no plan uses the storage', async () => {
+			await storageService.updateStorage(storageId, payload);
+
+			expect(LocalStrategy).toHaveBeenCalled();
+			expect(mockLocalStrategy.updateRemoteStorage).toHaveBeenCalledWith(
+				'My SFTP',
+				expect.objectContaining({
+					new: expect.objectContaining({ port: '2222' }),
+				})
+			);
+		});
+
+		it('pushes the config to the device that owns a plan', async () => {
+			mockPlanStore.getStoragePlans.mockResolvedValue([{ sourceId: 'device-2' } as any]);
+
+			await storageService.updateStorage(storageId, payload);
+
+			expect(RemoteStrategy).toHaveBeenCalledWith('device-2');
+			expect(mockRemoteStrategy.updateRemoteStorage).toHaveBeenCalledTimes(1);
+			expect(mockLocalStrategy.updateRemoteStorage).toHaveBeenCalledTimes(1);
+		});
+
+		it('pushes the config to the device that replicates to the storage', async () => {
+			mockStorageStore.getReplicationPlanSources = jest.fn().mockResolvedValue(['device-3']);
+
+			await storageService.updateStorage(storageId, payload);
+
+			expect(mockStorageStore.getReplicationPlanSources).toHaveBeenCalledWith(storageId);
+			expect(RemoteStrategy).toHaveBeenCalledWith('device-3');
+			expect(mockRemoteStrategy.updateRemoteStorage).toHaveBeenCalledTimes(1);
+		});
+
+		it('lists a device once when it owns a plan and replicates to the storage', async () => {
+			mockPlanStore.getStoragePlans.mockResolvedValue([{ sourceId: 'device-2' } as any]);
+			mockStorageStore.getReplicationPlanSources = jest.fn().mockResolvedValue(['device-2']);
+
+			await storageService.updateStorage(storageId, payload);
+
+			expect(mockRemoteStrategy.updateRemoteStorage).toHaveBeenCalledTimes(1);
+		});
+
+		it('sends the old values so a failed update can be reverted', async () => {
+			await storageService.updateStorage(storageId, payload);
+
+			expect(mockLocalStrategy.updateRemoteStorage).toHaveBeenCalledWith(
+				'My SFTP',
+				expect.objectContaining({
+					old: expect.objectContaining({ host: 'example.com', port: '22' }),
+				})
+			);
+		});
+
+		it('does not resend the credentials when they did not change', async () => {
+			const samePayload = {
+				...payload,
+				credentials: { host: 'example.com', port: '22' },
+			};
+
+			await storageService.updateStorage(storageId, samePayload);
+
+			const sent = (mockLocalStrategy.updateRemoteStorage as jest.Mock).mock.calls[0][1];
+			expect(sent.new).toEqual({ idle_timeout: '1m0s' });
+		});
+
+		it('writes the encrypted credentials to the database', async () => {
+			await storageService.updateStorage(storageId, payload);
+
+			expect(mockStorageStore.update).toHaveBeenCalledWith(
+				storageId,
+				expect.objectContaining({
+					credentials: { host: 'encrypted(example.com)', port: 'encrypted(2222)' },
+				})
+			);
+		});
+
+		it('throws NotFoundError if the storage does not exist', async () => {
+			mockStorageStore.getById.mockResolvedValue(null);
+
+			await expect(storageService.updateStorage(storageId, payload)).rejects.toThrow(
+				'Storage not found'
+			);
+		});
+	});
+
+	// ----------------------------------------
 	// deleteStorage
 	// ----------------------------------------
 	describe('deleteStorage', () => {

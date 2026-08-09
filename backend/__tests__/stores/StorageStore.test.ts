@@ -256,4 +256,83 @@ describe('StorageStore', () => {
 			expect(result).toBe(false);
 		});
 	});
+
+	describe('getReplicationPlanSources', () => {
+		const replicationPlan = (
+			id: string,
+			sourceId: string,
+			targetId: string,
+			storageId = 'primary'
+		) => ({
+			id,
+			title: `Plan ${id}`,
+			createdAt: new Date(),
+			isActive: true,
+			stats: null,
+			method: 'restic',
+			storageId,
+			sourceId,
+			settings: { replication: { enabled: true, storages: [{ storageId: targetId }] } },
+		});
+
+		it('should return the source of every plan replicating to the storage', async () => {
+			mockDb.query.plans.findMany.mockResolvedValue([
+				replicationPlan('plan-1', 'main', 'storage-1'),
+				replicationPlan('plan-2', 'device-2', 'storage-1'),
+			]);
+
+			const result = await storageStore.getReplicationPlanSources('storage-1');
+
+			expect(result).toEqual(['main', 'device-2']);
+		});
+
+		it('should list a source once when it owns two replication plans', async () => {
+			mockDb.query.plans.findMany.mockResolvedValue([
+				replicationPlan('plan-1', 'device-2', 'storage-1'),
+				replicationPlan('plan-2', 'device-2', 'storage-1'),
+			]);
+
+			const result = await storageStore.getReplicationPlanSources('storage-1');
+
+			expect(result).toEqual(['device-2']);
+		});
+
+		it('should ignore a plan that replicates to a different storage', async () => {
+			mockDb.query.plans.findMany.mockResolvedValue([
+				replicationPlan('plan-1', 'device-2', 'storage-9'),
+			]);
+
+			const result = await storageStore.getReplicationPlanSources('storage-1');
+
+			expect(result).toEqual([]);
+		});
+
+		it('should ignore a plan whose primary storage is the same storage', async () => {
+			mockDb.query.plans.findMany.mockResolvedValue([
+				replicationPlan('plan-1', 'device-2', 'storage-1', 'storage-1'),
+			]);
+
+			const result = await storageStore.getReplicationPlanSources('storage-1');
+
+			expect(result).toEqual([]);
+		});
+
+		it('should ignore a plan with replication disabled', async () => {
+			const plan = replicationPlan('plan-1', 'device-2', 'storage-1');
+			plan.settings.replication.enabled = false;
+			mockDb.query.plans.findMany.mockResolvedValue([plan]);
+
+			const result = await storageStore.getReplicationPlanSources('storage-1');
+
+			expect(result).toEqual([]);
+		});
+
+		it('should return an empty list when no plan exists', async () => {
+			mockDb.query.plans.findMany.mockResolvedValue([]);
+
+			const result = await storageStore.getReplicationPlanSources('storage-1');
+
+			expect(result).toEqual([]);
+		});
+	});
 });
