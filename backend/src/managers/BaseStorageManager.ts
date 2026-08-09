@@ -120,7 +120,8 @@ export class BaseStorageManager {
 
 		try {
 			// console.log('rclone updateArgs :', updateArgs);
-			const output = await runRcloneCommand([...updateArgs, '--non-interactive']);
+			// --obscure is also used on create, so passwords keep the same form after an update.
+			const output = await runRcloneCommand([...updateArgs, '--obscure', '--non-interactive']);
 
 			// Verify the remote still works after update
 			try {
@@ -132,7 +133,7 @@ export class BaseStorageManager {
 				};
 			} catch (error: any) {
 				// Revert to old settings
-				const revertArgs = ['config', 'update', name, '--non-interactive'];
+				const revertArgs = ['config', 'update', name, '--obscure', '--non-interactive'];
 				Object.entries(oldSettings).forEach(([key, value]) => {
 					revertArgs.push(key, value.toString());
 				});
