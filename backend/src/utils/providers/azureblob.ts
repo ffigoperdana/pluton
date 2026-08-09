@@ -3,6 +3,7 @@ const azureblobSettings = [
 		label: 'Storage Account Name',
 		value: 'account',
 		fieldType: 'string',
+		authFieldType: 'client',
 		required: true,
 		default: '',
 		description: 'Azure Storage Account Name. Set this to the Azure Storage Account Name in use.',
@@ -42,18 +43,15 @@ const azureblobSettings = [
 		label: 'Tenant ID',
 		value: 'tenant',
 		fieldType: 'string',
-		authFieldType: 'password',
 		required: false,
 		default: '',
-		description:
-			"ID of the service principal's tenant, also called its directory ID.",
+		description: "ID of the service principal's tenant, also called its directory ID.",
 		command: '--azureblob-tenant',
 	},
 	{
 		label: 'Client ID',
 		value: 'client_id',
 		fieldType: 'string',
-		authFieldType: 'password',
 		required: false,
 		default: '',
 		description: 'The ID of the client in use.',
@@ -74,8 +72,7 @@ const azureblobSettings = [
 		fieldType: 'string',
 		required: false,
 		default: '',
-		description:
-			'Path to a PEM or PKCS12 certificate file including the private key.',
+		description: 'Path to a PEM or PKCS12 certificate file including the private key.',
 		command: '--azureblob-client-certificate-path',
 	},
 	{
@@ -101,7 +98,6 @@ const azureblobSettings = [
 		label: 'Username',
 		value: 'username',
 		fieldType: 'string',
-		authFieldType: 'password',
 		required: false,
 		default: '',
 		description: 'User name (usually an email address).',
@@ -111,7 +107,6 @@ const azureblobSettings = [
 		label: 'Password',
 		value: 'password',
 		fieldType: 'password',
-		authFieldType: 'password',
 		required: false,
 		default: '',
 		description: "The user's password.",
@@ -196,8 +191,7 @@ const azureblobSettings = [
 		fieldType: 'bool',
 		required: false,
 		default: false,
-		description:
-			'Use the Azure CLI tool (az) as the sole means of authentication.',
+		description: 'Use the Azure CLI tool (az) as the sole means of authentication.',
 		command: '--azureblob-use-az',
 	},
 	{
@@ -309,8 +303,7 @@ const azureblobSettings = [
 		fieldType: 'encoding',
 		required: false,
 		default: 'slash,backslash,del,ctl,rightperiod,invalidutf8',
-		description:
-			'The encoding for the backend.',
+		description: 'The encoding for the backend.',
 		command: '--azureblob-encoding',
 	},
 	{

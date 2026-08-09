@@ -242,8 +242,15 @@ export const providers: Record<string, ProviderConfig> = {
 		name: 'Azure Blob Storage',
 		doc: '/storages/connecting-azure-blob-storage',
 		settings: azureblobSettings,
-		authTypes: ['client', 'password'],
-		setup: creds => ['account', creds.account, 'key', creds.key],
+		authTypes: ['client'],
+		setup: creds => {
+			if (!creds.account || !creds.key) {
+				return false;
+			}
+			// The key is the base64 string from the Azure portal. rclone passes it
+			// through and the Azure SDK decodes it, so do not encode it here.
+			return ['account', creds.account, 'key', creds.key];
+		},
 		features: providerFeatures['azureblob'],
 	},
 	gcs: {
@@ -329,7 +336,27 @@ export const providers: Record<string, ProviderConfig> = {
 		doc: '/storages/connecting-storj',
 		settings: storjSettings,
 		authTypes: ['client', 'password'],
-		setup: creds => ['access_grant', creds.accessGrant],
+		setup: (creds, type) => {
+			if (type === 'client') {
+				if (!creds.satellite_address || !creds.api_key || !creds.passphrase) {
+					return false;
+				}
+				return [
+					'provider',
+					'new',
+					'satellite_address',
+					creds.satellite_address,
+					'api_key',
+					creds.api_key,
+					'passphrase',
+					creds.passphrase,
+				];
+			}
+			if (!creds.access_grant) {
+				return false;
+			}
+			return ['provider', 'existing', 'access_grant', creds.access_grant];
+		},
 		features: providerFeatures['storj'],
 	},
 	seafile: {
@@ -455,8 +482,8 @@ export const providers: Record<string, ProviderConfig> = {
 					creds.client_id,
 					'client_secret',
 					creds.client_secret,
-					'scope',
-					creds.scope,
+					'scope_access',
+					creds.scope_access,
 					'--hidrive-client-credentials',
 				];
 			}
@@ -504,14 +531,21 @@ export const providers: Record<string, ProviderConfig> = {
 		doc: '/storages/connecting-qingstor',
 		authTypes: ['client'],
 		settings: qingstorSettings,
-		setup: creds => [
-			'access_key_id',
-			creds.access_key_id,
-			'secret_access_key',
-			creds.secret_access_key,
-			'zone',
-			creds.zone,
-		],
+		setup: creds => {
+			const flags = [
+				'access_key_id',
+				creds.access_key_id,
+				'secret_access_key',
+				creds.secret_access_key,
+				'zone',
+				creds.zone,
+			];
+			if (creds.endpoint) {
+				flags.push('endpoint', creds.endpoint);
+			}
+
+			return flags;
+		},
 		features: providerFeatures['qingstor'],
 	},
 	premiumizeme: {
@@ -636,7 +670,22 @@ export const providers: Record<string, ProviderConfig> = {
 		doc: '/storages/connecting-files-com',
 		authTypes: ['client', 'password'],
 		settings: filesComSettings,
-		setup: creds => ['api_key', creds.api_key],
+		setup: (creds, type) => {
+			if (type === 'password') {
+				if (!creds.site || !creds.username || !creds.password) {
+					return false;
+				}
+				return ['site', creds.site, 'username', creds.username, 'password', creds.password];
+			}
+			if (!creds.api_key) {
+				return false;
+			}
+			const args = ['api_key', creds.api_key];
+			if (creds.site) {
+				args.push('site', creds.site);
+			}
+			return args;
+		},
 		features: providerFeatures['filescom'],
 	},
 	gofile: {
@@ -644,7 +693,7 @@ export const providers: Record<string, ProviderConfig> = {
 		doc: '/storages/connecting-gofile',
 		authTypes: ['client'],
 		settings: gofileSettings,
-		setup: creds => ['token', creds.token],
+		setup: creds => ['access_token', creds.access_token],
 		features: providerFeatures['gofile'],
 	},
 	gphotos: {
@@ -674,7 +723,7 @@ export const providers: Record<string, ProviderConfig> = {
 		doc: '/storages/connecting-linkbox',
 		authTypes: ['client'],
 		settings: linkboxSettings,
-		setup: creds => ['api_key', creds.api_key],
+		setup: creds => ['token', creds.token, 'email', creds.email, 'password', creds.password],
 		features: providerFeatures['linkbox'],
 	},
 	oracleobjectstorage: {
@@ -701,7 +750,7 @@ export const providers: Record<string, ProviderConfig> = {
 		doc: '/storages/connecting-pikpak',
 		authTypes: ['password'],
 		settings: pikpakSettings,
-		setup: creds => ['user', creds.username, 'pass', creds.password],
+		setup: creds => ['user', creds.user, 'pass', creds.pass],
 		features: providerFeatures['pikpak'],
 	},
 	pixeldrain: {

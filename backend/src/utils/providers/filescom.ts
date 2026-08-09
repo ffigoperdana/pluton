@@ -3,7 +3,7 @@ const filesSettings = [
 		label: 'Site Domain',
 		value: 'site',
 		fieldType: 'string',
-		authFieldType: 'password',
+		authFieldType: 'all',
 		required: true,
 		default: '',
 		description:

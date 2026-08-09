@@ -8,7 +8,7 @@ import TagsInput from '../../common/form/TagsInput/TagsInput';
 import { Storage, storageOptionField } from '../../../@types/storages';
 import StorageSettings from '../StorageSettings/StorageSettings';
 import StorageAuthSettings from '../StorageAuthSettings/StorageAuthSettings';
-import { shouldDisplayStorageField } from '../../../utils/helpers';
+import { matchesAuthType, shouldDisplayStorageField } from '../../../utils/helpers';
 
 type EditStorageProps = {
    close: () => void;
@@ -67,7 +67,7 @@ const EditStorage = ({ close, storage }: EditStorageProps) => {
 
          // Check if this field is relevant to the current auth type
          const isAuthField = !!fieldDef.authFieldType;
-         const isRelevantAuthField = !isAuthField || fieldDef.authFieldType === currentAuthType;
+         const isRelevantAuthField = !isAuthField || matchesAuthType(fieldDef, currentAuthType);
          if (!isRelevantAuthField) return;
 
          // Get the field value from the appropriate state object

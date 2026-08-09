@@ -355,6 +355,11 @@ export const isValidURL = (url: string): boolean => {
    }
 };
 
+// An auth field belongs to one auth type, or to every type when marked 'all'
+export const matchesAuthType = (field: storageOptionField, authType: string): boolean => {
+   return field.authFieldType === 'all' || field.authFieldType === authType;
+};
+
 export const shouldDisplayStorageField = (field: storageOptionField, settings: Record<string, any>, allFields: storageOptionField[]): boolean => {
    // If no conditions, always display the field
    if (!field.condition || field.condition.length === 0) {

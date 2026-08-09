@@ -8,7 +8,7 @@ import TagsInput from '../../common/form/TagsInput/TagsInput';
 import { storageOptionField } from '../../../@types/storages';
 import StorageSettings from '../StorageSettings/StorageSettings';
 // import { useGetDevice } from '../../../services/devices';
-import { shouldDisplayStorageField } from '../../../utils/helpers';
+import { matchesAuthType, shouldDisplayStorageField } from '../../../utils/helpers';
 import StorageAuthSettings from '../StorageAuthSettings/StorageAuthSettings';
 import StorageProviderSelect from '../../common/form/StorageProviderSelect/StorageProviderSelect';
 
@@ -122,7 +122,7 @@ const AddStorage = ({ close }: AddStorageProps) => {
 
          // Check if this field is relevant to the current auth type
          const isAuthField = !!fieldDef.authFieldType;
-         const isRelevantAuthField = !isAuthField || fieldDef.authFieldType === currentAuthType;
+         const isRelevantAuthField = !isAuthField || matchesAuthType(fieldDef, currentAuthType);
          if (!isRelevantAuthField) return;
 
          // Get the field value from the appropriate state object

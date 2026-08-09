@@ -47,20 +47,6 @@ const storjSettings = [
 		command: '--storj-passphrase',
 	},
 	{
-		label: 'Auth Provider',
-		value: 'provider',
-		fieldType: 'select',
-		authFieldType: 'client',
-		required: false,
-		default: 'existing',
-		description: 'Choose an authentication method.',
-		command: '--storj-provider',
-		options: [
-			{ label: 'Use an existing access grant', value: 'existing' },
-			{ label: 'Create a new access grant', value: 'new' },
-		],
-	},
-	{
 		label: 'Description',
 		value: 'description',
 		fieldType: 'string',

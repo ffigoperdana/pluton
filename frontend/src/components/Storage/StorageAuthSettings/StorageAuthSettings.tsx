@@ -5,6 +5,7 @@ import Icon from '../../common/Icon/Icon';
 import classes from '../AddStorage/AddStorage.module.scss';
 import StorageSettings from '../StorageSettings/StorageSettings';
 import { startStorageAuthorize, getStorageAuthorizeStatus, cancelStorageAuthorize } from '../../../services/storage';
+import { matchesAuthType } from '../../../utils/helpers';
 
 interface StorageAuthSettingsProps {
    storageType: string;
@@ -151,7 +152,7 @@ const StorageAuthSettings = ({
                   </div>
                )}
                <StorageSettings
-                  fields={fields.filter((f) => f.authFieldType === currentAuthType)}
+                  fields={fields.filter((f) => matchesAuthType(f, currentAuthType))}
                   settings={settings}
                   onUpdate={(newSettings) => onUpdate(newSettings)}
                   errors={errors}
