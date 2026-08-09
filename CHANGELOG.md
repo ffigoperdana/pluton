@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.2](https://github.com/plutonhq/pluton/compare/pluton-v0.18.1...pluton-v0.18.2) (2026-07-31)
+
+
+### Bug Fixes
+
+* resolves broken self-backup for local storage ([564c4a6](https://github.com/plutonhq/pluton/commit/564c4a63fd971f11f7b4ff0ba9fcaa0869368575))
+
 ## [0.18.1](https://github.com/plutonhq/pluton/compare/pluton-v0.18.0...pluton-v0.18.1) (2026-07-28)
 
 
