@@ -102,6 +102,20 @@ export interface ProviderConfig {
 	setup: (credentials: Record<string, string>, type?: string) => string[] | false;
 }
 
+/**
+ * Builds `key value` argument pairs for optional credential fields.
+ * Fields the user left blank are skipped so rclone keeps its own default.
+ * Values are stringified because spawn() rejects non-string arguments.
+ */
+const optionalCreds = (creds: Record<string, string>, keys: string[]): string[] =>
+	keys.flatMap(key => {
+		const value = creds[key];
+		if (value === undefined || value === null || value === '') {
+			return [];
+		}
+		return [key, String(value)];
+	});
+
 export const providers: Record<string, ProviderConfig> = {
 	local: {
 		name: 'Local',
@@ -749,7 +763,15 @@ export const providers: Record<string, ProviderConfig> = {
 		doc: '/storages/connecting-smb',
 		authTypes: ['password'],
 		settings: smbSettings,
-		setup: creds => ['host', creds.host, 'user', creds.user, 'pass', creds.pass],
+		setup: creds => [
+			'host',
+			creds.host,
+			'user',
+			creds.user,
+			'pass',
+			creds.pass,
+			...optionalCreds(creds, ['port', 'domain']),
+		],
 		features: providerFeatures['smb'],
 	},
 	sftp: {
@@ -757,7 +779,15 @@ export const providers: Record<string, ProviderConfig> = {
 		doc: '/storages/connecting-sftp',
 		authTypes: ['password'],
 		settings: sftpSettings,
-		setup: creds => ['host', creds.host, 'user', creds.user, 'pass', creds.pass],
+		setup: creds => [
+			'host',
+			creds.host,
+			'user',
+			creds.user,
+			'pass',
+			creds.pass,
+			...optionalCreds(creds, ['port']),
+		],
 		features: providerFeatures['sftp'],
 	},
 	ftp: {
@@ -765,7 +795,15 @@ export const providers: Record<string, ProviderConfig> = {
 		doc: '/storages/connecting-ftp',
 		authTypes: ['password'],
 		settings: ftpSettings,
-		setup: creds => ['host', creds.host, 'user', creds.user, 'pass', creds.pass],
+		setup: creds => [
+			'host',
+			creds.host,
+			'user',
+			creds.user,
+			'pass',
+			creds.pass,
+			...optionalCreds(creds, ['port', 'tls', 'explicit_tls']),
+		],
 		features: providerFeatures['ftp'],
 	},
 	webdav: {
