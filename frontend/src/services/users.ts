@@ -69,7 +69,7 @@ export function useLogin() {
    return useMutation({
       mutationFn: loginUser,
       onSuccess: (res) => {
-         queryClient.removeQueries({ queryKey: ['auth'] });
+         queryClient.resetQueries({ queryKey: ['auth'] });
          if (res.totpRequired) {
             navigate('/login/verify-otp');
          } else {

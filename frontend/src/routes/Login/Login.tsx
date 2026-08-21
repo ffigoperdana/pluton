@@ -92,7 +92,7 @@ const Login = () => {
                      onChange={(event) => setPassword(event.target.value)}
                   />
                </div>
-               <button className={classes.loginButton} onClick={handleLogin} disabled={loginMutation.isPending}>
+               <button className={classes.loginButton} type="submit" disabled={loginMutation.isPending}>
                   {loginMutation.isPending ? 'Logging in...' : 'Login'}
                </button>
                {error && error.msg && <div className={classes.loginErrorMsg}>{error.msg}</div>}
