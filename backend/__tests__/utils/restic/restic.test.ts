@@ -11,6 +11,9 @@ jest.mock('../../../src/utils/AppPaths', () => ({
 	},
 }));
 jest.mock('../../../src/utils/restic/helpers');
+jest.mock('../../../src/utils/processTree', () => ({
+	killProcessTree: jest.fn(),
+}));
 jest.mock('../../../src/services/ConfigService', () => ({
 	configService: {
 		config: {
@@ -31,8 +34,10 @@ import { getBinaryPath } from '../../../src/utils/binaryPathResolver';
 import { getRcloneConfigPath } from '../../../src/utils/rclone/helpers';
 import { appPaths } from '../../../src/utils/AppPaths';
 import { generateResticRepoPath } from '../../../src/utils/restic/helpers';
+import { killProcessTree } from '../../../src/utils/processTree';
 
 const mockSpawn = spawn as jest.MockedFunction<typeof spawn>;
+const mockKillProcessTree = killProcessTree as jest.MockedFunction<typeof killProcessTree>;
 const mockGetBinaryPath = getBinaryPath as jest.MockedFunction<typeof getBinaryPath>;
 const mockGetRcloneConfigPath = getRcloneConfigPath as jest.MockedFunction<
 	typeof getRcloneConfigPath
@@ -473,6 +478,54 @@ describe('runResticCommand', () => {
 			expect.any(Array),
 			expect.any(Object)
 		);
+	});
+
+	describe('stall watchdog', () => {
+		beforeEach(() => jest.useFakeTimers());
+		afterEach(() => jest.useRealTimers());
+
+		it('trips after the full inactivity period and kills the process tree', async () => {
+			const promise = runResticCommand(
+				['backup', '/test'],
+				undefined,
+				jest.fn(),
+				undefined,
+				undefined,
+				undefined,
+				{ stallTimeout: 60_000 }
+			);
+			// Attach a catch synchronously so the rejection is never unhandled.
+			const settled = expect(promise).rejects.toMatchObject({ stalled: true });
+
+			// One poll (60 s) with no stdout/stderr activity trips the watchdog.
+			await jest.advanceTimersByTimeAsync(60_000);
+
+			await settled;
+			expect(mockKillProcessTree).toHaveBeenCalledTimes(1);
+		});
+
+		it('does not trip while stderr keeps emitting activity', async () => {
+			const promise = runResticCommand(
+				['backup', '/test'],
+				undefined,
+				jest.fn(),
+				undefined,
+				undefined,
+				undefined,
+				{ stallTimeout: 120_000 }
+			);
+
+			// Emit activity before each 60 s poll, so inactivity never reaches 120 s.
+			await jest.advanceTimersByTimeAsync(59_000);
+			mockProcess.stderr.emit('data', Buffer.from('transferring'));
+			await jest.advanceTimersByTimeAsync(59_000);
+			mockProcess.stderr.emit('data', Buffer.from('transferring'));
+			await jest.advanceTimersByTimeAsync(59_000);
+
+			mockProcess.emit('close', 0);
+			await expect(promise).resolves.toBeDefined();
+			expect(mockKillProcessTree).not.toHaveBeenCalled();
+		});
 	});
 });
 

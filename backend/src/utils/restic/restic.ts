@@ -11,12 +11,13 @@ import { buildResticEnvFromSettings, buildRcloneEnvFromSettings } from '../globa
 import { BackupVerifiedResult } from '../../types/plans';
 import { runHelper } from '../linuxHelper';
 import { ResticExitCode } from './exitCodes';
-import { KillableProcess } from '../processTree';
+import { KillableProcess, killProcessTree } from '../processTree';
 
 export type ResticCommandError = Error & {
 	code?: number;
 	stderr?: string;
 	timedOut?: boolean;
+	stalled?: boolean;
 };
 
 // Cap retained stdout/stderr to avoid exceeding V8's max string size on long
@@ -35,7 +36,7 @@ export function runResticCommand(
 	onError?: (data: Buffer) => void,
 	onComplete?: (code: number) => void,
 	onProcess?: (process: any) => void,
-	options?: { timeout?: number }
+	options?: { timeout?: number; stallTimeout?: number }
 ): Promise<string> {
 	let lastProgressTime = 0;
 	const THROTTLE_INTERVAL = 2000; // 2 seconds
@@ -108,12 +109,20 @@ export function runResticCommand(
 
 		// When a timeout is provided we kill the process and reject with a `timedOut` error.
 		let timedOut = false;
+		let stalled = false;
 		let timeoutHandle: NodeJS.Timeout | undefined;
+		let stallInterval: NodeJS.Timeout | undefined;
+		let lastActivity = Date.now();
 		const timeoutMs = options?.timeout;
-		const clearTimeoutTimer = () => {
+		const stallTimeoutMs = options?.stallTimeout;
+		const clearTimers = () => {
 			if (timeoutHandle) {
 				clearTimeout(timeoutHandle);
 				timeoutHandle = undefined;
+			}
+			if (stallInterval) {
+				clearInterval(stallInterval);
+				stallInterval = undefined;
 			}
 		};
 
@@ -135,10 +144,28 @@ export function runResticCommand(
 			}, timeoutMs);
 		}
 
+		// Watchdog: if the child gives no output for stallTimeout, it is stuck
+		// (sleep, VPN drop, NAS offline). Kill it so the job queue does not lock.
+		if (stallTimeoutMs && stallTimeoutMs > 0) {
+			const STALL_POLL_INTERVAL = 60_000;
+			stallInterval = setInterval(() => {
+				if (Date.now() - lastActivity < stallTimeoutMs) return;
+				stalled = true;
+				clearTimers();
+				// Kill the whole tree so the stuck rclone releases the repo lock.
+				killProcessTree(resticProcess as KillableProcess, 'SIGTERM');
+				const stallError: ResticCommandError = new Error(
+					`Restic command stalled: no output for ${Math.round(stallTimeoutMs / 60000)} minute(s)`
+				);
+				stallError.stalled = true;
+				reject(stallError);
+			}, STALL_POLL_INTERVAL);
+		}
+
 		// Handle User exit gracefully
 		resticProcess.on('exit', (code, signal) => {
-			clearTimeoutTimer();
-			if (timedOut) return;
+			clearTimers();
+			if (timedOut || stalled) return;
 			// On Windows taskkill reports code 1 / signal null, so also check the
 			// marker that killProcessTree sets on the tracked process.
 			if (signal === 'SIGTERM' || (resticProcess as KillableProcess).__plutonKilled) {
@@ -150,8 +177,8 @@ export function runResticCommand(
 
 		// Handle Restic Run Errors
 		resticProcess.on('error', error => {
-			clearTimeoutTimer();
-			if (timedOut) return;
+			clearTimers();
+			if (timedOut || stalled) return;
 			const errorMsg = `Failed to run restic : ${error.message}`;
 			onError?.(Buffer.from(errorMsg));
 			reject(new Error(errorMsg));
@@ -159,6 +186,7 @@ export function runResticCommand(
 
 		// Handle Restic Output Messages
 		resticProcess.stdout?.on('data', (data: Buffer) => {
+			lastActivity = Date.now();
 			const stdoutText = data.toString();
 			if (!isStreaming) {
 				output += stdoutText;
@@ -194,6 +222,7 @@ export function runResticCommand(
 
 		// Handle Error Messages
 		resticProcess.stderr?.on('data', (data: Buffer) => {
+			lastActivity = Date.now();
 			if (!wasCancelled) {
 				console.log('restic output Error :', data.toString());
 				errorOutput = appendBounded(errorOutput, data.toString());
@@ -207,8 +236,8 @@ export function runResticCommand(
 		// Handle Process Exit
 		resticProcess.on('close', (code: number) => {
 			// console.log('Restic Process exited with code:', code);
-			clearTimeoutTimer();
-			if (timedOut) return;
+			clearTimers();
+			if (timedOut || stalled) return;
 			if (!wasCancelled) {
 				onComplete?.(code);
 				const isBackupWarning = cmd === 'backup' && code === ResticExitCode.IncompleteBackup;

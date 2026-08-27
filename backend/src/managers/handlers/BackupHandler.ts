@@ -24,6 +24,10 @@ type ResticArgsAndEnv = {
 	resticEnv: Record<string, string>;
 };
 
+// A backup that gives no output for one hour is stuck (sleep, VPN drop, NAS offline).
+// The watchdog kills it so the job queue does not lock forever.
+const RESTIC_STALL_TIMEOUT_MS = 60 * 60 * 1000;
+
 export class BackupHandler {
 	private runningBackups = new Set<string>();
 	private cancelledBackups = new Set<string>();
@@ -327,7 +331,8 @@ export class BackupHandler {
 				handlers.onProgress,
 				handlers.onError,
 				handlers.onComplete,
-				process => processManager.trackProcess('backup-' + backupId, process)
+				process => processManager.trackProcess('backup-' + backupId, process),
+				{ stallTimeout: RESTIC_STALL_TIMEOUT_MS }
 			);
 			if (!this.cancelledBackups.has(planId + backupId)) {
 				// Exit code 3: snapshot created with warnings. Log this as a warning
@@ -813,7 +818,9 @@ export class BackupHandler {
 					dryRunEnv,
 					handlers.onProgress,
 					handlers.onError,
-					handlers.onComplete
+					handlers.onComplete,
+					undefined,
+					{ stallTimeout: RESTIC_STALL_TIMEOUT_MS }
 				);
 				const outputLines = dryRunOutput.split('\n').filter(line => line.trim() !== '');
 				const summaryLine = outputLines[outputLines.length - 1];

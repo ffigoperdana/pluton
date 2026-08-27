@@ -881,7 +881,9 @@ describe('BackupHandler', () => {
 				expect.any(Object),
 				expect.any(Function),
 				expect.any(Function),
-				expect.any(Function)
+				expect.any(Function),
+				undefined,
+				expect.objectContaining({ stallTimeout: expect.any(Number) })
 			);
 		});
 
@@ -907,7 +909,9 @@ describe('BackupHandler', () => {
 				expect.any(Object),
 				expect.any(Function),
 				expect.any(Function),
-				expect.any(Function)
+				expect.any(Function),
+				undefined,
+				expect.objectContaining({ stallTimeout: expect.any(Number) })
 			);
 		});
 	});
@@ -975,7 +979,8 @@ describe('BackupHandler', () => {
 				expect.any(Function),
 				expect.any(Function),
 				expect.any(Function),
-				expect.any(Function)
+				expect.any(Function),
+				expect.objectContaining({ stallTimeout: expect.any(Number) })
 			);
 
 			expect(mockTrackProcess).toHaveBeenCalledWith('backup-backup-1', mockProcess);
@@ -996,7 +1001,8 @@ describe('BackupHandler', () => {
 				expect.any(Function),
 				expect.any(Function),
 				expect.any(Function),
-				expect.any(Function)
+				expect.any(Function),
+				expect.objectContaining({ stallTimeout: expect.any(Number) })
 			);
 		});
 	});
@@ -1465,7 +1471,9 @@ describe('BackupHandler', () => {
 				expect.objectContaining({ RESTIC_PASSWORD: 'test-encryption-key' }),
 				expect.any(Function),
 				expect.any(Function),
-				expect.any(Function)
+				expect.any(Function),
+				undefined,
+				expect.objectContaining({ stallTimeout: expect.any(Number) })
 			);
 		});
 
@@ -1481,7 +1489,9 @@ describe('BackupHandler', () => {
 				expect.any(Object),
 				expect.any(Function),
 				expect.any(Function),
-				expect.any(Function)
+				expect.any(Function),
+				undefined,
+				expect.objectContaining({ stallTimeout: expect.any(Number) })
 			);
 		});
 
@@ -1556,7 +1566,8 @@ describe('BackupHandler', () => {
 				expect.any(Function),
 				expect.any(Function),
 				expect.any(Function),
-				expect.any(Function)
+				expect.any(Function),
+				expect.objectContaining({ stallTimeout: expect.any(Number) })
 			);
 		});
 
