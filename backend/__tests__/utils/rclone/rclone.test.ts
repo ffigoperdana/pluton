@@ -70,6 +70,7 @@ describe('runRcloneCommand', () => {
 
 		expect(result).toBe(expectedOutput);
 		expect(spawn).toHaveBeenCalledWith('/usr/local/bin/rclone', args, {
+			detached: expect.any(Boolean),
 			env: expect.objectContaining({
 				RCLONE_CONFIG: '/home/user/.config/rclone/rclone.conf',
 				LOCALAPPDATA: 'C:\\Users\\Test\\AppData\\Local',
@@ -164,6 +165,7 @@ describe('runRcloneCommand', () => {
 		await promise;
 
 		expect(spawn).toHaveBeenCalledWith('/usr/local/bin/rclone', args, {
+			detached: expect.any(Boolean),
 			env: expect.objectContaining({
 				CUSTOM_VAR: 'custom-value',
 				RCLONE_TEMP_PASS: 'temp-password',
@@ -185,6 +187,7 @@ describe('runRcloneCommand', () => {
 		await promise;
 
 		expect(spawn).toHaveBeenCalledWith('/usr/local/bin/rclone', args, {
+			detached: expect.any(Boolean),
 			env: expect.objectContaining({
 				LOCALAPPDATA: '/home/user',
 			}),
@@ -261,6 +264,7 @@ describe('runRcloneCommand', () => {
 		await promise;
 
 		expect(spawn).toHaveBeenCalledWith('/usr/local/bin/rclone', args, {
+			detached: expect.any(Boolean),
 			env: expect.objectContaining({
 				RCLONE_CONFIG_PASS: 'test-encryption-key',
 			}),
@@ -279,6 +283,7 @@ describe('runRcloneCommand', () => {
 
 		// RCLONE_CONFIG_PASS comes from configService.config.ENCRYPTION_KEY, not process.env
 		expect(spawn).toHaveBeenCalledWith('/usr/local/bin/rclone', args, {
+			detached: expect.any(Boolean),
 			env: expect.objectContaining({
 				RCLONE_CONFIG_PASS: 'test-encryption-key',
 			}),
@@ -329,6 +334,7 @@ describe('runRcloneCommand', () => {
 		await promise;
 
 		expect(spawn).toHaveBeenCalledWith('/usr/local/bin/rclone', args, {
+			detached: expect.any(Boolean),
 			env: expect.objectContaining({
 				RCLONE_CONFIG: '/home/user/.config/rclone (1)/rclone.conf',
 			}),
@@ -350,6 +356,7 @@ describe('runRcloneCommand', () => {
 
 		// Custom env should override defaults
 		expect(spawn).toHaveBeenCalledWith('/usr/local/bin/rclone', args, {
+			detached: expect.any(Boolean),
 			env: expect.objectContaining({
 				RCLONE_CONFIG: '/custom/path/rclone.conf',
 				RCLONE_CONFIG_PASS: 'custom-password',

@@ -30,7 +30,10 @@ export function runRcloneCommand(
 			...env, // Per-call overrides still take precedence
 		};
 		// console.log('rcloneBinary :', rcloneBinary, args);
-		const rcProcess = spawn(rcloneBinary, args, { env: envVars });
+		const rcProcess = spawn(rcloneBinary, args, {
+			env: envVars,
+			detached: process.platform !== 'win32',
+		});
 		let output = '';
 		let errorOutput = '';
 		let timer: NodeJS.Timeout | undefined;
@@ -107,7 +110,10 @@ export function runRcloneCommandWithProgress(
 		...options?.env,
 	};
 
-	const rcProcess = spawn(rcloneBinary, args, { env: envVars });
+	const rcProcess = spawn(rcloneBinary, args, {
+		env: envVars,
+		detached: process.platform !== 'win32',
+	});
 	let output = '';
 	let errorOutput = '';
 

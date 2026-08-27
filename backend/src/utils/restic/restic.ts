@@ -11,6 +11,7 @@ import { buildResticEnvFromSettings, buildRcloneEnvFromSettings } from '../globa
 import { BackupVerifiedResult } from '../../types/plans';
 import { runHelper } from '../linuxHelper';
 import { ResticExitCode } from './exitCodes';
+import { KillableProcess } from '../processTree';
 
 export type ResticCommandError = Error & {
 	code?: number;
@@ -91,7 +92,12 @@ export function runResticCommand(
 			finalArgs.push('--insecure-no-password');
 		}
 
-		const resticProcess = spawn(resticBinary, finalArgs, { env: envVars });
+		// detached on POSIX gives the child its own process group (setsid) so
+		// killProcessTree can reach restic and its rclone child with kill(-pid).
+		const resticProcess = spawn(resticBinary, finalArgs, {
+			env: envVars,
+			detached: process.platform !== 'win32',
+		});
 
 		if (onProcess) {
 			onProcess(resticProcess);
@@ -133,7 +139,9 @@ export function runResticCommand(
 		resticProcess.on('exit', (code, signal) => {
 			clearTimeoutTimer();
 			if (timedOut) return;
-			if (signal === 'SIGTERM') {
+			// On Windows taskkill reports code 1 / signal null, so also check the
+			// marker that killProcessTree sets on the tracked process.
+			if (signal === 'SIGTERM' || (resticProcess as KillableProcess).__plutonKilled) {
 				wasCancelled = true;
 				reject(new Error('Process terminated by user'));
 				return;

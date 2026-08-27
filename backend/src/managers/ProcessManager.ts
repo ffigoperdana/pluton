@@ -1,4 +1,5 @@
-import { ChildProcessWithoutNullStreams, ChildProcess } from 'child_process';
+import { ChildProcess } from 'child_process';
+import { killProcessTree } from '../utils/processTree';
 
 export class ProcessManager {
 	private processes = new Map<string, ChildProcess>();
@@ -10,12 +11,18 @@ export class ProcessManager {
 	killProcess(id: string) {
 		const process = this.processes.get(id);
 		if (process) {
-			// Use SIGTERM signal for graceful termination
-			process.kill('SIGTERM');
+			killProcessTree(process, 'SIGTERM');
 			this.processes.delete(id);
 			return true;
 		}
 		return false;
+	}
+
+	killAll() {
+		for (const process of this.processes.values()) {
+			killProcessTree(process, 'SIGTERM');
+		}
+		this.processes.clear();
 	}
 
 	getProcess(id: string) {

@@ -1,5 +1,12 @@
 import { processManager } from '../../src/managers/ProcessManager';
 import { ChildProcess } from 'child_process';
+import { killProcessTree } from '../../src/utils/processTree';
+
+jest.mock('../../src/utils/processTree', () => ({
+	killProcessTree: jest.fn(),
+}));
+
+const mockKillProcessTree = killProcessTree as jest.MockedFunction<typeof killProcessTree>;
 
 // Create a mock ChildProcess object for testing purposes.
 // We only need a `kill` method that is a jest spy.
@@ -74,7 +81,7 @@ describe('ProcessManager', () => {
 	});
 
 	describe('killProcess', () => {
-		it('should call the kill method on the specified process with SIGTERM', () => {
+		it('should kill the whole process tree with SIGTERM', () => {
 			// Arrange
 			const mockProcess = createMockProcess() as unknown as ChildProcess;
 			const processId = 'process-to-kill';
@@ -84,8 +91,8 @@ describe('ProcessManager', () => {
 			processManager.killProcess(processId);
 
 			// Assert
-			expect(mockProcess.kill).toHaveBeenCalledTimes(1);
-			expect(mockProcess.kill).toHaveBeenCalledWith('SIGTERM');
+			expect(mockKillProcessTree).toHaveBeenCalledTimes(1);
+			expect(mockKillProcessTree).toHaveBeenCalledWith(mockProcess, 'SIGTERM');
 		});
 
 		it('should remove the process from tracking after killing it', () => {
@@ -131,6 +138,30 @@ describe('ProcessManager', () => {
 
 			// Act & Assert
 			expect(() => processManager.killProcess('non-existent-id')).not.toThrow();
+		});
+	});
+
+	describe('killAll', () => {
+		it('should kill every tracked process and clear the map', () => {
+			// Arrange
+			const mockProcess1 = createMockProcess() as unknown as ChildProcess;
+			const mockProcess2 = createMockProcess() as unknown as ChildProcess;
+			processManager.trackProcess('proc-1', mockProcess1);
+			processManager.trackProcess('proc-2', mockProcess2);
+
+			// Act
+			processManager.killAll();
+
+			// Assert
+			expect(mockKillProcessTree).toHaveBeenCalledTimes(2);
+			expect(mockKillProcessTree).toHaveBeenCalledWith(mockProcess1, 'SIGTERM');
+			expect(mockKillProcessTree).toHaveBeenCalledWith(mockProcess2, 'SIGTERM');
+			expect(processManager.getProcess('proc-1')).toBeUndefined();
+			expect(processManager.getProcess('proc-2')).toBeUndefined();
+		});
+
+		it('should not throw when no processes are tracked', () => {
+			expect(() => processManager.killAll()).not.toThrow();
 		});
 	});
 });
