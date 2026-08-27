@@ -17,7 +17,7 @@ import { runScriptsForEvent } from '../../utils/executeUserScript';
 import { configService } from '../../services/ConfigService';
 import { ReplicationOrchestrator } from './ReplicationOrchestrator';
 import { BackupMirror, BackupRunConfig } from '../../types/backups';
-import { formatBytes } from '../../utils/formatter';
+import { checkDestinationSpace } from '../../utils/checkDestinationSpace';
 
 type ResticArgsAndEnv = {
 	resticArgs: string[];
@@ -601,16 +601,17 @@ export class BackupHandler {
 		}
 
 		// Check the destination has enough free space before the backup starts.
-		await this.checkDestinationSpace(options, dryRunSummary);
+		await this.checkBackupDestinationSpace(options, dryRunSummary);
 
 		return true;
 	}
 
 	/**
 	 * Checks that the destination volume has enough free space for the backup.
-	 * Throws a non-retryable error if the space is not enough.
+	 * Throws a non-retryable error if the space is not enough. The skip
+	 * conditions are backup-specific; the measurement is the shared util.
 	 */
-	private async checkDestinationSpace(
+	private async checkBackupDestinationSpace(
 		options: Record<string, any>,
 		dryRunSummary?: false | Record<string, any>
 	): Promise<void> {
@@ -623,30 +624,12 @@ export class BackupHandler {
 		if (!dryRunSummary || dryRunSummary.dry_run_skipped || options.method === 'rescue') return;
 
 		const estimated: number = dryRunSummary.data_added_packed || dryRunSummary.data_added || 0;
-		if (estimated <= 0) return;
 
-		// Measure the free space of the destination filesystem
-		// destination must have the estimated backup size + a 256 MiB buffer for restic
-		let available: number;
-		try {
-			const stats = await fs.promises.statfs(options.storagePath);
-			available = stats.bavail * stats.bsize;
-			if (!Number.isFinite(available) || available < 0) return;
-		} catch {
-			return;
-		}
-
-		const MiB = 1024 * 1024;
-		const required = estimated * 1.2 + 256 * MiB;
-		if (available >= required) return;
-
-		const message =
-			`Not enough space on the destination "${options.storagePath}". ` +
-			`The backup needs about ${formatBytes(required)} but only ${formatBytes(available)} is free.`;
-
-		const spaceError: Error & { retryable?: boolean } = new Error(message);
-		spaceError.retryable = false;
-		throw spaceError;
+		await checkDestinationSpace({
+			targetPath: options.storagePath,
+			estimatedBytes: estimated,
+			label: 'backup',
+		});
 	}
 
 	/**

@@ -459,6 +459,53 @@ describe('RestoreHandler', () => {
 		});
 	});
 
+	describe('canRun - destination space check', () => {
+		const GiB = 1024 * 1024 * 1024;
+
+		// statfs reports free bytes as bavail * bsize; use bsize = 1 so bavail is the byte count.
+		const statfsWithAvailable = (available: number) =>
+			({ bsize: 1, bavail: available, blocks: 10 * GiB, bfree: available } as any);
+
+		const stats = { total_bytes: 500 * 1024 * 1024, bytes_restored: 500 * 1024 * 1024 };
+
+		let statfsSpy: jest.SpyInstance;
+
+		beforeEach(() => {
+			jest.spyOn(os, 'freemem').mockReturnValue(2 * GiB);
+			jest.spyOn(os, 'cpus').mockReturnValue(new Array(4));
+			statfsSpy = jest.spyOn(require('fs').promises, 'statfs');
+		});
+
+		it('skips the check when target is root', async () => {
+			const result = await handler.canRun({ ...baseOptions, target: '/' }, stats);
+
+			expect(result).toBe(true);
+			expect(statfsSpy).not.toHaveBeenCalled();
+		});
+
+		it('skips the check when there are no dry-run stats', async () => {
+			const result = await handler.canRun(baseOptions);
+
+			expect(result).toBe(true);
+			expect(statfsSpy).not.toHaveBeenCalled();
+		});
+
+		it('throws a non-retryable error when space is insufficient', async () => {
+			statfsSpy.mockResolvedValue(statfsWithAvailable(100 * 1024 * 1024));
+
+			await expect(handler.canRun(baseOptions, stats)).rejects.toMatchObject({
+				retryable: false,
+			});
+		});
+
+		it('passes when space is sufficient', async () => {
+			statfsSpy.mockResolvedValue(statfsWithAvailable(5 * GiB));
+
+			const result = await handler.canRun(baseOptions, stats);
+			expect(result).toBe(true);
+		});
+	});
+
 	describe('cancel', () => {
 		it('should cancel restore and kill process', async () => {
 			const result = await handler.cancel('plan-1', 'restore-1');

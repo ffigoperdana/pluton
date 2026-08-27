@@ -25,6 +25,7 @@ import {
 	isPermissionDeniedError,
 	runHelper,
 } from '../../utils/linuxHelper';
+import { checkDestinationSpace } from '../../utils/checkDestinationSpace';
 
 export class RestoreHandler {
 	private runningRestores = new Set<string>();
@@ -236,7 +237,9 @@ export class RestoreHandler {
 
 		// Run pre-flight checks
 		await this.updateProgress(planId, restoreId, 'pre-restore', 'PRE_RESTORE_CHECKS_START', false);
-		await this.canRun(options);
+		const dryRunStats =
+			typeof restoreStats.result === 'object' ? restoreStats.result.stats : undefined;
+		await this.canRun(options, dryRunStats);
 		await this.updateProgress(
 			planId,
 			restoreId,
@@ -489,7 +492,7 @@ export class RestoreHandler {
 		});
 	}
 
-	async canRun(options: RestoreOptions) {
+	async canRun(options: RestoreOptions, dryRunStats?: Record<string, any>) {
 		// Check system resource availability
 		// Use a fixed minimum (128MB) rather than scaling by CPU count.
 		// Restic's memory usage doesn't scale linearly with cores, and on macOS
@@ -536,7 +539,34 @@ export class RestoreHandler {
 			}
 		}
 
+		// Check the target has enough free space before the restore starts.
+		await this.checkRestoreDestinationSpace(options, dryRunStats);
+
 		return true;
+	}
+
+	/**
+	 * Checks that the restore target has enough free space.
+	 * Throws a non-retryable error if the space is not enough. The skip
+	 * conditions are restore-specific; the measurement is the shared util.
+	 */
+	private async checkRestoreDestinationSpace(
+		options: RestoreOptions,
+		dryRunStats?: Record<string, any>
+	): Promise<void> {
+		const target = options.target;
+		// Skip original-path and root restores (Windows temp+move, or restore to
+		// the original locations): there is no single measurable target volume.
+		if (!target || target === '/') return;
+		if (!dryRunStats) return;
+
+		const estimated: number = dryRunStats.bytes_restored || dryRunStats.total_bytes || 0;
+
+		await checkDestinationSpace({
+			targetPath: target,
+			estimatedBytes: estimated,
+			label: 'restore',
+		});
 	}
 
 	createResticRestoreArgs(
