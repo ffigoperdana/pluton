@@ -5,7 +5,10 @@ import { PlanStore } from '../stores/PlanStore';
 import { BackupStore } from '../stores/BackupStore';
 import { StorageStore } from '../stores/StorageStore';
 import { RestoreStore } from '../stores/RestoreStore';
+import { sql } from 'drizzle-orm/sql';
 import { Plan, NewPlan, planInsertSchema, planUpdateSchema } from '../db/schema/plans';
+import { Backup } from '../db/schema/backups';
+import { Restore } from '../db/schema/restores';
 import {
 	BackupPlanArgs,
 	BackupVerifiedResult,
@@ -745,6 +748,57 @@ export class PlanService {
 
 	public async reconcileSchedules(): Promise<void> {
 		await this.scheduleReconciler.reconcileSchedules();
+	}
+
+	/**
+	 * Marks every orphaned in-progress backup and restore as failed and clears
+	 * stale in-progress flags on plans. The job queue is in memory only, so any
+	 * in-progress row at startup is a leftover of a stopped or crashed service.
+	 * Returns the swept rows.
+	 */
+	public async clearOrphanedInProgress(): Promise<{
+		backups: Backup[];
+		restores: Restore[];
+		plans: Plan[];
+	}> {
+		const backupMsg =
+			'Backup was interrupted because the Pluton service stopped or restarted. It was not completed.';
+		const restoreMsg =
+			'Restore was interrupted because the Pluton service stopped or restarted. It was not completed.';
+
+		const sweptBackups: Backup[] = [];
+		const orphanBackups = ((await this.backupStore.getAll()) || []).filter(b => b.inProgress);
+		for (const backup of orphanBackups) {
+			const updated = await this.backupStore.update(backup.id, {
+				inProgress: false,
+				status: 'failed',
+				success: false,
+				ended: sql`(unixepoch())` as any,
+				errorMsg: backupMsg,
+			});
+			if (updated) sweptBackups.push(updated);
+		}
+
+		const sweptRestores: Restore[] = [];
+		const orphanRestores = ((await this.restoreStore.getAll()) || []).filter(r => r.inProgress);
+		for (const restore of orphanRestores) {
+			// RestoreStore.update sets `ended` for a final status on its own.
+			const updated = await this.restoreStore.update(restore.id, {
+				inProgress: false,
+				status: 'failed',
+				errorMsg: restoreMsg,
+			});
+			if (updated) sweptRestores.push(updated);
+		}
+
+		const sweptPlans: Plan[] = [];
+		const orphanPlans = ((await this.planStore.getAll()) || []).filter(p => p.inProgress);
+		for (const plan of orphanPlans) {
+			const updated = await this.planStore.update(plan.id, { inProgress: false });
+			if (updated) sweptPlans.push(updated);
+		}
+
+		return { backups: sweptBackups, restores: sweptRestores, plans: sweptPlans };
 	}
 
 	/**

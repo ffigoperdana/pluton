@@ -48,6 +48,7 @@ import { BaseStorageManager } from './managers/BaseStorageManager';
 import { StorageService } from './services/StorageService';
 import { SettingsService } from './services/SettingsService';
 import { SelfBackupService } from './services/SelfBackupService';
+import { StartupRecovery } from './services/StartupRecovery';
 import { SystemTaskManager } from './jobs/SystemTaskManager';
 import { SYSTEM_JOBS } from './jobs/systemJobs';
 import { jobProcessor } from './jobs/JobProcessor';
@@ -255,6 +256,9 @@ export async function createApp(): Promise<{ app: Express }> {
 	app.get('{*path}', (req, res) => {
 		res.sendFile(path.join(publicPath, 'index.html'));
 	});
+
+	// Clean up backups/restores left "in progress" by a previous shutdown, before any schedule job starts.
+	await new StartupRecovery(planService).run();
 
 	// Reconcile CronManager schedules with the database (fixes drift on restart)
 	try {

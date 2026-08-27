@@ -1200,4 +1200,67 @@ describe('PlanService', () => {
 			);
 		});
 	});
+
+	describe('clearOrphanedInProgress', () => {
+		it('marks in-progress backups and restores as failed and clears plan flags', async () => {
+			mockBackupStore.getAll = jest.fn().mockResolvedValue([
+				{ id: 'b1', planId: 'p1', inProgress: true },
+				{ id: 'b2', planId: 'p2', inProgress: false },
+			]);
+			mockRestoreStore.getAll = jest
+				.fn()
+				.mockResolvedValue([{ id: 'r1', planId: 'p1', backupId: 'b1', inProgress: true }]);
+			mockPlanStore.getAll = jest
+				.fn()
+				.mockResolvedValue([{ id: 'p1', inProgress: true }, { id: 'p2', inProgress: false }]);
+
+			mockBackupStore.update = jest.fn().mockImplementation((id: string) => ({ id }));
+			mockRestoreStore.update = jest.fn().mockImplementation((id: string) => ({ id }));
+			mockPlanStore.update = jest.fn().mockImplementation((id: string) => ({ id }));
+
+			const result = await planService.clearOrphanedInProgress();
+
+			expect(mockBackupStore.update).toHaveBeenCalledTimes(1);
+			expect(mockBackupStore.update).toHaveBeenCalledWith(
+				'b1',
+				expect.objectContaining({
+					inProgress: false,
+					status: 'failed',
+					success: false,
+					ended: expect.any(Object),
+					errorMsg: expect.stringContaining('Backup was interrupted'),
+				})
+			);
+			expect(mockRestoreStore.update).toHaveBeenCalledWith(
+				'r1',
+				expect.objectContaining({
+					inProgress: false,
+					status: 'failed',
+					errorMsg: expect.stringContaining('Restore was interrupted'),
+				})
+			);
+			expect(mockPlanStore.update).toHaveBeenCalledWith('p1', { inProgress: false });
+
+			expect(result.backups).toHaveLength(1);
+			expect(result.restores).toHaveLength(1);
+			expect(result.plans).toHaveLength(1);
+		});
+
+		it('does nothing when there are no orphans', async () => {
+			mockBackupStore.getAll = jest.fn().mockResolvedValue([{ id: 'b1', inProgress: false }]);
+			mockRestoreStore.getAll = jest.fn().mockResolvedValue(null);
+			mockPlanStore.getAll = jest.fn().mockResolvedValue([{ id: 'p1', inProgress: false }]);
+
+			mockBackupStore.update = jest.fn();
+			mockRestoreStore.update = jest.fn();
+			mockPlanStore.update = jest.fn();
+
+			const result = await planService.clearOrphanedInProgress();
+
+			expect(mockBackupStore.update).not.toHaveBeenCalled();
+			expect(mockRestoreStore.update).not.toHaveBeenCalled();
+			expect(mockPlanStore.update).not.toHaveBeenCalled();
+			expect(result).toEqual({ backups: [], restores: [], plans: [] });
+		});
+	});
 });
