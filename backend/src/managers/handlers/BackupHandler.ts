@@ -17,6 +17,7 @@ import { runScriptsForEvent } from '../../utils/executeUserScript';
 import { configService } from '../../services/ConfigService';
 import { ReplicationOrchestrator } from './ReplicationOrchestrator';
 import { BackupMirror, BackupRunConfig } from '../../types/backups';
+import { formatBytes } from '../../utils/formatter';
 
 type ResticArgsAndEnv = {
 	resticArgs: string[];
@@ -264,7 +265,7 @@ export class BackupHandler {
 
 		// Run pre-flight checks
 		await this.updateProgress(planId, backupId, 'pre-backup', 'PRE_BACKUP_CHECKS_START', false);
-		await this.canRun(options, resticArgsAndEnv);
+		await this.canRun(options, resticArgsAndEnv, dryRunSummary);
 		await this.updateProgress(planId, backupId, 'pre-backup', 'PRE_BACKUP_CHECKS_COMPLETE', true);
 
 		// Run pre-backup scripts
@@ -560,7 +561,11 @@ export class BackupHandler {
 	 * @param options - Options for the backup process.
 	 * @returns A promise that resolves to a boolean indicating if the backup can run.
 	 */
-	async canRun(options: Record<string, any>, resticArgsAndEnv: ResticArgsAndEnv): Promise<boolean> {
+	async canRun(
+		options: Record<string, any>,
+		resticArgsAndEnv: ResticArgsAndEnv,
+		dryRunSummary?: false | Record<string, any>
+	): Promise<boolean> {
 		// Check system resource availability
 		// Use a fixed minimum (128MB) rather than scaling by CPU count.
 		// Restic's memory usage doesn't scale linearly with cores, and on macOS
@@ -595,7 +600,53 @@ export class BackupHandler {
 			}
 		}
 
+		// Check the destination has enough free space before the backup starts.
+		await this.checkDestinationSpace(options, dryRunSummary);
+
 		return true;
+	}
+
+	/**
+	 * Checks that the destination volume has enough free space for the backup.
+	 * Throws a non-retryable error if the space is not enough.
+	 */
+	private async checkDestinationSpace(
+		options: Record<string, any>,
+		dryRunSummary?: false | Record<string, any>
+	): Promise<void> {
+		// Only local storage on the Pluton host is measurable here.
+		if (options.storage?.type !== 'local') return;
+		// A remote-device plan would measure the Pluton server, not the device.
+		if (options.sourceId !== 'main') return;
+		if (!options.storagePath) return;
+		// The dry run does not run (rescue method or skipDryRun), so no estimate.
+		if (!dryRunSummary || dryRunSummary.dry_run_skipped || options.method === 'rescue') return;
+
+		const estimated: number = dryRunSummary.data_added_packed || dryRunSummary.data_added || 0;
+		if (estimated <= 0) return;
+
+		// Measure the free space of the destination filesystem
+		// destination must have the estimated backup size + a 256 MiB buffer for restic
+		let available: number;
+		try {
+			const stats = await fs.promises.statfs(options.storagePath);
+			available = stats.bavail * stats.bsize;
+			if (!Number.isFinite(available) || available < 0) return;
+		} catch {
+			return;
+		}
+
+		const MiB = 1024 * 1024;
+		const required = estimated * 1.2 + 256 * MiB;
+		if (available >= required) return;
+
+		const message =
+			`Not enough space on the destination "${options.storagePath}". ` +
+			`The backup needs about ${formatBytes(required)} but only ${formatBytes(available)} is free.`;
+
+		const spaceError: Error & { retryable?: boolean } = new Error(message);
+		spaceError.retryable = false;
+		throw spaceError;
 	}
 
 	/**

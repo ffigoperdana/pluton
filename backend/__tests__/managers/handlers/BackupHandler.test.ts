@@ -762,6 +762,82 @@ describe('BackupHandler', () => {
 		});
 	});
 
+	describe('canRun - destination space check', () => {
+		const GiB = 1024 * 1024 * 1024;
+
+		const localOptions = {
+			...baseOptions,
+			storage: { ...baseOptions.storage, type: 'local' },
+			storagePath: 'C:\\backups\\plan1',
+			sourceId: 'main',
+		};
+
+		const dryRun = { data_added_packed: 500 * 1024 * 1024 };
+
+		// statfs reports free bytes as bavail * bsize; use bsize = 1 so bavail is the byte count.
+		const statfsWithAvailable = (available: number) =>
+			({ bsize: 1, bavail: available, blocks: 10 * GiB, bfree: available } as any);
+
+		let statfsSpy: jest.SpyInstance;
+
+		beforeEach(() => {
+			jest.spyOn(os, 'freemem').mockReturnValue(2 * GiB);
+			statfsSpy = jest.spyOn(fs.promises, 'statfs');
+		});
+
+		it('skips the check for non-local storage (s3)', async () => {
+			const resticArgsAndEnv = handler.createResticBackupArgs('plan-1', baseOptions as any);
+			const result = await handler.canRun(baseOptions, resticArgsAndEnv, dryRun);
+
+			expect(result).toBe(true);
+			expect(statfsSpy).not.toHaveBeenCalled();
+		});
+
+		it('skips the check for a remote device plan (sourceId !== main)', async () => {
+			const remoteDeviceOptions = { ...localOptions, sourceId: 'device-1' };
+			const resticArgsAndEnv = handler.createResticBackupArgs('plan-1', remoteDeviceOptions as any);
+			const result = await handler.canRun(remoteDeviceOptions, resticArgsAndEnv, dryRun);
+
+			expect(result).toBe(true);
+			expect(statfsSpy).not.toHaveBeenCalled();
+		});
+
+		it('skips the check when no dry run occurred', async () => {
+			const resticArgsAndEnv = handler.createResticBackupArgs('plan-1', localOptions as any);
+			const result = await handler.canRun(localOptions, resticArgsAndEnv, undefined);
+
+			expect(result).toBe(true);
+			expect(statfsSpy).not.toHaveBeenCalled();
+		});
+
+		it('skips the check when the measurement fails', async () => {
+			statfsSpy.mockRejectedValue(new Error('ENOENT'));
+
+			const resticArgsAndEnv = handler.createResticBackupArgs('plan-1', localOptions as any);
+			const result = await handler.canRun(localOptions, resticArgsAndEnv, dryRun);
+
+			expect(result).toBe(true);
+		});
+
+		it('throws a non-retryable error when space is insufficient', async () => {
+			statfsSpy.mockResolvedValue(statfsWithAvailable(100 * 1024 * 1024));
+
+			const resticArgsAndEnv = handler.createResticBackupArgs('plan-1', localOptions as any);
+			await expect(
+				handler.canRun(localOptions, resticArgsAndEnv, dryRun)
+			).rejects.toMatchObject({ retryable: false });
+		});
+
+		it('passes when space is sufficient', async () => {
+			statfsSpy.mockResolvedValue(statfsWithAvailable(5 * GiB));
+
+			const resticArgsAndEnv = handler.createResticBackupArgs('plan-1', localOptions as any);
+			const result = await handler.canRun(localOptions, resticArgsAndEnv, dryRun);
+
+			expect(result).toBe(true);
+		});
+	});
+
 	describe('cancel', () => {
 		it('should cancel backup and kill process', async () => {
 			const result = await handler.cancel('plan-1', 'backup-1');
