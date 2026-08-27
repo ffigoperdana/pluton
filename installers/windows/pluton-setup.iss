@@ -103,6 +103,8 @@ Filename: "{app}\nssm.exe"; Parameters: "set {#MyAppServiceName} Start SERVICE_A
 Filename: "{app}\nssm.exe"; Parameters: "set {#MyAppServiceName} AppDirectory ""{app}"""; Flags: runhidden
 ; Set environment variables for data directory on the service
 Filename: "{app}\nssm.exe"; Parameters: "set {#MyAppServiceName} AppEnvironmentExtra PLUTON_DATA_DIR=""{commonappdata}\{#MyAppName}"""; Flags: runhidden
+; Exit code 0 is a deliberate stop (e.g. port already in use) - do not restart
+Filename: "{app}\nssm.exe"; Parameters: "set {#MyAppServiceName} AppExit 0 Exit"; Flags: runhidden
 ; Set stdout and stderr logging
 Filename: "{app}\nssm.exe"; Parameters: "set {#MyAppServiceName} AppStdout ""{commonappdata}\{#MyAppName}\logs\service-out.log"""; Flags: runhidden
 Filename: "{app}\nssm.exe"; Parameters: "set {#MyAppServiceName} AppStderr ""{commonappdata}\{#MyAppName}\logs\service-err.log"""; Flags: runhidden

@@ -92,13 +92,26 @@ if (isMainModule || isDevelopment) {
 
 		const { app } = await createApp();
 
-		const server = app.listen(configService.config.SERVER_PORT || 5173, () => {
-			console.log(`Server running on port ${configService.config.SERVER_PORT || 5173}`);
+		const port = configService.config.SERVER_PORT || 5173;
+
+		const server = app.listen(port, () => {
+			console.log(`Server running on port ${port}`);
 			if (configService.isSetupPending()) {
 				console.log(
-					`⚠️  Initial setup required. Visit http://localhost:${configService.config.SERVER_PORT || 5173} to complete setup.`
+					`⚠️  Initial setup required. Visit http://localhost:${port} to complete setup.`
 				);
 			}
+		});
+
+		server.on('error', (err: NodeJS.ErrnoException) => {
+			if (err.code === 'EADDRINUSE') {
+				console.error(
+					`[Startup] Port ${port} is already in use. Another Pluton instance is running. Exiting.`
+				);
+				process.exit(0);
+			}
+			console.error('[Startup] HTTP server error:', err);
+			process.exit(1);
 		});
 
 		// Handle graceful shutdown
