@@ -96,12 +96,12 @@ class JobQueue {
 		job.attempts++;
 		job.lastAttempt = Date.now();
 
-		if (job.attempts <= job.maxAttempts) {
+		if (job.attempts < job.maxAttempts) {
 			this.reQueue(job);
 			return false; // It was re-queued, not permanently failed.
 		} else {
 			cronLogger.error(
-				`Job '${job.name}' for plan '${job.payload?.planId}' failed after ${job.maxAttempts} retries.`
+				`Job '${job.name}' for plan '${job.payload?.planId}' failed after ${job.attempts} attempts.`
 			);
 			// Clear the running job
 			this.runningJob = null;

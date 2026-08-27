@@ -161,7 +161,7 @@ export class BackupHandler {
 			const classification = classifyResticExitCode(resticExitCode);
 			const isNonRetryable = resticExitCode !== undefined && !classification.retryable;
 
-			const attemptsExhausted = retryInfo.attempts + 1 > retryInfo.maxAttempts;
+			const attemptsExhausted = retryInfo.attempts + 1 >= retryInfo.maxAttempts;
 			const permanentlyFailed = attemptsExhausted || isNonRetryable;
 
 			// Mark as failed

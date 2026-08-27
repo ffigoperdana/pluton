@@ -341,6 +341,24 @@ describe('JobQueue', () => {
 			expect(job.attempts).toBe(3);
 		});
 
+		it('fails permanently when the attempt count reaches maxAttempts (no off-by-one)', () => {
+			const job: Job = {
+				id: 'fail-boundary',
+				name: 'FailJob',
+				payload: {},
+				attempts: 2,
+				maxAttempts: 3,
+				retryDelay: 60000,
+				lastAttempt: 0,
+			};
+
+			// attempts 2 -> 3 == maxAttempts, so this is the final run, not a re-queue.
+			const isPermanent = jobQueue.failJob(job);
+
+			expect(job.attempts).toBe(3);
+			expect(isPermanent).toBe(true);
+		});
+
 		it('sets lastAttempt timestamp', () => {
 			const job: Job = {
 				id: 'fail-5',
