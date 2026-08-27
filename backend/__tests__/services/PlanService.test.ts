@@ -82,10 +82,14 @@ describe('PlanService', () => {
 			performBackupSpy.mockRestore();
 		});
 
+		// Use an OS-appropriate absolute path: local storage on a Windows host
+		// requires a drive letter, while a POSIX host requires a leading slash.
+		const localStoragePath = process.platform === 'win32' ? 'C:\\backups\\test' : '/backups/test';
+
 		const planData: NewPlanReq = {
 			title: 'Test Plan',
 			storage: { id: 'storage-123', name: 'Test Storage' },
-			storagePath: '/backups/test',
+			storagePath: localStoragePath,
 			sourceId: 'main', // Testing with the local device
 			sourceType: 'device',
 			sourceConfig: { includes: ['/data/important'], excludes: [] },
@@ -326,6 +330,27 @@ describe('PlanService', () => {
 
 			// Act & Assert
 			await expect(planService.updatePlan(planId, invalidUpdateData as any)).rejects.toThrow(); // Zod will throw its own specific error
+		});
+
+		it('should reject changing the destination storage with a 400', async () => {
+			mockPlanStore.getById.mockResolvedValue(currentPlan);
+
+			await expect(
+				planService.updatePlan(planId, { storageId: 'storage-999' } as any)
+			).rejects.toHaveProperty('statusCode', 400);
+			expect(mockPlanStore.update).not.toHaveBeenCalled();
+		});
+
+		it('should reject changing the destination path with a 400', async () => {
+			mockPlanStore.getById.mockResolvedValue({
+				...currentPlan,
+				storagePath: '/backups/original',
+			});
+
+			await expect(
+				planService.updatePlan(planId, { storagePath: '/backups/moved' } as any)
+			).rejects.toHaveProperty('statusCode', 400);
+			expect(mockPlanStore.update).not.toHaveBeenCalled();
 		});
 	});
 

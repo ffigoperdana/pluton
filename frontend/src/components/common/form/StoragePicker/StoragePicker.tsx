@@ -89,7 +89,16 @@ const StoragePicker = ({ onUpdate, storagePath = '', storageId, disabled = false
 
    return (
       <div className={classes.storagePicker}>
-         <div className={classes.storagePickerInput}>
+         <div
+            className={classes.storagePickerInput}
+            {...(disabled
+               ? {
+                    'data-tooltip-id': 'appTooltip',
+                    'data-tooltip-content': "The destination path can't be changed after a plan is created.",
+                    'data-tooltip-place': 'top',
+                 }
+               : {})}
+         >
             <div>
                <div className={classes.storage}>
                   <Select

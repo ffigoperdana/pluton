@@ -213,6 +213,26 @@ export class PlanService {
 			throw error;
 		}
 
+		// The backup destination is immutable after a plan is created — the restic
+		// repository and all its snapshots live there. Refuse any change.
+		if (parsedPlanData.storageId != null && parsedPlanData.storageId !== currentPlan.storageId) {
+			throw new AppError(
+				400,
+				'The backup destination storage cannot be changed after the plan is created.'
+			);
+		}
+		if (
+			parsedPlanData.storagePath != null &&
+			parsedPlanData.storagePath !== currentPlan.storagePath
+		) {
+			throw new AppError(
+				400,
+				'The backup destination path cannot be changed after the plan is created, because the repository and its snapshots are stored there.'
+			);
+		}
+		// Never let the immutable storageId reach the update.
+		delete (parsedPlanData as Record<string, unknown>).storageId;
+
 		const updatedPlan = await this.planStore.update(planId, parsedPlanData as Partial<Plan>);
 		if (!updatedPlan) {
 			throw new AppError(500, 'Failed to update plan in the database.');

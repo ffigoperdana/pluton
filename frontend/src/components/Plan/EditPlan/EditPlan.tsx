@@ -20,7 +20,9 @@ const EditPlan = ({ close, plan }: EditPlanProps) => {
       }
       console.log('newPlan :', newPlan);
 
-      const allowedFields = ['title', 'description', 'isActive', 'storagePath', 'sourceConfig', 'tags', 'settings'] as const;
+      // storagePath is immutable after a plan is created (the repository lives there),
+      // so the client no longer sends it. The backend also refuses a change with a 400.
+      const allowedFields = ['title', 'description', 'isActive', 'sourceConfig', 'tags', 'settings'] as const;
       const updatedPlan = Object.fromEntries(Object.entries(newPlan).filter(([key]) => allowedFields.includes(key as any)));
 
       updatePlanMutation.mutate(

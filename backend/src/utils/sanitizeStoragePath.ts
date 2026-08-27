@@ -44,6 +44,27 @@ export function sanitizeStoragePath(
 	}
 
 	if (storageType === 'local') {
+		if (isTargetWindows) {
+			// Refuse UNC paths. Test the RAW input, because
+			// path.win32.normalize('\\\\host') collapses to '\host' and destroys the
+			// UNC signature (the silent F:\host defect). The raw test finds
+			// '\\host\share', '\\host', and '//host/share'.
+			const parsedRoot = path.win32.parse(normalizedPath).root;
+			if (/^[\\/]{2}/.test(trimmedPath) || parsedRoot.startsWith('\\\\')) {
+				throw new AppError(
+					400,
+					'Invalid Storage Destination path: Network (UNC) destinations are not supported. Map the share to a drive letter on the Pluton host, or add the share as an SMB storage.'
+				);
+			}
+			// Refuse a rootless path (no drive letter). Also fixes '/mnt/data' -> 'F:\mnt\data' defect.
+			if (parsedRoot === '\\' || parsedRoot === '/') {
+				throw new AppError(
+					400,
+					'Invalid Storage Destination path: Include a drive letter (e.g., "C:\\backups").'
+				);
+			}
+		}
+
 		// For local storage, we need a fully qualified absolute path.
 		// Check *before* resolve() because resolve() always returns an absolute path
 		// by prepending the server's CWD, which mangles paths for remote devices

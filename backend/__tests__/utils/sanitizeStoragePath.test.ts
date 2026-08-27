@@ -267,4 +267,49 @@ describe('sanitizeStoragePath', () => {
 			expect(result).toBe('/var/home/backups');
 		});
 	});
+
+	describe('UNC and rootless Windows paths', () => {
+		it('should reject a UNC path with a share', () => {
+			expect(() => sanitizeStoragePath('\\\\server\\share', 'local', 'windows')).toThrow(AppError);
+			expect(() => sanitizeStoragePath('\\\\server\\share', 'local', 'windows')).toThrow(
+				'Network (UNC) destinations are not supported'
+			);
+		});
+
+		it('should reject a bare UNC host (the silent F:\\host defect)', () => {
+			expect(() => sanitizeStoragePath('\\\\server', 'local', 'windows')).toThrow(
+				'Network (UNC) destinations are not supported'
+			);
+		});
+
+		it('should reject a forward-slash UNC path', () => {
+			expect(() => sanitizeStoragePath('//server/share', 'local', 'windows')).toThrow(
+				'Network (UNC) destinations are not supported'
+			);
+		});
+
+		it('should reject a rootless path with no drive letter', () => {
+			expect(() => sanitizeStoragePath('/mnt/data', 'local', 'windows')).toThrow(AppError);
+			expect(() => sanitizeStoragePath('/mnt/data', 'local', 'windows')).toThrow(
+				'Include a drive letter'
+			);
+		});
+
+		it('should reject a single-backslash rootless path', () => {
+			expect(() => sanitizeStoragePath('\\folder\\sub', 'local', 'windows')).toThrow(
+				'Include a drive letter'
+			);
+		});
+
+		it('should accept a valid drive-letter path', () => {
+			const result = sanitizeStoragePath('C:\\backups\\plan1', 'local', 'windows');
+			expect(result).toContain('backups');
+			expect(result).toMatch(/^[A-Za-z]:/);
+		});
+
+		it('should not reject a UNC-style path on a Linux target', () => {
+			// On POSIX, "//host/share" is a legal absolute path, not UNC.
+			expect(() => sanitizeStoragePath('//host/share', 'local', 'linux')).not.toThrow();
+		});
+	});
 });
