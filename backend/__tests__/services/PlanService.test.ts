@@ -1246,6 +1246,31 @@ describe('PlanService', () => {
 			expect(result.plans).toHaveLength(1);
 		});
 
+		it('leaves in-progress rows of a remote device alone', async () => {
+			mockBackupStore.getAll = jest
+				.fn()
+				.mockResolvedValue([{ id: 'b1', planId: 'p1', sourceId: 'device-1', inProgress: true }]);
+			mockRestoreStore.getAll = jest.fn().mockResolvedValue([
+				{ id: 'r1', planId: 'p1', backupId: 'b1', sourceId: 'device-1', inProgress: true },
+			]);
+			mockPlanStore.getAll = jest
+				.fn()
+				.mockResolvedValue([{ id: 'p1', sourceId: 'device-1', inProgress: true }]);
+
+			mockBackupStore.update = jest.fn();
+			mockRestoreStore.update = jest.fn();
+			mockPlanStore.update = jest.fn();
+
+			const result = await planService.clearOrphanedInProgress();
+
+			expect(mockBackupStore.update).not.toHaveBeenCalled();
+			expect(mockRestoreStore.update).not.toHaveBeenCalled();
+			expect(mockPlanStore.update).not.toHaveBeenCalled();
+			expect(result.backups).toHaveLength(0);
+			expect(result.restores).toHaveLength(0);
+			expect(result.plans).toHaveLength(0);
+		});
+
 		it('does nothing when there are no orphans', async () => {
 			mockBackupStore.getAll = jest.fn().mockResolvedValue([{ id: 'b1', inProgress: false }]);
 			mockRestoreStore.getAll = jest.fn().mockResolvedValue(null);

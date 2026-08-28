@@ -752,9 +752,10 @@ export class PlanService {
 
 	/**
 	 * Marks every orphaned in-progress backup and restore as failed and clears
-	 * stale in-progress flags on plans. The job queue is in memory only, so any
-	 * in-progress row at startup is a leftover of a stopped or crashed service.
-	 * Returns the swept rows.
+	 * stale in-progress flags on plans. The job queue is in memory only, so a
+	 * row of this host that is in progress at startup is a leftover of a stopped
+	 * or crashed service. Rows of a remote device are left alone.
+	 * Returns the cleared rows.
 	 */
 	public async clearOrphanedInProgress(): Promise<{
 		backups: Backup[];
@@ -766,8 +767,14 @@ export class PlanService {
 		const restoreMsg =
 			'Restore was interrupted because the Pluton service stopped or restarted. It was not completed.';
 
+		// Only rows of this host. A remote device runs its own agent, which keeps
+		// running when Pluton restarts, so its in-progress rows are not orphans.
+		const isLocal = (row: { sourceId?: string | null }) => (row.sourceId || 'main') === 'main';
+
 		const sweptBackups: Backup[] = [];
-		const orphanBackups = ((await this.backupStore.getAll()) || []).filter(b => b.inProgress);
+		const orphanBackups = ((await this.backupStore.getAll()) || []).filter(
+			b => b.inProgress && isLocal(b)
+		);
 		for (const backup of orphanBackups) {
 			const updated = await this.backupStore.update(backup.id, {
 				inProgress: false,
@@ -780,7 +787,9 @@ export class PlanService {
 		}
 
 		const sweptRestores: Restore[] = [];
-		const orphanRestores = ((await this.restoreStore.getAll()) || []).filter(r => r.inProgress);
+		const orphanRestores = ((await this.restoreStore.getAll()) || []).filter(
+			r => r.inProgress && isLocal(r)
+		);
 		for (const restore of orphanRestores) {
 			// RestoreStore.update sets `ended` for a final status on its own.
 			const updated = await this.restoreStore.update(restore.id, {
@@ -792,7 +801,9 @@ export class PlanService {
 		}
 
 		const sweptPlans: Plan[] = [];
-		const orphanPlans = ((await this.planStore.getAll()) || []).filter(p => p.inProgress);
+		const orphanPlans = ((await this.planStore.getAll()) || []).filter(
+			p => p.inProgress && isLocal(p)
+		);
 		for (const plan of orphanPlans) {
 			const updated = await this.planStore.update(plan.id, { inProgress: false });
 			if (updated) sweptPlans.push(updated);
