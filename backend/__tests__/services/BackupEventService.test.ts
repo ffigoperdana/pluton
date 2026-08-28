@@ -375,6 +375,99 @@ describe('BackupEventService', () => {
 		});
 	});
 
+	describe('cancelled backups', () => {
+		const planId = 'plan-123';
+		const backupId = 'backup-abc';
+
+		const markRowCancelled = () =>
+			mockBackupStore.getById.mockResolvedValue({ id: backupId, status: 'cancelled' } as any);
+
+		describe('onBackupCancelled', () => {
+			it('should mark the backup as "cancelled" and end it', async () => {
+				// Arrange
+				mockBackupStore.update.mockResolvedValue({ id: backupId } as any);
+
+				// Act
+				await backupEventService.onBackupCancelled({ planId, backupId });
+
+				// Assert
+				expect(mockBackupStore.update).toHaveBeenCalledWith(
+					backupId,
+					expect.objectContaining({
+						status: 'cancelled',
+						success: false,
+						inProgress: false,
+					})
+				);
+			});
+		});
+
+		describe('guard against late failure events', () => {
+			it('should ignore a failed onBackupComplete for a cancelled backup', async () => {
+				// Arrange
+				markRowCancelled();
+
+				// Act
+				await backupEventService.onBackupComplete({ planId, backupId, success: false } as any);
+
+				// Assert
+				expect(mockBackupStore.update).not.toHaveBeenCalled();
+			});
+
+			it('should still record a genuine success for a cancelled backup', async () => {
+				// Arrange
+				markRowCancelled();
+				mockBackupStore.update.mockResolvedValue({ id: backupId } as any);
+
+				// Act
+				await backupEventService.onBackupComplete({ planId, backupId, success: true } as any);
+
+				// Assert
+				expect(mockBackupStore.update).toHaveBeenCalledWith(
+					backupId,
+					expect.objectContaining({ status: 'completed' })
+				);
+			});
+
+			it('should ignore onBackupError for a cancelled backup', async () => {
+				// Arrange
+				markRowCancelled();
+
+				// Act
+				await backupEventService.onBackupError({ planId, backupId, error: 'killed' });
+
+				// Assert
+				expect(mockBackupStore.update).not.toHaveBeenCalled();
+			});
+
+			it('should ignore onBackupFailure for a cancelled backup', async () => {
+				// Arrange
+				markRowCancelled();
+
+				// Act
+				await backupEventService.onBackupFailure({ planId, backupId, error: 'killed' });
+
+				// Assert
+				expect(mockBackupStore.update).not.toHaveBeenCalled();
+			});
+
+			it('should record a failure normally when the backup was not cancelled', async () => {
+				// Arrange
+				mockBackupStore.getById.mockResolvedValue({ id: backupId, status: 'started' } as any);
+				mockBackupStore.update.mockResolvedValue({ id: backupId } as any);
+
+				// Act
+				await backupEventService.onBackupError({ planId, backupId, error: 'real failure' });
+
+				// Assert
+				expect(mockBackupStore.update).toHaveBeenCalledWith(backupId, {
+					status: 'retrying',
+					errorMsg: 'real failure',
+				});
+			});
+		});
+	});
+
 	describe('onBackupStatsUpdate', () => {
 		it('should update plan stats if data is valid', async () => {
 			// Arrange

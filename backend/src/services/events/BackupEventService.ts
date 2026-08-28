@@ -173,12 +173,26 @@ export class BackupEventService {
 		}
 	}
 
+	/**
+	 * A cancelled backup is terminal: the user asked for it and cancelBackup
+	 * already recorded it. A remote agent still reports its killed run as an
+	 * ordinary failure, so those late events must not overwrite the status.
+	 */
+	protected async wasCancelled(backupId: string): Promise<boolean> {
+		const backup = await this.backupStore.getById(backupId);
+		return backup?.status === 'cancelled';
+	}
+
 	async onBackupComplete(data: BackupCompleteEvent): Promise<void> {
 		const { planId, success, backupId, summary } = data;
 		const progressFile = `${this.progressDir}/backup-${backupId}.json`;
 		let summaryData: any = null;
 		let totalDuration = 0;
 		try {
+			if (!success && (await this.wasCancelled(backupId))) {
+				return;
+			}
+
 			// If remote agent summary data is already provided, use it
 			if (summary && summary.message_type === 'summary') {
 				summaryData = summary;
@@ -270,8 +284,40 @@ export class BackupEventService {
 		}
 	}
 
+	/**
+	 * A remote agent reports a user cancellation with its own event, so the
+	 * backup is not recorded as a failure. cancelBackup normally wrote the same
+	 * status already; this also covers a cancel that the agent started itself.
+	 */
+	async onBackupCancelled(data: { planId: string; backupId: string }): Promise<void> {
+		const { planId, backupId } = data;
+		try {
+			const backup = await this.backupStore.update(backupId, {
+				inProgress: false,
+				status: 'cancelled',
+				success: false,
+				ended: sql`(unixepoch())` as any,
+			});
+			if (!backup) {
+				throw new Error('Failed to update Backup entry in Database.');
+			}
+
+			planLogger('backup', planId, backupId).info(`Backup was cancelled by the user.`);
+		} catch (error: any) {
+			planLogger('backup', planId, backupId).error(
+				`Error processing backup cancellation for Backup. Reason : ${
+					error?.message.toString() || 'Unknown Error'
+				}`
+			);
+		}
+	}
+
 	async onBackupError(data: BackupErrorEvent): Promise<void> {
 		try {
+			if (await this.wasCancelled(data.backupId)) {
+				return;
+			}
+
 			// Update DB with Error
 			const backup = await this.backupStore.update(data.backupId, {
 				status: 'retrying',
@@ -297,6 +343,10 @@ export class BackupEventService {
 	async onBackupFailure(data: { planId: string; backupId: string; error: string }): Promise<void> {
 		const { planId, backupId, error } = data;
 		try {
+			if (await this.wasCancelled(backupId)) {
+				return;
+			}
+
 			// Update DB with Error
 			const backup = await this.backupStore.update(backupId, {
 				status: 'failed',

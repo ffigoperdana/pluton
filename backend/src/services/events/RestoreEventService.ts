@@ -90,12 +90,26 @@ export class RestoreEventService {
 		}
 	}
 
+	/**
+	 * A cancelled restore is terminal: the user asked for it and cancelRestore
+	 * already recorded it. A remote agent still reports its killed run as an
+	 * ordinary failure, so those late events must not overwrite the status.
+	 */
+	protected async wasCancelled(restoreId: string): Promise<boolean> {
+		const restore = await this.restoreStore.getById(restoreId);
+		return restore?.status === 'cancelled';
+	}
+
 	async onRestoreError(eventPayload: RestoreErrorEvent) {
 		const { backupId, restoreId, planId, error } = eventPayload;
 		if (!backupId || !planId || !error) {
 			return;
 		}
 		try {
+			if (restoreId && (await this.wasCancelled(restoreId))) {
+				return;
+			}
+
 			if (restoreId) {
 				await this.restoreStore.update(restoreId, {
 					status: 'error',
@@ -121,6 +135,10 @@ export class RestoreEventService {
 			return;
 		}
 		try {
+			if (await this.wasCancelled(restoreId)) {
+				return;
+			}
+
 			if (restoreId) {
 				await this.restoreStore.update(restoreId, {
 					status: 'failed',
@@ -146,6 +164,10 @@ export class RestoreEventService {
 			return;
 		}
 		try {
+			if (!success && (await this.wasCancelled(restoreId))) {
+				return;
+			}
+
 			const progressFile = `${appPaths.getProgressDir()}/restore-${restoreId}.json`;
 			let progressData;
 

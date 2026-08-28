@@ -27,8 +27,8 @@ export class RemoteStrategy implements SnapshotStrategy {
 		return await this.publishCommand('GET_SNAPSHOT_DOWNLOAD', { planId, backupId });
 	}
 
-	async cancelSnapshotDownload(backupId: string) {
-		return await this.publishCommand('CANCEL_SNAPSHOT_DOWNLOAD', { backupId });
+	async cancelSnapshotDownload(planId: string, backupId: string) {
+		return await this.publishCommand('CANCEL_SNAPSHOT_DOWNLOAD', { planId, backupId });
 	}
 
 	async getSnapshotFiles(

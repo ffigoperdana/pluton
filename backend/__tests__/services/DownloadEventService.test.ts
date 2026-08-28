@@ -109,7 +109,9 @@ describe('DownloadEventService', () => {
 			});
 		});
 
-		it('should handle missing backup gracefully (backup is null)', async () => {
+		it('should not rebuild the download when none is tracked', async () => {
+			// A cancel clears the download. A late failure report must not
+			// recreate it, or the cancelled run looks like a real failure.
 			// Arrange
 			mockBackupStore.getById.mockResolvedValue(null);
 			mockBackupStore.update.mockResolvedValue({} as any);
@@ -119,13 +121,7 @@ describe('DownloadEventService', () => {
 
 			// Assert
 			expect(mockBackupStore.getById).toHaveBeenCalledWith(backupId);
-			expect(mockBackupStore.update).toHaveBeenCalledWith(backupId, {
-				download: {
-					status: 'failed',
-					error: errorMsg,
-					ended: expect.any(Number),
-				},
-			});
+			expect(mockBackupStore.update).not.toHaveBeenCalled();
 		});
 
 		it('should log an error and not throw if an exception occurs', async () => {
@@ -166,7 +162,8 @@ describe('DownloadEventService', () => {
 			});
 		});
 
-		it('should handle missing backup gracefully (backup is null)', async () => {
+		it('should not rebuild the download when none is tracked', async () => {
+			// A cancel clears the download, so there is nothing to complete.
 			// Arrange
 			mockBackupStore.getById.mockResolvedValue(null);
 			mockBackupStore.update.mockResolvedValue({} as any);
@@ -176,13 +173,7 @@ describe('DownloadEventService', () => {
 
 			// Assert
 			expect(mockBackupStore.getById).toHaveBeenCalledWith(backupId);
-			expect(mockBackupStore.update).toHaveBeenCalledWith(backupId, {
-				download: {
-					status: 'complete',
-					error: '',
-					ended: expect.any(Number),
-				},
-			});
+			expect(mockBackupStore.update).not.toHaveBeenCalled();
 		});
 
 		it('should log an error and not throw if an exception occurs', async () => {

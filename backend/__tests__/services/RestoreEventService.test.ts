@@ -176,6 +176,62 @@ describe('RestoreEventService', () => {
 		});
 	});
 
+	describe('cancelled restores', () => {
+		const restoreId = 'restore-xyz';
+		const baseEvent = { planId: 'plan-123', backupId: 'backup-abc', restoreId };
+
+		const markRowCancelled = () =>
+			mockRestoreStore.getById.mockResolvedValue({ id: restoreId, status: 'cancelled' } as any);
+
+		it('should ignore onRestoreError for a cancelled restore', async () => {
+			// Arrange
+			markRowCancelled();
+
+			// Act
+			await restoreEventService.onRestoreError({ ...baseEvent, error: 'killed' });
+
+			// Assert
+			expect(mockRestoreStore.update).not.toHaveBeenCalled();
+		});
+
+		it('should ignore onRestoreFailed for a cancelled restore', async () => {
+			// Arrange
+			markRowCancelled();
+
+			// Act
+			await restoreEventService.onRestoreFailed({ ...baseEvent, error: 'killed' });
+
+			// Assert
+			expect(mockRestoreStore.update).not.toHaveBeenCalled();
+		});
+
+		it('should ignore a failed onRestoreComplete for a cancelled restore', async () => {
+			// Arrange
+			markRowCancelled();
+
+			// Act
+			await restoreEventService.onRestoreComplete({ ...baseEvent, success: false } as any);
+
+			// Assert
+			expect(mockRestoreStore.update).not.toHaveBeenCalled();
+		});
+
+		it('should record a failure normally when the restore was not cancelled', async () => {
+			// Arrange
+			mockRestoreStore.getById.mockResolvedValue({ id: restoreId, status: 'started' } as any);
+			mockRestoreStore.update.mockResolvedValue({ id: restoreId } as any);
+
+			// Act
+			await restoreEventService.onRestoreFailed({ ...baseEvent, error: 'real failure' });
+
+			// Assert
+			expect(mockRestoreStore.update).toHaveBeenCalledWith(
+				restoreId,
+				expect.objectContaining({ status: 'failed', errorMsg: 'real failure' })
+			);
+		});
+	});
+
 	describe('onRestoreFailed', () => {
 		const failedEvent: RestoreErrorEvent = {
 			planId: 'plan-123',

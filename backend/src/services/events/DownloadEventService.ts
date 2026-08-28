@@ -34,9 +34,15 @@ export class DownloadEventService {
 		const { backupId, planId, error } = eventPayload;
 		try {
 			const backup = await this.backupStore.getById(backupId);
+			// A cancel cleared the download. Do not rebuild it from a late
+			// failure report, or the killed run looks like a real failure.
+			if (!backup?.download) {
+				return;
+			}
+
 			await this.backupStore.update(backupId, {
 				download: {
-					...(backup?.download || {}),
+					...backup.download,
 					status: 'failed',
 					error: error,
 					ended: Math.floor(Date.now() / 1000),
@@ -58,9 +64,14 @@ export class DownloadEventService {
 		const { backupId, planId, success } = eventPayload;
 		try {
 			const backup = await this.backupStore.getById(backupId);
+			// A cancel cleared the download, so there is nothing to complete.
+			if (!backup?.download) {
+				return;
+			}
+
 			await this.backupStore.update(backupId, {
 				download: {
-					...(backup?.download || {}),
+					...backup.download,
 					status: 'complete',
 					error: '',
 					ended: Math.floor(Date.now() / 1000),
