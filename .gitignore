@@ -34,9 +34,7 @@ dist-lib
 *.code-workspace
 *.vscode
 /*.vscode
-repomix-output.xml
-/.repomix
-.repomix
+.codegraph
 
 #env
 /*.env
