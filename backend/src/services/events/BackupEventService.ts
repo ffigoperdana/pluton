@@ -20,6 +20,7 @@ import {
 	BackupStatUpdateEvent,
 } from '../../types/events';
 import { generateResticRepoPath } from '../../utils/restic/helpers';
+import { eventDate } from '../../utils/eventTime';
 import { BackupVerifiedResult, PlanReplicationStorage, PlanStorageItem } from '../../types/plans';
 import { handleResticCheckResult } from '../../utils/restic/restic';
 
@@ -183,12 +184,27 @@ export class BackupEventService {
 		return backup?.status === 'cancelled';
 	}
 
+	/**
+	 * A finished backup is terminal. A duplicate or replayed completion/failure
+	 * event must not rewrite the row or send the notification again. Cancelled
+	 * is excluded: a genuine success that beat the kill must still be recorded.
+	 */
+	protected async wasFinalized(backupId: string): Promise<boolean> {
+		const backup = await this.backupStore.getById(backupId);
+		return (
+			!!backup && !backup.inProgress && (backup.status === 'completed' || backup.status === 'failed')
+		);
+	}
+
 	async onBackupComplete(data: BackupCompleteEvent): Promise<void> {
 		const { planId, success, backupId, summary } = data;
 		const progressFile = `${this.progressDir}/backup-${backupId}.json`;
 		let summaryData: any = null;
 		let totalDuration = 0;
 		try {
+			if (await this.wasFinalized(backupId)) {
+				return;
+			}
 			if (!success && (await this.wasCancelled(backupId))) {
 				return;
 			}
@@ -224,7 +240,7 @@ export class BackupEventService {
 				inProgress: false,
 				status: success ? 'completed' : 'failed',
 				success: !!success,
-				ended: sql`(unixepoch())` as any,
+				ended: eventDate((data as { occurredAt?: number }).occurredAt),
 				completionStats: summaryData ? summaryData : null,
 				...(success ? { errorMsg: null } : {}),
 			};
@@ -296,7 +312,7 @@ export class BackupEventService {
 				inProgress: false,
 				status: 'cancelled',
 				success: false,
-				ended: sql`(unixepoch())` as any,
+				ended: eventDate((data as { occurredAt?: number }).occurredAt),
 			});
 			if (!backup) {
 				throw new Error('Failed to update Backup entry in Database.');
@@ -343,6 +359,9 @@ export class BackupEventService {
 	async onBackupFailure(data: { planId: string; backupId: string; error: string }): Promise<void> {
 		const { planId, backupId, error } = data;
 		try {
+			if (await this.wasFinalized(backupId)) {
+				return;
+			}
 			if (await this.wasCancelled(backupId)) {
 				return;
 			}
@@ -353,7 +372,7 @@ export class BackupEventService {
 				errorMsg: error,
 				success: false,
 				inProgress: false,
-				ended: sql`(unixepoch())` as any,
+				ended: eventDate((data as { occurredAt?: number }).occurredAt),
 			});
 			if (!backup) {
 				throw new Error('Failed to update Backup entry in Database.');
@@ -390,13 +409,18 @@ export class BackupEventService {
 		const { total_size, snapshots = [], backupId, planId, error = '', mirrors } = data;
 		if (planId && total_size && !Number.isNaN(total_size) && snapshots.length > 0) {
 			try {
+				const occurredAt = (data as { occurredAt?: number }).occurredAt;
+				const eventTime = occurredAt ? new Date(occurredAt * 1000) : new Date();
+				const plan = await this.planStore.getById(planId);
+				// A replayed late event must not move lastBackupTime backwards
+				const isNewer = !plan?.lastBackupTime || eventTime >= plan.lastBackupTime;
 				await this.planStore.update(data.planId, {
 					stats: {
 						size: total_size,
 						snapshots: snapshots,
 						...(mirrors ? { mirrors } : {}),
 					},
-					lastBackupTime: sql`(unixepoch())` as any,
+					...(isNewer ? { lastBackupTime: eventTime } : {}),
 				});
 				planLogger('update', planId, backupId).info(
 					`Updated plan stats for Backup Plan. Total Size: ${total_size} bytes, Total Snapshots: ${snapshots.length || 0} `

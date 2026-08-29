@@ -1,4 +1,4 @@
-import { RestoreConfig, RestoreStats } from '../types/restores';
+﻿import { RestoreConfig, RestoreStats } from '../types/restores';
 import { BackupCompletionStats, BackupTaskStats } from './backups';
 
 // Event emitted before the dry-run to initialize the backup entry in the database.

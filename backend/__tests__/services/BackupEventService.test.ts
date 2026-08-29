@@ -313,6 +313,46 @@ describe('BackupEventService', () => {
 				})
 			);
 		});
+
+		it('should skip a replayed completion for an already finalized backup', async () => {
+			// Arrange
+			mockBackupStore.getById.mockResolvedValue({
+				id: backupId,
+				status: 'completed',
+				inProgress: false,
+			} as any);
+			const completeEvent = { planId, backupId, success: true, summary: mockCompletionStats };
+
+			// Act
+			await backupEventService.onBackupComplete(completeEvent);
+
+			// Assert
+			expect(mockBackupStore.update).not.toHaveBeenCalled();
+			expect(mockBackupNotification.send).not.toHaveBeenCalled();
+		});
+
+		it('should use occurredAt for the ended time when present', async () => {
+			// Arrange
+			mockPlanStore.getById.mockResolvedValue(mockPlan);
+			mockBackupStore.update.mockResolvedValue({ id: backupId } as any);
+			const occurredAt = 1700000000;
+			const completeEvent = {
+				planId,
+				backupId,
+				success: true,
+				summary: mockCompletionStats,
+				occurredAt,
+			};
+
+			// Act
+			await backupEventService.onBackupComplete(completeEvent);
+
+			// Assert
+			expect(mockBackupStore.update).toHaveBeenCalledWith(
+				backupId,
+				expect.objectContaining({ ended: new Date(occurredAt * 1000) })
+			);
+		});
 	});
 
 	describe('onBackupError', () => {
@@ -490,6 +530,56 @@ describe('BackupEventService', () => {
 						snapshots: ['snap1', 'snap2'],
 					},
 				})
+			);
+		});
+
+		it('should not move lastBackupTime backwards for a replayed late event', async () => {
+			// Arrange
+			const occurredAt = 1700000000;
+			mockPlanStore.getById.mockResolvedValue({
+				id: 'plan-123',
+				lastBackupTime: new Date((occurredAt + 3600) * 1000),
+			} as any);
+			const statsEvent = {
+				planId: 'plan-123',
+				backupId: 'backup-abc',
+				total_size: 1024,
+				snapshots: ['snap1'],
+				occurredAt,
+			};
+
+			// Act
+			await backupEventService.onBackupStatsUpdate(statsEvent as any);
+
+			// Assert
+			expect(mockPlanStore.update).toHaveBeenCalledWith(
+				'plan-123',
+				expect.not.objectContaining({ lastBackupTime: expect.anything() })
+			);
+		});
+
+		it('should set lastBackupTime from occurredAt when it is newer', async () => {
+			// Arrange
+			const occurredAt = 1700000000;
+			mockPlanStore.getById.mockResolvedValue({
+				id: 'plan-123',
+				lastBackupTime: new Date((occurredAt - 3600) * 1000),
+			} as any);
+			const statsEvent = {
+				planId: 'plan-123',
+				backupId: 'backup-abc',
+				total_size: 1024,
+				snapshots: ['snap1'],
+				occurredAt,
+			};
+
+			// Act
+			await backupEventService.onBackupStatsUpdate(statsEvent as any);
+
+			// Assert
+			expect(mockPlanStore.update).toHaveBeenCalledWith(
+				'plan-123',
+				expect.objectContaining({ lastBackupTime: new Date(occurredAt * 1000) })
 			);
 		});
 	});

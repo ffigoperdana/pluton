@@ -1,4 +1,4 @@
-import { BaseBackupManager } from '../../managers/BaseBackupManager';
+﻿import { BaseBackupManager } from '../../managers/BaseBackupManager';
 import { BackupStore } from '../../stores/BackupStore';
 import { StorageStore } from '../../stores/StorageStore';
 import { PlanStore } from '../../stores/PlanStore';
@@ -13,6 +13,7 @@ import {
 	ResolvedReplicationStorage,
 } from '../../types/events';
 import { ReplicationHandler } from '../../managers/handlers/ReplicationHandler';
+import { eventMs } from '../../utils/eventTime';
 import { ProgressManager } from '../../managers/ProgressManager';
 import { appPaths } from '../../utils/AppPaths';
 
@@ -223,7 +224,7 @@ export class ReplicationEventService {
 				storagePath: data.storagePath,
 				storageType: data.storageType,
 				status: 'started',
-				started: Date.now(),
+				started: eventMs((data as { occurredAt?: number }).occurredAt),
 			});
 			planLogger('replication', data.planId, data.backupId).info(
 				`Replication started for storage ${data.storageName} (${data.storageId})`
@@ -243,7 +244,7 @@ export class ReplicationEventService {
 				storagePath: data.storagePath,
 				storageType: data.storageType,
 				status: data.success ? 'completed' : 'failed',
-				ended: Date.now(),
+				ended: eventMs((data as { occurredAt?: number }).occurredAt),
 				error: data.error,
 			});
 

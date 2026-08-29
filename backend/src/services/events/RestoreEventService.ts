@@ -1,5 +1,4 @@
-import { sql } from 'drizzle-orm';
-import { PlanStore } from '../../stores/PlanStore';
+﻿import { PlanStore } from '../../stores/PlanStore';
 import { BackupStore } from '../../stores/BackupStore';
 import { RestoreStore } from '../../stores/RestoreStore';
 import { readFile } from 'fs/promises';
@@ -9,6 +8,7 @@ import { NewRestore, restoreInsertSchema } from '../../db/schema/restores';
 import { SourceTypes } from '../../types/source';
 import { RestoreCompleteEvent, RestoreErrorEvent, RestoreStartEvent } from '../../types/events';
 import { BaseRestoreManager } from '../../managers/BaseRestoreManager';
+import { eventDate } from '../../utils/eventTime';
 
 export class RestoreEventService {
 	constructor(
@@ -115,7 +115,7 @@ export class RestoreEventService {
 					status: 'error',
 					errorMsg: error,
 					inProgress: true,
-					ended: sql`(unixepoch())` as any,
+					ended: eventDate((eventPayload as { occurredAt?: number }).occurredAt),
 				});
 			}
 
@@ -144,7 +144,7 @@ export class RestoreEventService {
 					status: 'failed',
 					errorMsg: error,
 					inProgress: false,
-					ended: sql`(unixepoch())` as any,
+					ended: eventDate((eventPayload as { occurredAt?: number }).occurredAt),
 				});
 			}
 
@@ -178,7 +178,7 @@ export class RestoreEventService {
 			await this.restoreStore.update(restoreId, {
 				status: success ? 'completed' : 'failed',
 				inProgress: false,
-				ended: sql`(unixepoch())` as any,
+				ended: eventDate((eventPayload as { occurredAt?: number }).occurredAt),
 				completionStats: progressData?.data,
 			});
 

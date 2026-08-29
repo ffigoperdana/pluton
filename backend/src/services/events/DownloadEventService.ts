@@ -1,7 +1,8 @@
-import { BackupStore } from '../../stores/BackupStore';
+﻿import { BackupStore } from '../../stores/BackupStore';
 import { planLogger } from '../../utils/logger';
 import { DownloadCompleteEvent, DownloadErrorEvent, DownloadStartEvent } from '../../types/events';
 import { BaseSnapshotManager } from '../../managers/BaseSnapshotManager';
+import { eventSec } from '../../utils/eventTime';
 
 export class DownloadEventService {
 	constructor(
@@ -45,7 +46,7 @@ export class DownloadEventService {
 					...backup.download,
 					status: 'failed',
 					error: error,
-					ended: Math.floor(Date.now() / 1000),
+					ended: eventSec((eventPayload as { occurredAt?: number }).occurredAt),
 				},
 			});
 
@@ -74,7 +75,7 @@ export class DownloadEventService {
 					...backup.download,
 					status: 'complete',
 					error: '',
-					ended: Math.floor(Date.now() / 1000),
+					ended: eventSec((eventPayload as { occurredAt?: number }).occurredAt),
 				},
 			});
 
