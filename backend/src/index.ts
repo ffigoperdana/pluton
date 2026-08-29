@@ -23,6 +23,12 @@ import { CLI_COMMAND_FLAGS } from './utils/cliCommands';
 const isMainModule = import.meta.url === `file://${process.argv[1]}` || (process as any).pkg;
 const isDevelopment = process.env.NODE_ENV === 'development';
 
+// Backup event handlers are async but run detached from the emitter, so a
+// rejection would end the process and leave the run with a stale lock.
+process.on('unhandledRejection', (reason: any) => {
+	console.error('[CORE] Unhandled promise rejection:', reason?.stack || reason);
+});
+
 if (isMainModule || isDevelopment) {
 	(async () => {
 		// These flags are also what lets ConfigService skip its server-credential fail-fast
