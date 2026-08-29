@@ -73,7 +73,9 @@ describe('SMTPChannel', () => {
 				port: 587,
 				secure: false,
 				requireTLS: false,
+				connectionTimeout: 15000,
 				greetingTimeout: 10000,
+				socketTimeout: 30000,
 				auth: {
 					user: 'user@example.com',
 					pass: 'password123',

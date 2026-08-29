@@ -23,7 +23,9 @@ export class SMTPChannel implements NotificationChannel {
 			requireTLS: false,
 			// debug: true,
 			// logger: true,
+			connectionTimeout: 15000,
 			greetingTimeout: 10000,
+			socketTimeout: 30000,
 			auth: {
 				user: smtpConfig.username,
 				pass: smtpConfig.password,
