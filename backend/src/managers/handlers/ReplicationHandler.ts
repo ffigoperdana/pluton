@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { runResticCommand } from '../../utils/restic/restic';
 import { generateResticRepoPath } from '../../utils/restic/helpers';
+import { normalizeStorageName } from '../../utils/helpers';
 import { processManager } from '../ProcessManager';
 import { PruneHandler } from './PruneHandler';
 import { ProgressManager } from '../ProgressManager';
@@ -151,7 +152,7 @@ export class ReplicationHandler {
 				false
 			);
 
-			const destRepoPath = generateResticRepoPath(storageName, storagePath);
+			const destRepoPath = generateResticRepoPath(normalizeStorageName(storageName), storagePath);
 
 			// Step 1: Ensure replication repo is initialized (with chunker params from source)
 			try {

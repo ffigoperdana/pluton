@@ -6,6 +6,7 @@ import { BackupStore } from '../stores/BackupStore';
 import { StorageStore } from '../stores/StorageStore';
 import { BaseRestoreManager } from '../managers/BaseRestoreManager';
 import { RestoreConfig, RestoreOptions } from '../types/restores';
+import { normalizeStorageName } from '../utils/helpers';
 
 /**
  * A class for managing restore operations.
@@ -84,7 +85,7 @@ export class RestoreService {
 				);
 				if (replicationStorage) {
 					storagePath = replicationStorage.storagePath || '';
-					storageName = replicationStorage.storageName;
+					storageName = normalizeStorageName(replicationStorage.storageName);
 					if (!storageName) {
 						storageName = await this.getStorageName(replicationStorage.storageId);
 					}
@@ -149,7 +150,7 @@ export class RestoreService {
 				);
 				if (replicationStorage) {
 					storagePath = replicationStorage.storagePath || '';
-					storageName = replicationStorage.storageName;
+					storageName = normalizeStorageName(replicationStorage.storageName);
 					if (!storageName) {
 						storageName = await this.getStorageName(replicationStorage.storageId);
 					}
