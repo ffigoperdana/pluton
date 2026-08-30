@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.18.3](https://github.com/plutonhq/pluton/compare/pluton-v0.18.2...pluton-v0.18.3) (2026-08-09)
+
+
+### Bug Fixes
+
+* resolve missing obfuscation on storage update ([4095c45](https://github.com/plutonhq/pluton/commit/4095c45e129ef02f1bbff5183ec4b7b0615f8197))
+* resolves broken storage update when there was no plan associated ([0b9417d](https://github.com/plutonhq/pluton/commit/0b9417d331c08266cccc02cff22a3ef3856aede8))
+* resolves multiple storage integration issues ([02dbe0d](https://github.com/plutonhq/pluton/commit/02dbe0dd0d2825f21fc93dcfd6b4871eec044507))
+* resolves SFTP & FTP port setting issue ([347638c](https://github.com/plutonhq/pluton/commit/347638ca9ddd1153bd94a85c103a37ef62a94af8)), closes [#118](https://github.com/plutonhq/pluton/issues/118)
+
 ## [0.18.2](https://github.com/plutonhq/pluton/compare/pluton-v0.18.1...pluton-v0.18.2) (2026-07-31)
 
 
