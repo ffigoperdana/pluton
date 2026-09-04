@@ -14,10 +14,20 @@ interface StoragePickerProps {
    storageId?: string;
    disabled?: boolean;
    deviceId?: string;
+   excludeStorageIds?: string[];
+   disabledHint?: string;
    onUpdate: (val: { storage: storageItem; path: string }) => void;
 }
 
-const StoragePicker = ({ onUpdate, storagePath = '', storageId, disabled = false, deviceId }: StoragePickerProps) => {
+const StoragePicker = ({
+   onUpdate,
+   storagePath = '',
+   storageId,
+   disabled = false,
+   deviceId,
+   excludeStorageIds,
+   disabledHint = "The destination path can't be changed after a plan is created.",
+}: StoragePickerProps) => {
    const [selectedStorage, setSelectedStorage] = useState<null | storageItem>();
    const [showFolderPicker, setShowFolderPicker] = useState(false);
    const [showAddStorageModal, setShowAddStorageModal] = useState(false);
@@ -34,13 +44,24 @@ const StoragePicker = ({ onUpdate, storagePath = '', storageId, disabled = false
    console.log('selectedStorage :', selectedStorage);
 
    const storageOptions = useMemo(() => {
-      const storageOpts = allStorages.map(({ name, id, type }) => ({
-         label: name,
-         value: id.toString(),
-         image: <img src={`/providers/${type}.png`} />,
-      }));
+      const storageOpts = allStorages
+         .filter(({ id }) => !excludeStorageIds?.includes(id))
+         .map(({ name, id, type }) => ({
+            label: name,
+            value: id.toString(),
+            image: <img src={`/providers/${type}.png`} />,
+         }));
       return storageOpts;
-   }, [allStorages]);
+   }, [allStorages, excludeStorageIds]);
+
+   // Clear the selection when the picked storage becomes excluded (e.g. the user
+   // selected it as the source of the same plan).
+   useEffect(() => {
+      if (selectedStorage && excludeStorageIds?.includes(selectedStorage.id)) {
+         setSelectedStorage(null);
+         setPath('');
+      }
+   }, [excludeStorageIds, selectedStorage]);
 
    const selectStorage = (storageID: string) => {
       console.log('storageID :', storageID);
@@ -94,7 +115,7 @@ const StoragePicker = ({ onUpdate, storagePath = '', storageId, disabled = false
             {...(disabled
                ? {
                     'data-tooltip-id': 'appTooltip',
-                    'data-tooltip-content': "The destination path can't be changed after a plan is created.",
+                    'data-tooltip-content': disabledHint,
                     'data-tooltip-place': 'top',
                  }
                : {})}

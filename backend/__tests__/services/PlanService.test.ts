@@ -242,6 +242,82 @@ describe('PlanService', () => {
 		});
 	});
 
+	// -------------------------------------
+	// Tests for creating a storage-to-storage sync plan
+	// -------------------------------------
+	describe('createPlan with a storage source', () => {
+		beforeEach(() => {
+			performBackupSpy = jest
+				.spyOn(planService, 'performBackup')
+				.mockImplementation(() => Promise.resolve(''));
+		});
+
+		afterEach(() => {
+			performBackupSpy.mockRestore();
+		});
+
+		const localStoragePath = process.platform === 'win32' ? 'C:\\backups\\test' : '/backups/test';
+
+		const storagePlanData: NewPlanReq = {
+			title: 'Storage Sync Plan',
+			storage: { id: 'dest-storage', name: 'Dest Storage' },
+			storagePath: localStoragePath,
+			sourceId: 'source-storage',
+			sourceType: 'storage',
+			sourceConfig: { includes: ['some/path'], excludes: [] },
+			method: 'sync',
+			tags: [],
+			settings: {
+				interval: { type: 'daily', time: '10:00AM' },
+			} as PlanBackupSettings,
+		} as any;
+
+		beforeEach(() => {
+			mockStorageStore.getById.mockImplementation(async (id: string) => {
+				if (id === 'dest-storage') {
+					return { id: 'dest-storage', name: 'Dest Storage', type: 'local' } as any;
+				}
+				if (id === 'source-storage') {
+					return { id: 'source-storage', name: 'SourceRemote', type: 's3' } as any;
+				}
+				return null;
+			});
+			mockPlanStore.create.mockImplementation((data: any) =>
+				Promise.resolve({ id: 'plan-sync', ...data })
+			);
+		});
+
+		it('bakes the source remote:path into sourceConfig.includes[0]', async () => {
+			await planService.createPlan(storagePlanData);
+
+			expect(mockPlanStore.create).toHaveBeenCalledWith(
+				expect.objectContaining({
+					sourceConfig: expect.objectContaining({
+						includes: ['SourceRemote:some/path'],
+					}),
+				})
+			);
+		});
+
+		it('does not look up a source device', async () => {
+			await planService.createPlan(storagePlanData);
+
+			expect(mockDeviceStore.getById).not.toHaveBeenCalled();
+		});
+
+		it('rejects when the source storage is the same as the destination storage', async () => {
+			const badData = { ...storagePlanData, sourceId: 'dest-storage' };
+
+			await expect(planService.createPlan(badData)).rejects.toHaveProperty('statusCode', 400);
+		});
+
+		it('rejects a storage source when the method is not sync', async () => {
+			const badData = { ...storagePlanData, method: 'backup' };
+
+			await expect(planService.createPlan(badData)).rejects.toHaveProperty('statusCode', 400);
+		});
+	});
+
 	// -------------------------
 	// Tests for updating a plan
 	// -------------------------
@@ -349,6 +425,73 @@ describe('PlanService', () => {
 
 			await expect(
 				planService.updatePlan(planId, { storagePath: '/backups/moved' } as any)
+			).rejects.toHaveProperty('statusCode', 400);
+			expect(mockPlanStore.update).not.toHaveBeenCalled();
+		});
+	});
+
+	// -------------------------------------
+	// Tests for updating a storage-to-storage sync plan
+	// -------------------------------------
+	describe('updatePlan on a storage-source plan', () => {
+		const planId = 'plan-storage-sync';
+		const currentPlan = {
+			id: planId,
+			title: 'Sync Plan',
+			sourceId: 'source-storage',
+			sourceType: 'storage',
+			storageId: 'dest-storage',
+			sourceConfig: { includes: ['SourceRemote:old/path'], excludes: [] },
+			settings: {
+				interval: { type: 'daily', time: '10:00AM' },
+			},
+		} as any;
+
+		beforeEach(() => {
+			mockPlanStore.getById.mockResolvedValue(currentPlan);
+			mockPlanStore.update.mockImplementation((id: string, data: any) =>
+				Promise.resolve({ ...currentPlan, ...data })
+			);
+			mockStorageStore.getById.mockImplementation(async (id: string) => {
+				if (id === 'dest-storage') {
+					return { id: 'dest-storage', name: 'Dest Storage', type: 'local' } as any;
+				}
+				if (id === 'source-storage') {
+					return { id: 'source-storage', name: 'SourceRemote', type: 's3' } as any;
+				}
+				return null;
+			});
+		});
+
+		it('re-bakes sourceConfig.includes[0] from a fresh path', async () => {
+			await planService.updatePlan(planId, {
+				sourceConfig: { includes: ['new/path'], excludes: [] },
+			} as any);
+
+			expect(mockPlanStore.update).toHaveBeenCalledWith(
+				planId,
+				expect.objectContaining({
+					sourceConfig: expect.objectContaining({ includes: ['SourceRemote:new/path'] }),
+				})
+			);
+		});
+
+		it('is idempotent when the incoming value is already prefixed with the remote name', async () => {
+			await planService.updatePlan(planId, {
+				sourceConfig: { includes: ['SourceRemote:new/path'], excludes: [] },
+			} as any);
+
+			expect(mockPlanStore.update).toHaveBeenCalledWith(
+				planId,
+				expect.objectContaining({
+					sourceConfig: expect.objectContaining({ includes: ['SourceRemote:new/path'] }),
+				})
+			);
+		});
+
+		it('rejects changing the source storage with a 400', async () => {
+			await expect(
+				planService.updatePlan(planId, { sourceId: 'other-storage' } as any)
 			).rejects.toHaveProperty('statusCode', 400);
 			expect(mockPlanStore.update).not.toHaveBeenCalled();
 		});
@@ -1049,7 +1192,7 @@ describe('PlanService', () => {
 			schedulesMap.set('plan-orphan', [{ type: 'backup', options: {} }]);
 			mockCronManager.getSchedules.mockResolvedValue(schedulesMap);
 			mockCronManager.removeSchedule.mockResolvedValue(undefined);
-			mockPlanStore.getDevicePlans.mockResolvedValue([]);
+			mockPlanStore.getAll = jest.fn().mockResolvedValue([]);
 
 			// Act
 			await planService.reconcileSchedules();
@@ -1059,12 +1202,30 @@ describe('PlanService', () => {
 			expect(mockCronManager.removeSchedule).toHaveBeenCalledTimes(1);
 		});
 
+		it('should not remove the schedule of a storage-source plan as an orphan', async () => {
+			// A storage-source plan has a storage id in sourceId, not 'main'
+			const storagePlan = makePlan('plan-storage', {
+				sourceId: 'storage-src-1',
+				sourceType: 'storage',
+				method: 'sync',
+			});
+			const schedulesMap = new Map();
+			schedulesMap.set('plan-storage', [{ type: 'sync', options: {} }]);
+			mockCronManager.getSchedules.mockResolvedValue(schedulesMap);
+			mockCronManager.removeSchedule.mockResolvedValue(undefined);
+			mockPlanStore.getAll = jest.fn().mockResolvedValue([storagePlan]);
+
+			await planService.reconcileSchedules();
+
+			expect(mockCronManager.removeSchedule).not.toHaveBeenCalled();
+		});
+
 		it('should recreate missing schedules for plans in the database', async () => {
 			// Arrange: DB has a plan but CronManager has no schedules
 			const plan = makePlan('plan-missing');
 			const schedulesMap = new Map();
 			mockCronManager.getSchedules.mockResolvedValue(schedulesMap);
-			mockPlanStore.getDevicePlans.mockResolvedValue([plan]);
+			mockPlanStore.getAll = jest.fn().mockResolvedValue([plan]);
 			mockStorageStore.getById.mockResolvedValue({
 				id: 'storage-123',
 				name: 'Test Storage',
@@ -1097,7 +1258,7 @@ describe('PlanService', () => {
 			const schedulesMap = new Map();
 			schedulesMap.set('plan-synced', [{ type: 'backup', options: {} }]);
 			mockCronManager.getSchedules.mockResolvedValue(schedulesMap);
-			mockPlanStore.getDevicePlans.mockResolvedValue([plan]);
+			mockPlanStore.getAll = jest.fn().mockResolvedValue([plan]);
 
 			// Act
 			await planService.reconcileSchedules();
@@ -1112,7 +1273,7 @@ describe('PlanService', () => {
 			const planNoInterval = makePlan('plan-no-interval', { settings: {} });
 			const schedulesMap = new Map();
 			mockCronManager.getSchedules.mockResolvedValue(schedulesMap);
-			mockPlanStore.getDevicePlans.mockResolvedValue([planNoInterval]);
+			mockPlanStore.getAll = jest.fn().mockResolvedValue([planNoInterval]);
 
 			// Act
 			await planService.reconcileSchedules();
@@ -1126,7 +1287,7 @@ describe('PlanService', () => {
 			const plan = makePlan('plan-bad-storage');
 			const schedulesMap = new Map();
 			mockCronManager.getSchedules.mockResolvedValue(schedulesMap);
-			mockPlanStore.getDevicePlans.mockResolvedValue([plan]);
+			mockPlanStore.getAll = jest.fn().mockResolvedValue([plan]);
 			mockStorageStore.getById.mockResolvedValue(null); // Storage not found
 
 			// Act — should not throw
@@ -1143,7 +1304,7 @@ describe('PlanService', () => {
 			schedulesMap.set('plan-deleted', [{ type: 'backup', options: {} }]);
 			mockCronManager.getSchedules.mockResolvedValue(schedulesMap);
 			mockCronManager.removeSchedule.mockResolvedValue(undefined);
-			mockPlanStore.getDevicePlans.mockResolvedValue([plan]);
+			mockPlanStore.getAll = jest.fn().mockResolvedValue([plan]);
 			mockStorageStore.getById.mockResolvedValue({
 				id: 'storage-123',
 				name: 'Test Storage',
@@ -1173,7 +1334,7 @@ describe('PlanService', () => {
 			const plan2 = makePlan('plan-ok', { storageId: 'storage-good' });
 			const schedulesMap = new Map();
 			mockCronManager.getSchedules.mockResolvedValue(schedulesMap);
-			mockPlanStore.getDevicePlans.mockResolvedValue([plan1, plan2]);
+			mockPlanStore.getAll = jest.fn().mockResolvedValue([plan1, plan2]);
 			mockStorageStore.getById.mockImplementation(async (id: string) => {
 				if (id === 'storage-bad') return null; // Will cause getStorageDetails to throw
 				return {

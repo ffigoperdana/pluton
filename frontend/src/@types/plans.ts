@@ -181,7 +181,7 @@ export type Plan = {
    lastUpdated: string | null;
    storageId: string;
    sourceId: string;
-   sourceType: 'device' | 'database' | 'googleworkspace' | 'microsoft365';
+   sourceType: 'device' | 'storage' | 'database' | 'googleworkspace' | 'microsoft365';
    storagePath: string;
    sourceConfig: PlanSource;
    tags: string[];
@@ -190,7 +190,7 @@ export type Plan = {
    settings: PlanSettings;
 
    storage: { name: string; type: string; id: string };
-   device: { name: string; id: string; hostname: string };
+   device?: { name: string; id: string; hostname: string };
    backups: Backup[];
    restores?: RestoreSlim[];
 };
@@ -205,7 +205,7 @@ export interface NewPlanSettings {
       excludes: string[];
    };
    sourceId: string;
-   sourceType: 'device' | 'database' | 'googleworkspace' | 'microsoft365';
+   sourceType: 'device' | 'storage' | 'database' | 'googleworkspace' | 'microsoft365';
    storage: { id: string; name: string };
    storagePath: string;
    tags: string[];

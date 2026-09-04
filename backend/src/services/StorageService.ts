@@ -279,6 +279,16 @@ export class StorageService {
 					`This Storage is used as a replication target by the following plans: ${planTitles}. Please remove it from their replication settings before deleting the storage.`
 				);
 			}
+			// Disallow removing a storage that is used as a source for storage-sync plans.
+			// Storage-to-storage sync plans hold the source storage id in `plans.sourceId`.
+			const sourcePlans = await this.planStore.getDevicePlans(id);
+			if (sourcePlans && sourcePlans.length > 0) {
+				const planTitles = sourcePlans.map(p => p.title).join(', ');
+				throw new AppError(
+					400,
+					`This Storage is used as a backup source by the following plans: ${planTitles}. Please remove them before deleting the Storage.`
+				);
+			}
 
 			const settingsRow = await this.settingsStore.getFirst();
 			const selfBackup = resolveSelfBackup(settingsRow?.settings);

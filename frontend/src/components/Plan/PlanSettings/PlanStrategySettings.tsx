@@ -26,7 +26,7 @@ const PlanStrategySettings = ({ plan, options = [], disabled = false, onUpdate }
             <RadioIconSelect
                label="Backup Strategy*"
                options={options}
-               fieldValue={plan.method}
+               fieldValue={plan.sourceType === 'storage' ? 'storage-sync' : plan.method}
                onUpdate={(method) => onUpdate(method)}
                onDisableClick={(value) => {
                   const option = options.find((opt) => opt.value === value);

@@ -19,6 +19,12 @@
 
 .planActions {
    position: relative;
+   display: flex;
+   .actionBtn {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+   }
    .moreOptions {
       position: absolute;
       width: max-content;

@@ -42,6 +42,7 @@ export { default as PasswordField } from './common/form/PasswordField/PasswordFi
 export { default as RadioIconSelect } from './common/form/RadioIconSelect/RadioIconSelect';
 export { default as Select } from './common/form/Select/Select';
 export { default as SizePicker } from './common/form/SizePicker/SizePicker';
+export { default as StorageIcon } from './common/Icon/StorageIcon';
 export { default as StoragePicker } from './common/form/StoragePicker/StoragePicker';
 export { default as TagsInput } from './common/form/TagsInput/TagsInput';
 export { default as TimePicker } from './common/form/TimePicker/TimePicker';

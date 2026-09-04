@@ -32,6 +32,9 @@ const Upgrade = ({ focus, onClose }: UpgradeProps) => {
                      <li className={tab === 'sync' ? classes.active : ''} onClick={() => setTab('sync')}>
                         <Icon type="sync" size={14} /> Sync Backups
                      </li>
+                     <li className={tab === 'storage-sync' ? classes.active : ''} onClick={() => setTab('storage-sync')}>
+                        <Icon type="storages" size={14} /> Storage Sync
+                     </li>
                      <li className={tab === 'remote' ? classes.active : ''} onClick={() => setTab('remote')}>
                         <Icon type="computer-remote" size={14} /> Backup Remote Machines
                      </li>
@@ -77,6 +80,32 @@ const Upgrade = ({ focus, onClose }: UpgradeProps) => {
                         </ul>
                         <div className={classes.tabImage}>
                            <img src="https://pluton.b-cdn.net/upgrade/features_pro_sync.webp" />
+                        </div>
+                     </div>
+                  )}
+                  {tab === 'storage-sync' && (
+                     <div className={classes.tab}>
+                        <h3>
+                           <Icon type="storages" size={18} /> Unlock Cloud-to-Cloud Storage Sync
+                        </h3>
+                        <ul>
+                           <li>
+                              <Icon type="check-circle" size={14} /> Sync one cloud storage directly to another, with no local copy
+                           </li>
+                           <li>
+                              <Icon type="check-circle" size={14} /> Keep a second provider up to date, so one provider is never a single point of
+                              failure
+                           </li>
+                           <li>
+                              <Icon type="check-circle" size={14} /> File revisions, exclude patterns, and integrity checks work the same as a device
+                              sync
+                           </li>
+                           <li>
+                              <Icon type="check-circle" size={14} /> Restore files back to the source storage at any time
+                           </li>
+                        </ul>
+                        <div className={classes.tabImage}>
+                           <img src="https://pluton.b-cdn.net/upgrade/features_pro_storage_sync.webp" />
                         </div>
                      </div>
                   )}
@@ -235,21 +264,23 @@ const Upgrade = ({ focus, onClose }: UpgradeProps) => {
                </div>
                <div className={classes.mobileNav}>
                   <ul>
-                     {['sync', 'remote', 'recovery', 'snapshot', 'rescue', 'email'].map((item) => (
+                     {['sync', 'storage-sync', 'remote', 'recovery', 'snapshot', 'rescue', 'email'].map((item) => (
                         <li key={item} className={tab === item ? classes.active : ''} onClick={() => setTab(item)}>
                            <Icon
                               type={
                                  item === 'sync'
                                     ? 'sync'
-                                    : item === 'remote'
-                                      ? 'computer-remote'
-                                      : item === 'recovery'
-                                        ? 'integrity'
-                                        : item === 'snapshot'
-                                          ? 'box'
-                                          : item === 'rescue'
-                                            ? 'linux'
-                                            : 'email'
+                                    : item === 'storage-sync'
+                                      ? 'storages'
+                                      : item === 'remote'
+                                        ? 'computer-remote'
+                                        : item === 'recovery'
+                                          ? 'integrity'
+                                          : item === 'snapshot'
+                                            ? 'box'
+                                            : item === 'rescue'
+                                              ? 'linux'
+                                              : 'email'
                               }
                               size={24}
                            />

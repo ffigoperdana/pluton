@@ -567,3 +567,16 @@ export const proViewFileFormatObj = {
 };
 
 export const proViewableFileFormats = Object.values(proViewFileFormatObj).flat();
+
+export const getBackupIconName = (method: string, sourceType?: string): string => {
+   if (method === 'sync' && sourceType === 'storage') {
+      return 'storage-sync';
+   }
+   if (method === 'sync') {
+      return 'sync';
+   }
+   if (method === 'rescue') {
+      return 'rescue';
+   }
+   return 'backup';
+};

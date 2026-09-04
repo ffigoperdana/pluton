@@ -20,8 +20,8 @@ export class RestoreService {
 		protected storageStore: StorageStore
 	) {}
 
-	getRestoreStrategy(deviceId: string, method: string): RestoreStrategy {
-		const isRemote = deviceId !== 'main';
+	getRestoreStrategy(deviceId: string, method: string, sourceType?: string): RestoreStrategy {
+		const isRemote = sourceType !== 'storage' && deviceId !== 'main';
 		return isRemote ? new RemoteStrategy(deviceId) : new LocalStrategy(this.localAgent);
 	}
 
@@ -43,7 +43,7 @@ export class RestoreService {
 		if (!restore) {
 			throw new NotFoundError('Restore not found');
 		}
-		const strategy = this.getRestoreStrategy(restore.sourceId, restore.method);
+		const strategy = this.getRestoreStrategy(restore.sourceId, restore.method, restore.sourceType);
 		const statsRes = await strategy.getRestoreStats(restore.planId as string, restoreId);
 
 		return statsRes;
@@ -94,7 +94,7 @@ export class RestoreService {
 				}
 			}
 
-			const strategy = this.getRestoreStrategy(backupDevice, backup.method);
+			const strategy = this.getRestoreStrategy(backupDevice, backup.method, backup.sourceType);
 			const restoreResult = await strategy.getRestoreSnapshotStats(
 				backup.planId as string,
 				backup.id,
@@ -159,7 +159,7 @@ export class RestoreService {
 				}
 			}
 
-			const strategy = this.getRestoreStrategy(backupDevice, plan.method);
+			const strategy = this.getRestoreStrategy(backupDevice, plan.method, plan.sourceType);
 			const restoreResult = await strategy.restoreSnapshot(backup.planId as string, backup.id, {
 				planId: backup.planId as string,
 				storageName: storageName,
@@ -189,7 +189,11 @@ export class RestoreService {
 		if (!restore) {
 			throw new NotFoundError('Restore not found');
 		}
-		const strategy = this.getRestoreStrategy(restore.sourceId as string, restore.method);
+		const strategy = this.getRestoreStrategy(
+			restore.sourceId as string,
+			restore.method,
+			restore.sourceType
+		);
 		const cancelResult = await strategy.cancelSnapshotRestore(restore.planId as string, restoreId);
 		await this.restoreStore.update(restoreId, {
 			status: 'cancelled',
@@ -204,7 +208,11 @@ export class RestoreService {
 		if (!restore) {
 			throw new NotFoundError('Restore not found');
 		}
-		const strategy = this.getRestoreStrategy(restore.sourceId as string, restore.method);
+		const strategy = this.getRestoreStrategy(
+			restore.sourceId as string,
+			restore.method,
+			restore.sourceType
+		);
 		const progressResult = await strategy.getRestoreProgress(restore.planId as string, restoreId);
 		if (!progressResult.success) {
 			throw new Error((progressResult.result as string) || 'Failed to get Restore Progress');

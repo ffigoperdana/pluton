@@ -1,6 +1,8 @@
 import Icon from '../../common/Icon/Icon';
+import StorageIcon from '../../common/Icon/StorageIcon';
 import { Plan } from '../../../@types/plans';
-import { formatIntervalDisplay } from '../../../utils/helpers';
+import { useGetStorages } from '../../../services/storage';
+import { formatIntervalDisplay, getBackupIconName } from '../../../utils/helpers';
 import PlanHistory from '../PlanHistory/PlanHistory';
 import PlanSizeChart from '../PlanSizeChart/PlanSizeChart';
 import classes from './PlanStats.module.scss';
@@ -16,6 +18,13 @@ interface PlanStatsProps {
 const PlanStats = ({ plan, isSync, lastBackupItem }: PlanStatsProps) => {
    const { sourceConfig, storage, storagePath, isActive, settings } = plan;
    const { interval } = settings;
+   const isStorageSource = plan.sourceType === 'storage';
+
+   const { data: storageData } = useGetStorages();
+   const sourceStorage = isStorageSource
+      ? ((storageData?.result as { id: string; name: string; type: string }[]) || []).find((s) => s.id === plan.sourceId)
+      : undefined;
+   const sourceName = isStorageSource ? sourceStorage?.name || '' : plan.device?.name || '';
 
    const totalFiles = lastBackupItem?.totalFiles || 0;
    const totalSize = lastBackupItem?.totalSize || 0;
@@ -24,7 +33,7 @@ const PlanStats = ({ plan, isSync, lastBackupItem }: PlanStatsProps) => {
       let html = '';
       if (sources && sources.includes && sources.includes.length > 0) {
          html += `<div><strong>Includes</strong></div>`;
-         html += sources.includes.map((p) => `<div>${plan.device.name} -> ${p}</div>`).join('');
+         html += sources.includes.map((p) => `<div>${sourceName} -> ${p}</div>`).join('');
       }
       if (sources && sources.excludes && sources.excludes.length > 0) {
          html += `<div><strong>Excludes</strong></div>`;
@@ -37,12 +46,12 @@ const PlanStats = ({ plan, isSync, lastBackupItem }: PlanStatsProps) => {
       <div className={classes.planStats}>
          <div className={classes.sources}>
             <div className={classes.widgetTitle}>
-               <Icon type="backup" size={12} /> {isSync ? 'Syncing' : 'Backing Up'}
+               <Icon type={getBackupIconName(plan.method, plan.sourceType)} size={12} /> {isSync ? 'Syncing' : 'Backing Up'}
             </div>
             <div className={classes.sourceContent}>
                <div data-tooltip-id="htmlToolTip" data-tooltip-place="top" data-tooltip-html={sourceTooltipHTML(sourceConfig)}>
-                  <Icon type="folders" size={18} />
-                  <span>{sourceConfig?.includes.length} Sources</span>
+                  {isStorageSource ? <StorageIcon type={sourceStorage?.type} size={18} /> : <Icon type="folders" size={18} />}
+                  <span>{isStorageSource ? sourceName : `${sourceConfig?.includes.length} Sources`}</span>
                </div>
                <div
                   data-tooltip-id="htmlToolTip"

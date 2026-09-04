@@ -362,6 +362,7 @@ describe('StorageService', () => {
 			mockStorageStore.getById.mockResolvedValue(mockStorage);
 			mockPlanStore.getStoragePlans.mockResolvedValue([]); // No dependent plans
 			mockStorageStore.getReplicationPlans = jest.fn().mockResolvedValue([]);
+			mockPlanStore.getDevicePlans.mockResolvedValue([]);
 			mockStorageManager.deleteRemote.mockResolvedValue({ success: true, result: 'Deleted' });
 			mockStorageStore.delete.mockResolvedValue(true);
 
@@ -370,6 +371,19 @@ describe('StorageService', () => {
 			expect(mockPlanStore.getStoragePlans).toHaveBeenCalledWith(storageId);
 			expect(mockStorageManager.deleteRemote).toHaveBeenCalledWith('Old Storage');
 			expect(mockStorageStore.delete).toHaveBeenCalledWith(storageId);
+			expect(result).toBe(true);
+		});
+
+		it('should still succeed when getDevicePlans returns null', async () => {
+			mockStorageStore.getById.mockResolvedValue(mockStorage);
+			mockPlanStore.getStoragePlans.mockResolvedValue([]);
+			mockStorageStore.getReplicationPlans = jest.fn().mockResolvedValue([]);
+			mockPlanStore.getDevicePlans.mockResolvedValue(null);
+			mockStorageManager.deleteRemote.mockResolvedValue({ success: true, result: 'Deleted' });
+			mockStorageStore.delete.mockResolvedValue(true);
+
+			const result = await storageService.deleteStorage(storageId);
+
 			expect(result).toBe(true);
 		});
 
@@ -402,6 +416,19 @@ describe('StorageService', () => {
 			await expect(storageService.deleteStorage(storageId)).rejects.toThrow(
 				'This Storage is used as a replication target by the following plans: Plan B. Please remove it from their replication settings before deleting the storage.'
 			);
+		});
+
+		it('should throw AppError if the storage is used as a plan source', async () => {
+			mockStorageStore.getById.mockResolvedValue(mockStorage);
+			mockPlanStore.getStoragePlans.mockResolvedValue([]);
+			mockStorageStore.getReplicationPlans = jest.fn().mockResolvedValue([]);
+			mockPlanStore.getDevicePlans.mockResolvedValue([{ title: 'Sync Plan C' } as any]);
+
+			await expect(storageService.deleteStorage(storageId)).rejects.toThrow(AppError);
+			await expect(storageService.deleteStorage(storageId)).rejects.toThrow(
+				'This Storage is used as a backup source by the following plans: Sync Plan C. Please remove them before deleting the Storage.'
+			);
+			expect(mockStorageManager.deleteRemote).not.toHaveBeenCalled();
 		});
 
 		it('should throw AppError if an active self-backup uses the storage', async () => {

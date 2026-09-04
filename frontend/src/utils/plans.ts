@@ -53,6 +53,16 @@ export function isPlanSettingsValid(newPlan: NewPlanSettings, step: number | fal
       return false;
    }
    if (step === 2 || step === false) {
+      if (newPlan.sourceType === 'storage') {
+         if (!newPlan.sourceId) {
+            toast.error(`Source Storage is required`);
+            return false;
+         }
+         if (newPlan.storage.id === newPlan.sourceId) {
+            toast.error(`The source storage and the destination storage must be different`);
+            return false;
+         }
+      }
       if (newPlan.sourceConfig.includes.length === 0) {
          toast.error(`Sources are required`);
          return false;

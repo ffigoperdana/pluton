@@ -15,6 +15,7 @@ interface PlanReplicationSettingsProps {
    primaryStorageId: string;
    primaryStoragePath?: string;
    deviceId: string;
+   excludeStorageIds?: string[];
    isEditing?: boolean;
    planID?: string;
    maxReplications?: number;
@@ -34,6 +35,7 @@ const PlanReplicationSettings = ({
    primaryStorageId,
    primaryStoragePath,
    deviceId,
+   excludeStorageIds,
    isEditing = false,
    planID,
    maxReplications: maxReplicationsProp,
@@ -213,6 +215,7 @@ const PlanReplicationSettings = ({
                            storagePath={mirror.storagePath}
                            storageId={mirror.storageId}
                            deviceId={deviceId}
+                           excludeStorageIds={excludeStorageIds}
                            disabled={isEditing}
                            onUpdate={(s) => {
                               if (s.storage.id === primaryStorageId && s.path === primaryStoragePath) {
@@ -259,6 +262,7 @@ const PlanReplicationSettings = ({
                               storagePath={tempStorage.storagePath}
                               storageId={tempStorage.storageId}
                               deviceId={deviceId}
+                              excludeStorageIds={excludeStorageIds}
                               disabled={false}
                               onUpdate={(s) => {
                                  updateTempStorage(index, {

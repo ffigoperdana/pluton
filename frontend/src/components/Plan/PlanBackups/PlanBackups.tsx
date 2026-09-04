@@ -47,7 +47,7 @@ const PlanBackups = ({ plan }: PlanBackupsProps) => {
                method={method}
                sourceId={sourceId}
                sourceType={sourceType}
-               deviceId={plan.device.id}
+               deviceId={plan.device?.id || 'main'}
                storage={storage}
                snapLimit={settings.prune.snapCount}
                replicationSettings={settings.replication}

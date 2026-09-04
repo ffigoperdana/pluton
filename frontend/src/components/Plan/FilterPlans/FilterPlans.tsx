@@ -29,14 +29,15 @@ const FilterPlans = ({ onUpdate, plans }: FilterPlansProps) => {
                items.tags.push({ label: tag, value: tag });
             }
          });
-         if (!items.devices.find((t) => t.value === plan.device.id)) {
+         if (plan.device && !items.devices.find((t) => t.value === plan.device?.id)) {
             items.devices.push({ label: plan.device.name, value: plan.device.id });
          }
          if (!items.storages.find((t) => t.value === plan.storage.id)) {
             items.storages.push({ label: plan.storage.name, value: plan.storage.id });
          }
-         if (!items.methods.find((t) => t.value === plan.method)) {
-            items.methods.push({ label: plan.method, value: plan.method });
+         const methodValue = plan.sourceType === 'storage' ? 'storage-sync' : plan.method;
+         if (!items.methods.find((t) => t.value === methodValue)) {
+            items.methods.push({ label: methodValue === 'storage-sync' ? 'Storage Sync' : plan.method, value: methodValue });
          }
       });
       return items;

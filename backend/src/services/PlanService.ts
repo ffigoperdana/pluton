@@ -112,19 +112,44 @@ export class PlanService {
 			throw new NotFoundError('Storage not found.');
 		}
 
+		const isStorageSource = sourceType === 'storage';
+		let planSourceConfig = sourceConfig;
+
+		if (isStorageSource) {
+			if (method !== 'sync') {
+				throw new AppError(400, 'A storage source is only supported by the sync method.');
+			}
+			if (sourceId === storage.id) {
+				throw new AppError(
+					400,
+					'The source storage and the destination storage must be different.'
+				);
+			}
+			if (!sourceConfig?.includes?.[0]?.trim()) {
+				throw new AppError(400, 'A source path is required.');
+			}
+			if (settings?.replication?.storages?.some(s => s.storageId === sourceId)) {
+				throw new AppError(400, 'A replication storage must be different from the source storage.');
+			}
+			planSourceConfig = {
+				...sourceConfig,
+				includes: [await this.bakeStorageSourcePath(sourceConfig?.includes?.[0], sourceId)],
+			};
+		}
+
 		// Fetch the device early so we can use its OS for cross-platform path sanitization.
 		// Without this, a Windows server would mangle Linux paths (e.g., /var/home → F:/var/home).
-		const device = await this.deviceStore.getById(sourceId);
-		if (!device) {
+		const device = isStorageSource ? null : await this.deviceStore.getById(sourceId);
+		if (!isStorageSource && !device) {
 			throw new NotFoundError('Source device not found');
 		}
 
 		let theStoragePath;
 		if (storagePath) {
 			try {
-				const isRemote = sourceId !== 'main';
+				const isRemote = !isStorageSource && sourceId !== 'main';
 				const targetOS = isRemote
-					? device.platform
+					? device?.platform
 						? device.platform.toLowerCase()
 						: undefined
 					: undefined;
@@ -145,7 +170,7 @@ export class PlanService {
 			storageId: storage.id,
 			storagePath: theStoragePath,
 			method,
-			sourceConfig,
+			sourceConfig: planSourceConfig,
 			sourceId,
 			sourceType,
 			settings,
@@ -236,6 +261,30 @@ export class PlanService {
 		// Never let the immutable storageId reach the update.
 		delete (parsedPlanData as Record<string, unknown>).storageId;
 
+		if (parsedPlanData.sourceType !== currentPlan.sourceType) {
+			throw new AppError(400, 'The source type cannot be changed after the plan is created.');
+		}
+
+		if (currentPlan.sourceType === 'storage') {
+			if (parsedPlanData.sourceId != null && parsedPlanData.sourceId !== currentPlan.sourceId) {
+				throw new AppError(400, 'The source storage cannot be changed after the plan is created.');
+			}
+			const newSettings = parsedPlanData.settings || currentPlan.settings;
+			if (newSettings?.replication?.storages?.some(s => s.storageId === currentPlan.sourceId)) {
+				throw new AppError(400, 'A replication storage must be different from the source storage.');
+			}
+			if (parsedPlanData.sourceConfig) {
+				// A partial update without a source path must not re-bake to the remote root
+				const givenPath = parsedPlanData.sourceConfig.includes?.[0]?.trim();
+				parsedPlanData.sourceConfig = {
+					...parsedPlanData.sourceConfig,
+					includes: givenPath
+						? [await this.bakeStorageSourcePath(givenPath, currentPlan.sourceId)]
+						: currentPlan.sourceConfig.includes,
+				};
+			}
+		}
+
 		const updatedPlan = await this.planStore.update(planId, parsedPlanData as Partial<Plan>);
 		if (!updatedPlan) {
 			throw new AppError(500, 'Failed to update plan in the database.');
@@ -260,7 +309,7 @@ export class PlanService {
 			const strategy = this.getStrategy(updatedPlan) as BackupStrategy;
 			const updateRes = await strategy.updateBackup(planId, backupScheduleOptions);
 			if (!updateRes.success) {
-				if (updatedPlan.sourceId !== 'main') {
+				if (updatedPlan.sourceType === 'device' && updatedPlan.sourceId !== 'main') {
 					// Revert the update in the database if remote update fails to avoid inconsistencies
 					await this.planStore.update(planId, currentPlan);
 				}
@@ -729,6 +778,24 @@ export class PlanService {
 				`Test webhook request failed. Reason: ${error instanceof Error ? error.message : 'Unknown'}`
 			);
 		}
+	}
+
+	/**
+	 * Builds the `remoteName:path` source that rclone reads for a storage-to-storage sync plan.
+	 */
+	private async bakeStorageSourcePath(
+		sourcePath: string | undefined,
+		sourceStorageId: string
+	): Promise<string> {
+		const sourceStorage = await this.getStorageDetails(sourceStorageId);
+		if (!sourceStorage.name || !sourceStorage.type) {
+			throw new NotFoundError('Source storage not found.');
+		}
+		const prefix = `${sourceStorage.name}:`;
+		const givenPath = (sourcePath || '').trim();
+		const rawPath = givenPath.startsWith(prefix) ? givenPath.slice(prefix.length) : givenPath;
+		const cleanPath = sanitizeStoragePath(rawPath, sourceStorage.type);
+		return `${sourceStorage.name}:${cleanPath}`;
 	}
 
 	private async getStorageDetails(storageId: string): Promise<BackupPlanArgs['storage']> {

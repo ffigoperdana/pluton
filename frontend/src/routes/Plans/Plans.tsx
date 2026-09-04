@@ -95,10 +95,12 @@ const Plans = () => {
          let filteredPlans = plansToSort && plansToSort.length > 0 ? plansToSort : plans;
 
          if (filter.devices.length > 0) {
-            filteredPlans = filteredPlans.filter((plan) => filter.devices.includes(plan.device.id));
+            filteredPlans = filteredPlans.filter((plan) => !!plan.device && filter.devices.includes(plan.device.id));
          }
          if (filter.methods.length > 0) {
-            filteredPlans = filteredPlans.filter((plan) => filter.methods.includes(plan.method));
+            filteredPlans = filteredPlans.filter((plan) =>
+               filter.methods.includes(plan.sourceType === 'storage' ? 'storage-sync' : plan.method)
+            );
          }
          if (filter.storages.length > 0) {
             filteredPlans = filteredPlans.filter((plan) => filter.storages.includes(plan.storage.id));

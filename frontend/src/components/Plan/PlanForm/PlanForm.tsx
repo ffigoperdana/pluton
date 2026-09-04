@@ -181,7 +181,7 @@ const PlanForm = ({
                         },
                      ]}
                   /> */}
-                  {planSettings.sourceType === 'device' && (
+                  {(planSettings.sourceType === 'device' || planSettings.sourceType === 'storage') && (
                      <PlanStrategySettings
                         plan={planSettings}
                         onUpdate={(method) => onPlanSettingsChange({ ...planSettings, method })}
@@ -195,9 +195,16 @@ const PlanForm = ({
                            },
                            {
                               value: 'sync',
-                              icon: 'reload',
+                              icon: 'sync',
                               label: 'Real-time Sync',
                               description: 'Maintain identical source (with revisions)',
+                              disabled: true,
+                           },
+                           {
+                              value: 'storage-sync',
+                              icon: 'storage-sync',
+                              label: 'Storage Sync',
+                              description: 'Sync one cloud storage to another cloud storage',
                               disabled: true,
                            },
                            {

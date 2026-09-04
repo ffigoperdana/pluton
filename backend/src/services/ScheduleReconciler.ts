@@ -55,7 +55,8 @@ export class ScheduleReconciler {
 	}
 
 	protected async getReconciliationPlans(): Promise<Plan[]> {
-		return (await this.planStore.getDevicePlans('main')) || [];
+		const allPlans = (await this.planStore.getAll(false)) || [];
+		return allPlans.filter(plan => plan.sourceId === 'main' || plan.sourceType === 'storage');
 	}
 
 	protected async removeOrphanedSchedules(
@@ -104,19 +105,14 @@ export class ScheduleReconciler {
 		};
 	}
 
-	protected async reconcileMissingSchedule(
-		planId: string,
-		plan: Plan | NewPlan
-	): Promise<boolean> {
+	protected async reconcileMissingSchedule(planId: string, plan: Plan | NewPlan): Promise<boolean> {
 		const backupScheduleOptions = await this.buildReconciliationScheduleOptions(planId, plan);
 		if (!backupScheduleOptions) {
 			return false;
 		}
 
 		await this.localAgent.createOrUpdateSchedules(planId, backupScheduleOptions, 'create');
-		console.log(
-			`[Reconciliation] Recreated missing schedule for plan "${plan.title}" (${planId})`
-		);
+		console.log(`[Reconciliation] Recreated missing schedule for plan "${plan.title}" (${planId})`);
 
 		return true;
 	}

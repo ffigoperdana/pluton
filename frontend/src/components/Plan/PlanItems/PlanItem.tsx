@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { toast } from 'react-toastify';
 import { NavLink } from 'react-router';
 import { Plan } from '../../../@types/plans';
-import { formatBytes, formatDateTime, timeAgo } from '../../../utils/helpers';
+import { formatBytes, formatDateTime, getBackupIconName, timeAgo } from '../../../utils/helpers';
 import Icon from '../../common/Icon/Icon';
+import StorageIcon from '../../common/Icon/StorageIcon';
 import classes from './PlanItem.module.scss';
 import { useDeletePlan, usePausePlan, usePerformBackup, useResumePlan } from '../../../services/plans';
+import { useGetStorages } from '../../../services/storage';
 import { planIntervalName } from '../../../utils/plans';
 import PlanHistory from '../PlanHistory/PlanHistory';
 import PlanStorageInfo from '../PlanStorageInfo/PlanStorageInfo';
@@ -35,6 +37,12 @@ const PlanItem = ({ plan, layout = 'list' }: PlanItemProps) => {
 
    const { interval = { type: 'daily', time: '10:00AM' }, encryption = false, compression = false } = settings;
    const [showSettings, setShowSettings] = useState(false);
+
+   const isStorageSource = plan.sourceType === 'storage';
+   const { data: storageData } = useGetStorages();
+   const sourceStorage = isStorageSource
+      ? ((storageData?.result as { id: string; name: string; type: string }[]) || []).find((s) => s.id === plan.sourceId)
+      : undefined;
 
    const deletePlanMutation = useDeletePlan();
    const performBackupMutation = usePerformBackup();
@@ -106,7 +114,7 @@ const PlanItem = ({ plan, layout = 'list' }: PlanItemProps) => {
       >
          <div className={classes.leftContent}>
             <div className={`${classes.status} ${!isActive ? classes.paused : ''}  ${inProgress ? classes.inProgress : ''}`}>
-               {inProgress ? <Icon type="loading" size={28} /> : <Icon type={method === 'backup' ? 'plans' : 'sync'} size={28} />}
+               {inProgress ? <Icon type="loading" size={28} /> : <Icon type={getBackupIconName(method, plan.sourceType)} size={28} />}
             </div>
 
             <div className={classes.content}>
@@ -150,10 +158,16 @@ const PlanItem = ({ plan, layout = 'list' }: PlanItemProps) => {
                         data-tooltip-place="top"
                         data-tooltip-html={sourceConfig?.includes ? sourceConfig.includes.map((p) => `<div>${p}</div>`).join('') : ''}
                      >
-                        {device?.name && (
+                        {isStorageSource ? (
                            <>
-                              <Icon type={device.id === 'main' ? 'computer' : 'computer-remote'} size={13} /> {device.name}
+                              <StorageIcon type={sourceStorage?.type} size={13} /> {sourceStorage?.name}
                            </>
+                        ) : (
+                           device?.name && (
+                              <>
+                                 <Icon type={device.id === 'main' ? 'computer' : 'computer-remote'} size={13} /> {device.name}
+                              </>
+                           )
                         )}
                         <span className={classes.sourceCount}>{sourceConfig.includes.length}</span>
                      </span>{' '}

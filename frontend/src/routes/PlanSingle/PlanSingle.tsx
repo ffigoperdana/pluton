@@ -17,6 +17,7 @@ import PlanBackups from '../../components/Plan/PlanBackups/PlanBackups';
 import PlanIntegrity from '../../components/Plan/PlanIntegrity/PlanIntegrity';
 import PlanRepair from '../../components/Plan/PlanRepair/PlanRepair';
 import { PlanVerifiedResult } from '../..';
+import { getBackupIconName } from '../../utils';
 
 const PlanSingle = () => {
    const [showMoreOptions, setShowMoreOptions] = useState(false);
@@ -97,12 +98,12 @@ const PlanSingle = () => {
                   </>
                }
                pageTitle={title}
-               icon="plans"
+               icon={getBackupIconName(method, plan.sourceType)}
                rightSection={
                   <>
                      <div className={classes.planActions}>
                         <button className={classes.actionBtn} onClick={backupNow}>
-                           <Icon size={14} type={isSync ? 'sync' : 'backup'} /> {isSync ? 'Sync' : 'Backup'} Now
+                           <Icon size={16} type={isSync ? 'reload' : 'backup'} /> {isSync ? 'Sync' : 'Backup'} Now
                         </button>
                         <button className={`${classes.actionBtn} ${!isActive ? classes.actionBtnHighlight : ''}`} onClick={changeStatus}>
                            <Icon size={14} type={isActive ? 'pause' : 'resume'} /> {isActive ? 'Pause' : 'Resume'}

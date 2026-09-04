@@ -3,7 +3,9 @@ import classes from './PlanSettings.module.scss';
 import PathPicker from '../../common/PathPicker/PathPicker';
 import { NewPlanSettings } from '../../../@types/plans';
 import { useGetDevices } from '../../../services/devices';
+import { useGetStorages } from '../../../services/storage';
 import Select from '../../common/form/Select/Select';
+import StoragePicker from '../../common/form/StoragePicker/StoragePicker';
 import { Device } from '../../../@types/devices';
 
 interface PlanSourceSettingsProps {
@@ -15,6 +17,8 @@ interface PlanSourceSettingsProps {
 
 const PlanSourceSettings = ({ plan, onUpdate, error, isEditing }: PlanSourceSettingsProps) => {
    const { data } = useGetDevices();
+   const { data: storageData } = useGetStorages();
+   const isStorageSource = plan.sourceType === 'storage';
    const deviceList = [];
    const deviceId = plan.sourceId || 'main';
    if (data?.success && data.result) {
@@ -33,7 +37,7 @@ const PlanSourceSettings = ({ plan, onUpdate, error, isEditing }: PlanSourceSett
    // e.g. when navigating between steps in the Add Plan form).
    const prevDeviceIdRef = useRef<string | null>(null);
    useEffect(() => {
-      if (isEditing) {
+      if (isEditing || isStorageSource) {
          prevDeviceIdRef.current = deviceId;
          return;
       }
@@ -48,6 +52,36 @@ const PlanSourceSettings = ({ plan, onUpdate, error, isEditing }: PlanSourceSett
       }
       prevDeviceIdRef.current = deviceId;
    }, [isEditing, deviceId]);
+
+   if (isStorageSource) {
+      const storages = (storageData?.result as { id: string; name: string }[]) || [];
+      const sourceStorage = storages.find((s) => s.id === plan.sourceId);
+      const prefix = sourceStorage ? `${sourceStorage.name}:` : '';
+      const bakedPath = plan.sourceConfig.includes[0] || '';
+      const sourcePath = prefix && bakedPath.startsWith(prefix) ? bakedPath.slice(prefix.length) : bakedPath;
+
+      return (
+         <div className={classes.field}>
+            <label className={classes.label}>Source Storage*</label>
+            {error && <span className={classes.fieldErrorLabel}>{error}</span>}
+            <StoragePicker
+               storageId={plan.sourceId}
+               storagePath={sourcePath}
+               deviceId="main"
+               excludeStorageIds={plan.storage.id ? [plan.storage.id] : []}
+               disabled={isEditing}
+               disabledHint="The source storage can't be changed after a plan is created."
+               onUpdate={(s) =>
+                  onUpdate({
+                     ...plan,
+                     sourceId: s.storage.id,
+                     sourceConfig: { ...plan.sourceConfig, includes: [s.path] },
+                  })
+               }
+            />
+         </div>
+      );
+   }
 
    return (
       <>
