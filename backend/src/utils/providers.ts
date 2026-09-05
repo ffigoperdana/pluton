@@ -1337,7 +1337,7 @@ export const providers: Record<string, ProviderConfig> = {
 			'secret_access_key',
 			creds.secret_access_key,
 			'endpoint',
-			`s3.${creds.region === 'us-east-1' ? '' : '.' + creds.region}wasabisys.com`,
+			`s3.${creds.region && creds.region !== 'us-east-1' ? creds.region + '.' : ''}wasabisys.com`,
 			'region',
 			creds.region,
 		],
