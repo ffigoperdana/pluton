@@ -73,6 +73,7 @@ const TagsInput = ({ label, description, customClasses = '', hint = '', fieldVal
                   value={newTag}
                   onChange={(e) => updateTag(e)}
                   onKeyDown={handleKeyDown}
+                  onBlur={() => addTag(newTag)}
                   placeholder={`${type}${tags.length + 1}, ${type}${tags.length + 2}`}
                />
             </div>
