@@ -109,6 +109,7 @@ export class RestoreService {
 					includes: restoreConfig.includes,
 					excludes: restoreConfig.excludes,
 					replicationId: restoreConfig.replicationId,
+					fromStorage: restoreConfig.fromStorage,
 					sources: plan.sourceConfig?.includes || [],
 				}
 			);
@@ -170,6 +171,8 @@ export class RestoreService {
 				includes: restoreConfig.includes || [],
 				excludes: restoreConfig.excludes || [],
 				delete: restoreConfig.delete || false,
+				replicationId: restoreConfig.replicationId,
+				fromStorage: restoreConfig.fromStorage,
 				sources: plan.sourceConfig.includes || [],
 				performanceSettings,
 			});

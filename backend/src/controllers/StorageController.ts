@@ -40,6 +40,24 @@ export class StorageController {
 		}
 	}
 
+	async browseStorage(req: Request, res: Response): Promise<void> {
+		if (!req.params.id) {
+			res.status(400).json({ success: false, error: 'Storage ID is required' });
+			return;
+		}
+		try {
+			const requestedPath = req.query.path ? decodeURIComponent(req.query.path as string) : '';
+			const result = await this.storageService.browseStorage(req.params.id, requestedPath);
+			res.json({ success: true, result });
+		} catch (error: any) {
+			console.log('Error browsing storage:', error);
+			res.status(error?.statusCode || 500).json({
+				success: false,
+				error: error?.message || 'Failed to read storage contents',
+			});
+		}
+	}
+
 	async createStorage(req: Request, res: Response): Promise<void> {
 		try {
 			if (!req.body.name || !req.body.type || !req.body.settings || !req.body.credentials) {

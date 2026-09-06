@@ -252,6 +252,9 @@ describe('RestoreController', () => {
 				includes: ['file1.txt'],
 				excludes: ['*.tmp'],
 				delete: false,
+				storageId: undefined,
+				replicationId: undefined,
+				fromStorage: false,
 			});
 			expect(mockStatus).toHaveBeenCalledWith(200);
 			expect(mockJson).toHaveBeenCalledWith({
@@ -277,6 +280,9 @@ describe('RestoreController', () => {
 				includes: [],
 				excludes: [],
 				delete: false,
+				storageId: undefined,
+				replicationId: undefined,
+				fromStorage: false,
 			});
 		});
 
@@ -331,6 +337,9 @@ describe('RestoreController', () => {
 				includes: [],
 				excludes: [],
 				delete: false,
+				storageId: undefined,
+				replicationId: undefined,
+				fromStorage: false,
 			});
 			expect(mockStatus).toHaveBeenCalledWith(200);
 			expect(mockJson).toHaveBeenCalledWith({

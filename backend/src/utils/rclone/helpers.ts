@@ -61,6 +61,21 @@ export async function rcloneDeleteFile(
 }
 
 /**
+ * Rclone reports failures as timestamped log lines. This returns just the message
+ * of the first ERROR line, so the UI shows a user-friendly error message.
+ */
+export function rcloneErrorMessage(error: any): string {
+	const raw = (error?.message || '').trim();
+	if (!raw) return '';
+	const lines: string[] = raw
+		.split('\n')
+		.map((line: string) => line.trim())
+		.filter(Boolean);
+	const line = lines.find((l: string) => /\s(ERROR|CRITICAL)\s*:/.test(l)) || lines[0];
+	return line.replace(/^.*?\s(?:ERROR|CRITICAL|NOTICE|INFO)\s*:\s*/, '').trim() || raw;
+}
+
+/**
  * List a remote path as JSON.
  */
 export async function rcloneLsJson(

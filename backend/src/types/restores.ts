@@ -30,6 +30,7 @@ export interface RestoreConfig {
 	storageId?: string;
 	replicationId?: string;
 	sources?: string[];
+	fromStorage?: boolean; // Reads the selected files from the live storage for sync plans
 }
 
 export interface RestoreStats {

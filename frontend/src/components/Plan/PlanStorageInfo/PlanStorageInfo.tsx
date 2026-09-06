@@ -1,3 +1,4 @@
+import { ReactNode } from 'react';
 import { PlanReplicationSettings } from '../../../@types';
 import classes from './PlanStorageInfo.module.scss';
 
@@ -7,15 +8,16 @@ interface PlanStorageInfoProps {
    replicationSettings?: PlanReplicationSettings;
    disableTooltip?: boolean;
    inline?: boolean;
+   action?: ReactNode;
 }
 
-const PlanStorageInfo = ({ replicationSettings, storage, storagePath, disableTooltip = true, inline = true }: PlanStorageInfoProps) => {
-   console.log('replicationSettings :', replicationSettings);
+const PlanStorageInfo = ({ replicationSettings, storage, storagePath, disableTooltip = true, inline = true, action }: PlanStorageInfoProps) => {
+   const storageWithReplications = replicationSettings && replicationSettings.enabled && replicationSettings.storages.length > 0;
    return (
       <>
-         {replicationSettings && replicationSettings.enabled && replicationSettings.storages.length > 0 ? (
+         {storageWithReplications ? (
             <div
-               className={`${classes.planStorages} ${inline ? classes.inline : ''}`}
+               className={`${classes.planStorages} ${inline ? classes.inline : ''} ${storageWithReplications ? classes.withReplications : ''}`}
                data-tooltip-hidden={disableTooltip}
                data-tooltip-id="htmlToolTip"
                data-tooltip-place="top"
@@ -55,6 +57,7 @@ const PlanStorageInfo = ({ replicationSettings, storage, storagePath, disableToo
                   </div>
                   <div className={classes.storageName}>{replicationSettings.storages.length + 1} Storages</div>
                </div>
+               {action && <div className={classes.storageAction}>{action}</div>}
             </div>
          ) : (
             <div
@@ -74,6 +77,7 @@ const PlanStorageInfo = ({ replicationSettings, storage, storagePath, disableToo
             >
                <img src={`/providers/${storage?.type}.png`} />
                <div className={classes.storageName}>{storage?.name}</div>
+               {action && <div className={classes.storageAction}>{action}</div>}
             </div>
          )}
       </>

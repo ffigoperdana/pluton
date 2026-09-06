@@ -11,6 +11,7 @@ type RestorePayload = {
 	delete?: boolean;
 	storageId?: string;
 	replicationId?: string;
+	fromStorage?: boolean;
 };
 
 export class RestoreController {
@@ -97,6 +98,7 @@ export class RestoreController {
 				delete: restorePayload.delete || false,
 				storageId: restorePayload.storageId || undefined,
 				replicationId: restorePayload.replicationId || undefined,
+				fromStorage: restorePayload.fromStorage || false,
 			});
 			res.status(200).json({
 				success: true,
@@ -129,6 +131,7 @@ export class RestoreController {
 				delete: restorePayload.delete || false,
 				storageId: restorePayload.storageId || undefined,
 				replicationId: restorePayload.replicationId || undefined,
+				fromStorage: restorePayload.fromStorage || false,
 			});
 
 			res.status(200).json({

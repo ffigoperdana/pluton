@@ -234,6 +234,34 @@ export async function getStorageAuthorizeStatus(sessionId: string): Promise<{
    return data.result;
 }
 
+// Browse Storage
+export async function browseStorage(payload: { storageId: string; path?: string }) {
+   const url = new URL(`${API_URL}/storages/${payload.storageId}/browse`);
+   if (payload.path) {
+      url.searchParams.append('path', encodeURIComponent(payload.path));
+   }
+
+   const res = await fetch(url.toString(), {
+      method: 'GET',
+      credentials: 'include',
+   });
+   const data = await res.json();
+   if (!data.success) {
+      throw new Error(data.error);
+   }
+   return data;
+}
+
+export function useBrowseStorage(payload: { storageId: string; path?: string }, enabled: boolean = true) {
+   return useQuery({
+      queryKey: ['storageBrowse', payload.storageId, payload.path],
+      queryFn: () => browseStorage(payload),
+      refetchOnMount: true,
+      retry: false,
+      enabled,
+   });
+}
+
 export async function cancelStorageAuthorize(sessionId: string): Promise<void> {
    const header = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
    const res = await fetch(`${API_URL}/storages/authorize/cancel`, {

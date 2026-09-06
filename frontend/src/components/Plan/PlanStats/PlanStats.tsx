@@ -1,3 +1,4 @@
+import { ReactNode } from 'react';
 import Icon from '../../common/Icon/Icon';
 import StorageIcon from '../../common/Icon/StorageIcon';
 import { Plan } from '../../../@types/plans';
@@ -13,9 +14,10 @@ interface PlanStatsProps {
    plan: Plan;
    isSync: boolean;
    lastBackupItem: any;
+   storageAction?: ReactNode;
 }
 
-const PlanStats = ({ plan, isSync, lastBackupItem }: PlanStatsProps) => {
+const PlanStats = ({ plan, isSync, lastBackupItem, storageAction }: PlanStatsProps) => {
    const { sourceConfig, storage, storagePath, isActive, settings } = plan;
    const { interval } = settings;
    const isStorageSource = plan.sourceType === 'storage';
@@ -67,6 +69,7 @@ const PlanStats = ({ plan, isSync, lastBackupItem }: PlanStatsProps) => {
                   replicationSettings={plan.settings.replication}
                   storage={storage}
                   storagePath={storagePath}
+                  action={storageAction}
                />
             </div>
          </div>

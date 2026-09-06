@@ -1,4 +1,26 @@
 .planStorages {
+   position: relative;
+   .storageAction {
+      position: absolute;
+      margin-top: -4px;
+      z-index: 111;
+      opacity: 0;
+      transition: opacity 0.15s linear;
+      button {
+         display: flex;
+         align-items: center;
+         justify-content: center;
+         padding: 5px 6px;
+         border-radius: 50%;
+         cursor: pointer;
+         color: var(--primary-color);
+         background: var(--content-background-color);
+         border: 1px solid var(--line-color);
+      }
+   }
+   &:hover .storageAction {
+      opacity: 1;
+   }
    .storageWithReplications {
       display: flex;
       flex-direction: column;
@@ -38,6 +60,18 @@
       }
       .storageName {
          display: inline-block;
+      }
+   }
+   &.withReplications {
+      &:hover {
+         .storageWithReplications {
+            filter: blur(2px);
+         }
+      }
+
+      .storageAction {
+         margin-top: 0px;
+         left: 27px;
       }
    }
 }

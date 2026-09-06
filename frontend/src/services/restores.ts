@@ -91,6 +91,7 @@ export async function restoreBackup({
    deleteOption,
    storageId,
    replicationId,
+   fromStorage,
 }: {
    backupId: string;
    planId: string;
@@ -101,13 +102,14 @@ export async function restoreBackup({
    deleteOption: boolean;
    storageId?: string;
    replicationId?: string;
+   fromStorage?: boolean;
 }) {
    const header = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
    const res = await fetch(`${API_URL}/restores/action/restore`, {
       method: 'POST',
       credentials: 'include',
       headers: header,
-      body: JSON.stringify({ backupId, planId, target, overwrite, includes, excludes, delete: deleteOption, storageId, replicationId }),
+      body: JSON.stringify({ backupId, planId, target, overwrite, includes, excludes, delete: deleteOption, storageId, replicationId, fromStorage }),
    });
    const data = await res.json();
    if (!data.success) {

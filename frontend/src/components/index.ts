@@ -130,6 +130,8 @@ export { default as SkeletonItems } from './Skeleton/SkeletonItems';
 export { default as AddStorage } from './Storage/AddStorage/AddStorage';
 export { default as EditStorage } from './Storage/EditStorage/EditStorage';
 export { default as StorageAuthSettings } from './Storage/StorageAuthSettings/StorageAuthSettings';
+export { default as StorageFileBrowser } from './Storage/StorageFileBrowser/StorageFileBrowser';
+export type { StorageFileBrowserProps } from './Storage/StorageFileBrowser/StorageFileBrowser';
 export { default as StorageItem } from './Storage/StorageItem/StorageItem';
 export { default as StorageSettings } from './Storage/StorageSettings/StorageSettings';
 

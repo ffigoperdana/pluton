@@ -1,3 +1,4 @@
+import path from 'path';
 import { Storage, storageInsertSchema, storageUpdateSchema } from '../db/schema/storages';
 import { providers } from '../utils/providers';
 import { PlanStore } from '../stores/PlanStore';
@@ -11,7 +12,8 @@ import {
 	LocalStrategy as LocalSystemStrategy,
 	SystemStrategy,
 } from '../strategies/system';
-import { generateUID } from '../utils/helpers';
+import { generateUID, normalizeStorageName } from '../utils/helpers';
+import { sanitizeStoragePath } from '../utils/sanitizeStoragePath';
 import { BaseSystemManager } from '../managers/BaseSystemManager';
 import { configService } from './ConfigService';
 import { AppError, NotFoundError } from '../utils/AppError';
@@ -19,7 +21,28 @@ import {
 	spawnRcloneAuthorize,
 	RcloneAuthSession,
 	RcloneAuthSessionStatus,
+	rcloneLsJson,
+	rcloneErrorMessage,
 } from '../utils/rclone/helpers';
+
+export interface StorageBrowseItem {
+	name: string;
+	path: string;
+	type: 'directory' | 'file';
+	isDirectory: boolean;
+	size: number;
+	modifiedAt: string;
+	owner: string;
+	permissions: string;
+}
+
+export interface ResolvedStorageTarget {
+	storage: Storage;
+	remote: string;
+	isLocal: boolean;
+	cleaned: string;
+	target: string;
+}
 
 /**
  * A class for managing storage operations.
@@ -71,6 +94,103 @@ export class StorageService {
 				'Could not decrypt your Storage Credentials Settings. Your Pluton Secret key may have changed or missing.'
 			);
 		}
+	}
+
+	/**
+	 * Resolves a storage id plus a user-supplied path into an rclone target.
+	 * The path is sanitized here, so callers never build a target from raw input.
+	 */
+	protected async resolveStorageTarget(
+		id: string,
+		requestedPath: string
+	): Promise<ResolvedStorageTarget> {
+		const storage = await this.storageStore.getById(id);
+		if (!storage) {
+			throw new NotFoundError('Storage not found');
+		}
+
+		const remote = storage.id === 'local' ? 'local' : normalizeStorageName(storage.name);
+		const isLocal = storage.type === 'local';
+		const trimmed = (requestedPath || '').trim();
+
+		if (isLocal) {
+			this.assertLocalBrowseAllowed(trimmed);
+			if (!trimmed) {
+				throw new AppError(400, 'A folder path is required to browse the local storage.');
+			}
+		}
+
+		const cleaned = trimmed
+			? sanitizeStoragePath(trimmed, storage.type as string).replace(/\\/g, '/')
+			: '';
+
+		return { storage, remote, isLocal, cleaned, target: `${remote}:${cleaned}` };
+	}
+
+	/**
+	 * The local storage reads the host filesystem, so it obeys the same file browser
+	 * limits as the device browser.
+	 */
+	protected assertLocalBrowseAllowed(requestedPath: string): void {
+		if (configService.config.ALLOW_FILE_BROWSER === false) {
+			throw new AppError(403, 'File browser is disabled');
+		}
+
+		const browserRoot = configService.config.FILE_BROWSER_ROOT;
+		if (browserRoot && requestedPath) {
+			const resolved = path.resolve(requestedPath);
+			const resolvedRoot = path.resolve(browserRoot);
+			if (!resolved.startsWith(resolvedRoot)) {
+				throw new AppError(403, 'Access denied: path outside allowed root');
+			}
+		}
+	}
+
+	async browseStorage(
+		id: string,
+		requestedPath: string
+	): Promise<{ path: string; items: StorageBrowseItem[] }> {
+		const storage = await this.storageStore.getById(id);
+		if (!storage) {
+			throw new NotFoundError('Storage not found');
+		}
+
+		// The local storage has no bucket to list, so an empty path means the host's drives.
+		if (storage.type === 'local' && !(requestedPath || '').trim()) {
+			this.assertLocalBrowseAllowed('');
+			const response = await this.getSystemStrategy('main').getBrowsePath('');
+			if (!response.success) {
+				throw new AppError(500, 'Failed to read the local drives');
+			}
+			const result = response.result as unknown as { path: string; items: StorageBrowseItem[] };
+			return { path: '', items: result.items || [] };
+		}
+
+		const { cleaned, target } = await this.resolveStorageTarget(id, requestedPath);
+
+		let entries;
+		try {
+			entries = await rcloneLsJson(target);
+		} catch (error: any) {
+			throw new AppError(400, rcloneErrorMessage(error) || 'Failed to read this storage.');
+		}
+		const items: StorageBrowseItem[] = entries.map(entry => ({
+			name: entry.Name,
+			path: cleaned ? `${cleaned}/${entry.Path}` : entry.Path,
+			type: entry.IsDir ? 'directory' : 'file',
+			isDirectory: entry.IsDir,
+			size: entry.Size < 0 ? 0 : entry.Size,
+			modifiedAt: entry.ModTime || '',
+			owner: '',
+			permissions: '',
+		}));
+
+		items.sort((a, b) => {
+			if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+			return a.name.localeCompare(b.name);
+		});
+
+		return { path: cleaned, items };
 	}
 
 	async getAvailableStorageTypes(): Promise<Record<string, any>> {

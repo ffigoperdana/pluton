@@ -8,6 +8,8 @@ import EditStorage from '../EditStorage/EditStorage';
 import Modal from '../../common/Modal/Modal';
 import { useDeleteStorage, useVerifyStorage } from '../../../services/storage';
 import ActionModal from '../../common/ActionModal/ActionModal';
+import StorageFileBrowser from '../StorageFileBrowser/StorageFileBrowser';
+import { useComponentOverride } from '../../../context/ComponentOverrideContext';
 
 interface StorageItemProps {
    storage: Storage;
@@ -19,11 +21,13 @@ const StorageItem = ({ storage, layout }: StorageItemProps) => {
    const [showEditModal, setShowEditModal] = useState(false);
    const [showDeleteModal, setShowDeleteModal] = useState(false);
    const [showVerifyModal, setShowVerifyModal] = useState(false);
-   const { id, name, type, plans = [], usedSize = 200, storageTypeName, settings = {} } = storage;
+   const [showBrowser, setShowBrowser] = useState(false);
+   const { id, name, type, plans = [], usedSize = 200, storageTypeName, settings = {}, defaultPath } = storage;
    const deleteStorageMutation = useDeleteStorage();
    const verifyStorageMutation = useVerifyStorage();
    const isLocalStorage = id === 'local';
    const description = settings.description as string;
+   const Browser = useComponentOverride('StorageFileBrowser', StorageFileBrowser);
 
    const removeStorage = () => {
       deleteStorageMutation.mutate(storage.id, {
@@ -69,6 +73,15 @@ const StorageItem = ({ storage, layout }: StorageItemProps) => {
                <Icon type="disk" size={14} /> <i>{formatBytes(usedSize)}</i>
             </div>
             <button
+               className={classes.browseBtn}
+               onClick={() => setShowBrowser(true)}
+               data-tooltip-id="appTooltip"
+               data-tooltip-content="Browse Files"
+               data-tooltip-place="top"
+            >
+               <Icon type="folder-open" size={14} />
+            </button>
+            <button
                className={`${classes.moreBtn} ${showSettings ? classes.moreBtnActive : ''}`}
                onClick={() => setShowSettings(!showSettings)}
                disabled={isLocalStorage}
@@ -108,6 +121,15 @@ const StorageItem = ({ storage, layout }: StorageItemProps) => {
                   </>
                )}
             </div>
+         )}
+         {showBrowser && (
+            <Browser
+               title={`${name} - File Browser`}
+               storageId={id}
+               storageType={type}
+               defaultPath={defaultPath && defaultPath !== '/' ? defaultPath : undefined}
+               close={() => setShowBrowser(false)}
+            />
          )}
          {showEditModal && <EditStorage close={() => setShowEditModal(false)} storage={storage} />}
          {showVerifyModal && (

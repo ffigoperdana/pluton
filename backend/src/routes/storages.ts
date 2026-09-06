@@ -10,6 +10,7 @@ export function createStorageRouter(
 	router.get('/', authM, controller.listStorages.bind(controller));
 	router.get('/available', authM, controller.listAvailableStorageTypes.bind(controller));
 	router.get('/:id', authM, controller.getStorage.bind(controller));
+	router.get('/:id/browse', authM, controller.browseStorage.bind(controller));
 	router.put('/:id', authM, controller.updateStorage.bind(controller));
 	router.delete('/:id', authM, controller.deleteStorage.bind(controller));
 	router.post('/verify/:id', authM, controller.verifyStorage.bind(controller));

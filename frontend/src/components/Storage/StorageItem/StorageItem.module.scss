@@ -106,6 +106,17 @@
    }
 }
 
+.browseBtn {
+   color: var(--content-text-color-light);
+   padding: 3px 6px;
+   border-radius: 4px;
+   cursor: pointer;
+   &:hover {
+      background-color: var(--primary-color-light);
+      color: var(--primary-color);
+   }
+}
+
 .settings {
    position: absolute;
    z-index: 99;
@@ -195,7 +206,7 @@
       padding: 6px 10px;
       box-sizing: border-box;
       background: var(--primary-color-lighter);
-      .moreBtn {
+      .browseBtn {
          margin-left: auto;
       }
    }
