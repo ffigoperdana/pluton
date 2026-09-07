@@ -59,7 +59,7 @@ const DeviceItem = ({ device, layout }: DeviceItemProps) => {
                data-tooltip-id="appTooltip"
                data-tooltip-content={`Pluton Agent version: ${agentVersion ? 'v' + agentVersion : 'latest'}`}
             >
-               <Icon type="compressed" size={14} /> <i>{agentVersion ? 'v' + agentVersion : 'latest'}</i>
+               <Icon type="logo" size={13} /> <i>{agentVersion ? 'v' + agentVersion : 'latest'}</i>
             </div>
             <button className={`${classes.moreBtn} ${showSettings ? classes.moreBtnActive : ''}`} onClick={() => setShowSettings(!showSettings)}>
                <Icon type="dots-vertical" size={14} />
