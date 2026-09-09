@@ -54,13 +54,15 @@ const DeviceItem = ({ device, layout }: DeviceItemProps) => {
             <div className={classes.version}>
                <Icon type="backup" size={14} /> <i>{plans.length} Plans</i>
             </div>
-            <div
-               className={classes.version}
-               data-tooltip-id="appTooltip"
-               data-tooltip-content={`Pluton Agent version: ${agentVersion ? 'v' + agentVersion : 'latest'}`}
-            >
-               <Icon type="logo" size={13} /> <i>{agentVersion ? 'v' + agentVersion : 'latest'}</i>
-            </div>
+            {id !== 'main' && (
+               <div
+                  className={classes.version}
+                  data-tooltip-id="appTooltip"
+                  data-tooltip-content={`Pluton Agent version: ${agentVersion ? 'v' + agentVersion : 'latest'}`}
+               >
+                  <Icon type="logo" size={13} /> <i>{agentVersion ? 'v' + agentVersion : 'latest'}</i>
+               </div>
+            )}
             <button className={`${classes.moreBtn} ${showSettings ? classes.moreBtnActive : ''}`} onClick={() => setShowSettings(!showSettings)}>
                <Icon type="dots-vertical" size={14} />
             </button>
