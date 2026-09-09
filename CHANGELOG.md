@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.20.0](https://github.com/plutonhq/pluton/compare/pluton-v0.19.0...pluton-v0.20.0) (2026-09-09)
+
+
+### Features
+
+* add the ability to browse storage files ([39314e9](https://github.com/plutonhq/pluton/commit/39314e948a5539d8794d79f689edbfe0d509ec43))
+
+
+### Bug Fixes
+
+* resolves broken Wasabi integration due to invalid region endpoint ([317f3b8](https://github.com/plutonhq/pluton/commit/317f3b8ec58dae843fe0a8041b015049651561e8)), closes [#123](https://github.com/plutonhq/pluton/issues/123)
+* resolves missing storage removal failure notice on plan removal ([fd5736c](https://github.com/plutonhq/pluton/commit/fd5736cecdccd633c170b7e3510278b914e598b7))
+* resolves tag input fields not being applied ([d988e1a](https://github.com/plutonhq/pluton/commit/d988e1acdcc88d7c11a7cb94e83b87f5c62aed0b))
+
+
+### Dependencies
+
+* bump rclone to v1.75.1 ([f65f78e](https://github.com/plutonhq/pluton/commit/f65f78efe19eeb06a4848cffce5eec74e81481b8))
+
 ## [0.19.0](https://github.com/plutonhq/pluton/compare/pluton-v0.18.3...pluton-v0.19.0) (2026-08-30)
 
 
