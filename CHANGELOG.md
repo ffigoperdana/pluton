@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.19.0](https://github.com/plutonhq/pluton/compare/pluton-v0.18.3...pluton-v0.19.0) (2026-08-30)
+
+
+### Features
+
+* add better storage error handling ([7af1f7e](https://github.com/plutonhq/pluton/commit/7af1f7e9cd625527e4ede314994c7ab360c77b7a))
+* add pre-backup free-space check on the destination ([e8d9baa](https://github.com/plutonhq/pluton/commit/e8d9baad7721c23900c8374b353193672382d263))
+* add pre-restore free-space check on the destination ([83aaea4](https://github.com/plutonhq/pluton/commit/83aaea46fb9b835b4cab0a814a524a6fee8cdfaa))
+
+
+### Bug Fixes
+
+* clear interrupted backups and restores on startup ([4eebc84](https://github.com/plutonhq/pluton/commit/4eebc84d80b421158c0036e787b11de35920e67e))
+* correct off-by-one in job retry counting ([13b2325](https://github.com/plutonhq/pluton/commit/13b232516443a910703c7da34d20b66e813ced71))
+* fail a stuck backup instead of locking the job queue ([1ee6167](https://github.com/plutonhq/pluton/commit/1ee6167c45ee599865a45607c10257d750691f30))
+* prevent duplicate instances on startup ([46b133b](https://github.com/plutonhq/pluton/commit/46b133bda733e81502f34af7aa846afe34205001))
+* resolve possible crashes caused by event failures ([d0905e2](https://github.com/plutonhq/pluton/commit/d0905e2871bfe2db1370104618cbdfb8956c836c))
+* resolves login form firing twice on submission ([41be0d0](https://github.com/plutonhq/pluton/commit/41be0d0fe0a1dcaad2029f36ad2950284968cd32))
+* resolves replication and restore failure for plans with local storages. ([52be0c1](https://github.com/plutonhq/pluton/commit/52be0c14bf23ff97bc42a7793ed61bd840640dc2))
+* stop rclone leaking after a cancelled backup ([3ea4b59](https://github.com/plutonhq/pluton/commit/3ea4b59cb3d9bcb58b9a2b6740a00e6f4d7f7975))
+
 ## [0.18.3](https://github.com/plutonhq/pluton/compare/pluton-v0.18.2...pluton-v0.18.3) (2026-08-09)
 
 
