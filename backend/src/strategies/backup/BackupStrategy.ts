@@ -1,5 +1,10 @@
 import { StrategyMethodTypes } from '../../types/strategy';
-import { BackupPlanArgs, BackupVerifiedResult, PlanAddRunSettings } from '../../types/plans';
+import {
+	BackupPlanArgs,
+	BackupVerifiedResult,
+	PlanAddRunSettings,
+	RemoveBackupResult,
+} from '../../types/plans';
 import { BackupRunConfig } from '../../types/backups';
 
 export interface BackupStrategy {
@@ -25,7 +30,7 @@ export interface BackupStrategy {
 			encryption: boolean;
 			replicationStorages?: { storageName: string; storagePath: string }[];
 		}
-	): Promise<{ success: boolean; result: string }>;
+	): Promise<RemoveBackupResult>;
 	removeReplicationStorage(
 		planId: string,
 		options: {

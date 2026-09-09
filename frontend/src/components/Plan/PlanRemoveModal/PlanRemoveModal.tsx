@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { toast } from 'react-toastify';
 import { useNavigate } from 'react-router';
 import ActionModal from '../../common/ActionModal/ActionModal';
+import UnremovedPathsNotice from './UnremovedPathsNotice';
 import { useDeletePlan } from '../../../services/plans';
 import Toggle from '../../common/form/Toggle/Toggle';
 import classes from './PlanRemoveModal.module.scss';
@@ -33,9 +34,17 @@ const PlanRemoveModal = ({ planId, taskPending, actionInProgress, close }: PlanR
                console.log('error :', error?.message);
                toast.error(error.message || `Error Removing Plan!`);
             },
-            onSuccess: (data: any) => {
+            onSuccess: (data) => {
                console.log('Success :', data);
-               toast.success(`Removed Backup Plan Successfully!`, { autoClose: 5000 });
+               if (data.unremovedPaths?.length) {
+                  toast.warning(<UnremovedPathsNotice paths={data.unremovedPaths} reason={data.unremovedReason} />, {
+                     autoClose: false,
+                     closeOnClick: false,
+                     style: { minWidth: '360px' },
+                  });
+               } else {
+                  toast.success(`Removed Backup Plan Successfully!`, { autoClose: 5000 });
+               }
                navigate('/');
             },
          },

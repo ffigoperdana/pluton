@@ -17,6 +17,7 @@ import {
 	PlanLogItem,
 	PlanNotification,
 	PlanNotificationType,
+	PlanStoragePath,
 } from '../types/plans';
 import { planLogger } from '../utils/logger';
 import { generateUID, normalizeStorageName } from '../utils/helpers';
@@ -327,8 +328,17 @@ export class PlanService {
 
 	/**
 	 * Deletes a plan and instructs the execution engine to remove its schedule and data.
+	 * Storage data the engine could not remove does not stop the plan being deleted: those
+	 * locations come back in `unremovedPaths`, with `unremovedReason` saying why.
 	 */
-	public async deletePlan(planId: string, removeRemoteData: boolean): Promise<boolean> {
+	public async deletePlan(
+		planId: string,
+		removeRemoteData: boolean
+	): Promise<{
+		deleted: boolean;
+		unremovedPaths: PlanStoragePath[];
+		unremovedReason: string;
+	}> {
 		const plan = await this.planStore.getById(planId);
 		if (!plan) throw new NotFoundError('Plan not found.');
 		const storageName = plan.storage?.name || '';
@@ -362,7 +372,11 @@ export class PlanService {
 
 		planLogger('delete', planId).info('Plan and associated data successfully deleted.');
 
-		return deleteRes;
+		return {
+			deleted: deleteRes,
+			unremovedPaths: deleteResult.unremovedPaths || [],
+			unremovedReason: deleteResult.unremovedReason || '',
+		};
 	}
 
 	/**

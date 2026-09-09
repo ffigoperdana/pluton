@@ -275,7 +275,11 @@ describe('PlanController', () => {
 
 		it('should successfully delete a plan', async () => {
 			mockRequest.params = { id: 'plan-1' };
-			mockPlanService.deletePlan.mockResolvedValue(true);
+			mockPlanService.deletePlan.mockResolvedValue({
+				deleted: true,
+				unremovedPaths: [],
+				unremovedReason: '',
+			});
 
 			await planController.deletePlan(mockRequest as Request, mockResponse as Response);
 
@@ -284,6 +288,28 @@ describe('PlanController', () => {
 			expect(mockJson).toHaveBeenCalledWith({
 				success: true,
 				message: 'Plan deleted successfully',
+				unremovedPaths: [],
+				unremovedReason: '',
+			});
+		});
+
+		it('should report storage paths that could not be removed, and why', async () => {
+			mockRequest.params = { id: 'plan-1' };
+			const unremovedPaths = [{ storageName: 'wasabi', storagePath: 'pluton/laptop-01' }];
+			mockPlanService.deletePlan.mockResolvedValue({
+				deleted: true,
+				unremovedPaths,
+				unremovedReason: 'The device could not be reached.',
+			});
+
+			await planController.deletePlan(mockRequest as Request, mockResponse as Response);
+
+			expect(mockStatus).toHaveBeenCalledWith(200);
+			expect(mockJson).toHaveBeenCalledWith({
+				success: true,
+				message: 'Plan deleted successfully',
+				unremovedPaths,
+				unremovedReason: 'The device could not be reached.',
 			});
 		});
 	});

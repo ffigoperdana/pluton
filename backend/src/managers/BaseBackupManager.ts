@@ -8,6 +8,8 @@ import {
 	BackupVerifiedResult,
 	PlanAddRunSettings,
 	PlanPrune,
+	PlanStoragePath,
+	RemoveBackupResult,
 } from '../types/plans';
 import { BackupHandler } from './handlers/BackupHandler';
 import { PruneHandler } from './handlers/PruneHandler';
@@ -149,44 +151,44 @@ export class BaseBackupManager extends EventEmitter {
 			encryption: boolean;
 			replicationStorages?: { storageName: string; storagePath: string }[];
 		}
-	): Promise<{ success: boolean; result: string }> {
+	): Promise<RemoveBackupResult> {
 		try {
 			// Stop all cron jobs for this backup and remove the cron schedule
 			await this.cronManager.removeSchedule(planId);
-			let removeResult = 'Successfully Removed';
-
-			// Remove the primary storage data when necessary
-			if (options.storagePath && options.removeRemoteData) {
-				const output = await runRcloneCommand([
-					'purge',
-					`${options.storageName}:${options.storagePath}`,
-				]);
-				removeResult += output;
-			}
-
-			// Also remove data from replication storages
-			if (options.removeRemoteData && options.replicationStorages?.length) {
-				for (const replica of options.replicationStorages) {
-					try {
-						const output = await runRcloneCommand([
-							'purge',
-							`${replica.storageName}:${replica.storagePath}`,
-						]);
-						removeResult += ` | Replication ${replica.storageName}: ${output}`;
-					} catch (error: any) {
-						// Log but don't fail the entire removal if a replication storage purge fails
-						console.warn(
-							`[removeBackup] Failed to purge replication storage ${replica.storageName}:${replica.storagePath}: ${error.message}`
-						);
-						removeResult += ` | Replication ${replica.storageName} purge failed: ${error.message}`;
-					}
-				}
-			}
-
-			return { success: true, result: removeResult };
 		} catch (error: any) {
 			return { success: false, result: error.message };
 		}
+
+		let removeResult = 'Successfully Removed';
+		const unremovedPaths: PlanStoragePath[] = [];
+		let unremovedReason = '';
+
+		// On purge failure let the user know so they can manually remove the data.
+		const purge = async (storageName: string, storagePath: string, label?: string) => {
+			try {
+				const output = await runRcloneCommand(['purge', `${storageName}:${storagePath}`]);
+				removeResult += label ? ` | ${label}: ${output}` : output;
+			} catch (error: any) {
+				console.warn(
+					`[removeBackup] Failed to purge ${storageName}:${storagePath}: ${error.message}`
+				);
+				removeResult += ` | ${label || storageName} purge failed: ${error.message}`;
+				unremovedPaths.push({ storageName, storagePath });
+				unremovedReason = unremovedReason || error.message;
+			}
+		};
+
+		if (options.removeRemoteData) {
+			if (options.storagePath) {
+				await purge(options.storageName, options.storagePath);
+			}
+			for (const replica of options.replicationStorages || []) {
+				if (!replica.storagePath) continue;
+				await purge(replica.storageName, replica.storagePath, `Replication ${replica.storageName}`);
+			}
+		}
+
+		return { success: true, result: removeResult, unremovedPaths, unremovedReason };
 	}
 
 	/**

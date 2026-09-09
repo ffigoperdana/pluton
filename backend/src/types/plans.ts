@@ -232,6 +232,15 @@ export interface BackupPlanArgs extends NewPlan {
 	cronExpression: string;
 }
 
+export type PlanStoragePath = { storageName: string; storagePath: string };
+
+export type RemoveBackupResult = {
+	success: boolean;
+	result: string;
+	unremovedPaths?: PlanStoragePath[];
+	unremovedReason?: string;
+};
+
 export type PlanChildItem = Pick<
 	Plan,
 	'id' | 'title' | 'createdAt' | 'isActive' | 'stats' | 'method'

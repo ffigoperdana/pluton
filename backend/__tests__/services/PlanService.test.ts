@@ -534,7 +534,31 @@ describe('PlanService', () => {
 			});
 			expect(mockBackupStore.deleteByPlanId).toHaveBeenCalledWith(planId);
 			expect(mockPlanStore.delete).toHaveBeenCalledWith(planId);
-			expect(result).toBe(true);
+			expect(result).toEqual({ deleted: true, unremovedPaths: [], unremovedReason: '' });
+		});
+
+		it('should still delete the plan when storage data could not be removed', async () => {
+			// Arrange
+			mockPlanStore.getById.mockResolvedValue(mockPlan);
+			mockStrategy.removeBackup.mockResolvedValue({
+				success: true,
+				result: 'purge failed',
+				unremovedPaths: [{ storageName: 'Test Storage', storagePath: '/backups/delete' }],
+				unremovedReason: 'The device could not be reached.',
+			});
+			mockBackupStore.deleteByPlanId.mockResolvedValue(true);
+			mockPlanStore.delete.mockResolvedValue(true);
+
+			// Act
+			const result = await planService.deletePlan(planId, true);
+
+			// Assert
+			expect(mockPlanStore.delete).toHaveBeenCalledWith(planId);
+			expect(result).toEqual({
+				deleted: true,
+				unremovedPaths: [{ storageName: 'Test Storage', storagePath: '/backups/delete' }],
+				unremovedReason: 'The device could not be reached.',
+			});
 		});
 
 		it('should throw a NotFoundError if the plan does not exist', async () => {

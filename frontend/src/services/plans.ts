@@ -207,7 +207,16 @@ export function useUpdatePlan() {
 }
 
 // Remove Plan
-export async function deletePlan({ id, removeRemoteData }: { id: string; removeRemoteData: boolean }) {
+export type UnremovedStoragePath = { storageName: string; storagePath: string };
+
+export type DeletePlanResult = {
+   success: boolean;
+   message: string;
+   unremovedPaths?: UnremovedStoragePath[];
+   unremovedReason?: string;
+};
+
+export async function deletePlan({ id, removeRemoteData }: { id: string; removeRemoteData: boolean }): Promise<DeletePlanResult> {
    const header = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
    const res = await fetch(`${API_URL}/plans/${id}?removeData=${removeRemoteData}`, {
       method: 'DELETE',
@@ -225,8 +234,10 @@ export function useDeletePlan() {
    const queryClient = useQueryClient();
    return useMutation({
       mutationFn: deletePlan,
-      onSuccess: (res) => {
+      onSuccess: (res, variables) => {
          console.log('# Plan Removed! :', res);
+         // Drop the deleted plan's query, or it keeps refetching a record that now 404s.
+         queryClient.removeQueries({ queryKey: ['plan', variables.id], exact: true });
          queryClient.invalidateQueries({ queryKey: ['plans'] });
       },
    });

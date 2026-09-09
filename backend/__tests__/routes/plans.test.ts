@@ -199,7 +199,11 @@ describe('Plan Routes', () => {
 		});
 
 		it('should delete a plan when authenticated', async () => {
-			mockPlanService.deletePlan.mockResolvedValue(true);
+			mockPlanService.deletePlan.mockResolvedValue({
+				deleted: true,
+				unremovedPaths: [],
+				unremovedReason: '',
+			});
 
 			const response = await request(app).delete('/api/plans/plan-1');
 

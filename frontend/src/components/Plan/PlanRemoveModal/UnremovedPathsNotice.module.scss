@@ -1,0 +1,51 @@
+.unremovedNotice {
+   strong {
+      color: var(--content-title-color);
+   }
+   p {
+      margin: 6px 0 0;
+   }
+}
+
+.reason {
+   font-weight: 600;
+}
+
+.paths {
+   margin: 8px 0 0;
+   padding: 0;
+   list-style: none;
+   // Keeps a long list from filling the screen inside a toast.
+   max-height: 180px;
+   overflow-y: auto;
+
+   li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 5px 8px;
+      margin-bottom: 4px;
+      border-radius: 4px;
+      // Neutral so it reads on both the light and dark toast themes.
+      background: rgba(128, 128, 128, 0.18);
+      font-family: monospace;
+      font-size: 0.85em;
+      word-break: break-all;
+
+      button {
+         flex-shrink: 0;
+         display: flex;
+         padding: 2px;
+         border: 0;
+         background: none;
+         color: inherit;
+         cursor: pointer;
+         opacity: 0.6;
+
+         &:hover {
+            opacity: 1;
+         }
+      }
+   }
+}

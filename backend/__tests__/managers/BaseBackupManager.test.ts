@@ -574,7 +574,7 @@ describe('BaseBackupManager', () => {
 			expect(res.result).toContain('Deleted 100 files');
 		});
 
-		it('handles rclone errors during purge', async () => {
+		it('reports a failed purge instead of stranding the plan', async () => {
 			mockRunRcloneCommand.mockRejectedValueOnce(new Error('Purge failed'));
 			const res = await mgr.removeBackup('plan-purge-fail', {
 				storageName: 'remote',
@@ -582,8 +582,61 @@ describe('BaseBackupManager', () => {
 				removeRemoteData: true,
 				encryption: false,
 			});
-			expect(res.success).toBe(false);
-			expect(res.result).toMatch(/Purge failed/);
+			// The plan must still be removable; the caller shows the path to the user.
+			expect(res.success).toBe(true);
+			expect(res.unremovedPaths).toEqual([{ storageName: 'remote', storagePath: 'path' }]);
+			expect(res.unremovedReason).toMatch(/Purge failed/);
+		});
+
+		it('reports a failed replication purge that used to be swallowed', async () => {
+			mockRunRcloneCommand
+				.mockResolvedValueOnce('') // primary purge succeeds
+				.mockRejectedValueOnce(new Error('Mirror unreachable'));
+
+			const res = await mgr.removeBackup('plan-replica-fail', {
+				storageName: 'remote',
+				storagePath: 'path',
+				removeRemoteData: true,
+				encryption: false,
+				replicationStorages: [{ storageName: 'b2-mirror', storagePath: 'mirrors/path' }],
+			});
+
+			expect(res.success).toBe(true);
+			expect(res.unremovedPaths).toEqual([
+				{ storageName: 'b2-mirror', storagePath: 'mirrors/path' },
+			]);
+			expect(res.unremovedReason).toMatch(/Mirror unreachable/);
+		});
+
+		it('reports every path when the primary and a replication both fail', async () => {
+			mockRunRcloneCommand
+				.mockRejectedValueOnce(new Error('Primary down'))
+				.mockRejectedValueOnce(new Error('Mirror down'));
+
+			const res = await mgr.removeBackup('plan-all-fail', {
+				storageName: 'remote',
+				storagePath: 'path',
+				removeRemoteData: true,
+				encryption: false,
+				replicationStorages: [{ storageName: 'b2-mirror', storagePath: 'mirrors/path' }],
+			});
+
+			expect(res.unremovedPaths).toHaveLength(2);
+			// The first failure is the reason shown to the user.
+			expect(res.unremovedReason).toMatch(/Primary down/);
+		});
+
+		it('reports nothing unremoved when every purge succeeds', async () => {
+			const res = await mgr.removeBackup('plan-ok', {
+				storageName: 'remote',
+				storagePath: 'path',
+				removeRemoteData: true,
+				encryption: false,
+				replicationStorages: [{ storageName: 'b2-mirror', storagePath: 'mirrors/path' }],
+			});
+
+			expect(res.unremovedPaths).toEqual([]);
+			expect(res.unremovedReason).toBe('');
 		});
 	});
 
