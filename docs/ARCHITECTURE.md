@@ -1,8 +1,9 @@
 # Existing community architecture
 
 Baseline inspected for Phase 0: commit `5c74a48`, application version `0.20.0`.
-This describes the checked-in public source, not proprietary editions or a claim
-that the proposed legacy adapter exists. No application behavior changes in Phase 0.
+This describes the checked-in public source, not proprietary editions. Phase 1 adds
+a separate local, read-only legacy repository adapter; it does not modify the
+managed backup lifecycle.
 
 ## Application structure
 
@@ -11,7 +12,7 @@ that the proposed legacy adapter exists. No application behavior changes in Phas
 | Workspace      | TypeScript monorepo with pnpm `10.20.0`, `backend/` and `frontend/` packages, and Turborepo build orchestration. Backend CI uses Node.js 24. See [package.json](../package.json), [pnpm-workspace.yaml](../pnpm-workspace.yaml), and [turbo.json](../turbo.json).                                                                                                                                                                                |
 | Backend        | Node.js, Express 5, and TypeScript. [index.ts](../backend/src/index.ts) handles startup; [createApp.ts](../backend/src/createApp.ts) wires stores, managers, services, controllers, routes, middleware, and jobs. Routes/controllers call services, stores access the database, and managers/handlers run backup and restore operations.                                                                                                         |
 | Frontend       | React 18, Vite 6, React Router 7, TanStack Query, and SCSS modules. [main.tsx](../frontend/src/main.tsx) installs providers; [router.tsx](../frontend/src/router.tsx) maps pages. `routes/`, `components/`, `services/`, and `hooks/` organize screens, UI, API access, and state. Snapshot browsing also uses Dexie/IndexedDB through [useSnapshotDatabase.ts](../frontend/src/components/common/SnapshotBrowser/hooks/useSnapshotDatabase.ts). |
-| Database       | SQLite through `better-sqlite3` and Drizzle ORM, with WAL enabled in [db/index.ts](../backend/src/db/index.ts). Schemas live in `backend/src/db/schema/`, migrations in `backend/drizzle/`, and persistence helpers in `backend/src/stores/`. Tables cover plans, backups, restores, devices, storages, and settings.                                                                                                                            |
+| Database       | SQLite through `better-sqlite3` and Drizzle ORM, with WAL enabled in [db/index.ts](../backend/src/db/index.ts). Schemas live in `backend/src/db/schema/`, migrations in `backend/drizzle/`, and persistence helpers in `backend/src/stores/`. Tables cover plans, backups, restores, devices, storages, settings, and the separate read-only legacy registrations.                                                                                  |
 | Local state    | [AppPaths.ts](../backend/src/utils/AppPaths.ts) locates the database, config, schedules, logs, temporary files, cache, downloads, and restores. Unpackaged development/test execution uses the current working directory's `data/`; production paths depend on installation mode and configuration.                                                                                                                                              |
 | Backup storage | Restic repositories are accessed via Rclone storage definitions. [generateResticRepoPath](../backend/src/utils/restic/helpers.ts) produces `rclone:<storage-name>:<storage-path>`. The [storages schema](../backend/src/db/schema/storages.ts) includes settings and credential fields, and execution also uses local Rclone configuration. Database/runtime files and credentials must stay out of Git.                                         |
 
@@ -42,7 +43,7 @@ path. Managed snapshots use `plan-<id>` and `backup-<id>` tags to associate Rest
 data with application records. Existing repository passwords and untagged snapshots
 therefore need their own abstraction.
 
-These existing paths must remain outside the future legacy adapter:
+These existing paths remain outside the Phase 1 legacy adapter:
 
 - [BaseBackupManager.createBackup](../backend/src/managers/BaseBackupManager.ts)
   invokes repository initialization, installs schedules, and can run a backup immediately.
@@ -54,7 +55,26 @@ These existing paths must remain outside the future legacy adapter:
   [RestoreService](../backend/src/services/RestoreService.ts) work with managed
   backup records; their interfaces are not an imported-repository safety boundary.
 
-Phase 0 documents these behaviors and leaves them unchanged.
+They remain unchanged. The adapter has its own schema, store, service, controller,
+routes, and [allowlisted inspector](../backend/src/utils/restic/LegacyRepositoryInspector.ts).
+Its only Restic operations are JSON `snapshots` and `stats --mode raw-data`, each
+with `--no-lock` and `--no-cache`; it does not reuse the managed executor.
+
+## Phase 1 legacy repository boundary
+
+The `legacy_repositories` table stores only local registration metadata, an
+encrypted external repository password, mandatory `isReadOnly`, and local
+validation status. [LegacyRepositoryService.ts](../backend/src/services/LegacyRepositoryService.ts)
+rejects non-local or non-read-only records before any inspection. It validates
+registration through snapshots, maps process errors to safe messages, applies exact
+metadata filters locally, and deletes only the registration.
+
+Routes mounted at `/api/legacy-repositories` require the authenticated UI session.
+The frontend route `/legacy-repositories` exposes registration, status, statistics,
+and snapshot metadata only. Neither surface includes a browser, restore action,
+retention action, mutation command, or lifecycle handoff. See
+[LEGACY_REPOSITORY_DESIGN.md](LEGACY_REPOSITORY_DESIGN.md) for the exact Phase 1
+contract and known compatibility boundary.
 
 ## Scheduling and job execution
 
@@ -72,15 +92,16 @@ emits failure events. Managers and event listeners update progress and database
 records. [StartupRecovery.ts](../backend/src/services/StartupRecovery.ts) handles
 interrupted managed work after restart; the job queue itself is not durable.
 
-## Existing features versus proposed work
+## Existing features versus later work
 
 The public source already includes managed snapshot browsing, a restore wizard,
 script hooks, and email/Slack/Discord/NTFY notification code. Remote strategy
-interfaces also exist. Their presence does not establish that a standalone agent,
-database lifecycle, or imported-repository workflow is available in this fork.
-Later roadmap phases must identify the additional behavior and reuse only public
-code that meets the new boundaries. References to PRO/Business in upstream package
-READMEs are attribution/context, not permission to inspect proprietary implementations.
+interfaces also exist. Their presence does not establish that an imported legacy
+repository can browse contents, restore, act as a standalone agent, or take over a
+database lifecycle. Later roadmap phases must identify the additional behavior and
+reuse only public code that meets the new boundaries. References to PRO/Business in
+upstream package READMEs are attribution/context, not permission to inspect
+proprietary implementations.
 
 ## Validation commands
 
@@ -115,8 +136,9 @@ preserve it instead of adding a second configuration format. The tracked
 `frontend/.env.dev` contains only app name/port settings. Ignoring future `.env.*`
 files does not remove or sanitize tracked files.
 
-The first adapter implementation still needs an explicit supported Restic version
-range, repository-format/backend matrix, password-storage decision, JSON parsing
-limits, and verified no-write access including locks. No production inventory or
-repository was inspected for Phase 0. See the
-[legacy design](LEGACY_REPOSITORY_DESIGN.md) for the proposed boundaries.
+Phase 1 deliberately supports only local filesystem registrations and retains no
+supported-Restic-version or repository-format matrix. Password storage uses local
+encryption under `SECRET`; JSON parsing and output limits are implemented; and
+`--no-lock` is required. No production inventory or repository was inspected. See
+the [legacy adapter design](LEGACY_REPOSITORY_DESIGN.md) for the implemented
+boundary and remaining compatibility work.

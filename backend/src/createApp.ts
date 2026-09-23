@@ -25,6 +25,8 @@ import { SettingsController } from './controllers/SettingsController';
 import { SetupController } from './controllers/SetupController';
 import { createBackupRouter } from './routes/backups';
 import { BackupController } from './controllers/BackupController';
+import { createLegacyRepositoryRouter } from './routes/legacyRepositories';
+import { LegacyRepositoryController } from './controllers/LegacyRepositoryController';
 
 import versionMiddleware from './middlewares/versionMiddleware';
 import { PlanStore } from './stores/PlanStore';
@@ -57,6 +59,8 @@ import { initializeLogger } from './utils/logger';
 import { configService } from './services/ConfigService';
 import { BaseRestoreManager } from './managers/BaseRestoreManager';
 import { parseTrustProxy } from './utils/helpers';
+import { LegacyRepositoryStore } from './stores/LegacyRepositoryStore';
+import { LegacyRepositoryService } from './services/LegacyRepositoryService';
 
 const MemoryStore = createMemoryStore(session);
 
@@ -71,6 +75,7 @@ export async function createApp(): Promise<{ app: Express }> {
 	const deviceStore = new DeviceStore(db);
 	const restoreStore = new RestoreStore(db);
 	const settingsStore = new SettingsStore(db);
+	const legacyRepositoryStore = new LegacyRepositoryStore(db);
 
 	// Local Agents
 	const localPlanAgent = new BaseBackupManager();
@@ -119,6 +124,7 @@ export async function createApp(): Promise<{ app: Express }> {
 	);
 	const selfBackupService = new SelfBackupService(settingsStore, storageStore, sqlite, 'core');
 	const settingsService = new SettingsService(settingsStore, selfBackupService);
+	const legacyRepositoryService = new LegacyRepositoryService(legacyRepositoryStore);
 
 	// API Route Controllers
 	const planController = new PlanController(planService);
@@ -129,6 +135,7 @@ export async function createApp(): Promise<{ app: Express }> {
 	const settingsController = new SettingsController(settingsService);
 	const userController = new UserController(settingsService);
 	const setupController = new SetupController();
+	const legacyRepositoryController = new LegacyRepositoryController(legacyRepositoryService);
 
 	// Express App
 	const app = express();
@@ -249,6 +256,7 @@ export async function createApp(): Promise<{ app: Express }> {
 	app.use('/api/storages', createStorageRouter(storageController));
 	app.use('/api/restores', createRestoreRouter(restoreController));
 	app.use('/api/settings', createSettingsRouter(settingsController));
+	app.use('/api/legacy-repositories', createLegacyRepositoryRouter(legacyRepositoryController));
 	app.use('/api/health', createHealthRouter());
 
 	// For any other request that doesn't match an API route or a static file,

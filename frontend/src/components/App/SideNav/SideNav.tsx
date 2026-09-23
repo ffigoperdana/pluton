@@ -45,6 +45,20 @@ const SideNav = () => {
                   </span>
                )}
             </NavLink>
+            <NavLink to="/legacy-repositories" end aria-label="Legacy Repositories">
+               {() => (
+                  <span
+                     className={classes.navMenuLabel}
+                     data-tooltip-id="appTooltip"
+                     data-tooltip-content="Legacy Repositories"
+                     data-tooltip-place="left"
+                     data-tooltip-delay-show={500}
+                     data-tooltip-hidden={isMobile()}
+                  >
+                     <Icon type="lock" size={25} />
+                  </span>
+               )}
+            </NavLink>
             <NavLink to="/sources" end aria-label="Sources">
                {() => (
                   <span
