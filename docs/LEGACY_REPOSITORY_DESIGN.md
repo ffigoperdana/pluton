@@ -1,188 +1,150 @@
-# Legacy Restic repository adapter — design only
+# Legacy Restic repository adapter — Phase 1
 
-Status: proposed, not implemented. Phase 0 adds no endpoints, schema migrations,
-configuration options, jobs, or Restic operations. The design uses only public
-Pluton source and documented Restic/Rclone interfaces.
+Status: implemented for local filesystem repositories only. This adapter uses only
+the public Pluton source and documented Restic interfaces. It does not inspect a
+real user repository during tests and does not certify a Restic-version or
+repository-format compatibility matrix.
 
-## Purpose and initial adoption contract
+## Adoption contract
 
-Allow Pluton to register a repository created and maintained outside Pluton without
-assuming ownership of its backup schedule, credentials, retention, or maintenance.
-Phase 1 should start with an existing local filesystem path; additional backend
-locators require a tested compatibility decision, not an assumption that every
-Restic/Rclone backend is supported.
+An operator can register an already-existing local Restic repository with a display
+name, an absolute path on the Pluton server, and its own repository password. The
+registration is a separate domain from managed plans, backups, schedules, storage
+definitions, and retention.
 
-Initial adoption must provide:
+The adapter is mandatory read-only. The UI displays this state but provides no
+control to change it. Removing a registration deletes only Pluton's local record;
+it never deletes or changes repository contents. The original backup tooling keeps
+ownership of scheduling, retention, maintenance, and credentials.
 
-- An existing repository path and an independently configured repository password.
-- Read-only repository access enabled by default and mandatory for this initial adapter.
-- Snapshot listing, metadata inspection, and filters by path, tag, and host.
-- Snapshot content browsing and selected-file/directory restore in Phase 2, with
-  restore restricted to an explicitly selected staging directory.
-- No backup writes, retention execution, prune, unlock, repair, or repository
-  migration. Registration must not initialize an absent repository or alter tags,
-  keys, format, snapshots, indexes, packs, or lock objects.
+Phase 1 provides connection validation, basic safe statistics, snapshot metadata,
+and exact tag/path/host filters. It does not browse snapshot contents or restore
+data. Those remain future work.
 
-The original backup tooling remains responsible for repository maintenance. Removing
-a registration removes Pluton's local record/cache only, never repository contents.
+## Stored local registration
 
-## Separate domain and credentials
+The [legacy repository schema](../backend/src/db/schema/legacyRepositories.ts)
+creates a dedicated `legacy_repositories` table through migration
+[`0003_luxuriant_fat_cobra.sql`](../backend/drizzle/0003_luxuriant_fat_cobra.sql).
+It is not related to managed plans or backups.
 
-Use a proposed `LegacyRepository` record and dedicated service/adapter, separate
-from managed `plans`, `backups`, and their job lifecycle. These names are design
-labels, not existing database tables or application APIs.
+| Field | Meaning |
+| --- | --- |
+| `id`, `displayName` | Local registration identity and UI label. |
+| `repositoryPath` | Existing, validated absolute local path. |
+| `backend` | Fixed to `local` in Phase 1. Remote/Rclone backend locators are not accepted. |
+| `encryptedPassword` | The external repository password encrypted for the local registration with Pluton's configured `SECRET`. It is never sent to the frontend. |
+| `isReadOnly` | Always `true`; request payloads cannot opt out and non-read-only stored records are rejected. |
+| `validationStatus`, `lastValidatedAt` | Local availability state from the most recent safe inspection. |
+| `createdAt`, `updatedAt` | Local registration timestamps. |
 
-| Proposed field                        | Meaning                                                                                                                    |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `id`, `displayName`                   | Local registration identity and a user-facing label.                                                                       |
-| `repositoryPath`                      | Validated existing absolute path for the initial local adapter. Do not manufacture a Pluton storage path or initialize it. |
-| `passwordSecretRef`                   | Opaque reference to independently configured secret material, never a plaintext API response or checked-in value.          |
-| `accessMode`                          | `read-only`; omitted input defaults to this value, and writable modes are rejected during initial adoption.                |
-| `repositoryIdentity`, `formatVersion` | Values observed through supported read operations, used to detect path reuse/replacement and unsupported formats.          |
-| `lastInspectedAt`, `status`           | Local inspection state, including unavailable/unsupported/authentication failures, with redacted diagnostics.              |
+The repository password remains independent from Pluton's managed repository
+password derivation and `ENCRYPTION_KEY`. `SECRET` protects the stored value; it
+does not replace or re-key the external Restic password. The password is placed in
+the child process environment only for the inspection and is not logged, returned,
+or included in command arguments.
 
-Keep the repository decryption password independent from Pluton's `ENCRYPTION_KEY`
-and from any future storage-transport credentials. Changing an application secret
-must not re-key or replace the external repository password. Reuse an appropriate
-local secret-protection primitive only after review; an application encryption key
-may protect a stored secret without becoming the Restic password itself. Resolve
-the secret for the child process only, avoid command-line secret values, redact
-process environment/error output, and never return secrets to the frontend.
+## Read-only execution boundary
 
-Snapshot references must pair this registration/repository identity with a full
-Restic snapshot ID. Do not invent managed backup records or require `plan-*`/
-`backup-*` tags. Missing optional metadata or tags must be handled explicitly;
-hostnames, tags, filenames, and errors from snapshots are untrusted and potentially
-sensitive data, not safe public fixtures.
+[LegacyRepositoryInspector.ts](../backend/src/utils/restic/LegacyRepositoryInspector.ts)
+is intentionally independent of the general managed `runResticCommand` helper. It
+accepts only the following typed operations:
 
-## Registration and inspection flow
+| Operation | Fixed Restic arguments | Returned data |
+| --- | --- | --- |
+| Snapshot validation/listing | `--no-lock --no-cache --json --repo <path> snapshots` | Normalized snapshot ID, time, host, tags, paths, and parent metadata. |
+| Safe statistics | `--no-lock --no-cache --json --repo <path> stats --mode raw-data` | Snapshot count, sizes, compression ratio, and blob count when the installed Restic supports it. |
 
-1. Authenticate/authorize registration and filesystem access. Validate the locator
-   and secret reference without logging secret material or embedded credentials.
-2. Inspect the supported Restic binary/version and existing repository identity
-   through the read-only command boundary. Reject absent repositories, wrong
-   passwords, unsupported formats/backends, and unsafe access conditions.
-3. Save a local registration only after validation. Do not invoke
-   `BaseBackupManager.createBackup`, create a normal plan, or install schedules.
-4. List snapshots and inspect metadata by full snapshot ID. Normalize documented
-   JSON with bounded memory, timeouts, cancellation, and explicit error handling.
-5. Apply validated path/tag/host filters without adding Pluton tags. Define filter
-   combination semantics in the API and tests; snapshot path filtering concerns
-   recorded source paths and is distinct from searching files inside a snapshot.
+The executor builds an argument array, starts the binary with `shell: false`, uses
+a bounded timeout and output limit, and discards stderr rather than logging it.
+Before spawning it removes inherited `RESTIC_REPOSITORY`, repository-file, and
+password-command/file variables. Structured JSON is validated before it becomes an
+API response. User-provided filters are applied to returned snapshot metadata, so
+they do not become raw CLI arguments.
 
-The public [Restic repository guide](https://restic.readthedocs.io/en/stable/045_working_with_repos.html)
-describes snapshot filtering and `ls` JSON output. Its command surface is an input
-to compatibility tests, not evidence that this proposed integration is working.
+`--no-lock` is required because Restic reads can otherwise create repository lock
+objects. It also means the repository owner must coordinate concurrent maintenance;
+this adapter never attempts `unlock` as recovery. A read-only filesystem mount or
+read-only backend credential is still recommended as defense in depth. See the
+[Restic manual](https://restic.readthedocs.io/en/stable/manual_rest.html) for the
+documented `--no-lock`, JSON, snapshot, and stats interfaces.
 
-## Operation boundary
+The runtime allowlist rejects every other operation before process creation. In
+particular, these commands are not available through the legacy adapter:
 
-Provide typed methods such as registration validation, snapshot listing, metadata
-inspection, and later content listing/staged restore. A central backend policy must
-build arguments from validated values and deny every unrecognized operation or
-flag. Do not accept arbitrary command strings, password commands, backend program
-overrides, or raw Restic arguments from the UI.
+- `backup`
+- `forget`
+- `prune`
+- `unlock`
+- `migrate`
+- `repair`
+- `init`
+- `restore`
 
-| Operation class              | Candidate public interface                                                                                            | Allowed effects                                                                                                                      |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Repository inspection        | `version`, narrowly scoped `cat config`, `snapshots --json`, `cat snapshot <id>`                                      | Read repository data; write only explicitly scoped Pluton metadata/cache. No repository lock writes.                                 |
-| Content inspection (Phase 2) | `ls --json <id>` with validated snapshot paths                                                                        | Read repository data; no filesystem extraction.                                                                                      |
-| Staged restore (Phase 2)     | `restore <id>` with a required validated `--target` and supported selection/overwrite controls                        | Read the repository and write only the selected staging destination. This is a destination mutation, not a metadata-only operation.  |
-| Repository mutation          | `init`, `backup`, `forget`, `prune`, `unlock`, `migrate`, `repair`, `tag`, key changes, and copying into a repository | Always rejected for initial adoption, including retries and error recovery. All other commands are denied until explicitly reviewed. |
+There are no corresponding routes, jobs, retry handlers, or UI controls. The
+adapter also does not use managed plan creation, retention, startup recovery,
+replication, repository deletion, or repair/unlock paths.
 
-Audit the exact invocation, environment, backend options, and effects for each
-supported Restic version before enabling a candidate interface. No executable
-examples or runtime changes are introduced here.
+## API and UI
 
-### Read-only access includes locks
+All legacy routes require the authenticated UI session; the limited machine API-key
+allowlist does not include them.
 
-Reading snapshot data does not by itself guarantee zero writes: Restic can create
-repository locks. The [public Restic manual](https://restic.readthedocs.io/en/stable/manual_rest.html)
-documents `--no-lock` for supported operations on read-only repositories. The
-future adapter must use and test that behavior for each allowed command, with a
-read-only filesystem mount or read-only backend credentials as defense in depth.
-If an operation cannot satisfy the no-write contract, reject it; never retry with
-write access, silently initialize, or remove locks.
+| Endpoint | Local effect |
+| --- | --- |
+| `GET /api/legacy-repositories` | List safe local registration metadata. |
+| `POST /api/legacy-repositories` | Validate with snapshot inspection, then store one read-only registration. |
+| `GET /api/legacy-repositories/:id` | View one registration's safe metadata. |
+| `POST /api/legacy-repositories/:id/validate` | Recheck access through snapshot inspection. |
+| `GET /api/legacy-repositories/:id/snapshots` | List snapshot metadata, with optional exact `tag`, `path`, and `host` filters. |
+| `GET /api/legacy-repositories/:id/snapshots/:snapshotId` | View one already-listed snapshot by full 64-character ID. |
+| `GET /api/legacy-repositories/:id/stats` | Obtain safe statistics when supported by Restic. |
+| `DELETE /api/legacy-repositories/:id` | Delete the local registration only. |
 
-Skipping locks also removes coordination with external maintenance. Inspection or
-restore must use a stable read-only view, or a maintenance window in which the
-repository owner prevents concurrent destructive maintenance. A preliminary lock
-check alone cannot eliminate this race. If data disappears during an operation,
-report failure/partial output and leave the repository untouched. No automatic
-`forget`, `prune`, or `unlock` is permitted.
+The [Legacy Repositories UI](../frontend/src/routes/LegacyRepositories/) includes a
+registration panel, repository list, availability status, basic statistics,
+snapshot metadata, filters, and local-registration removal. It explicitly states
+that the repository is read-only and that Pluton owns no retention policy. It has
+no file browser, restoration path, retention action, or repository-mutation UI.
 
-Application cache files must live outside the repository, be bounded and private,
-and be invalidated when repository identity changes. This limited local state does
-not weaken the prohibition on repository writes.
+## Error handling and validation
 
-## Safe staged restore (Phase 2)
+The service validates a non-empty absolute path and credential before persistence.
+It maps wrong-password, unavailable-repository, timeout, malformed JSON, oversized
+output, and generic execution failures to safe API messages. Raw stderr, command
+environment values, and password text do not cross the service boundary.
 
-The [public restore documentation](https://restic.readthedocs.io/en/stable/050_restore.html)
-states that the default restore behavior can overwrite destination files. The
-adapter therefore needs stronger destination rules than simply forwarding a target:
+Snapshot IDs must be full 64-character hexadecimal values. Tag, host, and path
+filters use exact matching against the snapshot list. This deliberately avoids
+inventing managed `plan-*` or `backup-*` tags and avoids content searches inside a
+snapshot.
 
-- Require the user to select a dedicated staging directory and review the exact
-  snapshot ID, selected paths, and resolved destination before starting.
-- Require a new or empty staging directory within an authorized staging root;
-  reject filesystem roots, live source directories, the repository, application
-  data, and ancestor/descendant overlap with protected locations.
-- Canonicalize paths and validate containment, including Windows drive/UNC rules,
-  symlinks, junctions, and traversal. Recheck immediately before execution and
-  isolate destination access to prevent path-swap races and link-based escapes.
-- Use supported no-overwrite controls, never `--delete` or in-place restore.
-  Check required flag support first and reject unsupported versions instead of
-  silently falling back to destructive defaults.
-- Resolve selections to an immutable full snapshot ID; never execute against an
-  ambiguous prefix or a moving `latest` selection. Validate include/path semantics
-  with tests so a granular selection cannot unexpectedly become a full restore.
-- Apply time, space, and output limits; record partial/cancelled results without
-  claiming success. Clean up only adapter-owned staging artifacts, never arbitrary
-  user directories. Do not automatically promote staged data into live locations.
+## Tests and known boundary
 
-Restoring may expose sensitive content and metadata even with read-only repository
-access. Keep authorization on the backend and staging permissions appropriately
-restricted. Restored filenames/links must be treated as untrusted input.
+The Phase 1 tests use mocked child processes and generic fixtures rather than a
+real repository:
 
-## Integration with the current codebase
+- [LegacyRepositoryInspector.test.ts](../backend/__tests__/utils/restic/LegacyRepositoryInspector.test.ts)
+  verifies fixed argument arrays, `shell: false`, inherited-environment clearing,
+  JSON parsing, safe statistics, password nondisclosure, and denial of all eight
+  forbidden operations before Restic is spawned.
+- [LegacyRepositoryService.test.ts](../backend/__tests__/services/LegacyRepositoryService.test.ts)
+  verifies valid registration, invalid paths, incorrect credentials, multiple
+  workload filters, local-only deletion, encrypted credential storage, and the
+  mandatory read-only guard.
+- [legacyRepositories.test.ts](../backend/__tests__/routes/legacyRepositories.test.ts)
+  verifies the session-only route boundary, safe public list data, and forwarding
+  of exact snapshot filters.
 
-Managed creation currently initializes repositories; backup handling can unlock
-stale locks; retention runs `forget --prune`; managed snapshot lookup relies on
-application tags/passwords. See [ARCHITECTURE.md](ARCHITECTURE.md).
+These tests establish the application boundary. They do not prove a particular
+external repository is mounted read-only or that every Restic version supports
+`stats --mode raw-data`. Such support is reported safely at runtime and needs a
+separately authorized disposable-fixture compatibility test before expanding the
+support matrix.
 
-Do not subclass a managed lifecycle and assume a boolean makes it safe. Legacy
-registrations must be absent from managed plan scheduling, retention, replication,
-startup recovery, repository deletion, and repair/unlock endpoints. Enforce that
-separation on request dispatch as well as job dispatch so forged IDs cannot cross
-the boundary.
+## Later work
 
-The existing `runResticCommand` injects global Restic/Rclone settings and uses a
-shared application cache; it is not a policy boundary. Reuse requires a scoped
-execution context, explicit per-repository secrets, reviewed environment options,
-and the allowlist above, while preserving existing callers. Otherwise use a
-dedicated independent executor. Reuse public parsing/UI components only where they
-do not assume managed plan/backup records or introduce mutation hooks.
-
-## Compatibility questions and future acceptance tests
-
-Before implementing Phase 1, decide the supported Restic versions/formats, local
-filesystem scope, secret-store integration, filter semantics, and JSON/output limits.
-Rclone and remote backends need separate credential and no-write verification.
-This design is not a certification of a live legacy environment.
-
-Future tests must use disposable, synthetic repositories and mocked process runners:
-
-- Correct/incorrect independent passwords; absent/corrupt/unsupported repositories;
-  path reuse, unavailable storage, empty repositories, and snapshots without Pluton tags.
-- Every allowlisted command/flag, argument-injection attempts, and denial of every
-  mutation path, including API calls, retries, scheduler dispatch, and recovery.
-- A repository exposed read-only: compare contents before/after and observe backend
-  write attempts, including transient lock creation/deletion, rather than relying
-  only on a final checksum. Fixture setup may write only to disposable test storage
-  in a separately scoped implementation task; Phase 0 runs no Restic commands.
-- JSON parsing limits, metadata filtering, cancellation, credential redaction, and
-  changes caused by external maintenance.
-- Phase 2 adds staging containment, symlink/junction races, no-overwrite behavior,
-  granular selection, permission errors, insufficient space, and partial restore tests.
-
-No new environment variables or configuration examples are needed before these
-decisions. Generic design values may use `app-01`, `/srv/example-restic`, and
-`/srv/example-restore-staging`; they do not identify any actual deployment.
+Phase 2 may add snapshot-content browsing and a separately authorized staged
+restore design. It must validate an explicit isolated destination, prevent path or
+symlink escape, handle cancellation and partial output, and keep imported
+repository access read-only. Phase 1 does not add any restoration capability.

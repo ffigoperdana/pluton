@@ -7,6 +7,7 @@ import { deviceRelations, devices } from './schema/devices';
 import { restoreRelations, restores } from './schema/restores';
 import { backupRelations, backups } from './schema/backups';
 import { settings } from './schema/settings';
+import { legacyRepositories } from './schema/legacyRepositories';
 import { appPaths } from '../utils/AppPaths';
 
 const dbPath = path.join(appPaths.getDbDir(), 'pluton.db');
@@ -27,6 +28,7 @@ export const db = drizzle(sqlite, {
 		backups,
 		backupRelations,
 		settings,
+		legacyRepositories,
 	},
 });
 export type DatabaseType = typeof db;

@@ -6,6 +6,8 @@ import { useAuth } from './services/users';
 import App from './components/App/App/App';
 import Settings from './routes/Settings/Settings';
 import Storages from './routes/Storages/Storages';
+import LegacyRepositories from './routes/LegacyRepositories/LegacyRepositories';
+import LegacyRepositoryDetail from './routes/LegacyRepositories/LegacyRepositoryDetail';
 import Sources from './routes/Sources/Sources';
 import PlanSingle from './routes/PlanSingle/PlanSingle';
 import DeviceSingle from './routes/DeviceSingle/DeviceSingle';
@@ -76,6 +78,8 @@ export function AppRoutes() {
             <Route index element={<Plans />} />
             <Route path="settings" element={<Settings />} />
             <Route path="storages" element={<Storages />} />
+            <Route path="legacy-repositories" element={<LegacyRepositories />} />
+            <Route path="legacy-repositories/:id" element={<LegacyRepositoryDetail />} />
             <Route path="sources" element={<Sources />} />
             <Route path={'device/:id'} element={<DeviceSingle />} />
             <Route path={'plan/:id'} element={<PlanSingle />} />
