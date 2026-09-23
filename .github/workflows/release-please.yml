@@ -18,6 +18,6 @@ jobs:
         with:
           # Use manifest-based config for monorepo
           # Bootstrap only: remove the package-level release-as after
-          # v0.17.0-alpha.1 is released, or update it to a newer one-time target.
+          # v0.18.0-alpha.1 is released, or update it to a newer one-time target.
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json

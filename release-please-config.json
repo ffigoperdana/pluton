@@ -8,9 +8,10 @@
       "versioning": "prerelease",
       "prerelease-type": "alpha",
       "prerelease": true,
-      "release-as": "0.17.0-alpha.1",
+      "release-as": "0.18.0-alpha.1",
       "bump-minor-pre-major": true,
       "component": "pluton",
+      "include-component-in-tag": false,
       "draft": true
     }
   },
