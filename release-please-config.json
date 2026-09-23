@@ -5,6 +5,10 @@
       "release-type": "node",
       "package-name": "pluton",
       "changelog-path": "CHANGELOG.md",
+      "versioning": "prerelease",
+      "prerelease-type": "alpha",
+      "prerelease": true,
+      "release-as": "0.17.0-alpha.1",
       "bump-minor-pre-major": true,
       "component": "pluton",
       "draft": true
