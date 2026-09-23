@@ -3,7 +3,6 @@ import { Link, useNavigate, useParams } from 'react-router';
 import { toast } from 'react-toastify';
 import ActionModal from '../../components/common/ActionModal/ActionModal';
 import Icon from '../../components/common/Icon/Icon';
-import Modal from '../../components/common/Modal/Modal';
 import NotFound from '../../components/common/NotFound/NotFound';
 import PageHeader from '../../components/common/PageHeader/PageHeader';
 import {
@@ -16,6 +15,7 @@ import {
 import type { LegacyRepositorySnapshotFilters, LegacyRepositorySnapshot } from '../../@types/legacyRepositories';
 import { formatBytes, formatDateTime } from '../../utils/helpers';
 import classes from './LegacyRepositories.module.scss';
+import LegacySnapshotBrowser from './LegacySnapshotBrowser';
 
 const LegacyRepositoryDetail = () => {
    const { id } = useParams();
@@ -94,7 +94,7 @@ const LegacyRepositoryDetail = () => {
                   <Icon type="lock" size={17} />
                   <div>
                      <strong>READ ONLY</strong>
-                     <p>No backup, restore, retention, prune, repair, migration, initialization, or lock cleanup is available for this repository.</p>
+                     <p>Browsing reads repository metadata. Selected files or directories can be restored only to isolated staging; backup, retention, prune, repair, migration, initialization, and lock cleanup remain unavailable.</p>
                   </div>
                </div>
                <section className={classes.summaryGrid}>
@@ -135,7 +135,7 @@ const LegacyRepositoryDetail = () => {
                   <div className={classes.sectionHeader}>
                      <div>
                         <h3>Snapshots</h3>
-                        <p>Existing snapshot metadata only. Selecting a snapshot does not browse or restore its files.</p>
+                        <p>Browse structured snapshot entries, choose files or directories, then restore them only to isolated staging.</p>
                      </div>
                   </div>
                   <form className={classes.filters} onSubmit={applyFilters}>
@@ -161,16 +161,7 @@ const LegacyRepositoryDetail = () => {
             </>
          )}
          {selectedSnapshot && (
-            <Modal title={`Snapshot ${selectedSnapshot.shortId}`} width="600px" closeModal={() => setSelectedSnapshot(undefined)}>
-               <div className={classes.snapshotMetadata}>
-                  <div><span>Snapshot ID</span><code>{selectedSnapshot.id}</code></div>
-                  <div><span>Time</span><strong>{formatDateTime(selectedSnapshot.time)}</strong></div>
-                  <div><span>Host</span><strong>{selectedSnapshot.hostname || 'Unknown host'}</strong></div>
-                  <div><span>Tags</span><strong>{selectedSnapshot.tags.length ? selectedSnapshot.tags.join(', ') : 'No tags'}</strong></div>
-                  <div><span>Paths</span>{selectedSnapshot.paths.length ? selectedSnapshot.paths.map((path) => <code key={path}>{path}</code>) : <strong>No paths reported</strong>}</div>
-                  {selectedSnapshot.parent && <div><span>Parent snapshot</span><code>{selectedSnapshot.parent}</code></div>}
-               </div>
-            </Modal>
+            <LegacySnapshotBrowser repositoryId={id} snapshot={selectedSnapshot} close={() => setSelectedSnapshot(undefined)} />
          )}
          {showDelete && repository && (
             <ActionModal

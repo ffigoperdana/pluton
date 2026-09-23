@@ -36,6 +36,46 @@ export interface LegacyRepositoryStats {
    snapshotCount: number;
 }
 
+export type LegacySnapshotEntryType = 'file' | 'directory' | 'symlink' | 'other';
+
+export interface LegacySnapshotEntry {
+   name: string;
+   path: string;
+   type: LegacySnapshotEntryType;
+   size: number | null;
+   modifiedAt: string | null;
+   permissions: string | null;
+   isSymlink: boolean;
+}
+
+export interface LegacySnapshotDirectory {
+   path: string;
+   entries: LegacySnapshotEntry[];
+}
+
+export type LegacyRestoreJobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface LegacyRestoreJob {
+   id: string;
+   repositoryId: string;
+   snapshotId: string;
+   selectedPaths: string[];
+   status: LegacyRestoreJobStatus;
+   errorMessage: string | null;
+   restoredFileCount: number | null;
+   restoredBytes: number | null;
+   stagingArea: 'isolated';
+   createdAt: string;
+   startedAt: string | null;
+   completedAt: string | null;
+   updatedAt: string | null;
+}
+
+export interface LegacyRestoreRequest {
+   snapshotId: string;
+   paths: string[];
+}
+
 export interface LegacyRepositoryRegistration {
    displayName: string;
    repositoryPath: string;

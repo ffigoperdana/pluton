@@ -8,6 +8,10 @@ export class ProcessManager {
 		this.processes.set(id, process);
 	}
 
+	untrackProcess(id: string) {
+		this.processes.delete(id);
+	}
+
 	killProcess(id: string) {
 		const process = this.processes.get(id);
 		if (process) {

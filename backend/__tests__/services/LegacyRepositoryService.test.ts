@@ -86,6 +86,7 @@ describe('LegacyRepositoryService', () => {
 		inspector = {
 			listSnapshots: jest.fn(),
 			getRepositoryStats: jest.fn(),
+			listSnapshotDirectory: jest.fn(),
 		};
 		service = new LegacyRepositoryService(store as unknown as LegacyRepositoryStore, inspector);
 	});

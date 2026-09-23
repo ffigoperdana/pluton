@@ -3,6 +3,7 @@ import type {
 	LegacyRepositoryBackend,
 	LegacyRepositoryValidationStatus,
 } from '../db/schema/legacyRepositories';
+import type { LegacyRestoreJobStatus } from '../db/schema/legacyRestoreJobs';
 
 export type LegacyRepositoryPublic = Omit<LegacyRepository, 'encryptedPassword'>;
 
@@ -36,9 +37,49 @@ export type LegacyRepositoryStats = {
 	snapshotCount: number;
 };
 
+export type LegacySnapshotEntryType = 'file' | 'directory' | 'symlink' | 'other';
+
+/** A direct child of a logical snapshot directory. `path` is always relative. */
+export type LegacySnapshotEntry = {
+	name: string;
+	path: string;
+	type: LegacySnapshotEntryType;
+	size: number | null;
+	modifiedAt: string | null;
+	permissions: string | null;
+	isSymlink: boolean;
+};
+
+export type LegacySnapshotDirectory = {
+	path: string;
+	entries: LegacySnapshotEntry[];
+};
+
+export type LegacyRestoreRequest = {
+	snapshotId: string;
+	paths: string[];
+};
+
+export type LegacyRestoreJobPublic = {
+	id: string;
+	repositoryId: string;
+	snapshotId: string;
+	selectedPaths: string[];
+	status: LegacyRestoreJobStatus;
+	errorMessage: string | null;
+	restoredFileCount: number | null;
+	restoredBytes: number | null;
+	stagingArea: 'isolated';
+	createdAt: Date;
+	startedAt: Date | null;
+	completedAt: Date | null;
+	updatedAt: Date | null;
+};
+
 export type LegacyRepositoryConnectionStatus = {
 	validationStatus: LegacyRepositoryValidationStatus;
 	lastValidatedAt: Date | null;
 };
 
 export type { LegacyRepositoryBackend, LegacyRepositoryValidationStatus };
+export type { LegacyRestoreJobStatus };

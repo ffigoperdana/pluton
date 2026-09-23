@@ -24,8 +24,8 @@ const LegacyRepositories = () => {
          <div className={classes.readOnlyNotice}>
             <Icon type="lock" size={17} />
             <div>
-               <strong>READ ONLY</strong>
-               <p>Legacy repositories remain outside Pluton's backup and retention lifecycle. This area only checks access and displays existing snapshot metadata.</p>
+                  <strong>READ ONLY</strong>
+                  <p>Legacy repositories remain outside Pluton's backup and retention lifecycle. This area browses snapshots and restores selected content only to isolated staging.</p>
             </div>
          </div>
          {error && <div className={classes.errorMessage}>{(error as Error).message}</div>}

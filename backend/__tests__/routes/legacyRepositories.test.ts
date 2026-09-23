@@ -2,6 +2,7 @@ import express, { type Express } from 'express';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import Cookies from 'cookies';
+import { Readable } from 'stream';
 
 jest.mock('jsonwebtoken');
 jest.mock('cookies');
@@ -27,7 +28,12 @@ describe('Legacy repository routes', () => {
 		validate: jest.Mock;
 		listSnapshots: jest.Mock;
 		getSnapshot: jest.Mock;
+		listSnapshotDirectory: jest.Mock;
 		getStats: jest.Mock;
+		startRestore: jest.Mock;
+		getRestoreJob: jest.Mock;
+		cancelRestore: jest.Mock;
+		openRestoredFile: jest.Mock;
 		deleteRegistration: jest.Mock;
 	};
 
@@ -49,7 +55,12 @@ describe('Legacy repository routes', () => {
 			validate: jest.fn(),
 			listSnapshots: jest.fn(),
 			getSnapshot: jest.fn(),
+			listSnapshotDirectory: jest.fn(),
 			getStats: jest.fn(),
+			startRestore: jest.fn(),
+			getRestoreJob: jest.fn(),
+			cancelRestore: jest.fn(),
+			openRestoredFile: jest.fn(),
 			deleteRegistration: jest.fn(),
 		};
 		app = express();
@@ -116,5 +127,62 @@ describe('Legacy repository routes', () => {
 			path: 'C:\\fixtures\\source',
 			host: 'fixture-host',
 		});
+	});
+
+	it('requires a UI session for snapshot browsing, restore creation, and restored-file download', async () => {
+		setAuthenticatedSession(false);
+
+		const [tree, restore, download] = await Promise.all([
+			request(app).get(`/api/legacy-repositories/legacy-fixture/snapshots/${'a'.repeat(64)}/tree`),
+			request(app).post('/api/legacy-repositories/legacy-fixture/restores').send({ snapshotId: 'a'.repeat(64), paths: ['app-01/index.txt'] }),
+			request(app)
+				.get(`/api/legacy-repositories/legacy-fixture/restores/${'b'.repeat(24)}/files`)
+				.query({ path: 'app-01/index.txt' }),
+		]);
+
+		expect(tree.status).toBe(401);
+		expect(restore.status).toBe(401);
+		expect(download.status).toBe(401);
+		expect(service.listSnapshotDirectory).not.toHaveBeenCalled();
+		expect(service.startRestore).not.toHaveBeenCalled();
+		expect(service.openRestoredFile).not.toHaveBeenCalled();
+	});
+
+	it('forwards a safe browser request and queues a staged restore through the service', async () => {
+		service.listSnapshotDirectory.mockResolvedValue({ path: 'app-01', entries: [] });
+		service.startRestore.mockResolvedValue({ id: 'b'.repeat(24), status: 'queued' });
+
+		const tree = await request(app)
+			.get(`/api/legacy-repositories/legacy-fixture/snapshots/${'a'.repeat(64)}/tree`)
+			.query({ path: 'app-01' });
+		const restore = await request(app)
+			.post('/api/legacy-repositories/legacy-fixture/restores')
+			.send({ snapshotId: 'a'.repeat(64), paths: ['app-01/index.txt'] });
+
+		expect(tree.status).toBe(200);
+		expect(restore.status).toBe(202);
+		expect(service.listSnapshotDirectory).toHaveBeenCalledWith('legacy-fixture', 'a'.repeat(64), 'app-01');
+		expect(service.startRestore).toHaveBeenCalledWith('legacy-fixture', {
+			snapshotId: 'a'.repeat(64),
+			paths: ['app-01/index.txt'],
+		});
+	});
+
+	it('streams only the safe file handle returned by the service with an attachment disposition', async () => {
+		service.openRestoredFile.mockResolvedValue({
+			fileName: 'example.txt',
+			size: 7,
+			fileHandle: { createReadStream: () => Readable.from(['fixture']) },
+		});
+
+		const response = await request(app)
+			.get(`/api/legacy-repositories/legacy-fixture/restores/${'b'.repeat(24)}/files`)
+			.query({ path: 'app-01/index.txt' });
+
+		expect(response.status).toBe(200);
+		expect(response.body.toString()).toBe('fixture');
+		expect(response.headers['content-disposition']).toContain('attachment;');
+		expect(response.headers['content-disposition']).toContain('example.txt');
+		expect(service.openRestoredFile).toHaveBeenCalledWith('legacy-fixture', 'b'.repeat(24), 'app-01/index.txt');
 	});
 });

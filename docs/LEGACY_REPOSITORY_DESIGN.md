@@ -1,94 +1,171 @@
-# Legacy Restic repository adapter — Phase 1
+# Legacy Restic repository adapter — Phases 1–2
 
-Status: implemented for local filesystem repositories only. This adapter uses only
-the public Pluton source and documented Restic interfaces. It does not inspect a
-real user repository during tests and does not certify a Restic-version or
-repository-format compatibility matrix.
+Status: implemented for existing local-filesystem Restic repositories. The adapter
+uses only the public Pluton source and documented Restic interfaces. It does not
+certify a Restic-version or repository-format compatibility matrix.
+
+Phase 1 introduced registration, safe metadata, and snapshot listing. Phase 2
+adds structured snapshot browsing and a constrained staged restore. Neither phase
+hands a legacy repository to Pluton's managed backup lifecycle.
 
 ## Adoption contract
 
-An operator can register an already-existing local Restic repository with a display
-name, an absolute path on the Pluton server, and its own repository password. The
-registration is a separate domain from managed plans, backups, schedules, storage
-definitions, and retention.
+An operator registers an existing repository with a display name, its absolute
+path on the Pluton server, and its repository password. The registration is
+separate from managed plans, backups, schedules, storage definitions, replication,
+and retention. Removing it deletes only Pluton's local record.
 
-The adapter is mandatory read-only. The UI displays this state but provides no
-control to change it. Removing a registration deletes only Pluton's local record;
-it never deletes or changes repository contents. The original backup tooling keeps
-ownership of scheduling, retention, maintenance, and credentials.
+The repository is mandatory read-only. The UI shows **READ ONLY REPOSITORY**, and
+the API rejects any stored record that is not local and read-only. Phase 2 restore
+is intentionally narrow: it reads from the repository and writes selected content
+only to an application-controlled staging directory. It never uses the managed
+restore service and never accepts an operator-provided restore destination.
 
-Phase 1 provides connection validation, basic safe statistics, snapshot metadata,
-and exact tag/path/host filters. It does not browse snapshot contents or restore
-data. Those remain future work.
+The original backup tooling retains ownership of scheduling, retention,
+maintenance, credentials, and recovery policy.
 
-## Stored local registration
+## Local registration and job records
 
 The [legacy repository schema](../backend/src/db/schema/legacyRepositories.ts)
-creates a dedicated `legacy_repositories` table through migration
+creates `legacy_repositories` through migration
 [`0003_luxuriant_fat_cobra.sql`](../backend/drizzle/0003_luxuriant_fat_cobra.sql).
 It is not related to managed plans or backups.
 
 | Field | Meaning |
 | --- | --- |
 | `id`, `displayName` | Local registration identity and UI label. |
-| `repositoryPath` | Existing, validated absolute local path. |
-| `backend` | Fixed to `local` in Phase 1. Remote/Rclone backend locators are not accepted. |
-| `encryptedPassword` | The external repository password encrypted for the local registration with Pluton's configured `SECRET`. It is never sent to the frontend. |
-| `isReadOnly` | Always `true`; request payloads cannot opt out and non-read-only stored records are rejected. |
-| `validationStatus`, `lastValidatedAt` | Local availability state from the most recent safe inspection. |
-| `createdAt`, `updatedAt` | Local registration timestamps. |
+| `repositoryPath` | Existing validated absolute local path. |
+| `backend` | Fixed to `local`; Rclone and other remote locators are not accepted. |
+| `encryptedPassword` | External repository password encrypted locally with Pluton's configured `SECRET`; never returned to the frontend. |
+| `isReadOnly` | Always `true`; callers cannot opt out and non-read-only records are rejected. |
+| `validationStatus`, `lastValidatedAt` | Local availability state from the most recent safe operation. |
 
-The repository password remains independent from Pluton's managed repository
-password derivation and `ENCRYPTION_KEY`. `SECRET` protects the stored value; it
-does not replace or re-key the external Restic password. The password is placed in
-the child process environment only for the inspection and is not logged, returned,
-or included in command arguments.
+Migration [`0004_next_vision.sql`](../backend/drizzle/0004_next_vision.sql)
+creates a separate `legacy_restore_jobs` table. It stores the repository ID,
+full snapshot ID, selected logical paths, an internal staging path, safe status,
+safe error text, summary counts, and timestamps. It has no relationship to a
+managed plan, backup, or managed restore record.
 
-## Read-only execution boundary
+The password remains independent of managed password derivation and
+`ENCRYPTION_KEY`. `SECRET` protects the stored value; it does not re-key the
+external repository. The password is supplied only in the child process
+environment and is not logged, returned, or placed in command arguments.
 
-[LegacyRepositoryInspector.ts](../backend/src/utils/restic/LegacyRepositoryInspector.ts)
-is intentionally independent of the general managed `runResticCommand` helper. It
-accepts only the following typed operations:
+## Legacy operation matrix
 
-| Operation | Fixed Restic arguments | Returned data |
-| --- | --- | --- |
-| Snapshot validation/listing | `--no-lock --no-cache --json --repo <path> snapshots` | Normalized snapshot ID, time, host, tags, paths, and parent metadata. |
-| Safe statistics | `--no-lock --no-cache --json --repo <path> stats --mode raw-data` | Snapshot count, sizes, compression ratio, and blob count when the installed Restic supports it. |
+Only typed code paths below can invoke Restic for a legacy registration. All use
+argument arrays, `shell: false`, `--no-lock`, `--no-cache`, bounded output, a
+timeout, and discarded stderr. `--no-lock` avoids Restic lock-object writes; the
+repository owner still needs to coordinate maintenance. A read-only filesystem
+mount or backend credential remains recommended defense in depth.
 
-The executor builds an argument array, starts the binary with `shell: false`, uses
-a bounded timeout and output limit, and discards stderr rather than logging it.
-Before spawning it removes inherited `RESTIC_REPOSITORY`, repository-file, and
-password-command/file variables. Structured JSON is validated before it becomes an
-API response. User-provided filters are applied to returned snapshot metadata, so
-they do not become raw CLI arguments.
+| Restic operation | Available | Repository effect | Other filesystem effect | Boundary |
+| --- | --- | --- | --- | --- |
+| `snapshots` | Yes | Read only | None | Fixed JSON inspection command. |
+| `stats --mode raw-data` | Yes | Read only | None | Fixed JSON inspection command. |
+| `ls <snapshot> <logical-path> --long` | Yes | Read only | None | Structured JSON browser; no human-output parsing. |
+| `restore <snapshot>` | Yes, constrained | Read only | Writes only an isolated staging workspace | Fixed `--target`, `--overwrite never`, and validated `--include` paths. |
+| `backup` | No | Never invoked | N/A | No route, service, job, or UI control. |
+| `forget` / `prune` | No | Never invoked | N/A | No retention handoff. |
+| `unlock` | No | Never invoked | N/A | Never used as error recovery. |
+| `migrate` / `repair` / `init` | No | Never invoked | N/A | No repository lifecycle handoff. |
 
-`--no-lock` is required because Restic reads can otherwise create repository lock
-objects. It also means the repository owner must coordinate concurrent maintenance;
-this adapter never attempts `unlock` as recovery. A read-only filesystem mount or
-read-only backend credential is still recommended as defense in depth. See the
-[Restic manual](https://restic.readthedocs.io/en/stable/manual_rest.html) for the
-documented `--no-lock`, JSON, snapshot, and stats interfaces.
+The [inspector](../backend/src/utils/restic/LegacyRepositoryInspector.ts) accepts
+only `snapshots`, `stats`, and `ls`. The separate
+[restore executor](../backend/src/utils/restic/LegacyRepositoryRestoreExecutor.ts)
+exposes only one fixed repository-read/staging-write restore request. Neither
+accepts an arbitrary command name, Restic flags, destination, password command,
+or repository environment override. Inherited `RESTIC_REPOSITORY`,
+`RESTIC_REPOSITORY_FILE`, `RESTIC_PASSWORD_COMMAND`, and `RESTIC_PASSWORD_FILE`
+values are removed before spawning the child process.
 
-The runtime allowlist rejects every other operation before process creation. In
-particular, these commands are not available through the legacy adapter:
+## Snapshot browser and logical paths
 
-- `backup`
-- `forget`
-- `prune`
-- `unlock`
-- `migrate`
-- `repair`
-- `init`
-- `restore`
+The browser invokes `restic ls --json` and validates individual JSON node records.
+It does not parse human-oriented Restic output and does not browse by restoring.
+It displays breadcrumbs and direct children with type, size, modification time,
+permissions, and logical path. A response is capped at 8 MiB and 10,000 direct
+entries so an unusually large snapshot directory fails safely.
 
-There are no corresponding routes, jobs, retry handlers, or UI controls. The
-adapter also does not use managed plan creation, retention, startup recovery,
-replication, repository deletion, or repair/unlock paths.
+Browser and restore input use a logical POSIX-relative path grammar. The backend
+rejects empty selections, absolute paths, `.` or `..` segments, repeated
+separators, backslashes or Windows drive confusion, percent-encoded ambiguity,
+NUL/control characters, replacement characters, malformed paths, and paths that
+are not direct entries of the selected snapshot directory. Full 64-character
+snapshot IDs are required. The server converts a validated logical path to the
+fixed Restic form only after validation.
+
+The UI can select one regular file, one directory, or up to 20 non-overlapping
+files/directories. It prevents selecting an item under an already-selected parent,
+and selecting a parent removes its already-selected descendants. Direct symlink
+selection is rejected server-side and disabled in the UI. Other unsupported node
+types are also rejected.
+
+## Staged restore boundary
+
+The application owns the staging root through
+[`AppPaths.getLegacyRestoresDir`](../backend/src/utils/AppPaths.ts). It is separate
+from the managed restore temporary directory:
+
+| Runtime | Legacy staging root |
+| --- | --- |
+| Development/test | `<repository>/data/legacy-restores` |
+| Docker | `/data/legacy-restores` |
+| Installed runtime | `<Pluton data base>/legacy-restores`, including `PLUTON_DATA_DIR` when configured |
+
+Every job gets a generated internal workspace named
+`restore-job-<24-lowercase-alphanumeric-id>`. The service creates it under the
+staging root with private POSIX permissions where supported, stores the exact path,
+then rejects symlinked roots/workspaces and validates the ID, expected path,
+`lstat`, and resolved path before using it. The path is never returned by the API
+or UI. The service never uses an
+operator-selected destination, source path, live application directory, or
+repository path as the target.
+
+Before a restore job is created, the service resolves both the registered
+repository path and the staging root and rejects equal, nested, or ancestor
+paths, including symlink aliases. This prevents a repository registration from
+causing the fixed restore target to write anywhere inside the source repository
+tree.
+
+The only restore command shape is equivalent to:
+
+```text
+restic --no-lock --no-cache --json --repo <registered-path> restore <full-snapshot-id>
+  --target <internal-staging-workspace> --overwrite never
+  --include /<validated-logical-path> [...]
+```
+
+It never supplies `--delete`. The executor records only JSON summary counts, has a
+30-minute timeout, caps stdout at 4 MiB and individual lines at 128 KiB, and does
+not retain Restic stderr. Job state is persisted as `queued`, `running`,
+`completed`, `failed`, or `cancelled`. Independent jobs use different workspaces;
+on application restart, queued and running jobs are marked failed rather than
+resumed against unknown partial output. Cancellation sends a termination signal to
+the tracked child and marks the job cancelled without attempting cleanup or unlock.
+
+The Restic [restore documentation](https://restic.readthedocs.io/en/stable/050_restore.html)
+describes `--target`, `--include`, and the effect of restoring selected content.
+
+## Download boundary
+
+The UI offers individual download only after that repository's job is completed.
+The download endpoint rechecks the UI session, repository ownership, job ownership,
+completed state, the same logical path grammar, workspace containment, and realpath
+containment. It uses `lstat`, refuses directories and symlinks, opens only a regular
+file with no-follow semantics where supported, and streams that file to the client.
+Directory archives are deliberately not generated. This avoids a second archive
+format, directory traversal during packaging, and ambiguous symlink behavior.
+
+A selected directory may contain symlinks in staging because Restic represents the
+snapshot faithfully, but those links can never be downloaded through this endpoint.
+Operators must inspect staged content through their approved local process if they
+need a directory-level recovery workflow.
 
 ## API and UI
 
-All legacy routes require the authenticated UI session; the limited machine API-key
-allowlist does not include them.
+All legacy routes require an authenticated UI session. The restricted machine
+API-key allowlist does not include them.
 
 | Endpoint | Local effect |
 | --- | --- |
@@ -96,55 +173,59 @@ allowlist does not include them.
 | `POST /api/legacy-repositories` | Validate with snapshot inspection, then store one read-only registration. |
 | `GET /api/legacy-repositories/:id` | View one registration's safe metadata. |
 | `POST /api/legacy-repositories/:id/validate` | Recheck access through snapshot inspection. |
-| `GET /api/legacy-repositories/:id/snapshots` | List snapshot metadata, with optional exact `tag`, `path`, and `host` filters. |
+| `GET /api/legacy-repositories/:id/snapshots` | List snapshot metadata with optional exact `tag`, `path`, and `host` filters. |
 | `GET /api/legacy-repositories/:id/snapshots/:snapshotId` | View one already-listed snapshot by full 64-character ID. |
+| `GET /api/legacy-repositories/:id/snapshots/:snapshotId/tree?path=<logical-path>` | List direct structured snapshot entries. |
 | `GET /api/legacy-repositories/:id/stats` | Obtain safe statistics when supported by Restic. |
+| `POST /api/legacy-repositories/:id/restores` | Queue a validated staged restore. |
+| `GET /api/legacy-repositories/:id/restores/:jobId` | Read safe state for that repository's job. |
+| `POST /api/legacy-repositories/:id/restores/:jobId/cancel` | Cancel a queued or running staged restore. |
+| `GET /api/legacy-repositories/:id/restores/:jobId/files?path=<logical-path>` | Stream one regular file from a completed job. |
 | `DELETE /api/legacy-repositories/:id` | Delete the local registration only. |
 
-The [Legacy Repositories UI](../frontend/src/routes/LegacyRepositories/) includes a
-registration panel, repository list, availability status, basic statistics,
-snapshot metadata, filters, and local-registration removal. It explicitly states
-that the repository is read-only and that Pluton owns no retention policy. It has
-no file browser, restoration path, retention action, or repository-mutation UI.
+The [Legacy Repositories UI](../frontend/src/routes/LegacyRepositories/) labels the
+repository as read-only, shows a breadcrumb browser, labels symlinks, supports
+multi-select and confirmation, reports job state, and only shows per-file download
+after successful staged recovery. The confirmation explains that the repository is
+read and staging is written.
 
-## Error handling and validation
+## Error handling, limits, and operational limits
 
-The service validates a non-empty absolute path and credential before persistence.
-It maps wrong-password, unavailable-repository, timeout, malformed JSON, oversized
-output, and generic execution failures to safe API messages. Raw stderr, command
-environment values, and password text do not cross the service boundary.
+Raw stderr, command environments, passwords, internal staging paths, and raw
+repository/transport errors never cross the service boundary. The API maps known
+errors to safe messages. Availability is marked unavailable on a repository-level
+execution failure; invalid logical paths and missing selected entries do not become
+arbitrary command input.
 
-Snapshot IDs must be full 64-character hexadecimal values. Tag, host, and path
-filters use exact matching against the snapshot list. This deliberately avoids
-inventing managed `plan-*` or `backup-*` tags and avoids content searches inside a
-snapshot.
+Current deliberate limits are:
 
-## Tests and known boundary
+- local filesystem registrations only;
+- no automatic staging cleanup, disk-space preflight, resume, or retry of a
+  partial restore;
+- no directory archive/download and no symlink download;
+- at most 20 selected paths, 10,000 direct browser entries, 8 MiB browser output,
+  and 4 MiB restore stdout;
+- a 30-second inspection timeout and 30-minute restore timeout;
+- no support matrix for all Restic versions, repository formats, or external mount
+  guarantees.
 
-The Phase 1 tests use mocked child processes and generic fixtures rather than a
-real repository:
+Staging output can contain sensitive recovered data. Operators must protect the
+Pluton data volume, review and remove staging output through an explicitly approved
+operational process, and never place it in source control.
 
-- [LegacyRepositoryInspector.test.ts](../backend/__tests__/utils/restic/LegacyRepositoryInspector.test.ts)
-  verifies fixed argument arrays, `shell: false`, inherited-environment clearing,
-  JSON parsing, safe statistics, password nondisclosure, and denial of all eight
-  forbidden operations before Restic is spawned.
-- [LegacyRepositoryService.test.ts](../backend/__tests__/services/LegacyRepositoryService.test.ts)
-  verifies valid registration, invalid paths, incorrect credentials, multiple
-  workload filters, local-only deletion, encrypted credential storage, and the
-  mandatory read-only guard.
-- [legacyRepositories.test.ts](../backend/__tests__/routes/legacyRepositories.test.ts)
-  verifies the session-only route boundary, safe public list data, and forwarding
-  of exact snapshot filters.
+## Test coverage and remaining boundary
 
-These tests establish the application boundary. They do not prove a particular
-external repository is mounted read-only or that every Restic version supports
-`stats --mode raw-data`. Such support is reported safely at runtime and needs a
-separately authorized disposable-fixture compatibility test before expanding the
-support matrix.
+Focused tests use mocked child processes and generic fixtures. They cover fixed
+argument arrays, environment clearing, JSON validation, path rejection, direct
+entry validation, symlink refusal, workspace containment, cross-job denial,
+cancellation, safe failure messages, session-only routes, streamed single-file
+download, fresh/upgrade migration, and independent concurrent workspaces. A
+disposable Docker Restic fixture is also used to verify `ls --json` and a selected
+`restore --no-lock --target ... --overwrite never --include ...` invocation without
+using a user repository.
 
-## Later work
-
-Phase 2 may add snapshot-content browsing and a separately authorized staged
-restore design. It must validate an explicit isolated destination, prevent path or
-symlink escape, handle cancellation and partial output, and keep imported
-repository access read-only. Phase 1 does not add any restoration capability.
+These checks establish the application boundary. They do not prove that an external
+repository is mounted read-only, that an operator has enough protected staging
+capacity, or that every Restic version has identical output. Any expansion to a
+remote backend, managed lifecycle, directory archive, automatic cleanup, recovery
+testing, or workload migration requires a separately scoped phase.

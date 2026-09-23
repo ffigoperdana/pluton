@@ -6,6 +6,9 @@ import type {
    LegacyRepositorySnapshot,
    LegacyRepositorySnapshotFilters,
    LegacyRepositoryStats,
+   LegacyRestoreJob,
+   LegacyRestoreRequest,
+   LegacySnapshotDirectory,
 } from '../@types/legacyRepositories';
 
 type ApiResponse<T> = {
@@ -81,6 +84,122 @@ export function useLegacyRepositoryStats(id?: string) {
       enabled: Boolean(id),
       retry: false,
    });
+}
+
+export function getLegacySnapshotDirectory(repositoryId: string, snapshotId: string, snapshotPath = '') {
+   const query = new URLSearchParams();
+   if (snapshotPath) query.set('path', snapshotPath);
+   const suffix = query.toString();
+   return request<LegacySnapshotDirectory>(
+      `/${encodeURIComponent(repositoryId)}/snapshots/${encodeURIComponent(snapshotId)}/tree${suffix ? `?${suffix}` : ''}`
+   );
+}
+
+export function useLegacySnapshotDirectory(repositoryId?: string, snapshotId?: string, snapshotPath = '') {
+   return useQuery({
+      queryKey: ['legacy-repositories', repositoryId, 'snapshots', snapshotId, 'tree', snapshotPath],
+      queryFn: () => getLegacySnapshotDirectory(repositoryId as string, snapshotId as string, snapshotPath),
+      enabled: Boolean(repositoryId && snapshotId),
+      retry: false,
+   });
+}
+
+export type LegacyRestorePayload = {
+   repositoryId: string;
+   request: LegacyRestoreRequest;
+};
+
+export function createLegacyRestore({ repositoryId, request: restoreRequest }: LegacyRestorePayload) {
+   return request<LegacyRestoreJob>(`/${encodeURIComponent(repositoryId)}/restores`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(restoreRequest),
+   });
+}
+
+export function useCreateLegacyRestore() {
+   const queryClient = useQueryClient();
+   return useMutation({
+      mutationFn: createLegacyRestore,
+      onSuccess: async (_result, payload) => {
+         await queryClient.invalidateQueries({ queryKey: ['legacy-repositories', payload.repositoryId, 'restores'] });
+      },
+   });
+}
+
+export function getLegacyRestoreJob(repositoryId: string, jobId: string) {
+   return request<LegacyRestoreJob>(`/${encodeURIComponent(repositoryId)}/restores/${encodeURIComponent(jobId)}`);
+}
+
+export function useLegacyRestoreJob(repositoryId?: string, jobId?: string) {
+   return useQuery({
+      queryKey: ['legacy-repositories', repositoryId, 'restores', jobId],
+      queryFn: () => getLegacyRestoreJob(repositoryId as string, jobId as string),
+      enabled: Boolean(repositoryId && jobId),
+      retry: false,
+      refetchInterval: query => {
+         const status = query.state.data?.result.status;
+         return status === 'queued' || status === 'running' ? 2000 : false;
+      },
+   });
+}
+
+export type LegacyRestoreJobPayload = {
+   repositoryId: string;
+   jobId: string;
+};
+
+export function cancelLegacyRestore({ repositoryId, jobId }: LegacyRestoreJobPayload) {
+   return request<LegacyRestoreJob>(`/${encodeURIComponent(repositoryId)}/restores/${encodeURIComponent(jobId)}/cancel`, {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+   });
+}
+
+export function useCancelLegacyRestore() {
+   const queryClient = useQueryClient();
+   return useMutation({
+      mutationFn: cancelLegacyRestore,
+      onSuccess: async (_result, payload) => {
+         await queryClient.invalidateQueries({ queryKey: ['legacy-repositories', payload.repositoryId, 'restores', payload.jobId] });
+      },
+   });
+}
+
+export async function downloadLegacyRestoredFile({ repositoryId, jobId, path }: LegacyRestoreJobPayload & { path: string }): Promise<void> {
+   const query = new URLSearchParams({ path });
+   const response = await fetch(
+      `${API_URL}/legacy-repositories/${encodeURIComponent(repositoryId)}/restores/${encodeURIComponent(jobId)}/files?${query.toString()}`,
+      { credentials: 'include' }
+   );
+   if (!response.ok) {
+      const error = (await response.json().catch(() => null)) as Partial<ApiResponse<unknown>> | null;
+      throw new Error(error?.error || 'Could not download the restored file.');
+   }
+
+   const contentDisposition = response.headers.get('content-disposition') || '';
+   const encodedFileName = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+   const quotedFileName = contentDisposition.match(/filename="([^"]+)"/i)?.[1];
+   let fileName = `restored-${path.split('/').pop() || 'file'}`;
+   try {
+      fileName = encodedFileName ? decodeURIComponent(encodedFileName) : quotedFileName || fileName;
+   } catch {
+      fileName = quotedFileName || fileName;
+   }
+
+   const blob = await response.blob();
+   const downloadUrl = window.URL.createObjectURL(blob);
+   const anchor = document.createElement('a');
+   anchor.href = downloadUrl;
+   anchor.download = fileName;
+   document.body.appendChild(anchor);
+   anchor.click();
+   anchor.remove();
+   window.URL.revokeObjectURL(downloadUrl);
+}
+
+export function useDownloadLegacyRestoredFile() {
+   return useMutation({ mutationFn: downloadLegacyRestoredFile });
 }
 
 export function useRegisterLegacyRepository() {

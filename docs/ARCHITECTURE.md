@@ -1,8 +1,8 @@
 # Existing community architecture
 
 Baseline inspected for Phase 0: commit `5c74a48`, application version `0.20.0`.
-This describes the checked-in public source, not proprietary editions. Phase 1 adds
-a separate local, read-only legacy repository adapter; it does not modify the
+This describes the checked-in public source, not proprietary editions. Phases 1-2
+add a separate local, read-only legacy repository adapter; they do not modify the
 managed backup lifecycle.
 
 ## Application structure
@@ -12,7 +12,7 @@ managed backup lifecycle.
 | Workspace      | TypeScript monorepo with pnpm `10.20.0`, `backend/` and `frontend/` packages, and Turborepo build orchestration. Backend CI uses Node.js 24. See [package.json](../package.json), [pnpm-workspace.yaml](../pnpm-workspace.yaml), and [turbo.json](../turbo.json).                                                                                                                                                                                |
 | Backend        | Node.js, Express 5, and TypeScript. [index.ts](../backend/src/index.ts) handles startup; [createApp.ts](../backend/src/createApp.ts) wires stores, managers, services, controllers, routes, middleware, and jobs. Routes/controllers call services, stores access the database, and managers/handlers run backup and restore operations.                                                                                                         |
 | Frontend       | React 18, Vite 6, React Router 7, TanStack Query, and SCSS modules. [main.tsx](../frontend/src/main.tsx) installs providers; [router.tsx](../frontend/src/router.tsx) maps pages. `routes/`, `components/`, `services/`, and `hooks/` organize screens, UI, API access, and state. Snapshot browsing also uses Dexie/IndexedDB through [useSnapshotDatabase.ts](../frontend/src/components/common/SnapshotBrowser/hooks/useSnapshotDatabase.ts). |
-| Database       | SQLite through `better-sqlite3` and Drizzle ORM, with WAL enabled in [db/index.ts](../backend/src/db/index.ts). Schemas live in `backend/src/db/schema/`, migrations in `backend/drizzle/`, and persistence helpers in `backend/src/stores/`. Tables cover plans, backups, restores, devices, storages, settings, and the separate read-only legacy registrations.                                                                                  |
+| Database       | SQLite through `better-sqlite3` and Drizzle ORM, with WAL enabled in [db/index.ts](../backend/src/db/index.ts). Schemas live in `backend/src/db/schema/`, migrations in `backend/drizzle/`, and persistence helpers in `backend/src/stores/`. Tables cover plans, backups, restores, devices, storages, settings, separate read-only legacy registrations, and separate legacy staged-restore jobs.                                                                                  |
 | Local state    | [AppPaths.ts](../backend/src/utils/AppPaths.ts) locates the database, config, schedules, logs, temporary files, cache, downloads, and restores. Unpackaged development/test execution uses the current working directory's `data/`; production paths depend on installation mode and configuration.                                                                                                                                              |
 | Backup storage | Restic repositories are accessed via Rclone storage definitions. [generateResticRepoPath](../backend/src/utils/restic/helpers.ts) produces `rclone:<storage-name>:<storage-path>`. The [storages schema](../backend/src/db/schema/storages.ts) includes settings and credential fields, and execution also uses local Rclone configuration. Database/runtime files and credentials must stay out of Git.                                         |
 
@@ -43,7 +43,7 @@ path. Managed snapshots use `plan-<id>` and `backup-<id>` tags to associate Rest
 data with application records. Existing repository passwords and untagged snapshots
 therefore need their own abstraction.
 
-These existing paths remain outside the Phase 1 legacy adapter:
+These existing paths remain outside the Phase 1-2 legacy adapter:
 
 - [BaseBackupManager.createBackup](../backend/src/managers/BaseBackupManager.ts)
   invokes repository initialization, installs schedules, and can run a backup immediately.
@@ -55,12 +55,15 @@ These existing paths remain outside the Phase 1 legacy adapter:
   [RestoreService](../backend/src/services/RestoreService.ts) work with managed
   backup records; their interfaces are not an imported-repository safety boundary.
 
-They remain unchanged. The adapter has its own schema, store, service, controller,
-routes, and [allowlisted inspector](../backend/src/utils/restic/LegacyRepositoryInspector.ts).
-Its only Restic operations are JSON `snapshots` and `stats --mode raw-data`, each
-with `--no-lock` and `--no-cache`; it does not reuse the managed executor.
+They remain unchanged. The adapter has its own schema, stores, service, controller,
+routes, [allowlisted inspector](../backend/src/utils/restic/LegacyRepositoryInspector.ts),
+and [staged restore executor](../backend/src/utils/restic/LegacyRepositoryRestoreExecutor.ts).
+Its inspection operations are JSON `snapshots`, `stats --mode raw-data`, and
+`ls`; the only write-capable local operation is a fixed `restore` that reads the
+repository and writes only a private app staging workspace. Every operation uses
+`--no-lock` and `--no-cache`; it does not reuse the managed executor.
 
-## Phase 1 legacy repository boundary
+## Phase 1-2 legacy repository boundary
 
 The `legacy_repositories` table stores only local registration metadata, an
 encrypted external repository password, mandatory `isReadOnly`, and local
@@ -71,9 +74,10 @@ metadata filters locally, and deletes only the registration.
 
 Routes mounted at `/api/legacy-repositories` require the authenticated UI session.
 The frontend route `/legacy-repositories` exposes registration, status, statistics,
-and snapshot metadata only. Neither surface includes a browser, restore action,
-retention action, mutation command, or lifecycle handoff. See
-[LEGACY_REPOSITORY_DESIGN.md](LEGACY_REPOSITORY_DESIGN.md) for the exact Phase 1
+structured snapshot browsing, selected staged recovery, and individual file
+download from a completed job. It has no arbitrary destination, retention action,
+repository-mutation command, or lifecycle handoff. See
+[LEGACY_REPOSITORY_DESIGN.md](LEGACY_REPOSITORY_DESIGN.md) for the exact Phase 1-2
 contract and known compatibility boundary.
 
 ## Scheduling and job execution
@@ -136,9 +140,10 @@ preserve it instead of adding a second configuration format. The tracked
 `frontend/.env.dev` contains only app name/port settings. Ignoring future `.env.*`
 files does not remove or sanitize tracked files.
 
-Phase 1 deliberately supports only local filesystem registrations and retains no
+Phases 1-2 deliberately support only local filesystem registrations and retain no
 supported-Restic-version or repository-format matrix. Password storage uses local
-encryption under `SECRET`; JSON parsing and output limits are implemented; and
-`--no-lock` is required. No production inventory or repository was inspected. See
-the [legacy adapter design](LEGACY_REPOSITORY_DESIGN.md) for the implemented
-boundary and remaining compatibility work.
+encryption under `SECRET`; JSON parsing, logical-path validation, output limits,
+and app-controlled staging are implemented; and `--no-lock` is required. No
+production inventory or repository was inspected. See the
+[legacy adapter design](LEGACY_REPOSITORY_DESIGN.md) for the implemented boundary
+and remaining compatibility work.

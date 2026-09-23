@@ -74,6 +74,74 @@ export class LegacyRepositoryController {
 		}
 	}
 
+	async listSnapshotDirectory(req: Request, res: Response): Promise<void> {
+		try {
+			const result = await this.legacyRepositoryService.listSnapshotDirectory(
+				req.params.id,
+				req.params.snapshotId,
+				this.readQueryString(req, 'path') || ''
+			);
+			res.status(200).json({ success: true, result });
+		} catch (error) {
+			this.respondWithError(res, error);
+		}
+	}
+
+	async createRestore(req: Request, res: Response): Promise<void> {
+		try {
+			const result = await this.legacyRepositoryService.startRestore(req.params.id, req.body);
+			res.status(202).json({ success: true, result });
+		} catch (error) {
+			this.respondWithError(res, error);
+		}
+	}
+
+	async getRestore(req: Request, res: Response): Promise<void> {
+		try {
+			const result = await this.legacyRepositoryService.getRestoreJob(req.params.id, req.params.jobId);
+			res.status(200).json({ success: true, result });
+		} catch (error) {
+			this.respondWithError(res, error);
+		}
+	}
+
+	async cancelRestore(req: Request, res: Response): Promise<void> {
+		try {
+			const result = await this.legacyRepositoryService.cancelRestore(req.params.id, req.params.jobId);
+			res.status(200).json({ success: true, result });
+		} catch (error) {
+			this.respondWithError(res, error);
+		}
+	}
+
+	async downloadRestoredFile(req: Request, res: Response): Promise<void> {
+		try {
+			const download = await this.legacyRepositoryService.openRestoredFile(
+				req.params.id,
+				req.params.jobId,
+				this.readQueryString(req, 'path')
+			);
+			const asciiFileName = download.fileName.replace(/[^\x20-\x7E]/g, '_');
+			res.setHeader('Content-Type', 'application/octet-stream');
+			res.setHeader(
+				'Content-Disposition',
+				`attachment; filename="${asciiFileName}"; filename*=UTF-8''${encodeURIComponent(download.fileName)}`
+			);
+			res.setHeader('Content-Length', String(download.size));
+			const fileStream = download.fileHandle.createReadStream();
+			fileStream.on('error', () => {
+				if (!res.headersSent) {
+					res.status(500).json({ success: false, error: 'Could not stream restored file.' });
+				} else {
+					res.destroy();
+				}
+			});
+			fileStream.pipe(res);
+		} catch (error) {
+			this.respondWithError(res, error);
+		}
+	}
+
 	async delete(req: Request, res: Response): Promise<void> {
 		try {
 			await this.legacyRepositoryService.deleteRegistration(req.params.id);

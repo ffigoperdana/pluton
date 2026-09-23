@@ -29,6 +29,13 @@
       "when": 1790061624138,
       "tag": "0003_luxuriant_fat_cobra",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1790147821929,
+      "tag": "0004_next_vision",
+      "breakpoints": true
     }
   ]
 }

@@ -45,7 +45,7 @@ const RegisterLegacyRepository = ({ close }: RegisterLegacyRepositoryProps) => {
                <Icon type="lock" size={16} />
                <div>
                   <strong>READ ONLY</strong>
-                  <p>Pluton will validate access and view snapshot metadata only. It will not create, restore, retain, delete, or modify this repository.</p>
+                  <p>Pluton validates access and browses snapshots. Selected content can be restored only to isolated staging; it will not create, retain, delete, or modify this repository.</p>
                </div>
             </div>
             <div className={classes.field}>
