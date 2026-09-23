@@ -1,0 +1,42 @@
+services:
+  pluton:
+    image: "${PLUTON_IMAGE_REF:?Set PLUTON_IMAGE_REF through deploy.sh or a digest-pinned .env}"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    ports:
+      - "${PLUTON_PORT:-5173}:5173"
+    volumes:
+      - pluton-data:/data
+    tmpfs:
+      - /tmp:mode=1777,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      NODE_ENV: production
+      IS_DOCKER: "true"
+      SERVER_PORT: "5173"
+      PLUTON_DATA_DIR: /data
+      ENCRYPTION_KEY: "${ENCRYPTION_KEY:?Set ENCRYPTION_KEY in the VM-only .env}"
+      USER_NAME: "${USER_NAME:?Set USER_NAME in the VM-only .env}"
+      USER_PASSWORD: "${USER_PASSWORD:?Set USER_PASSWORD in the VM-only .env}"
+      APP_TITLE: "${APP_TITLE:-Pluton}"
+      APP_URL: "${APP_URL:-http://localhost:5173}"
+      MAX_CONCURRENT_BACKUPS: "${MAX_CONCURRENT_BACKUPS:-2}"
+      SESSION_DURATION: "${SESSION_DURATION:-7}"
+      ALLOW_CUSTOM_RESTORE_PATH: "${ALLOW_CUSTOM_RESTORE_PATH:-true}"
+      ALLOW_FILE_BROWSER: "${ALLOW_FILE_BROWSER:-true}"
+      DISABLE_EVENT_SCRIPTS: "${DISABLE_EVENT_SCRIPTS:-false}"
+      TRUST_PROXY: "${TRUST_PROXY:-}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:5173/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+
+volumes:
+  pluton-data:
+    name: "${PLUTON_VOLUME_NAME:-pluton-data}"
