@@ -7,6 +7,10 @@ only needs Docker Engine, the Docker Compose plugin, the small files in
 deploy/, a persistent Docker volume, and a VM-local .env file. It does not
 need Git, Node.js, pnpm, TypeScript, or build tools.
 
+The GHCR production image is published for linux/amd64 only, matching the
+current x86_64/AMD64 VM deployment target. ARM64 images are not published by
+this deployment workflow.
+
 This document applies to the public community fork. It does not change the
 read-only guarantees for imported Restic repositories or enable any new backup
 operation.
