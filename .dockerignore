@@ -57,6 +57,9 @@ llm/
 repomix-output.xml
 **/repomix-output.xml
 
+# VM deployment scripts are not part of the source-built application image.
+deploy/
+
 # Misc
 *.md
 !README.md
