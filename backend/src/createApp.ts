@@ -60,6 +60,7 @@ import { configService } from './services/ConfigService';
 import { BaseRestoreManager } from './managers/BaseRestoreManager';
 import { parseTrustProxy } from './utils/helpers';
 import { LegacyRepositoryStore } from './stores/LegacyRepositoryStore';
+import { LegacyRestoreJobStore } from './stores/LegacyRestoreJobStore';
 import { LegacyRepositoryService } from './services/LegacyRepositoryService';
 
 const MemoryStore = createMemoryStore(session);
@@ -76,6 +77,7 @@ export async function createApp(): Promise<{ app: Express }> {
 	const restoreStore = new RestoreStore(db);
 	const settingsStore = new SettingsStore(db);
 	const legacyRepositoryStore = new LegacyRepositoryStore(db);
+	const legacyRestoreJobStore = new LegacyRestoreJobStore(db);
 
 	// Local Agents
 	const localPlanAgent = new BaseBackupManager();
@@ -124,7 +126,11 @@ export async function createApp(): Promise<{ app: Express }> {
 	);
 	const selfBackupService = new SelfBackupService(settingsStore, storageStore, sqlite, 'core');
 	const settingsService = new SettingsService(settingsStore, selfBackupService);
-	const legacyRepositoryService = new LegacyRepositoryService(legacyRepositoryStore);
+	const legacyRepositoryService = new LegacyRepositoryService(
+		legacyRepositoryStore,
+		undefined,
+		legacyRestoreJobStore
+	);
 
 	// API Route Controllers
 	const planController = new PlanController(planService);
@@ -267,6 +273,7 @@ export async function createApp(): Promise<{ app: Express }> {
 
 	// Clean up backups/restores left "in progress" by a previous shutdown, before any schedule job starts.
 	await new StartupRecovery(planService).run();
+	await legacyRepositoryService.recoverInterruptedRestores();
 
 	// Reconcile CronManager schedules with the database (fixes drift on restart)
 	try {

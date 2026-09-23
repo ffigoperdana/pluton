@@ -389,6 +389,264 @@
    font-size: 0.8rem;
 }
 
+.browserModal {
+   max-width: calc(100vw - 32px);
+}
+
+.browserIntro {
+   display: flex;
+   align-items: flex-start;
+   justify-content: space-between;
+   gap: 20px;
+   padding-bottom: 14px;
+   border-bottom: 1px solid var(--line-color);
+
+   strong {
+      display: block;
+      color: var(--primary-color);
+      font-size: 0.72rem;
+      letter-spacing: 0.05em;
+   }
+
+   p {
+      max-width: 560px;
+      margin: 5px 0 0;
+      color: var(--content-text-color-light);
+      font-size: 0.78rem;
+      line-height: 1.45;
+   }
+}
+
+.snapshotSummary {
+   display: grid;
+   gap: 4px;
+   min-width: 0;
+   color: var(--content-text-color-light);
+   font-size: 0.72rem;
+   text-align: right;
+
+   code {
+      overflow: hidden;
+      max-width: 270px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+   }
+}
+
+.breadcrumbs {
+   display: flex;
+   flex-wrap: wrap;
+   align-items: center;
+   gap: 3px;
+   margin: 14px 0;
+   font-size: 0.76rem;
+
+   button {
+      padding: 2px 3px;
+      color: var(--primary-color);
+      background: transparent;
+      cursor: pointer;
+
+      &:disabled {
+         color: var(--content-text-color-light);
+         cursor: default;
+      }
+   }
+}
+
+.breadcrumbSeparator {
+   margin: 0 3px;
+   color: var(--content-text-color-light);
+}
+
+.selectionBar {
+   display: flex;
+   align-items: center;
+   justify-content: space-between;
+   gap: 12px;
+   margin-bottom: 12px;
+   padding: 10px 12px;
+   border-radius: 6px;
+   background: var(--background-color);
+   color: var(--content-text-color-light);
+   font-size: 0.75rem;
+
+   > div {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+   }
+}
+
+.browserLoading {
+   display: flex;
+   justify-content: center;
+   padding: 35px;
+}
+
+.browserTable {
+   overflow-x: auto;
+   border: 1px solid var(--line-color);
+   border-radius: 6px;
+}
+
+.browserRow {
+   display: grid;
+   grid-template-columns: 55px minmax(220px, 1.8fr) 90px 90px 135px 70px 105px;
+   min-width: 830px;
+   gap: 10px;
+   align-items: center;
+   padding: 9px 12px;
+   border-bottom: 1px solid var(--line-color);
+   color: var(--content-text-color);
+   font-size: 0.74rem;
+
+   &:last-child {
+      border-bottom: 0;
+   }
+
+   > span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+   }
+
+   input {
+      vertical-align: middle;
+   }
+}
+
+.browserHeaderRow {
+   color: var(--content-text-color-light);
+   background: var(--background-color);
+   font-size: 0.68rem;
+   font-weight: 700;
+   letter-spacing: 0.03em;
+   text-transform: uppercase;
+}
+
+.browserName {
+   display: grid;
+   gap: 3px;
+
+   button,
+   > span {
+      display: inline-flex;
+      align-items: center;
+      min-width: 0;
+      gap: 6px;
+      overflow: hidden;
+      color: var(--content-text-color);
+      background: transparent;
+      font-size: 0.76rem;
+      text-align: left;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+   }
+
+   button {
+      cursor: pointer;
+
+      &:hover {
+         color: var(--primary-color);
+      }
+   }
+
+   small {
+      overflow: hidden;
+      color: var(--content-text-color-light);
+      font-family: monospace;
+      font-size: 0.66rem;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+   }
+}
+
+.entryType,
+.restoreStatus {
+   display: inline-flex;
+   align-items: center;
+   width: fit-content;
+   padding: 3px 6px;
+   border-radius: 12px;
+   color: var(--content-text-color-light);
+   background: var(--background-color);
+   font-size: 0.66rem;
+   font-weight: 700;
+   text-transform: uppercase;
+}
+
+.symlink {
+   color: var(--error-text-color);
+   background: var(--error-bg-color);
+}
+
+.unsafeEntry {
+   color: var(--content-text-color-light);
+   font-size: 0.67rem;
+}
+
+.restoreJobPanel {
+   display: grid;
+   grid-template-columns: auto 1fr auto;
+   gap: 16px;
+   align-items: center;
+   margin-top: 14px;
+   padding: 12px;
+   border: 1px solid var(--line-color);
+   border-left: 4px solid var(--primary-color);
+   border-radius: 6px;
+   background: var(--background-color);
+
+   > div {
+      display: grid;
+      gap: 5px;
+
+      > span {
+         color: var(--content-text-color-light);
+         font-size: 0.7rem;
+      }
+   }
+
+   p {
+      margin: 0;
+      color: var(--content-text-color-light);
+      font-size: 0.76rem;
+      line-height: 1.4;
+   }
+}
+
+.restorequeued,
+.restorerunning {
+   color: var(--primary-color);
+   background: var(--primary-color-lighter);
+}
+
+.restorecompleted {
+   color: var(--success-text-color);
+   background: var(--success-bg-color);
+}
+
+.restorefailed,
+.restorecancelled {
+   color: var(--error-text-color);
+   background: var(--error-bg-color);
+}
+
+.restorePaths {
+   max-height: 150px;
+   margin: 6px 0 0;
+   padding-left: 18px;
+   overflow-y: auto;
+
+   li {
+      margin: 3px 0;
+      overflow-wrap: anywhere;
+      font-size: 0.75rem;
+   }
+}
+
 @media only screen and (max-width: 1024px) {
    .summaryGrid,
    .statsGrid {
@@ -397,6 +655,21 @@
 
    .filters {
       grid-template-columns: 1fr 1fr;
+   }
+
+   .browserIntro,
+   .selectionBar,
+   .restoreJobPanel {
+      align-items: flex-start;
+      flex-direction: column;
+   }
+
+   .restoreJobPanel {
+      grid-template-columns: 1fr;
+   }
+
+   .snapshotSummary {
+      text-align: left;
    }
 }
 

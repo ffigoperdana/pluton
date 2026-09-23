@@ -1,13 +1,25 @@
 import { spawn } from 'child_process';
+import path from 'path';
 import { z } from 'zod';
 import { getBinaryPath } from '../binaryPathResolver';
-import type { LegacyRepositorySnapshot, LegacyRepositoryStats } from '../../types/legacyRepositories';
+import {
+	getLegacySnapshotParent,
+	normalizeLegacySnapshotPath,
+	toResticSnapshotPath,
+} from '../legacySnapshotPath';
+import type {
+	LegacyRepositorySnapshot,
+	LegacyRepositoryStats,
+	LegacySnapshotDirectory,
+	LegacySnapshotEntry,
+} from '../../types/legacyRepositories';
 
 const INSPECTION_TIMEOUT_MS = 30_000;
 const MAX_INSPECTION_OUTPUT_BYTES = 8 * 1024 * 1024;
-const ALLOWED_INSPECTION_OPERATIONS = new Set(['snapshots', 'stats']);
+const ALLOWED_INSPECTION_OPERATIONS = new Set(['snapshots', 'stats', 'ls']);
+const MAX_SNAPSHOT_DIRECTORY_ENTRIES = 10_000;
 
-export type LegacyRepositoryInspectionOperation = 'snapshots' | 'stats';
+export type LegacyRepositoryInspectionOperation = 'snapshots' | 'stats' | 'ls';
 
 export type LegacyRepositoryInspectionFailure =
 	| 'forbidden-operation'
@@ -15,6 +27,7 @@ export type LegacyRepositoryInspectionFailure =
 	| 'repository-unavailable'
 	| 'timeout'
 	| 'invalid-output'
+	| 'snapshot-path-not-found'
 	| 'output-limit'
 	| 'execution-failed';
 
@@ -32,6 +45,12 @@ export class LegacyRepositoryInspectionError extends Error {
 export interface LegacyResticInspectionClient {
 	listSnapshots(repositoryPath: string, password: string): Promise<LegacyRepositorySnapshot[]>;
 	getRepositoryStats(repositoryPath: string, password: string): Promise<LegacyRepositoryStats>;
+	listSnapshotDirectory(
+		repositoryPath: string,
+		password: string,
+		snapshotId: string,
+		relativePath: string
+	): Promise<LegacySnapshotDirectory>;
 }
 
 const snapshotSchema = z.object({
@@ -52,6 +71,16 @@ const statsSchema = z.object({
 	compression_ratio: z.number().nonnegative().default(0),
 	total_blob_count: z.number().int().nonnegative().default(0),
 	snapshots_count: z.number().int().nonnegative().default(0),
+});
+
+const snapshotNodeSchema = z.object({
+	message_type: z.literal('node'),
+	name: z.string().min(1),
+	type: z.string().min(1),
+	path: z.string().min(1),
+	size: z.number().nonnegative().optional(),
+	mtime: z.string().min(1).optional(),
+	permissions: z.string().min(1).optional(),
 });
 
 /**
@@ -111,17 +140,69 @@ export class ResticLegacyRepositoryInspector implements LegacyResticInspectionCl
 		};
 	}
 
+	async listSnapshotDirectory(
+		repositoryPath: string,
+		password: string,
+		snapshotId: string,
+		relativePath: string
+	): Promise<LegacySnapshotDirectory> {
+		const normalizedPath = normalizeLegacySnapshotPath(relativePath);
+		const output = await this.execute('ls', repositoryPath, password, {
+			snapshotId,
+			relativePath: normalizedPath,
+		});
+		const entries: LegacySnapshotEntry[] = [];
+		const lines = output.split(/\r?\n/).filter(line => line.trim() !== '');
+
+		for (const line of lines) {
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(line);
+			} catch {
+				throw new LegacyRepositoryInspectionError('invalid-output');
+			}
+			if (!this.isNodeMessage(parsed)) continue;
+			const node = snapshotNodeSchema.safeParse(parsed);
+			if (!node.success) {
+				throw new LegacyRepositoryInspectionError('invalid-output');
+			}
+			const entry = this.toSnapshotEntry(node.data, normalizedPath);
+			if (entry) entries.push(entry);
+			if (entries.length > MAX_SNAPSHOT_DIRECTORY_ENTRIES) {
+				throw new LegacyRepositoryInspectionError('output-limit');
+			}
+		}
+
+		entries.sort((left, right) => {
+			if (left.type === 'directory' && right.type !== 'directory') return -1;
+			if (left.type !== 'directory' && right.type === 'directory') return 1;
+			return left.name.localeCompare(right.name);
+		});
+		return { path: normalizedPath, entries };
+	}
+
 	async execute(
 		operation: string,
 		repositoryPath: string,
 		password: string,
+		details: { snapshotId?: string; relativePath?: string } = {},
 		timeoutMs: number = INSPECTION_TIMEOUT_MS
 	): Promise<string> {
 		if (!ALLOWED_INSPECTION_OPERATIONS.has(operation)) {
 			throw new LegacyRepositoryInspectionError('forbidden-operation');
 		}
 
-		const operationArgs = operation === 'stats' ? ['stats', '--mode', 'raw-data'] : ['snapshots'];
+		const operationArgs =
+			operation === 'stats'
+				? ['stats', '--mode', 'raw-data']
+				: operation === 'ls' && details.snapshotId !== undefined && details.relativePath !== undefined
+					? ['ls', details.snapshotId, toResticSnapshotPath(details.relativePath), '--long']
+					: operation === 'ls'
+						? null
+						: ['snapshots'];
+		if (!operationArgs) {
+			throw new LegacyRepositoryInspectionError('forbidden-operation');
+		}
 		const args = [
 			'--no-lock',
 			'--no-cache',
@@ -202,8 +283,46 @@ export class ResticLegacyRepositoryInspector implements LegacyResticInspectionCl
 					settle(() => reject(new LegacyRepositoryInspectionError('repository-unavailable')));
 					return;
 				}
+				if (operation === 'ls' && code === 1) {
+					settle(() => reject(new LegacyRepositoryInspectionError('snapshot-path-not-found')));
+					return;
+				}
 				settle(() => reject(new LegacyRepositoryInspectionError('execution-failed')));
 			});
 		});
+	}
+
+	private isNodeMessage(value: unknown): value is { message_type: 'node' } {
+		return typeof value === 'object' && value !== null && (value as { message_type?: unknown }).message_type === 'node';
+	}
+
+	private toSnapshotEntry(
+		node: z.infer<typeof snapshotNodeSchema>,
+		requestedPath: string
+	): LegacySnapshotEntry | null {
+		if (!node.path.startsWith('/')) {
+			throw new LegacyRepositoryInspectionError('invalid-output');
+		}
+		let relativePath: string;
+		try {
+			relativePath = normalizeLegacySnapshotPath(node.path.slice(1), false);
+		} catch {
+			throw new LegacyRepositoryInspectionError('invalid-output');
+		}
+		if (relativePath === requestedPath || getLegacySnapshotParent(relativePath) !== requestedPath) {
+			return null;
+		}
+
+		const name = path.posix.basename(relativePath);
+		const type = node.type === 'dir' ? 'directory' : node.type === 'file' ? 'file' : node.type === 'symlink' ? 'symlink' : 'other';
+		return {
+			name,
+			path: relativePath,
+			type,
+			size: typeof node.size === 'number' ? node.size : null,
+			modifiedAt: node.mtime || null,
+			permissions: node.permissions || null,
+			isSymlink: type === 'symlink',
+		};
 	}
 }

@@ -19,6 +19,7 @@ interface IAppPaths {
 	cache: string;
 	downloads: string;
 	restores: string;
+	legacyRestores: string;
 	sync: string;
 	config: string;
 	rescue: string;
@@ -126,6 +127,10 @@ class AppPaths {
 			cache: path.join(tempBase, 'pluton', 'cache'),
 			downloads: path.join(tempBase, 'pluton', 'downloads'),
 			restores: path.join(tempBase, 'pluton', 'restores'),
+			// Legacy restore output is intentionally independent from managed
+			// restore temp data. Under Docker this resolves inside /data and is
+			// therefore retained by the configured persistent volume.
+			legacyRestores: path.join(baseDir, 'legacy-restores'),
 			sync: path.join(baseDir, 'sync'),
 			config: path.join(baseDir, 'config'),
 			rescue: path.join(baseDir, 'rescue'),
@@ -141,6 +146,7 @@ class AppPaths {
 			this.paths.cache,
 			this.paths.downloads,
 			this.paths.restores,
+			this.paths.legacyRestores,
 			this.paths.sync,
 			this.paths.config,
 			this.paths.rescue,
@@ -242,6 +248,10 @@ class AppPaths {
 	public getRestoresDir(): string {
 		this.checkInitialized();
 		return this.paths.restores;
+	}
+	public getLegacyRestoresDir(): string {
+		this.checkInitialized();
+		return this.paths.legacyRestores;
 	}
 	public getSyncDir(): string {
 		this.checkInitialized();
