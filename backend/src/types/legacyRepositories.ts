@@ -27,6 +27,22 @@ export type LegacyRepositorySnapshotFilters = {
 	tag?: string;
 	path?: string;
 	host?: string;
+	workload?: string;
+	dataset?: string;
+	page?: number;
+	pageSize?: LegacyRepositorySnapshotPageSize;
+};
+
+export type LegacyRepositorySnapshotPageSize = 10 | 30 | 60 | 100 | 'all';
+
+export type LegacyRepositorySnapshotPage = {
+	items: LegacyRepositorySnapshot[];
+	total: number;
+	page: number;
+	pageSize: LegacyRepositorySnapshotPageSize;
+	totalPages: number;
+	workloads: string[];
+	datasets: string[];
 };
 
 export type LegacyRepositoryStats = {

@@ -41,11 +41,11 @@ export class LegacyRepositoryController {
 
 	async listSnapshots(req: Request, res: Response): Promise<void> {
 		try {
-			const filters = {
-				tag: this.readQueryString(req, 'tag'),
-				path: this.readQueryString(req, 'path'),
-				host: this.readQueryString(req, 'host'),
-			};
+			const filters: Record<string, string> = {};
+			for (const name of ['tag', 'path', 'host', 'workload', 'dataset', 'page', 'pageSize']) {
+				const value = this.readQueryString(req, name);
+				if (value !== undefined) filters[name] = value;
+			}
 			const result = await this.legacyRepositoryService.listSnapshots(req.params.id, filters);
 			res.status(200).json({ success: true, result });
 		} catch (error) {

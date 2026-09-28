@@ -295,11 +295,56 @@
    }
 }
 
+.filterPanel {
+   display: grid;
+   gap: 12px;
+   margin-bottom: 14px;
+}
+
+.groupingFilters {
+   display: grid;
+   grid-template-columns: repeat(2, minmax(0, 1fr));
+   gap: 8px;
+}
+
+.filterField {
+   display: grid;
+   gap: 5px;
+
+   span {
+      color: var(--content-text-color-light);
+      font-size: 0.72rem;
+      font-weight: 600;
+   }
+
+   select {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 9px;
+      color: var(--content-text-color);
+      border: 1px solid var(--field-line-color);
+      border-radius: 6px;
+      background: var(--content-background-color);
+      font-size: 0.75rem;
+   }
+}
+
+.advancedFilters {
+   border-top: 1px solid var(--line-color);
+   padding-top: 10px;
+
+   summary {
+      color: var(--content-text-color-light);
+      font-size: 0.75rem;
+      cursor: pointer;
+   }
+}
+
 .filters {
    display: grid;
-   grid-template-columns: 1fr 1.5fr 1fr auto auto;
+   grid-template-columns: repeat(3, minmax(0, 1fr));
    gap: 8px;
-   margin-bottom: 14px;
+   margin-top: 10px;
 
    input {
       min-width: 0;
@@ -310,6 +355,79 @@
       background: var(--content-background-color);
       font-size: 0.75rem;
    }
+}
+
+.filterActions {
+   display: flex;
+   align-items: center;
+   gap: 10px;
+}
+
+.snapshotPaginationHeader,
+.pagination {
+   display: flex;
+   align-items: center;
+   justify-content: space-between;
+   gap: 10px;
+   flex-wrap: wrap;
+   color: var(--content-text-color-light);
+   font-size: 0.75rem;
+}
+
+.snapshotPaginationHeader {
+   margin: 10px 0;
+
+   label {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+   }
+
+   select {
+      padding: 6px 8px;
+      color: var(--content-text-color);
+      border: 1px solid var(--field-line-color);
+      border-radius: 6px;
+      background: var(--content-background-color);
+      font-size: 0.75rem;
+   }
+}
+
+.pagination {
+   justify-content: center;
+   margin-top: 14px;
+}
+
+.pageButton {
+   min-width: 30px;
+   padding: 6px 9px;
+   color: var(--content-text-color);
+   border: 1px solid var(--line-color);
+   border-radius: 5px;
+   background: var(--content-background-color);
+   font-size: 0.74rem;
+   cursor: pointer;
+
+   &:hover:not(:disabled) {
+      color: var(--primary-color);
+      border-color: var(--primary-color);
+   }
+
+   &:disabled {
+      color: var(--content-text-color-light);
+      cursor: default;
+      opacity: 0.6;
+   }
+}
+
+.activePage {
+   color: var(--primary-text-color);
+   border-color: var(--primary-color);
+   background: var(--primary-color);
+}
+
+.pageEllipsis {
+   padding: 0 3px;
 }
 
 .snapshotList {
@@ -653,7 +771,8 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
    }
 
-   .filters {
+   .filters,
+   .groupingFilters {
       grid-template-columns: 1fr 1fr;
    }
 
@@ -687,6 +806,7 @@
    .summaryGrid,
    .statsGrid,
    .filters,
+   .groupingFilters,
    .snapshotRow {
       grid-template-columns: 1fr;
    }

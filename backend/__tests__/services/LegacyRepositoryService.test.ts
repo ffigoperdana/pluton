@@ -149,14 +149,108 @@ describe('LegacyRepositoryService', () => {
 		store.updateValidationStatus.mockResolvedValue(createStoredRepository());
 		inspector.listSnapshots.mockResolvedValue(snapshots);
 
-		await expect(service.listSnapshots('legacy-fixture', { tag: 'daily' })).resolves.toHaveLength(2);
-		await expect(service.listSnapshots('legacy-fixture', { host: 'host-b' })).resolves.toEqual([
-			expect.objectContaining({ id: 'b'.repeat(64) }),
-		]);
+		await expect(service.listSnapshots('legacy-fixture', { tag: 'daily' })).resolves.toEqual(
+			expect.objectContaining({
+				items: expect.arrayContaining([
+					expect.objectContaining({ id: 'a'.repeat(64) }),
+					expect.objectContaining({ id: 'c'.repeat(64) }),
+				]),
+				total: 2,
+			})
+		);
+		await expect(service.listSnapshots('legacy-fixture', { host: 'host-b' })).resolves.toEqual(
+			expect.objectContaining({
+				items: [expect.objectContaining({ id: 'b'.repeat(64) })],
+				total: 1,
+			})
+		);
 		await expect(
 			service.listSnapshots('legacy-fixture', { path: 'C:\\fixtures\\source-c' })
-		).resolves.toEqual([expect.objectContaining({ id: 'c'.repeat(64) })]);
+		).resolves.toEqual(expect.objectContaining({ items: [expect.objectContaining({ id: 'c'.repeat(64) })], total: 1 }));
 		expect(inspector.listSnapshots).toHaveBeenCalledWith(repositoryPath, expect.any(String));
+	});
+
+	it('paginates in newest-first order with the supported page sizes and All', async () => {
+		store.getById.mockResolvedValue(createStoredRepository());
+		store.updateValidationStatus.mockResolvedValue(createStoredRepository());
+		const generated = Array.from({ length: 105 }, (_, index) => ({
+			id: index.toString(16).padStart(64, '0'),
+			shortId: index.toString(16).padStart(8, '0'),
+			time: new Date(Date.UTC(2026, 0, 1, 0, 0, 105 - index)).toISOString(),
+			hostname: index % 2 === 0 ? 'host-a' : 'host-b',
+			tags: [index % 2 === 0 ? 'daily' : 'weekly'],
+			paths: [
+				index % 10 === 0
+					? `/unmatched/source-${index}`
+					: `/data/backup-staging/workload-${index % 3}/dataset-${index % 4}`,
+			],
+			parent: undefined,
+		}));
+		inspector.listSnapshots.mockResolvedValue([...generated].reverse());
+
+		const firstPage = await service.listSnapshots('legacy-fixture');
+		expect(firstPage).toEqual(expect.objectContaining({ page: 1, pageSize: 30, total: 105, totalPages: 4 }));
+		expect(firstPage.items).toHaveLength(30);
+		expect(firstPage.items[0].id).toBe(generated[0].id);
+		expect((await service.listSnapshots('legacy-fixture', { page: 2 })).items[0].id).toBe(generated[30].id);
+		expect((await service.listSnapshots('legacy-fixture', { page: 4 })).items.at(-1)?.id).toBe(generated[104].id);
+
+		for (const size of [10, 30, 60, 100] as const) {
+			const result = await service.listSnapshots('legacy-fixture', { pageSize: size });
+			expect(result.pageSize).toBe(size);
+			expect(result.items).toHaveLength(Math.min(size, generated.length));
+			expect(result.totalPages).toBe(Math.ceil(generated.length / size));
+		}
+
+		const all = await service.listSnapshots('legacy-fixture', { pageSize: 'all', page: 3 });
+		expect(all).toEqual(expect.objectContaining({ page: 1, pageSize: 'all', total: 105, totalPages: 1 }));
+		expect(all.items).toHaveLength(105);
+	});
+
+	it('discovers and filters workloads/datasets while composing with advanced filters', async () => {
+		store.getById.mockResolvedValue(createStoredRepository());
+		store.updateValidationStatus.mockResolvedValue(createStoredRepository());
+		const workloadSnapshots = [
+			{ ...snapshots[0], paths: ['/data/backup-staging/workload-a/mysql-plain'], tags: ['daily'], hostname: 'host-a' },
+			{ ...snapshots[1], paths: ['/data/backup-staging/workload-a/app-a'], tags: ['weekly'], hostname: 'host-a' },
+			{ ...snapshots[2], paths: ['/data/backup-staging/workload-b/mysql-plain'], tags: ['daily'], hostname: 'host-b' },
+			{ ...snapshots[0], id: 'd'.repeat(64), shortId: 'dddddddd', paths: ['/data/backup-staging/workload-b/app-b'], tags: ['daily'], hostname: 'host-b' },
+			{ ...snapshots[0], id: 'e'.repeat(64), shortId: 'eeeeeeee', paths: ['/unmatched/legacy/path'], tags: ['daily'], hostname: 'host-a' },
+			{
+				...snapshots[0],
+				id: 'f'.repeat(64),
+				shortId: 'ffffffff',
+				paths: [
+					'/data/backup-staging/workload-a/mysql-plain',
+					'/data/backup-staging/workload-b/app-b',
+				],
+				tags: ['daily'],
+				hostname: 'host-a',
+			},
+		];
+		inspector.listSnapshots.mockResolvedValue(workloadSnapshots);
+
+		const discovered = await service.listSnapshots('legacy-fixture');
+		expect(discovered.workloads).toEqual(['workload-a', 'workload-b']);
+		expect(discovered.datasets).toEqual(['app-a', 'app-b', 'mysql-plain']);
+		expect((await service.listSnapshots('legacy-fixture', { workload: 'workload-a' })).datasets).toEqual(['app-a', 'mysql-plain']);
+		expect((await service.listSnapshots('legacy-fixture', { workload: 'workload-a', dataset: 'app-a' })).items).toEqual([
+			expect.objectContaining({ id: 'b'.repeat(64) }),
+		]);
+		expect(
+			(
+				await service.listSnapshots('legacy-fixture', {
+					workload: 'workload-b',
+					tag: 'daily',
+					host: 'host-b',
+					path: '/data/backup-staging/workload-b/app-b',
+				})
+			).items
+		).toEqual([expect.objectContaining({ id: 'd'.repeat(64) })]);
+		expect((await service.listSnapshots('legacy-fixture', { workload: 'workload-a', dataset: 'app-b' })).items).toEqual([]);
+		expect((await service.listSnapshots('legacy-fixture', { path: '/unmatched/legacy/path' })).items).toEqual([
+			expect.objectContaining({ id: 'e'.repeat(64) }),
+		]);
 	});
 
 	it('only deletes the local registration and never inspects or changes the repository', async () => {

@@ -3,7 +3,7 @@ import { API_URL } from '../utils/constants';
 import type {
    LegacyRepository,
    LegacyRepositoryRegistration,
-   LegacyRepositorySnapshot,
+   LegacyRepositorySnapshotPage,
    LegacyRepositorySnapshotFilters,
    LegacyRepositoryStats,
    LegacyRestoreJob,
@@ -60,8 +60,12 @@ export function getLegacyRepositorySnapshots(id: string, filters: LegacyReposito
    if (filters.tag) query.set('tag', filters.tag);
    if (filters.path) query.set('path', filters.path);
    if (filters.host) query.set('host', filters.host);
+   if (filters.workload) query.set('workload', filters.workload);
+   if (filters.dataset) query.set('dataset', filters.dataset);
+   if (filters.page) query.set('page', String(filters.page));
+   if (filters.pageSize) query.set('pageSize', String(filters.pageSize));
    const suffix = query.toString();
-   return request<LegacyRepositorySnapshot[]>(`/${encodeURIComponent(id)}/snapshots${suffix ? `?${suffix}` : ''}`);
+   return request<LegacyRepositorySnapshotPage>(`/${encodeURIComponent(id)}/snapshots${suffix ? `?${suffix}` : ''}`);
 }
 
 export function useLegacyRepositorySnapshots(id?: string, filters: LegacyRepositorySnapshotFilters = {}) {

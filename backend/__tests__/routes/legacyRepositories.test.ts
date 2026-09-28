@@ -115,7 +115,15 @@ describe('Legacy repository routes', () => {
 	});
 
 	it('passes exact snapshot filters to the read-only service', async () => {
-		service.listSnapshots.mockResolvedValue([]);
+		service.listSnapshots.mockResolvedValue({
+			items: [],
+			total: 0,
+			page: 1,
+			pageSize: 30,
+			totalPages: 0,
+			workloads: [],
+			datasets: [],
+		});
 
 		const response = await request(app)
 			.get('/api/legacy-repositories/legacy-fixture/snapshots')
@@ -126,6 +134,31 @@ describe('Legacy repository routes', () => {
 			tag: 'application',
 			path: 'C:\\fixtures\\source',
 			host: 'fixture-host',
+		});
+	});
+
+	it('forwards grouping and pagination query parameters', async () => {
+		service.listSnapshots.mockResolvedValue({
+			items: [],
+			total: 809,
+			page: 2,
+			pageSize: 30,
+			totalPages: 27,
+			workloads: ['workload-a'],
+			datasets: ['mysql-plain'],
+		});
+
+		const response = await request(app)
+			.get('/api/legacy-repositories/legacy-fixture/snapshots')
+			.query({ workload: 'workload-a', dataset: 'mysql-plain', page: '2', pageSize: '30' });
+
+		expect(response.status).toBe(200);
+		expect(response.body.result).toEqual(expect.objectContaining({ total: 809, totalPages: 27 }));
+		expect(service.listSnapshots).toHaveBeenCalledWith('legacy-fixture', {
+			workload: 'workload-a',
+			dataset: 'mysql-plain',
+			page: '2',
+			pageSize: '30',
 		});
 	});
 

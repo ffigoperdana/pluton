@@ -32,6 +32,8 @@ import type {
 	LegacyRepositoryPublic,
 	LegacyRepositoryRegistration,
 	LegacyRepositorySnapshot,
+	LegacyRepositorySnapshotPage,
+	LegacyRepositorySnapshotPageSize,
 	LegacyRepositorySnapshotFilters,
 	LegacyRepositoryStats,
 	LegacyRestoreJobPublic,
@@ -39,6 +41,11 @@ import type {
 	LegacySnapshotDirectory,
 	LegacySnapshotEntry,
 } from '../types/legacyRepositories';
+import {
+	discoverLegacyDatasets,
+	discoverLegacyWorkloads,
+	getLegacySnapshotGroupings,
+} from '../utils/legacySnapshotGrouping';
 
 const registrationSchema = z
 	.object({
@@ -48,11 +55,20 @@ const registrationSchema = z
 	})
 	.strict();
 
+const snapshotPageSizes = [10, 30, 60, 100] as const;
+const defaultSnapshotPageSize: LegacyRepositorySnapshotPageSize = 30;
+
 const snapshotFiltersSchema = z
 	.object({
 		tag: z.string().trim().min(1).max(256).optional(),
 		path: z.string().trim().min(1).max(1024).optional(),
 		host: z.string().trim().min(1).max(256).optional(),
+		workload: z.string().trim().min(1).max(256).optional(),
+		dataset: z.string().trim().min(1).max(256).optional(),
+		page: z.coerce.number().int().min(1).default(1),
+		pageSize: z
+			.union([z.literal('all'), z.coerce.number().refine(value => snapshotPageSizes.includes(value as (typeof snapshotPageSizes)[number]))])
+			.default(defaultSnapshotPageSize),
 	})
 	.strict();
 
@@ -128,23 +144,55 @@ export class LegacyRepositoryService {
 		};
 	}
 
-	async listSnapshots(id: string, filters: unknown = {}): Promise<LegacyRepositorySnapshot[]> {
+	async listSnapshots(id: string, filters: unknown = {}): Promise<LegacyRepositorySnapshotPage> {
 		const parsedFilters = snapshotFiltersSchema.safeParse(filters);
 		if (!parsedFilters.success) {
 			throw new AppError(400, 'Snapshot filters must be non-empty text values.');
 		}
+		const normalizedFilters: LegacyRepositorySnapshotFilters = {
+			...parsedFilters.data,
+			pageSize:
+				parsedFilters.data.pageSize === 'all'
+					? 'all'
+					: (parsedFilters.data.pageSize as LegacyRepositorySnapshotPageSize),
+		};
 
 		const snapshots = await this.inspectRepository(await this.getStoredRepository(id));
 		await this.repositoryStore.updateValidationStatus(id, 'available');
-		return this.filterSnapshots(snapshots, parsedFilters.data);
+
+		const orderedSnapshots = [...snapshots].sort((left, right) => {
+			const leftTime = Date.parse(left.time);
+			const rightTime = Date.parse(right.time);
+			return (Number.isNaN(rightTime) ? 0 : rightTime) - (Number.isNaN(leftTime) ? 0 : leftTime);
+		});
+		const advancedFiltered = this.filterSnapshots(orderedSnapshots, normalizedFilters, false);
+		const workloads = discoverLegacyWorkloads(advancedFiltered);
+		const datasets = discoverLegacyDatasets(advancedFiltered, normalizedFilters.workload);
+		const filtered = this.filterSnapshots(advancedFiltered, normalizedFilters, true);
+		const total = filtered.length;
+		const pageSize = normalizedFilters.pageSize as LegacyRepositorySnapshotPageSize;
+		const totalPages = total === 0 ? 0 : pageSize === 'all' ? 1 : Math.ceil(total / pageSize);
+		const page = totalPages === 0 ? 1 : Math.min(normalizedFilters.page || 1, totalPages);
+		const start = pageSize === 'all' ? 0 : (page - 1) * pageSize;
+		const end = pageSize === 'all' ? total : start + pageSize;
+
+		return {
+			items: filtered.slice(start, end),
+			total,
+			page,
+			pageSize,
+			totalPages,
+			workloads,
+			datasets,
+		};
 	}
 
 	async getSnapshot(id: string, snapshotId: string): Promise<LegacyRepositorySnapshot> {
 		if (!fullSnapshotId.test(snapshotId)) {
 			throw new AppError(400, 'A full snapshot ID is required.');
 		}
-		const snapshots = await this.listSnapshots(id);
-		const snapshot = snapshots.find(candidate => candidate.id.toLowerCase() === snapshotId.toLowerCase());
+		const snapshots = await this.listSnapshots(id, { pageSize: 'all' });
+		const snapshot = snapshots.items.find(candidate => candidate.id.toLowerCase() === snapshotId.toLowerCase());
 		if (!snapshot) {
 			throw new NotFoundError('Snapshot not found.');
 		}
@@ -649,12 +697,25 @@ export class LegacyRepositoryService {
 
 	private filterSnapshots(
 		snapshots: LegacyRepositorySnapshot[],
-		filters: LegacyRepositorySnapshotFilters
+		filters: LegacyRepositorySnapshotFilters,
+		includeGrouping: boolean
 	): LegacyRepositorySnapshot[] {
 		return snapshots.filter(snapshot => {
 			if (filters.tag && !snapshot.tags.includes(filters.tag)) return false;
 			if (filters.path && !snapshot.paths.includes(filters.path)) return false;
 			if (filters.host && snapshot.hostname !== filters.host) return false;
+			if (includeGrouping && (filters.workload || filters.dataset)) {
+				const groupings = getLegacySnapshotGroupings(snapshot);
+				if (
+					!groupings.some(
+						grouping =>
+							(!filters.workload || grouping.workload === filters.workload) &&
+							(!filters.dataset || grouping.dataset === filters.dataset)
+					)
+				) {
+					return false;
+				}
+			}
 			return true;
 		});
 	}
