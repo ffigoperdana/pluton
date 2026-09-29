@@ -25,6 +25,11 @@ const baseConfigSchema = z.object({
 	// Reverse proxy: value passed to Express's `trust proxy` setting.
 	TRUST_PROXY: z.string().optional(),
 
+	// Agent control plane. HTTPS is required unless this explicit server-side
+	// exception is set for a trusted LAN pilot.
+	ALLOW_INSECURE_AGENT_HTTP: z.coerce.boolean().default(false).optional(),
+	AGENT_OFFLINE_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(90).optional(),
+
 	// Security (optional in setup mode)
 	ENCRYPTION_KEY: z
 		.string()

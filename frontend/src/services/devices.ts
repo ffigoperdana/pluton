@@ -15,13 +15,14 @@ export async function getSystemMetrics(id: string) {
    return data;
 }
 
-export function useGetSystemMetrics(id: string) {
+export function useGetSystemMetrics(id: string, enabled = true) {
    return useQuery({
       queryKey: ['device-metrics', id],
       queryFn: () => getSystemMetrics(id),
       refetchOnMount: true,
       refetchOnWindowFocus: false,
       retry: false,
+      enabled,
    });
 }
 
@@ -40,12 +41,56 @@ export async function getAllDevices() {
    return data;
 }
 
-export function useGetDevices() {
+export function useGetDevices(options?: { refetchInterval?: number }) {
    return useQuery({
       queryKey: ['devices'],
       queryFn: () => getAllDevices(),
       refetchOnMount: true,
       retry: false,
+      refetchInterval: options?.refetchInterval,
+   });
+}
+
+export type AgentEnrollment = {
+   id: string;
+   token: string;
+   expiresAt: string;
+   deviceName: string;
+};
+
+async function agentAdminRequest<T>(pathname: string, method: 'POST', body?: Record<string, unknown>): Promise<T> {
+   const headers = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
+   const res = await fetch(`${API_URL}/agent-admin${pathname}`, {
+      method,
+      credentials: 'include',
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+   });
+   const data = await res.json();
+   if (!data.success) throw new Error(data.error || 'Agent administration request failed.');
+   return data.result as T;
+}
+
+export function useCreateAgentEnrollment() {
+   return useMutation({
+      mutationFn: (name: string) => agentAdminRequest<AgentEnrollment>('/enrollments', 'POST', { name }),
+   });
+}
+
+export function useRevokeAgentEnrollment() {
+   return useMutation({
+      mutationFn: (id: string) => agentAdminRequest<void>(`/enrollments/${encodeURIComponent(id)}/revoke`, 'POST'),
+   });
+}
+
+export function useRevokeAgentDevice() {
+   const queryClient = useQueryClient();
+   return useMutation({
+      mutationFn: (id: string) => agentAdminRequest<void>(`/devices/${encodeURIComponent(id)}/revoke`, 'POST'),
+      onSuccess: (_result, id) => {
+         queryClient.invalidateQueries({ queryKey: ['devices'] });
+         queryClient.invalidateQueries({ queryKey: ['device', id] });
+      },
    });
 }
 

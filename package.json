@@ -43,6 +43,7 @@
   "packageManager": "pnpm@10.20.0",
   "workspaces": [
     "backend",
-    "frontend"
+    "frontend",
+    "agent"
   ]
 }
