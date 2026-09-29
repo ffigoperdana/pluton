@@ -99,6 +99,19 @@ export class AgentStore {
 				.get();
 			if (!enrollment) return null;
 
+			// Reject a duplicate enrollment before any new device row is written.
+			// This stays in the same transaction as the token claim, so throwing
+			// also rolls the claim back. The database primary key remains the
+			// race-safe final guard.
+			const existingDevice = tx
+				.select({ id: devices.id })
+				.from(devices)
+				.where(eq(devices.id, data.device.id))
+				.get();
+			if (existingDevice) {
+				throw new Error('Device is already enrolled.');
+			}
+
 			tx.insert(devices)
 				.values({
 					id: data.device.id,

@@ -105,11 +105,29 @@ describe('AgentStore durable command queue', () => {
 	it('rolls back a token claim if creating the enrolled device fails', async () => {
 		const now = new Date('2026-01-01T00:00:00.000Z');
 		await store.createEnrollment({ id: 'enroll-rollback', tokenHash: 'hash-rollback', deviceName: 'app-01', expiresAt: new Date('2026-01-01T00:15:00.000Z') });
+		// Make this test's failure injection independent of the shared agent
+		// fixture and of test execution order.
+		const conflictingDeviceId = 'remote-enrollment-conflict';
+		sqlite
+			.prepare(`INSERT INTO devices (id, name, type, agent_id, versions, hostname, os, platform, status, tags, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+			.run(
+				conflictingDeviceId,
+				'app-01',
+				'remote-agent',
+				'agent-existing-conflict',
+				JSON.stringify({ agent: inventory.agentVersion, restic: '', rclone: '' }),
+				inventory.hostname,
+				inventory.os,
+				inventory.architecture,
+				'active',
+				JSON.stringify([]),
+				Math.floor(Date.now() / 1000)
+			);
 		await expect(
 			store.enrollAgent({
 				...enrollmentData('rollback', 'hash-rollback', now),
-				device: { id: 'remote-1', agentId: 'agent-rollback', inventory },
-				identity: { agentId: 'agent-rollback', deviceId: 'remote-1', encryptedSecret: 'encrypted-rollback', inventory },
+				device: { id: conflictingDeviceId, agentId: 'agent-rollback', inventory },
+				identity: { agentId: 'agent-rollback', deviceId: conflictingDeviceId, encryptedSecret: 'encrypted-rollback', inventory },
 			})
 		).rejects.toThrow();
 		expect(await store.enrollAgent(enrollmentData('rollback-retry', 'hash-rollback', now))).toMatchObject({ id: 'enroll-rollback' });
