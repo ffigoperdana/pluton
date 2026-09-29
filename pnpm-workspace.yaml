@@ -1,6 +1,7 @@
 packages:
   - 'backend'
   - 'frontend'
+  - 'agent'
   - '../pluton/backend'
   - '../pluton/frontend'
 

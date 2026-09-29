@@ -44,6 +44,7 @@ const DeviceItem = ({ device, layout }: DeviceItemProps) => {
                         {name}
                         {id === 'main' && <span className={`label in_progress ${classes.mainLabel}`}>Main</span>}{' '}
                         {status === 'pending' && <span className={`label error ${classes.mainLabel}`}>Agent not Installed</span>}
+                        {status === 'revoked' && <span className={`label error ${classes.mainLabel}`}>Revoked</span>}
                      </h4>
                   </div>
                   <div className={classes.type}>{type}</div>

@@ -9,6 +9,14 @@ import { backupRelations, backups } from './schema/backups';
 import { settings } from './schema/settings';
 import { legacyRepositories } from './schema/legacyRepositories';
 import { legacyRestoreJobRelations, legacyRestoreJobs } from './schema/legacyRestoreJobs';
+import {
+	agentCommandRelations,
+	agentCommands,
+	agentEnrollmentTokens,
+	agentIdentities,
+	agentIdentityRelations,
+	agentRequestNonces,
+} from './schema/agents';
 import { appPaths } from '../utils/AppPaths';
 
 const dbPath = path.join(appPaths.getDbDir(), 'pluton.db');
@@ -32,6 +40,12 @@ export const db = drizzle(sqlite, {
 		legacyRepositories,
 		legacyRestoreJobs,
 		legacyRestoreJobRelations,
+		agentEnrollmentTokens,
+		agentIdentities,
+		agentIdentityRelations,
+		agentRequestNonces,
+		agentCommands,
+		agentCommandRelations,
 	},
 });
 export type DatabaseType = typeof db;

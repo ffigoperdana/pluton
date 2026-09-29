@@ -62,6 +62,13 @@ import { parseTrustProxy } from './utils/helpers';
 import { LegacyRepositoryStore } from './stores/LegacyRepositoryStore';
 import { LegacyRestoreJobStore } from './stores/LegacyRestoreJobStore';
 import { LegacyRepositoryService } from './services/LegacyRepositoryService';
+import { AgentStore } from './stores/AgentStore';
+import { AgentService } from './services/AgentService';
+import { AgentController } from './controllers/AgentController';
+import { AgentAdminController } from './controllers/AgentAdminController';
+import { createAgentRouter } from './routes/agents';
+import { createAgentAdminRouter } from './routes/agentAdmin';
+import type { AgentRequest } from './types/agents';
 
 const MemoryStore = createMemoryStore(session);
 
@@ -78,6 +85,7 @@ export async function createApp(): Promise<{ app: Express }> {
 	const settingsStore = new SettingsStore(db);
 	const legacyRepositoryStore = new LegacyRepositoryStore(db);
 	const legacyRestoreJobStore = new LegacyRestoreJobStore(db);
+	const agentStore = new AgentStore(db);
 
 	// Local Agents
 	const localPlanAgent = new BaseBackupManager();
@@ -116,7 +124,8 @@ export async function createApp(): Promise<{ app: Express }> {
 		restoreStore,
 		storageStore
 	);
-	const deviceService = new DeviceService(localSystemAgent, deviceStore, planStore, storageStore);
+	const agentService = new AgentService(agentStore);
+	const deviceService = new DeviceService(localSystemAgent, deviceStore, planStore, storageStore, agentService);
 	const storageService = new StorageService(
 		localStorageAgent,
 		localSystemAgent,
@@ -142,6 +151,8 @@ export async function createApp(): Promise<{ app: Express }> {
 	const userController = new UserController(settingsService);
 	const setupController = new SetupController();
 	const legacyRepositoryController = new LegacyRepositoryController(legacyRepositoryService);
+	const agentController = new AgentController(agentService);
+	const agentAdminController = new AgentAdminController(agentService);
 
 	// Express App
 	const app = express();
@@ -181,7 +192,13 @@ export async function createApp(): Promise<{ app: Express }> {
 		})
 	);
 	app.use(versionMiddleware);
-	app.use(express.json());
+	app.use(
+		express.json({
+			verify: (req, _res, buffer) => {
+				(req as AgentRequest).rawBody = buffer.toString('utf8');
+			},
+		})
+	);
 
 	// helmet security middleware
 	const appUrl = configService.config.APP_URL || 'http://localhost';
@@ -263,6 +280,8 @@ export async function createApp(): Promise<{ app: Express }> {
 	app.use('/api/restores', createRestoreRouter(restoreController));
 	app.use('/api/settings', createSettingsRouter(settingsController));
 	app.use('/api/legacy-repositories', createLegacyRepositoryRouter(legacyRepositoryController));
+	app.use('/api/agent', createAgentRouter(agentController, agentService));
+	app.use('/api/agent-admin', createAgentAdminRouter(agentAdminController));
 	app.use('/api/health', createHealthRouter());
 
 	// For any other request that doesn't match an API route or a static file,

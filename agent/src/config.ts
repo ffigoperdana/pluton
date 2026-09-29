@@ -1,0 +1,63 @@
+import path from 'node:path';
+import type { AgentConfig } from './types.js';
+
+const TRUE_VALUES = new Set(['1', 'true', 'yes']);
+
+export function parseBoolean(value: string | undefined): boolean {
+	return value ? TRUE_VALUES.has(value.trim().toLowerCase()) : false;
+}
+
+export function parseAllowedRoots(value: string | undefined): string[] {
+	if (!value) return [];
+	return [...new Set(value.split(/[\n,]/).map(item => item.trim()).filter(Boolean))];
+}
+
+export function createAgentConfig(input: {
+	serverUrl?: string;
+	dataDir?: string;
+	allowedRoots?: string;
+	allowInsecureHttp?: boolean;
+	caFile?: string;
+	clientCertFile?: string;
+	clientKeyFile?: string;
+}): AgentConfig {
+	if (!input.serverUrl) throw new Error('PLUTON_SERVER_URL or --server is required.');
+	let serverUrl: URL;
+	try {
+		serverUrl = new URL(input.serverUrl);
+	} catch {
+		throw new Error('PLUTON_SERVER_URL must be an absolute HTTP or HTTPS URL.');
+	}
+	if (serverUrl.protocol !== 'https:' && serverUrl.protocol !== 'http:') {
+		throw new Error('PLUTON_SERVER_URL must use HTTPS or explicitly allowed HTTP.');
+	}
+	if (serverUrl.protocol === 'http:' && !input.allowInsecureHttp) {
+		throw new Error('HTTP is disabled. Set ALLOW_INSECURE_HTTP=true only for a trusted LAN.');
+	}
+	if (serverUrl.username || serverUrl.password || serverUrl.hash) {
+		throw new Error('PLUTON_SERVER_URL must not include credentials or a fragment.');
+	}
+
+	return {
+		serverUrl,
+		dataDir: path.resolve(input.dataDir || '/var/lib/pluton-agent'),
+		allowedRoots: parseAllowedRoots(input.allowedRoots),
+		allowInsecureHttp: input.allowInsecureHttp === true,
+		caFile: input.caFile,
+		clientCertFile: input.clientCertFile,
+		clientKeyFile: input.clientKeyFile,
+	};
+}
+
+export function configFromEnvironment(overrides: Partial<Record<string, string>> = process.env): AgentConfig {
+	return createAgentConfig({
+		serverUrl: overrides.PLUTON_SERVER_URL,
+		dataDir: overrides.PLUTON_AGENT_DATA_DIR,
+		allowedRoots: overrides.PLUTON_AGENT_ALLOWED_ROOTS,
+		allowInsecureHttp:
+			parseBoolean(overrides.PLUTON_AGENT_ALLOW_INSECURE_HTTP) || parseBoolean(overrides.ALLOW_INSECURE_HTTP),
+		caFile: overrides.PLUTON_AGENT_CA_FILE,
+		clientCertFile: overrides.PLUTON_AGENT_CLIENT_CERT_FILE,
+		clientKeyFile: overrides.PLUTON_AGENT_CLIENT_KEY_FILE,
+	});
+}

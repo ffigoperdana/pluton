@@ -24,10 +24,10 @@ const PlanSourceSettings = ({ plan, onUpdate, error, isEditing }: PlanSourceSett
    if (data?.success && data.result) {
       deviceList.push(
          ...data.result.map((device: Device) => ({
-            label: `${device.name} ${device.id === 'main' ? '(Main)' : ''}`,
+            label: `${device.name} ${device.id === 'main' ? '(Main)' : device.isRemote ? '(Remote agent: backup not enabled)' : ''}`,
             value: device.id,
             icon: device.id === 'main' ? 'computer' : 'computer-remote',
-            // disabled: device.id === 'main' || device.connected ? false : true,
+            disabled: device.isRemote === true,
          })),
       );
    }
