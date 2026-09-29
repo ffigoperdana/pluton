@@ -480,6 +480,29 @@ describe('runResticCommand', () => {
 		);
 	});
 
+	describe('command timeout', () => {
+		beforeEach(() => jest.useFakeTimers());
+		afterEach(() => jest.useRealTimers());
+
+		it('kills the whole process tree when a command reaches its deadline', async () => {
+			const promise = runResticCommand(
+				['unlock', '-r', 'rclone:test:repo'],
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				{ timeout: 120_000 }
+			);
+			const settled = expect(promise).rejects.toMatchObject({ timedOut: true });
+
+			await jest.advanceTimersByTimeAsync(120_000);
+
+			await settled;
+			expect(mockKillProcessTree).toHaveBeenCalledWith(mockProcess, 'SIGKILL');
+		});
+	});
+
 	describe('stall watchdog', () => {
 		beforeEach(() => jest.useFakeTimers());
 		afterEach(() => jest.useRealTimers());

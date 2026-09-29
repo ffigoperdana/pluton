@@ -129,13 +129,10 @@ export function runResticCommand(
 		if (timeoutMs && timeoutMs > 0) {
 			timeoutHandle = setTimeout(() => {
 				timedOut = true;
-				// SIGKILL rather than SIGTERM: a wedged rclone transport may not
-				// respond to a graceful signal.
-				try {
-					resticProcess.kill('SIGKILL');
-				} catch {
-					// Process may have already exited.
-				}
+				clearTimers();
+				// A restic repository can use rclone as a child process. Kill the
+				// whole tree at the hard deadline so it cannot leave its transport alive.
+				killProcessTree(resticProcess as KillableProcess, 'SIGKILL');
 				const timeoutError: ResticCommandError = new Error(
 					`Restic command timed out after ${timeoutMs}ms`
 				);
