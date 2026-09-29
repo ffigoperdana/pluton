@@ -31,6 +31,21 @@ describe('PlanService', () => {
 
 	let performBackupSpy: jest.SpyInstance;
 
+	/**
+	 * Storage-source path baking is independent of remote execution support.
+	 * Stub only the service strategy selection in these tests so the assertions
+	 * can exercise the persisted sourceConfig while RemoteStrategy remains
+	 * fail-closed in production until remote backup is implemented.
+	 */
+	const stubStorageSourceScheduling = () => {
+		const strategy = {
+			createBackup: jest.fn().mockResolvedValue({ success: true, result: 'test schedule' }),
+			updateBackup: jest.fn().mockResolvedValue({ success: true, result: 'test schedule' }),
+		};
+		jest.spyOn(planService, 'getStrategy').mockReturnValue(strategy as any);
+		return strategy;
+	};
+
 	beforeAll(() => {
 		// This now guarantees the logger is initialized for this test file.
 		initializeLogger();
@@ -285,6 +300,7 @@ describe('PlanService', () => {
 			mockPlanStore.create.mockImplementation((data: any) =>
 				Promise.resolve({ id: 'plan-sync', ...data })
 			);
+			stubStorageSourceScheduling();
 		});
 
 		it('bakes the source remote:path into sourceConfig.includes[0]', async () => {
@@ -461,6 +477,7 @@ describe('PlanService', () => {
 				}
 				return null;
 			});
+			stubStorageSourceScheduling();
 		});
 
 		it('re-bakes sourceConfig.includes[0] from a fresh path', async () => {
