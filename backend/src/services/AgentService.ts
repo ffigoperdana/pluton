@@ -74,6 +74,8 @@ export class AgentService {
 		token: string;
 		expiresAt: Date;
 		deviceName: string;
+		serverUrl: string;
+		insecureHttpAllowed: boolean;
 	}> {
 		const parsed = enrollmentNameSchema.safeParse(input);
 		if (!parsed.success) throw new AppError(400, 'A remote machine name is required.');
@@ -88,7 +90,14 @@ export class AgentService {
 		});
 		if (!created) throw new AppError(500, 'Could not create an enrollment token.');
 		this.audit('enrollment_token_created');
-		return { id: created.id, token, expiresAt, deviceName: created.deviceName };
+		return {
+			id: created.id,
+			token,
+			expiresAt,
+			deviceName: created.deviceName,
+			serverUrl: configService.config.APP_URL,
+			insecureHttpAllowed: configService.config.ALLOW_INSECURE_AGENT_HTTP === true,
+		};
 	}
 
 	async revokeEnrollment(id: string): Promise<void> {

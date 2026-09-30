@@ -56,6 +56,8 @@ export type AgentEnrollment = {
    token: string;
    expiresAt: string;
    deviceName: string;
+   serverUrl: string;
+   insecureHttpAllowed: boolean;
 };
 
 async function agentAdminRequest<T>(pathname: string, method: 'POST', body?: Record<string, unknown>): Promise<T> {

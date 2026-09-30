@@ -75,41 +75,106 @@ Never use HTTP agent mode across an untrusted or public network. Changing the
 agent URL later to an HTTPS domain does not change enrollment, request signing,
 polling, or future backup business logic.
 
-## Enrollment
+The installer rejects an HTTP server URL unless `--allow-insecure-http` is
+present. For a trusted-LAN exception, use both server and installer opt-ins:
+
+```sh
+sudo ./installers/install-agent.sh \
+  --server http://192.0.2.10:5173 \
+  --allowed-root /srv/example-app \
+  --allow-insecure-http
+```
+
+For HTTPS, the system CA store is used by default and certificate verification
+remains enabled. A private CA is supported with a readable PEM path:
+
+```sh
+sudo ./installers/install-agent.sh \
+  --server https://pluton.example.internal \
+  --allowed-root /srv/example-app \
+  --ca-file /etc/ssl/local-ca/pluton-ca.pem
+```
+
+The installer validates that the `pluton-agent` account can read the custom CA
+file, then writes it as `PLUTON_AGENT_CA_FILE` in the agent environment.
+
+## Install, enrollment, and updates
+
+The repository installer supports Ubuntu/Debian-family hosts using systemd on
+x86_64. It installs a private Node.js 22 runtime under
+`/opt/pluton-agent/runtime`; it never upgrades or replaces `/usr/bin/node`,
+the host npm installation, or another production runtime.
 
 1. In **Sources**, select **Add Remote Machine**, give it a descriptive name,
    and create the one-time token.
-2. Copy the command shown by the UI. The raw token is displayed only in that
-   dialog and is stored on the server as a hash.
-3. On the remote host, as the dedicated agent user, enroll it. A package
-   installation exposes the `pluton-agent` command; a direct `dist` copy uses
-   the Node.js entry point shown below:
+2. On the remote host, clone the community fork you administer and run:
 
    ```sh
-   /usr/bin/node /opt/pluton-agent/index.js enroll --server https://pluton.example.internal --token '<one-time-token>'
+   git clone https://github.com/<your-community-fork>/pluton.git pluton
+   cd pluton
+   sudo ./installers/install-agent.sh \
+     --server https://pluton.example.internal \
+     --allowed-root /srv/example-app
    ```
 
-4. Start the service. The remote device appears in Sources after enrollment;
-   it reports `ONLINE` while heartbeats arrive, `OFFLINE` after the configured
-   timeout, and `REVOKED` immediately after an administrator revokes it.
+3. Choose an enrollment method in the dialog:
 
-The agent writes its identity to `identity.json` under
-`PLUTON_AGENT_DATA_DIR`, using directory mode `0700` and file mode `0600` on
-Linux. Back up neither this file nor an enrollment token to source control.
+   - **Secure install** is the default and preferred option for public, VPS,
+     or less-trusted environments. Its generated command has no token; the
+     installer requests the one-time token from a hidden terminal prompt.
+   - **Quick install** is intended only for a trusted internal/admin
+     environment. Its Copy button includes the actual one-time, short-lived
+     enrollment token as `--token` so the command can be pasted directly.
+     That token can be recorded in shell history and briefly appear in process
+     listings. It is never written to the systemd environment, state directory,
+     identity file, or agent command line.
 
-## Build and install
+Both commands use the server's configured URL and the allowed source root
+entered in the dialog. The HTTP opt-in flag appears only when the server has
+explicitly enabled trusted-LAN agent HTTP.
 
-The agent has no third-party runtime dependencies. Build it with Node.js 20 or
-later from this repository, then copy the generated `agent/dist` directory to
-the remote host:
+The installer validates the supported operating system, architecture, active
+systemd manager, required utilities, server URL, and allowed roots. It
+downloads the official Node.js tarball and its official `SHASUMS256.txt` file
+over HTTPS, verifies SHA256 before extraction, then builds the agent in an
+isolated temporary directory using the private runtime and the repository's
+pinned pnpm version and lockfile. It installs no global packages and copies
+only the compiled agent artifacts to `/opt/pluton-agent/app`.
+
+The source-build step is isolated behind the installer's staging process so a
+future signed release artifact can replace it without changing service or
+identity handling. The agent currently has no third-party runtime dependencies;
+the installer fails closed if that changes until its artifact step is updated.
+
+The installer creates a non-login `pluton-agent` user and group. It does not
+add that account to `sudo`, `docker`, or another privileged group. Its state
+directory is `/var/lib/pluton-agent` with mode `0700`, and the agent writes
+`identity.json` with mode `0600`.
+
+For automation, use standard input rather than a token argument. The secret
+injection mechanism must keep the value out of logs:
 
 ```sh
-pnpm --filter @plutonhq/pluton-agent build
+printf '%s\n' "$PLUTON_ENROLLMENT_TOKEN" | sudo ./installers/install-agent.sh \
+  --server https://pluton.example.internal \
+  --allowed-root /srv/example-app \
+  --token-stdin
 ```
 
-For example, after placing that directory at `/opt/pluton-agent`, invoke it as
-`/usr/bin/node /opt/pluton-agent/index.js run`. Keep the directory and its
-identity data owned by the dedicated `pluton-agent` user.
+`--allowed-root` may be repeated. The installer canonicalizes each root and
+checks that the dedicated agent account can read and traverse it. It stores the
+resulting roots as a comma-separated value in `/etc/pluton-agent.env`.
+
+Running the same install command again safely updates the private runtime and
+application while preserving `identity.json`; it reuses the existing remote
+device and never automatically enrolls a second one. Until the updated agent
+passes its control-plane check, the installer retains the prior application,
+configuration, and unit so a failed update can restore an active prior service.
+To deliberately replace an existing local identity, add `--re-enroll`. This
+requires an interactive `RE-ENROLL` confirmation unless `--force` is
+explicitly supplied, then requests a new one-time token. The prior local
+identity is retained until the new enrollment succeeds. Re-enrollment does not
+revoke the old server-side device.
 
 ## Filesystem policy
 
@@ -123,10 +188,10 @@ authorization.
 No filesystem command is enabled in this phase, so configuring a root only
 reports the capability and does not grant a remote caller file access.
 
-## systemd example
+## systemd service and operations
 
-Install the compiled `pluton-agent` executable/package using the repository's
-normal release process, then adapt this intentionally generic unit:
+The installer writes and enables the following service shape; administrators do
+not need to create it by hand:
 
 ```ini
 [Unit]
@@ -138,21 +203,70 @@ Wants=network-online.target
 Type=simple
 User=pluton-agent
 Group=pluton-agent
-EnvironmentFile=/etc/pluton-agent/agent.env
-ExecStart=/usr/bin/node /opt/pluton-agent/index.js run
+EnvironmentFile=/etc/pluton-agent.env
+ExecStart=/opt/pluton-agent/runtime/bin/node /opt/pluton-agent/app/dist/index.js run
 Restart=on-failure
-RestartSec=5
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectHome=true
+RestartSec=10s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ReadWritePaths=/var/lib/pluton-agent
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-The user needs read access only to the explicitly configured future source
-roots. Do not grant it repository credentials, root access, or shell sudo
-privileges for this Phase 4 foundation.
+The service deliberately does not set `ProtectHome`, because an explicitly
+configured future source root may be under a home directory. The user needs
+read access only to configured roots; do not grant it repository credentials,
+root access, shell sudo privileges, or Docker socket access.
+
+Before enabling the service, the installer runs one safe `run --once` cycle
+with the stored identity. That verifies the configured control plane can accept
+a heartbeat and poll. It then starts the service, which should report:
+
+```sh
+systemctl status pluton-agent
+journalctl -u pluton-agent -n 100 --no-pager
+```
+
+Safe agent diagnostics include only an operation stage and a sanitized message;
+they never include enrollment tokens, agent secrets, HMAC values, lease tokens,
+repository passwords, or storage credentials.
+
+The generated `/etc/pluton-agent.env` has mode `0600` and contains the server
+origin, state directory, one or more allowed roots, the optional private CA
+path, and the explicit `ALLOW_INSECURE_HTTP` value. It never contains an
+enrollment token or agent secret.
+
+## Uninstall and purge
+
+To remove the systemd service and installed private runtime while retaining a
+local identity for a later reinstall:
+
+```sh
+sudo ./installers/install-agent.sh uninstall
+```
+
+This stops and disables the service, removes the unit and
+`/opt/pluton-agent`, and preserves `/var/lib/pluton-agent/identity.json` plus
+`/etc/pluton-agent.env`. It does not contact the Pluton server.
+
+For a destructive local purge:
+
+```sh
+sudo ./installers/install-agent.sh uninstall --purge
+```
+
+Purge asks the administrator to type `PURGE` unless `--force` is supplied. It
+also removes the state directory, identity, and environment file. Neither
+uninstall nor purge revokes the server-side device. Revocation remains an
+explicit action in **Sources** to prevent accidental loss of an agent during a
+host rebuild.
 
 ## Revocation and limitations
 
