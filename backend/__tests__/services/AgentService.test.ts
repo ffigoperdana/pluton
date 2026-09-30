@@ -9,6 +9,7 @@ jest.mock('../../src/services/ConfigService', () => ({
 	configService: {
 		config: {
 			SECRET: 'agent-service-test-secret-that-is-long-enough',
+			APP_URL: 'https://pluton.example.internal',
 			ALLOW_INSECURE_AGENT_HTTP: false,
 			AGENT_OFFLINE_TIMEOUT_SECONDS: 90,
 		},
@@ -67,6 +68,8 @@ describe('AgentService', () => {
 	it('creates a random enrollment token while persisting only its hash', async () => {
 		const result = await service.createEnrollment({ name: 'app-01' });
 		expect(result.token).toHaveLength(43);
+		expect(result.serverUrl).toBe('https://pluton.example.internal');
+		expect(result.insecureHttpAllowed).toBe(false);
 		expect(store.createEnrollment).toHaveBeenCalledWith(
 			expect.objectContaining({
 				deviceName: 'app-01',
@@ -76,6 +79,16 @@ describe('AgentService', () => {
 		expect((store.createEnrollment.mock.calls[0][0] as { tokenHash: string }).tokenHash).toBe(
 			crypto.createHash('sha256').update(result.token).digest('base64url')
 		);
+	});
+
+	it('reports the explicit server-side HTTP exception with an enrollment response', async () => {
+		(configService.config as any).ALLOW_INSECURE_AGENT_HTTP = true;
+		try {
+			const result = await service.createEnrollment({ name: 'app-01' });
+			expect(result.insecureHttpAllowed).toBe(true);
+		} finally {
+			(configService.config as any).ALLOW_INSECURE_AGENT_HTTP = false;
+		}
 	});
 
 	it.each(['expired', 'reused', 'revoked'])('rejects a %s enrollment token', async () => {

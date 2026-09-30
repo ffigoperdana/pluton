@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { configFromEnvironment, createAgentConfig, parseBoolean } from './config.js';
 import { AgentClient } from './client.js';
-import { AgentOperationError, atAgentStage, formatAgentFailure } from './errors.js';
+import { readEnrollmentToken } from './enrollmentToken.js';
+import { atAgentStage, formatAgentFailure } from './errors.js';
 import { saveIdentity } from './identity.js';
 import { collectInventory } from './inventory.js';
 import { resolveAllowedRoots } from './filesystemPolicy.js';
@@ -30,7 +31,7 @@ function configFromArgs(args: string[]) {
 }
 
 function usage(): void {
-	console.log('Usage: pluton-agent enroll --server <url> --token <token> [--data-dir <dir>]');
+	console.log('Usage: pluton-agent enroll --server <url> (--token-stdin | --token <token>) [--data-dir <dir>]');
 	console.log('       pluton-agent run [--once] [--server <url>] [--data-dir <dir>]');
 }
 
@@ -44,8 +45,7 @@ async function main(): Promise<void> {
 		args.length > 0 ? configFromArgs(args) : configFromEnvironment()
 	);
 	if (command === 'enroll') {
-		const token = readOption(args, '--token');
-		if (!token) throw new AgentOperationError('enroll', 'enrollment token is required');
+		const token = await atAgentStage('read-enrollment-token', () => readEnrollmentToken(args));
 		const roots = await atAgentStage('resolve-allowed-roots', () => resolveAllowedRoots(config.allowedRoots));
 		const client = new AgentClient(config);
 		const result = await atAgentStage('enroll', () => client.enroll(

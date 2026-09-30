@@ -2,6 +2,7 @@ import { AgentHttpError } from './transport.js';
 
 export type AgentOperationStage =
 	| 'load-configuration'
+	| 'read-enrollment-token'
 	| 'load-identity'
 	| 'resolve-allowed-roots'
 	| 'enroll'

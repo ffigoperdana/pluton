@@ -9,14 +9,64 @@ type AgentEnrollmentProps = {
    close: () => void;
 };
 
+type InstallVariant = 'quick' | 'secure';
+
+const shellQuote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'";
+
+const buildInstallCommand = (serverUrl: string, allowedRoot: string, insecureHttp: boolean, token?: string) => {
+   const lines = [
+      'sudo ./installers/install-agent.sh \\',
+      '  --server ' + shellQuote(serverUrl) + ' \\',
+      ...(token ? ['  --token ' + shellQuote(token) + ' \\'] : []),
+      '  --allowed-root ' + shellQuote(allowedRoot) + (insecureHttp ? ' \\' : ''),
+      ...(insecureHttp ? ['  --allow-insecure-http'] : []),
+   ];
+   return lines.join('\n');
+};
+
+const copyToClipboard = async (value: string) => {
+   try {
+      if (navigator.clipboard?.writeText) {
+         await navigator.clipboard.writeText(value);
+         return;
+      }
+   } catch {
+      // Trusted-LAN HTTP pages often cannot use the modern Clipboard API.
+   }
+
+   const textArea = document.createElement('textarea');
+   textArea.value = value;
+   textArea.setAttribute('readonly', '');
+   textArea.style.position = 'fixed';
+   textArea.style.opacity = '0';
+   document.body.appendChild(textArea);
+   textArea.select();
+   const copied = document.execCommand('copy');
+   textArea.remove();
+   if (!copied) throw new Error('Clipboard access was denied.');
+};
+
 const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
    const [name, setName] = useState('');
+   const [allowedRoot, setAllowedRoot] = useState('');
    const [enrollment, setEnrollment] = useState<AgentEnrollment | null>(null);
    const [revokeError, setRevokeError] = useState('');
+   const [copyError, setCopyError] = useState('');
+   const [copiedVariant, setCopiedVariant] = useState<InstallVariant | null>(null);
    const createEnrollment = useCreateAgentEnrollment();
    const revokeEnrollment = useRevokeAgentEnrollment();
-   const serverUrl = typeof window === 'undefined' ? '' : window.location.origin;
-   const requiresInsecureHttp = serverUrl.startsWith('http:');
+   const serverUrl = enrollment?.serverUrl || (typeof window === 'undefined' ? '' : window.location.origin);
+   const requiresInsecureHttp = serverUrl.startsWith('http:') && enrollment?.insecureHttpAllowed === true;
+   const insecureHttpBlocked = serverUrl.startsWith('http:') && enrollment?.insecureHttpAllowed !== true;
+   const sourceRoot = allowedRoot.trim();
+   const hasValidSourceRoot = sourceRoot.startsWith('/');
+   const canGenerateCommands = enrollment && hasValidSourceRoot && !insecureHttpBlocked;
+   const quickInstallCommand = canGenerateCommands
+      ? buildInstallCommand(serverUrl, sourceRoot, requiresInsecureHttp, enrollment.token)
+      : '';
+   const secureInstallCommand = canGenerateCommands
+      ? buildInstallCommand(serverUrl, sourceRoot, requiresInsecureHttp)
+      : '';
 
    const create = async () => {
       try {
@@ -24,6 +74,17 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
          setEnrollment(result);
       } catch {
          // The UI renders a safe, generic error below.
+      }
+   };
+
+   const copyCommand = async (variant: InstallVariant, command: string) => {
+      setCopyError('');
+      try {
+         await copyToClipboard(command);
+         setCopiedVariant(variant);
+      } catch {
+         setCopiedVariant(null);
+         setCopyError('Could not copy the command. Select and copy it manually.');
       }
    };
 
@@ -38,7 +99,7 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
    };
 
    return (
-      <Modal title="Add Remote Machine" width="680px" closeModal={close} disableBackdropClick={Boolean(enrollment)}>
+      <Modal title="Add Remote Machine" width="760px" closeModal={close} disableBackdropClick={Boolean(enrollment)}>
          {!enrollment ? (
             <div className={classes.content}>
                <p>Create a single-use enrollment token for a self-hosted Pluton Agent. Remote filesystem backup is not enabled yet.</p>
@@ -61,13 +122,48 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
                <p className={classes.warning}>Copy this token now. It is not stored in the browser after this dialog closes.</p>
                <label className={classes.label}>One-time enrollment token</label>
                <code className={classes.token}>{enrollment.token}</code>
-               <label className={classes.label}>Enroll on the remote machine</label>
-               <code className={classes.command}>
-                  pluton-agent enroll --server {serverUrl} --token {enrollment.token}
-                  {requiresInsecureHttp ? ' --allow-insecure-http' : ''}
-               </code>
+               <label className={classes.label}>Step 1 — Clone your Pluton community fork</label>
+               <pre className={classes.command}>git clone &lt;your-pluton-community-fork-url&gt; pluton{`\n`}cd pluton</pre>
+               <Input
+                  label="Allowed source root"
+                  required={true}
+                  full={true}
+                  fieldValue={allowedRoot}
+                  placeholder="/srv/example-app"
+                  onUpdate={value => {
+                     setAllowedRoot(value);
+                     setCopiedVariant(null);
+                     setCopyError('');
+                  }}
+                  error={allowedRoot && !hasValidSourceRoot ? 'Enter an absolute Linux path.' : ''}
+               />
+               <p className={classes.help}>This path is included in the generated command and validated again on the remote host.</p>
+               {canGenerateCommands ? (
+                  <>
+                     <label className={classes.label}>Step 2 — Quick install</label>
+                     <p className={classes.quickWarning}>The easiest option for a trusted internal/admin environment. The token is one-time and short-lived, but may be stored in shell history and briefly appear in process listings.</p>
+                     <pre className={classes.command}>{quickInstallCommand}</pre>
+                     <div className={classes.copyAction}>
+                        <Button text={copiedVariant === 'quick' ? 'Copied' : 'Copy quick install command'} variant="secondary" size="sm" icon={copiedVariant === 'quick' ? 'check' : 'copy'} onClick={() => copyCommand('quick', quickInstallCommand)} />
+                     </div>
+                     <label className={classes.label}>Step 3 — Secure install</label>
+                     <p className={classes.help}>Preferred for public, VPS, or less-trusted environments. The installer requests the token interactively and keeps it out of shell history and process arguments.</p>
+                     <pre className={classes.command}>{secureInstallCommand}</pre>
+                     <div className={classes.copyAction}>
+                        <Button text={copiedVariant === 'secure' ? 'Copied' : 'Copy secure install command'} variant="secondary" size="sm" icon={copiedVariant === 'secure' ? 'check' : 'copy'} onClick={() => copyCommand('secure', secureInstallCommand)} />
+                     </div>
+                  </>
+               ) : hasValidSourceRoot ? null : (
+                  <p className={classes.help}>Enter the absolute source root to generate complete copy-paste installation commands.</p>
+               )}
+               {insecureHttpBlocked && (
+                  <p className={classes.error}>This Pluton server is not configured to accept agent HTTP. Use HTTPS or enable the explicit server-side trusted-LAN setting before installing an agent.</p>
+               )}
+               {copyError && <p className={classes.error}>{copyError}</p>}
+               <label className={classes.label}>Agent service commands</label>
+               <pre className={classes.command}>systemctl status pluton-agent{`\n`}sudo ./installers/install-agent.sh uninstall{`\n`}sudo ./installers/install-agent.sh uninstall --purge</pre>
                {revokeError && <p className={classes.error}>{revokeError}</p>}
-               <p className={classes.help}>For HTTP on a trusted LAN, the server and agent must each explicitly allow insecure HTTP. Use HTTPS for every untrusted or public network.</p>
+               <p className={classes.help}>For HTTP on a trusted LAN, the server and agent must each explicitly allow insecure HTTP. Use HTTPS for every untrusted or public network. Remote filesystem backup is not enabled yet.</p>
                <div className={classes.actions}>
                   <Button text="Revoke token" variant="danger" onClick={revoke} disabled={revokeEnrollment.isPending} />
                   <Button text="Done" variant="primary" onClick={close} />
