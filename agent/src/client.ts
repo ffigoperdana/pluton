@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
+import { AgentOperationError } from './errors.js';
 import { AgentTransport } from './transport.js';
-import { signRequest, verifyCommand } from './protocol.js';
+import { signRequest, verifyCommandDetailed } from './protocol.js';
 import type { AgentCommandEnvelope, AgentConfig, AgentInventory, StoredAgentIdentity } from './types.js';
 
 type ApiResponse<T> = { success: boolean; result: T; error?: string };
@@ -31,8 +32,12 @@ export class AgentClient {
 	async poll(): Promise<AgentCommandEnvelope | null> {
 		const result = await this.postSigned<{ command: AgentCommandEnvelope | null }>('/api/agent/poll', {});
 		if (!result.command) return null;
-		if (!this.identity || !verifyCommand(this.identity.secret, result.command)) {
-			throw new Error('Server command signature is invalid.');
+		if (!this.identity) {
+			throw new AgentOperationError('verify-command', 'agent identity is unavailable');
+		}
+		const verification = verifyCommandDetailed(this.identity.secret, result.command);
+		if (!verification.valid) {
+			throw new AgentOperationError('verify-command', verification.reason);
 		}
 		return result.command;
 	}
@@ -50,7 +55,13 @@ export class AgentClient {
 		leaseToken: string,
 		completion: { sequence: number; success: boolean; error?: string }
 	): Promise<void> {
-		await this.postSigned(`/api/agent/commands/${encodeURIComponent(commandId)}/complete`, { leaseToken, ...completion });
+		const { sequence, success, error } = completion;
+		await this.postSigned(`/api/agent/commands/${encodeURIComponent(commandId)}/complete`, {
+			leaseToken,
+			sequence,
+			success,
+			...(error ? { error } : {}),
+		});
 	}
 
 	private async postUnsigned<T>(pathname: string, body: Record<string, unknown>): Promise<T> {

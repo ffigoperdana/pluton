@@ -1,4 +1,5 @@
 import { AgentClient } from './client.js';
+import { AgentOperationError, atAgentStage, formatAgentFailure } from './errors.js';
 import { resolveAllowedRoots } from './filesystemPolicy.js';
 import { loadIdentity, saveIdentity } from './identity.js';
 import { collectInventory } from './inventory.js';
@@ -11,39 +12,39 @@ function rememberCompletion(identity: StoredAgentIdentity, completion: StoredAge
 }
 
 export async function runOnce(config: AgentConfig): Promise<void> {
-	const identity = await loadIdentity(config.dataDir);
-	const roots = await resolveAllowedRoots(config.allowedRoots);
+	const identity = await atAgentStage('load-identity', () => loadIdentity(config.dataDir));
+	const roots = await atAgentStage('resolve-allowed-roots', () => resolveAllowedRoots(config.allowedRoots));
 	const client = new AgentClient(config, identity);
 	const inventory = collectInventory({
 		filesystemRootsConfigured: roots.length > 0,
 		commandTypes: ['PING', 'INVENTORY_REFRESH'],
 	});
 
-	await client.heartbeat(inventory);
-	const command = await client.poll();
+	await atAgentStage('heartbeat', () => client.heartbeat(inventory));
+	const command = await atAgentStage('poll', () => client.poll());
 	if (!command) return;
 	if (!SAFE_COMMANDS.has(command.type)) {
-		throw new Error('Server returned an unsupported command type.');
+		throw new AgentOperationError('validate-command', 'server returned an unsupported command type');
 	}
 
 	const prior = identity.completedCommands.find(item => item.commandId === command.id);
 	if (prior) {
-		await client.complete(command.id, command.leaseToken, prior);
+		await atAgentStage('complete', () => client.complete(command.id, command.leaseToken, prior));
 		return;
 	}
 
-	await client.acknowledge(command.id, command.leaseToken);
-	await client.event(command.id, command.leaseToken, 1);
+	await atAgentStage('acknowledge', () => client.acknowledge(command.id, command.leaseToken));
+	await atAgentStage('record-event', () => client.event(command.id, command.leaseToken, 1));
 	// PING and INVENTORY_REFRESH are deliberate no-ops; neither can execute a shell or access files.
 	const completion = { commandId: command.id, sequence: 2, success: true };
 	// Persist before acknowledging completion so a retry cannot execute future non-idempotent work twice.
 	rememberCompletion(identity, completion);
-	await saveIdentity(config.dataDir, identity);
-	await client.complete(command.id, command.leaseToken, completion);
+	await atAgentStage('save-identity', () => saveIdentity(config.dataDir, identity));
+	await atAgentStage('complete', () => client.complete(command.id, command.leaseToken, completion));
 }
 
 export async function run(config: AgentConfig): Promise<void> {
-	const identity = await loadIdentity(config.dataDir);
+	const identity = await atAgentStage('load-identity', () => loadIdentity(config.dataDir));
 	let stopped = false;
 	let running = false;
 	const execute = async () => {
@@ -52,7 +53,7 @@ export async function run(config: AgentConfig): Promise<void> {
 		try {
 			await runOnce(config);
 		} catch (error) {
-			console.error('[pluton-agent] Control-plane request failed.');
+			console.error(`[pluton-agent] ${formatAgentFailure(error)}`);
 		} finally {
 			running = false;
 		}

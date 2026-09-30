@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { configFromEnvironment, createAgentConfig, parseBoolean } from './config.js';
 import { AgentClient } from './client.js';
+import { AgentOperationError, atAgentStage, formatAgentFailure } from './errors.js';
 import { saveIdentity } from './identity.js';
 import { collectInventory } from './inventory.js';
 import { resolveAllowedRoots } from './filesystemPolicy.js';
@@ -39,17 +40,19 @@ async function main(): Promise<void> {
 		usage();
 		return;
 	}
-	const config = args.length > 0 ? configFromArgs(args) : configFromEnvironment();
+	const config = await atAgentStage('load-configuration', () =>
+		args.length > 0 ? configFromArgs(args) : configFromEnvironment()
+	);
 	if (command === 'enroll') {
 		const token = readOption(args, '--token');
-		if (!token) throw new Error('--token is required for enrollment.');
-		const roots = await resolveAllowedRoots(config.allowedRoots);
+		if (!token) throw new AgentOperationError('enroll', 'enrollment token is required');
+		const roots = await atAgentStage('resolve-allowed-roots', () => resolveAllowedRoots(config.allowedRoots));
 		const client = new AgentClient(config);
-		const result = await client.enroll(
+		const result = await atAgentStage('enroll', () => client.enroll(
 			token,
 			collectInventory({ filesystemRootsConfigured: roots.length > 0, commandTypes: ['PING', 'INVENTORY_REFRESH'] })
-		);
-		await saveIdentity(config.dataDir, { ...result, completedCommands: [] });
+		));
+		await atAgentStage('save-identity', () => saveIdentity(config.dataDir, { ...result, completedCommands: [] }));
 		console.log(`Agent enrolled successfully: ${result.agentId}`);
 		return;
 	}
@@ -62,7 +65,7 @@ async function main(): Promise<void> {
 	throw new Error('Unknown command.');
 }
 
-main().catch(() => {
-	console.error('[pluton-agent] Startup failed. Check configuration and enrollment state.');
+main().catch(error => {
+	console.error(`[pluton-agent] ${formatAgentFailure(error)}`);
 	process.exitCode = 1;
 });

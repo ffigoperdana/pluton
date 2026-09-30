@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import test from 'node:test';
-import { verifyCommand } from './protocol.js';
+import { verifyCommand, verifyCommandDetailed } from './protocol.js';
 
 const secret = 'agent-protocol-test-secret';
 const timestamp = '1700000000000';
@@ -28,4 +28,10 @@ test('verifies a signed server command and rejects a modified payload', () => {
 	assert.equal(verifyCommand(secret, command), true);
 	assert.equal(verifyCommand(secret, { ...command, payload: { unexpected: true } }), false);
 	assert.equal(verifyCommand(secret, { ...command, leaseToken: 'b'.repeat(32) }), false);
+});
+
+test('reports a safely actionable reason for an expired command lease', () => {
+	const expired = { ...command, leaseExpiresAt: new Date(Date.now() - 1_000).toISOString() };
+	const result = verifyCommandDetailed(secret, expired);
+	assert.deepEqual(result, { valid: false, reason: 'command lease has expired; check clock synchronization' });
 });

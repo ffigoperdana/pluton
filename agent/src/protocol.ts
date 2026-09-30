@@ -1,6 +1,13 @@
 import crypto from 'node:crypto';
 import type { AgentCommandEnvelope } from './types.js';
 
+export type CommandVerificationResult =
+	| { valid: true }
+	| {
+			valid: false;
+			reason: 'command lease timestamp is invalid' | 'command lease has expired; check clock synchronization' | 'command signature does not match';
+	  };
+
 function bodyHash(body: string): string {
 	return crypto.createHash('sha256').update(body).digest('base64url');
 }
@@ -19,9 +26,12 @@ export function signRequest(
 		.digest('base64');
 }
 
-export function verifyCommand(secret: string, command: AgentCommandEnvelope): boolean {
+export function verifyCommandDetailed(secret: string, command: AgentCommandEnvelope): CommandVerificationResult {
 	const leaseExpiresAt = command.leaseExpiresAt ? Date.parse(command.leaseExpiresAt) : Number.NaN;
-	if (!Number.isFinite(leaseExpiresAt) || leaseExpiresAt <= Date.now()) return false;
+	if (!Number.isFinite(leaseExpiresAt)) return { valid: false, reason: 'command lease timestamp is invalid' };
+	if (leaseExpiresAt <= Date.now()) {
+		return { valid: false, reason: 'command lease has expired; check clock synchronization' };
+	}
 	const canonical = [
 		'command',
 		command.signatureTimestamp,
@@ -36,8 +46,14 @@ export function verifyCommand(secret: string, command: AgentCommandEnvelope): bo
 	try {
 		const expectedBuffer = Buffer.from(expected, 'base64');
 		const actualBuffer = Buffer.from(command.signature, 'base64');
-		return expectedBuffer.length === actualBuffer.length && crypto.timingSafeEqual(expectedBuffer, actualBuffer);
+		return expectedBuffer.length === actualBuffer.length && crypto.timingSafeEqual(expectedBuffer, actualBuffer)
+			? { valid: true }
+			: { valid: false, reason: 'command signature does not match' };
 	} catch {
-		return false;
+		return { valid: false, reason: 'command signature does not match' };
 	}
+}
+
+export function verifyCommand(secret: string, command: AgentCommandEnvelope): boolean {
+	return verifyCommandDetailed(secret, command).valid;
 }
