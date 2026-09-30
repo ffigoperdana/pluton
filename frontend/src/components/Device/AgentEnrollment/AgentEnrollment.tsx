@@ -11,6 +11,8 @@ type AgentEnrollmentProps = {
 
 type InstallVariant = 'quick' | 'secure';
 
+const communityForkUrl = import.meta.env.VITE_PLUTON_FORK_URL || 'https://github.com/<your-community-fork>/pluton.git';
+
 const shellQuote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'";
 
 const buildInstallCommand = (serverUrl: string, allowedRoot: string, insecureHttp: boolean, token?: string) => {
@@ -99,7 +101,7 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
    };
 
    return (
-      <Modal title="Add Remote Machine" width="760px" closeModal={close} disableBackdropClick={Boolean(enrollment)}>
+      <Modal title="Add Remote Machine" width="min(960px, calc(100vw - 32px))" closeModal={close} disableBackdropClick={Boolean(enrollment)}>
          {!enrollment ? (
             <div className={classes.content}>
                <p>Create a single-use enrollment token for a self-hosted Pluton Agent. Remote filesystem backup is not enabled yet.</p>
@@ -123,7 +125,7 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
                <label className={classes.label}>One-time enrollment token</label>
                <code className={classes.token}>{enrollment.token}</code>
                <label className={classes.label}>Step 1 — Clone your Pluton community fork</label>
-               <pre className={classes.command}>git clone &lt;your-pluton-community-fork-url&gt; pluton{`\n`}cd pluton</pre>
+               <pre className={classes.command}>{`git clone ${communityForkUrl} pluton\ncd pluton`}</pre>
                <Input
                   label="Allowed source root"
                   required={true}
@@ -139,20 +141,24 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
                />
                <p className={classes.help}>This path is included in the generated command and validated again on the remote host.</p>
                {canGenerateCommands ? (
-                  <>
-                     <label className={classes.label}>Step 2 — Quick install</label>
-                     <p className={classes.quickWarning}>The easiest option for a trusted internal/admin environment. The token is one-time and short-lived, but may be stored in shell history and briefly appear in process listings.</p>
-                     <pre className={classes.command}>{quickInstallCommand}</pre>
-                     <div className={classes.copyAction}>
-                        <Button text={copiedVariant === 'quick' ? 'Copied' : 'Copy quick install command'} variant="secondary" size="sm" icon={copiedVariant === 'quick' ? 'check' : 'copy'} onClick={() => copyCommand('quick', quickInstallCommand)} />
-                     </div>
-                     <label className={classes.label}>Step 3 — Secure install</label>
-                     <p className={classes.help}>Preferred for public, VPS, or less-trusted environments. The installer requests the token interactively and keeps it out of shell history and process arguments.</p>
-                     <pre className={classes.command}>{secureInstallCommand}</pre>
-                     <div className={classes.copyAction}>
-                        <Button text={copiedVariant === 'secure' ? 'Copied' : 'Copy secure install command'} variant="secondary" size="sm" icon={copiedVariant === 'secure' ? 'check' : 'copy'} onClick={() => copyCommand('secure', secureInstallCommand)} />
-                     </div>
-                  </>
+                  <div className={classes.installOptions}>
+                     <section className={classes.installOption} aria-labelledby="quick-install-title">
+                        <h4 className={classes.installTitle} id="quick-install-title">Step 2 — Quick install</h4>
+                        <p className={classes.quickWarning}>The easiest option for a trusted internal/admin environment. The token is one-time and short-lived, but may be stored in shell history and briefly appear in process listings.</p>
+                        <pre className={classes.command}>{quickInstallCommand}</pre>
+                        <div className={classes.copyAction}>
+                           <Button text={copiedVariant === 'quick' ? 'Copied' : 'Copy quick install command'} variant="secondary" size="sm" icon={copiedVariant === 'quick' ? 'check' : 'copy'} onClick={() => copyCommand('quick', quickInstallCommand)} />
+                        </div>
+                     </section>
+                     <section className={classes.installOption} aria-labelledby="secure-install-title">
+                        <h4 className={classes.installTitle} id="secure-install-title">Step 3 — Secure install</h4>
+                        <p className={classes.help}>Preferred for public, VPS, or less-trusted environments. The installer requests the token interactively and keeps it out of shell history and process arguments.</p>
+                        <pre className={classes.command}>{secureInstallCommand}</pre>
+                        <div className={classes.copyAction}>
+                           <Button text={copiedVariant === 'secure' ? 'Copied' : 'Copy secure install command'} variant="secondary" size="sm" icon={copiedVariant === 'secure' ? 'check' : 'copy'} onClick={() => copyCommand('secure', secureInstallCommand)} />
+                        </div>
+                     </section>
+                  </div>
                ) : hasValidSourceRoot ? null : (
                   <p className={classes.help}>Enter the absolute source root to generate complete copy-paste installation commands.</p>
                )}
