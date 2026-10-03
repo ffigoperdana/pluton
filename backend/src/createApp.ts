@@ -63,7 +63,9 @@ import { LegacyRepositoryStore } from './stores/LegacyRepositoryStore';
 import { LegacyRestoreJobStore } from './stores/LegacyRestoreJobStore';
 import { LegacyRepositoryService } from './services/LegacyRepositoryService';
 import { AgentStore } from './stores/AgentStore';
+import { RemoteManagedRepositoryStore } from './stores/RemoteManagedRepositoryStore';
 import { AgentService } from './services/AgentService';
+import { RemoteBackupService } from './services/RemoteBackupService';
 import { AgentController } from './controllers/AgentController';
 import { AgentAdminController } from './controllers/AgentAdminController';
 import { createAgentRouter } from './routes/agents';
@@ -86,6 +88,7 @@ export async function createApp(): Promise<{ app: Express }> {
 	const legacyRepositoryStore = new LegacyRepositoryStore(db);
 	const legacyRestoreJobStore = new LegacyRestoreJobStore(db);
 	const agentStore = new AgentStore(db);
+	const remoteManagedRepositoryStore = new RemoteManagedRepositoryStore(db);
 
 	// Local Agents
 	const localPlanAgent = new BaseBackupManager();
@@ -93,6 +96,13 @@ export async function createApp(): Promise<{ app: Express }> {
 	const localRestoreAgent = new BaseRestoreManager();
 	const localSystemAgent = new BaseSystemManager();
 	const localStorageAgent = new BaseStorageManager();
+	const remoteBackupService = new RemoteBackupService(
+		remoteManagedRepositoryStore,
+		agentStore,
+		planStore,
+		backupStore,
+		storageStore
+	);
 
 	// Event Listeners
 	new BackupEventListener(localPlanAgent, planStore, backupStore);
@@ -107,7 +117,8 @@ export async function createApp(): Promise<{ app: Express }> {
 		backupStore,
 		storageStore,
 		deviceStore,
-		restoreStore
+		restoreStore,
+		remoteBackupService
 	);
 	const backupService = new BackupService(
 		localBackupAgent,
@@ -115,7 +126,8 @@ export async function createApp(): Promise<{ app: Express }> {
 		planStore,
 		backupStore,
 		restoreStore,
-		storageStore
+		storageStore,
+		remoteBackupService
 	);
 	const restoreService = new RestoreService(
 		localRestoreAgent,
@@ -124,8 +136,19 @@ export async function createApp(): Promise<{ app: Express }> {
 		restoreStore,
 		storageStore
 	);
-	const agentService = new AgentService(agentStore);
-	const deviceService = new DeviceService(localSystemAgent, deviceStore, planStore, storageStore, agentService);
+	const agentService = new AgentService(
+		agentStore,
+		configService.config.SECRET,
+		undefined,
+		remoteBackupService
+	);
+	const deviceService = new DeviceService(
+		localSystemAgent,
+		deviceStore,
+		planStore,
+		storageStore,
+		agentService
+	);
 	const storageService = new StorageService(
 		localStorageAgent,
 		localSystemAgent,

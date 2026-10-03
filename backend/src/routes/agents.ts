@@ -17,5 +17,6 @@ export function createAgentRouter(
 	router.post('/commands/:id/ack', authenticated, controller.acknowledge.bind(controller));
 	router.post('/commands/:id/events', authenticated, controller.event.bind(controller));
 	router.post('/commands/:id/complete', authenticated, controller.complete.bind(controller));
+	router.post('/commands/:id/status', authenticated, controller.commandStatus.bind(controller));
 	return router;
 }

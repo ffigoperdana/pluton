@@ -1,0 +1,273 @@
+import Cryptr from 'cryptr';
+import { RemoteBackupService } from '../../src/services/RemoteBackupService';
+import type { AgentCommand } from '../../src/db/schema/agents';
+
+jest.mock('../../src/services/events/BackupEventService', () => ({
+	BackupEventService: jest.fn().mockImplementation(() => ({
+		onBackupCancelled: jest.fn(),
+		onBackupFailure: jest.fn(),
+		onBackupComplete: jest.fn(),
+	})),
+}));
+
+jest.mock('../../src/services/ConfigService', () => ({
+	configService: {
+		config: {
+			SECRET: 'remote-backup-default-secret-for-tests',
+			AGENT_OFFLINE_TIMEOUT_SECONDS: 90,
+		},
+	},
+}));
+
+const encryptionSecret = 'remote-backup-service-test-secret-that-is-long-enough';
+const repositoryPassword = 'test-only-managed-repository-password';
+const storagePassword = 'test-only-sftp-password';
+
+const plan = {
+	id: 'plan-remote-filesystem',
+	title: 'Example remote filesystem plan',
+	description: '',
+	isActive: true,
+	storageId: 'storage-sftp',
+	storagePath: 'managed-repositories/example-plan',
+	sourceId: 'remote-device-01',
+	sourceType: 'device',
+	sourceConfig: { includes: ['/srv/example-app'], excludes: ['*.tmp'] },
+	method: 'backup',
+	settings: {
+		encryption: true,
+		compression: false,
+		interval: { type: 'daily', time: '01:00AM' },
+		replication: { enabled: false, concurrent: false, storages: [] },
+		scripts: {},
+	},
+	stats: null,
+} as any;
+
+const capableAgent = {
+	agentId: 'agent-example-01',
+	deviceId: 'remote-device-01',
+	revokedAt: null,
+	lastSeen: new Date(),
+	agentVersion: '0.2.0',
+	resticVersion: 'restic 0.19.1',
+	rcloneVersion: 'rclone v1.75.1',
+	capabilities: {
+		filesystemRootsConfigured: true,
+		commandTypes: ['PING', 'INVENTORY_REFRESH', 'BACKUP_FILESYSTEM'],
+	},
+} as any;
+
+describe('RemoteBackupService', () => {
+	let repositories: any;
+	let agentStore: any;
+	let planStore: any;
+	let backupStore: any;
+	let storageStore: any;
+	let service: RemoteBackupService;
+
+	beforeEach(() => {
+		const crypt = new Cryptr(encryptionSecret);
+		repositories = {
+			getByPlanId: jest.fn().mockResolvedValue({
+				id: 'remote-repo-example-01',
+				planId: plan.id,
+				agentId: capableAgent.agentId,
+				storageId: plan.storageId,
+				storagePath: plan.storagePath,
+				encryptedPassword: crypt.encrypt(repositoryPassword),
+				initializedAt: null,
+			}),
+			getById: jest.fn().mockResolvedValue({
+				id: 'remote-repo-example-01',
+				planId: plan.id,
+				agentId: capableAgent.agentId,
+				storageId: plan.storageId,
+				storagePath: plan.storagePath,
+				encryptedPassword: crypt.encrypt(repositoryPassword),
+				initializedAt: null,
+			}),
+			createBackupAndCommand: jest.fn().mockResolvedValue({}),
+			markInitialized: jest.fn(),
+		};
+		agentStore = {
+			getAgentByDeviceId: jest.fn().mockResolvedValue({ ...capableAgent, lastSeen: new Date() }),
+		};
+		planStore = {
+			getById: jest.fn().mockResolvedValue(plan),
+			hasActiveBackups: jest.fn().mockResolvedValue(false),
+			getAll: jest.fn().mockResolvedValue([]),
+		};
+		backupStore = {
+			getById: jest.fn().mockResolvedValue({
+				id: 'backup-example-01',
+				planId: plan.id,
+				sourceId: plan.sourceId,
+				status: 'queued',
+				inProgress: true,
+			}),
+		};
+		storageStore = {
+			getById: jest.fn().mockResolvedValue({
+				id: plan.storageId,
+				type: 'sftp',
+				settings: {},
+				credentials: {
+					host: crypt.encrypt('sftp.example.internal'),
+					port: crypt.encrypt('22'),
+					user: crypt.encrypt('backup-user'),
+					pass: crypt.encrypt(storagePassword),
+				},
+			}),
+		};
+		service = new RemoteBackupService(
+			repositories,
+			agentStore,
+			planStore,
+			backupStore,
+			storageStore,
+			encryptionSecret
+		);
+	});
+
+	it('rejects a remote device without the filesystem-backup capability', async () => {
+		agentStore.getAgentByDeviceId.mockResolvedValue({
+			...capableAgent,
+			capabilities: { filesystemRootsConfigured: true, commandTypes: ['PING'] },
+		});
+		await expect(service.validatePlanCreation(plan)).rejects.toThrow(
+			'Remote agent does not yet support filesystem backup'
+		);
+	});
+
+	it('rejects an offline agent before creating or queueing a plan', async () => {
+		agentStore.getAgentByDeviceId.mockResolvedValue({
+			...capableAgent,
+			lastSeen: new Date(Date.now() - 91_000),
+		});
+		await expect(service.validatePlanCreation(plan)).rejects.toThrow(
+			'Remote agent is not available'
+		);
+	});
+
+	it('rejects malformed remote excludes with a client-safe validation error', async () => {
+		await expect(
+			service.validatePlanCreation({
+				...plan,
+				sourceConfig: { includes: ['/srv/example-app'], excludes: [123] },
+			} as any)
+		).rejects.toThrow('Remote backup exclude is invalid');
+	});
+
+	it('queues a non-secret durable command reference for a capable agent', async () => {
+		await expect(service.queuePlanBackup(plan.id)).resolves.toBe(
+			'Remote filesystem backup queued.'
+		);
+		const queued = repositories.createBackupAndCommand.mock.calls[0][0];
+		expect(queued.command).toMatchObject({
+			agentId: capableAgent.agentId,
+			payload: {
+				planId: plan.id,
+				repositoryId: 'remote-repo-example-01',
+				backupId: expect.any(String),
+			},
+		});
+		const persistedPayload = JSON.stringify(queued.command.payload);
+		expect(persistedPayload).not.toContain(storagePassword);
+		expect(persistedPayload).not.toContain(repositoryPassword);
+		expect(persistedPayload).not.toContain(encryptionSecret);
+	});
+
+	it('does not cancel a completed remote backup record', async () => {
+		backupStore.getById.mockResolvedValue({
+			id: 'backup-example-01',
+			planId: plan.id,
+			inProgress: false,
+			status: 'completed',
+			sourceId: plan.sourceId,
+		});
+		await expect(service.cancelBackup(plan.id, 'backup-example-01')).rejects.toThrow(
+			'no longer in progress'
+		);
+	});
+
+	it('materializes the minimum SFTP and repository credentials only at poll time', async () => {
+		const command = {
+			id: 'remote-backup-backup-example-01',
+			type: 'BACKUP_FILESYSTEM',
+			agentId: capableAgent.agentId,
+			payload: {
+				backupId: 'backup-example-01',
+				planId: plan.id,
+				repositoryId: 'remote-repo-example-01',
+			},
+		} as AgentCommand;
+		const payload = await service.materializeCommand(capableAgent.agentId, command);
+		expect(payload).toMatchObject({
+			sourcePath: '/srv/example-app',
+			repositoryPassword,
+			rclone: {
+				type: 'sftp',
+				options: {
+					host: 'sftp.example.internal',
+					port: '22',
+					user: 'backup-user',
+					pass: storagePassword,
+				},
+			},
+		});
+		expect(JSON.stringify(command.payload)).not.toContain(storagePassword);
+		expect(JSON.stringify(command.payload)).not.toContain(repositoryPassword);
+		expect(payload).not.toHaveProperty('encryptionKey');
+	});
+
+	it('does not materialize credentials for a finalized backup command', async () => {
+		backupStore.getById.mockResolvedValue({
+			id: 'backup-example-01',
+			planId: plan.id,
+			sourceId: plan.sourceId,
+			status: 'completed',
+			inProgress: false,
+		});
+		const command = {
+			id: 'remote-backup-backup-example-01',
+			type: 'BACKUP_FILESYSTEM',
+			agentId: capableAgent.agentId,
+			payload: {
+				backupId: 'backup-example-01',
+				planId: plan.id,
+				repositoryId: 'remote-repo-example-01',
+			},
+		} as AgentCommand;
+		await expect(service.materializeCommand(capableAgent.agentId, command)).rejects.toThrow(
+			'no longer has a valid managed plan'
+		);
+	});
+
+	it('refuses storage settings that would enable external SSH or a shell command', async () => {
+		const crypt = new Cryptr(encryptionSecret);
+		storageStore.getById.mockResolvedValue({
+			id: plan.storageId,
+			type: 'sftp',
+			settings: { ssh: 'ssh -o ProxyCommand=unsafe' },
+			credentials: {
+				host: crypt.encrypt('sftp.example.internal'),
+				user: crypt.encrypt('backup-user'),
+				pass: crypt.encrypt(storagePassword),
+			},
+		});
+		const command = {
+			id: 'remote-backup-backup-example-01',
+			type: 'BACKUP_FILESYSTEM',
+			agentId: capableAgent.agentId,
+			payload: {
+				backupId: 'backup-example-01',
+				planId: plan.id,
+				repositoryId: 'remote-repo-example-01',
+			},
+		} as AgentCommand;
+		await expect(service.materializeCommand(capableAgent.agentId, command)).rejects.toThrow(
+			'Remote filesystem backups support only SFTP host, port, username, and encrypted password credentials'
+		);
+	});
+});

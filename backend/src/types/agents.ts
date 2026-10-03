@@ -1,7 +1,11 @@
 import type { Request } from 'express';
 import type { AgentCommandType } from '../db/schema/agents';
 
-export const AGENT_COMMAND_TYPES: readonly AgentCommandType[] = ['PING', 'INVENTORY_REFRESH'];
+export const AGENT_COMMAND_TYPES: readonly AgentCommandType[] = [
+	'PING',
+	'INVENTORY_REFRESH',
+	'BACKUP_FILESYSTEM',
+];
 export const AGENT_REQUEST_SKEW_MS = 5 * 60 * 1000;
 export const AGENT_COMMAND_LEASE_MS = 60 * 1000;
 

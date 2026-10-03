@@ -21,6 +21,11 @@ fail() {
 	exit 1
 }
 
+# Load the installer once so its readonly constants are not redeclared when
+# the isolated checksum helpers are exercised below.
+# shellcheck disable=SC1090
+source "$INSTALLER"
+
 assert_file() {
 	[[ -f "$1" ]] || fail "Expected file: $1"
 }
@@ -57,18 +62,23 @@ test_fresh_install_and_generated_files() {
 	base_install "$root"
 	[[ "$before" == "$(sha256sum "$root/system-node")" ]] || fail 'The installer changed a simulated host Node runtime.'
 	assert_file "$root/opt/pluton-agent/runtime/bin/node"
+	assert_file "$root/opt/pluton-agent/bin/restic"
+	assert_file "$root/opt/pluton-agent/bin/rclone"
 	assert_file "$root/opt/pluton-agent/app/dist/index.js"
 	assert_file "$root/var/lib/pluton-agent/identity.json"
 	assert_file "$root/etc/pluton-agent.env"
 	assert_file "$root/etc/systemd/system/pluton-agent.service"
 	grep -Fx 'PLUTON_SERVER_URL="https://pluton.example.internal"' "$root/etc/pluton-agent.env" >/dev/null
 	grep -Fx "PLUTON_AGENT_ALLOWED_ROOTS=\"$root/source\"" "$root/etc/pluton-agent.env" >/dev/null
+	grep -Fx "PLUTON_AGENT_BIN_DIR=\"$root/opt/pluton-agent/bin\"" "$root/etc/pluton-agent.env" >/dev/null
 	grep -Fx 'ALLOW_INSECURE_HTTP="false"' "$root/etc/pluton-agent.env" >/dev/null
 	grep -Fx 'User=pluton-agent' "$root/etc/systemd/system/pluton-agent.service" >/dev/null
 	grep -Fx "EnvironmentFile=$root/etc/pluton-agent.env" "$root/etc/systemd/system/pluton-agent.service" >/dev/null
 	grep -Fx "ExecStart=$root/opt/pluton-agent/runtime/bin/node $root/opt/pluton-agent/app/dist/index.js run" "$root/etc/systemd/system/pluton-agent.service" >/dev/null
 	grep -Fx 'NoNewPrivileges=yes' "$root/etc/systemd/system/pluton-agent.service" >/dev/null
 	grep -Fx 'PrivateTmp=yes' "$root/etc/systemd/system/pluton-agent.service" >/dev/null
+	"$root/opt/pluton-agent/bin/restic" version | grep -F '0.19.1' >/dev/null
+	"$root/opt/pluton-agent/bin/rclone" version | grep -F '1.75.1' >/dev/null
 }
 
 test_reinstall_preserves_identity() {
@@ -173,10 +183,18 @@ test_checksum_mismatch_is_rejected() {
 	checksums="$checksum_root/SHASUMS256.txt"
 	printf 'not-the-expected-archive' > "$archive"
 	printf '%064d  %s\n' 0 "$(basename -- "$archive")" > "$checksums"
-	# shellcheck disable=SC1090
-	source "$INSTALLER"
 	if verify_node_checksum "$archive" "$checksums"; then
 		fail 'A checksum mismatch was accepted.'
+	fi
+}
+
+test_private_binary_checksum_mismatch_is_rejected() {
+	local checksum_root archive
+	checksum_root="$(make_root binary-checksum)"
+	archive="$checksum_root/restic.bz2"
+	printf 'not-the-expected-binary' > "$archive"
+	if verify_pinned_checksum "$archive" '0000000000000000000000000000000000000000000000000000000000000000'; then
+		fail 'A private binary checksum mismatch was accepted.'
 	fi
 }
 
@@ -209,5 +227,6 @@ test_conflicting_enrollment_token_inputs_are_rejected
 test_multiple_roots_and_private_ca_configuration
 test_platform_rejections
 test_checksum_mismatch_is_rejected
+test_private_binary_checksum_mismatch_is_rejected
 test_uninstall_and_purge
 printf 'PASS: install-agent installer tests\n'

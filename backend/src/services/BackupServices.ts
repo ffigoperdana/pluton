@@ -21,6 +21,7 @@ import { Backup } from '../db/schema/backups';
 import { BackupMirror } from '../types/backups';
 import { PlanStats } from '../types/plans';
 import { AppError, NotFoundError } from '../utils/AppError';
+import { RemoteBackupService } from './RemoteBackupService';
 
 export class BackupService {
 	constructor(
@@ -29,7 +30,8 @@ export class BackupService {
 		protected planStore: PlanStore,
 		protected backupStore: BackupStore,
 		protected restoreStore: RestoreStore,
-		protected storageStore: StorageStore
+		protected storageStore: StorageStore,
+		private readonly remoteBackupService?: RemoteBackupService
 	) {}
 
 	getSnapshotStrategy(deviceId: string, method?: string): SnapshotStrategy {
@@ -50,6 +52,11 @@ export class BackupService {
 		const backup = await this.backupStore.getById(backupId);
 		if (!backup) {
 			throw new Error('Backup not found');
+		}
+		if (RemoteBackupService.isRemoteFilesystemPlan(backup)) {
+			// Remote snapshot deletion is a future forget capability. Do not remove
+			// the server record while leaving the remote repository untouched.
+			throw new AppError(501, 'REMOTE_CAPABILITY_NOT_IMPLEMENTED');
 		}
 
 		const strategy = this.getSnapshotStrategy(backup.sourceId, backup.method);
@@ -165,6 +172,9 @@ export class BackupService {
 			throw new Error('Backup not found');
 		}
 		const backupDevice = backup.sourceId ? backup.sourceId : 'main';
+		if (RemoteBackupService.isRemoteFilesystemPlan(backup) && this.remoteBackupService) {
+			return this.remoteBackupService.cancelBackup(planId, backupId);
+		}
 		const strategy = this.getBackupStrategy(backupDevice);
 		const cancelResult = strategy.cancelBackup
 			? await strategy.cancelBackup(planId, backupId)
@@ -195,6 +205,9 @@ export class BackupService {
 			throw new Error('Backup not found');
 		}
 		const backupDevice = backup.sourceId ? backup.sourceId : 'main';
+		if (RemoteBackupService.isRemoteFilesystemPlan(backup) && this.remoteBackupService) {
+			return this.remoteBackupService.getBackupProgress(backupId);
+		}
 		const strategy = this.getBackupStrategy(backupDevice);
 		const progressResult = strategy.getBackupProgress
 			? await strategy.getBackupProgress(backup.planId as string, backupId)

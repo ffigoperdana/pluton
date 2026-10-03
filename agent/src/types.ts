@@ -1,53 +1,61 @@
-export type AgentCommandType = 'PING' | 'INVENTORY_REFRESH';
+export type AgentCommandType =
+  | "PING"
+  | "INVENTORY_REFRESH"
+  | "BACKUP_FILESYSTEM";
 
 export type AgentCapabilities = {
-	filesystemRootsConfigured: boolean;
-	commandTypes: AgentCommandType[];
+  filesystemRootsConfigured: boolean;
+  commandTypes: AgentCommandType[];
 };
 
 export type AgentInventory = {
-	hostname: string;
-	os: string;
-	architecture: string;
-	agentVersion: string;
-	resticVersion?: string;
-	rcloneVersion?: string;
-	uptimeSeconds?: number;
-	capabilities: AgentCapabilities;
+  hostname: string;
+  os: string;
+  architecture: string;
+  agentVersion: string;
+  resticVersion?: string;
+  rcloneVersion?: string;
+  uptimeSeconds?: number;
+  capabilities: AgentCapabilities;
 };
 
 export type StoredCommandCompletion = {
-	commandId: string;
-	sequence: number;
-	success: boolean;
-	error?: string;
+  commandId: string;
+  sequence: number;
+  success: boolean;
+  error?: string;
+  /** A bounded, non-secret execution result such as a Restic snapshot ID. */
+  result?: Record<string, unknown>;
+  cancelled?: boolean;
 };
 
 export type StoredAgentIdentity = {
-	deviceId: string;
-	agentId: string;
-	secret: string;
-	pollIntervalSeconds: number;
-	completedCommands: StoredCommandCompletion[];
+  deviceId: string;
+  agentId: string;
+  secret: string;
+  pollIntervalSeconds: number;
+  completedCommands: StoredCommandCompletion[];
 };
 
 export type AgentConfig = {
-	serverUrl: URL;
-	dataDir: string;
-	allowedRoots: string[];
-	allowInsecureHttp: boolean;
-	caFile?: string;
-	clientCertFile?: string;
-	clientKeyFile?: string;
+  serverUrl: URL;
+  dataDir: string;
+  allowedRoots: string[];
+  /** Private installer-owned binaries. Never resolve Restic/Rclone from host PATH. */
+  binDir?: string;
+  allowInsecureHttp: boolean;
+  caFile?: string;
+  clientCertFile?: string;
+  clientKeyFile?: string;
 };
 
 export type AgentCommandEnvelope = {
-	id: string;
-	type: AgentCommandType;
-	payload: Record<string, unknown>;
-	idempotencyKey: string;
-	leaseExpiresAt: string | null;
-	leaseToken: string;
-	signatureTimestamp: string;
-	signature: string;
+  id: string;
+  type: AgentCommandType;
+  payload: Record<string, unknown>;
+  idempotencyKey: string;
+  leaseExpiresAt: string | null;
+  leaseToken: string;
+  signatureTimestamp: string;
+  signature: string;
 };

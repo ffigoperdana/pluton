@@ -17,6 +17,10 @@ import {
 	agentIdentityRelations,
 	agentRequestNonces,
 } from './schema/agents';
+import {
+	remoteManagedRepositories,
+	remoteManagedRepositoryRelations,
+} from './schema/remoteManagedRepositories';
 import { appPaths } from '../utils/AppPaths';
 
 const dbPath = path.join(appPaths.getDbDir(), 'pluton.db');
@@ -46,6 +50,8 @@ export const db = drizzle(sqlite, {
 		agentRequestNonces,
 		agentCommands,
 		agentCommandRelations,
+		remoteManagedRepositories,
+		remoteManagedRepositoryRelations,
 	},
 });
 export type DatabaseType = typeof db;

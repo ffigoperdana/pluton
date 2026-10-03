@@ -4,14 +4,29 @@
    gap: 16px;
    color: var(--content-text-color-light);
    font-size: 0.8rem;
-   p { margin: 0; line-height: 1.5; }
+   p {
+      margin: 0;
+      line-height: 1.5;
+   }
 }
 
-.warning { color: var(--warning-text-color, var(--content-text-color)); }
-.error { color: var(--error-active-text); }
-.label { color: var(--content-title-color); font-size: 0.75rem; font-weight: 600; }
-.quickWarning { color: var(--warning-text-color, var(--content-text-color)); font-size: 0.72rem; }
-.token, .command {
+.warning {
+   color: var(--warning-text-color, var(--content-text-color));
+}
+.error {
+   color: var(--error-active-text);
+}
+.label {
+   color: var(--content-title-color);
+   font-size: 0.75rem;
+   font-weight: 600;
+}
+.quickWarning {
+   color: var(--warning-text-color, var(--content-text-color));
+   font-size: 0.72rem;
+}
+.token,
+.command {
    display: block;
    overflow-wrap: anywhere;
    white-space: pre-wrap;
@@ -22,9 +37,20 @@
    color: var(--content-text-color);
    line-height: 1.5;
 }
-.help { font-size: 0.72rem; }
-.copyAction { display: flex; justify-content: flex-end; margin-top: -8px; }
-.actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
+.help {
+   font-size: 0.72rem;
+}
+.copyAction {
+   display: flex;
+   justify-content: flex-end;
+   margin-top: -8px;
+}
+.actions {
+   display: flex;
+   justify-content: flex-end;
+   gap: 10px;
+   margin-top: 4px;
+}
 
 .installOptions {
    display: grid;
@@ -48,6 +74,8 @@
    font-size: 0.75rem;
 }
 
-@media only screen and (max-width: 900px) {
-   .installOptions { grid-template-columns: 1fr; }
+@media only screen and (max-width: 760px) {
+   .installOptions {
+      grid-template-columns: 1fr;
+   }
 }

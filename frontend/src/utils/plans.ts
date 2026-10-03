@@ -67,6 +67,17 @@ export function isPlanSettingsValid(newPlan: NewPlanSettings, step: number | fal
          toast.error(`Sources are required`);
          return false;
       }
+      if (newPlan.sourceType === 'device' && newPlan.sourceId !== 'main') {
+         const remoteSource = newPlan.sourceConfig.includes[0]?.trim() || '';
+         if (!remoteSource.startsWith('/') || remoteSource.includes('..')) {
+            toast.error(`Remote source must be one safe absolute Linux path`);
+            return false;
+         }
+         if (!newPlan.storagePath?.trim()) {
+            toast.error(`Remote backup destination path is required`);
+            return false;
+         }
+      }
       if (newPlan.storage.id === 'local' && newPlan.storagePath === '') {
          toast.error(`Storage Path is required`);
          return false;
