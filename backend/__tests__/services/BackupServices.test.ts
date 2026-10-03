@@ -134,6 +134,19 @@ describe('BackupService', () => {
 			// Act & Assert
 			await expect(backupService.deleteBackup(backupId)).rejects.toThrow('Backup not found');
 		});
+
+		it('refuses remote snapshot deletion until remote forget is implemented', async () => {
+			mockBackupStore.getById.mockResolvedValue({
+				...mockBackup,
+				sourceId: 'remote-device-01',
+				sourceType: 'device',
+			});
+
+			await expect(backupService.deleteBackup(backupId)).rejects.toThrow(
+				'REMOTE_CAPABILITY_NOT_IMPLEMENTED'
+			);
+			expect(mockBackupStore.delete).not.toHaveBeenCalled();
+		});
 	});
 
 	// ---------------------------------
@@ -345,7 +358,7 @@ describe('BackupService', () => {
 
 		it('should not call jobQueue.remove for a remote backup', async () => {
 			// Arrange
-			const remoteBackup = { ...mockBackup, sourceId: 'remote-device-1' };
+			const remoteBackup = { ...mockBackup, sourceId: 'remote-device-1', sourceType: 'device' };
 			mockBackupStore.getById.mockResolvedValue(remoteBackup);
 			const mockRemoteBackupStrategy = {
 				cancelBackup: jest.fn().mockResolvedValue({ success: true, result: 'Cancelled' }),

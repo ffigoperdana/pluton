@@ -277,6 +277,19 @@ export class AgentStore {
 				)
 			);
 
+		// One agent service is deliberately a serial executor in this MVP. This
+		// durable gate also protects against duplicate polls from a restarted or
+		// accidentally duplicated service process: a second queued command cannot
+		// be leased while a non-expired command is active for the same agent.
+		const activeCommand = await this.db.query.agentCommands.findFirst({
+			where: and(
+				eq(agentCommands.agentId, agentId),
+				inArray(agentCommands.state, ['leased', 'acknowledged', 'running']),
+				gt(agentCommands.leaseExpiresAt, now)
+			),
+		});
+		if (activeCommand) return null;
+
 		const candidate = await this.db.query.agentCommands.findFirst({
 			where: and(eq(agentCommands.agentId, agentId), eq(agentCommands.state, 'queued')),
 			orderBy: asc(agentCommands.createdAt),
@@ -307,7 +320,11 @@ export class AgentStore {
 		const existing = await this.getCommandForAgent(agentId, commandId);
 		if (!existing) return null;
 		if (existing.state === 'completed' || existing.state === 'failed') return existing;
-		if (existing.leaseOwner !== leaseToken || !existing.leaseExpiresAt || existing.leaseExpiresAt <= now) {
+		if (
+			existing.leaseOwner !== leaseToken ||
+			!existing.leaseExpiresAt ||
+			existing.leaseExpiresAt <= now
+		) {
 			return null;
 		}
 		const acknowledged = await this.db
@@ -331,11 +348,18 @@ export class AgentStore {
 		commandId: string,
 		leaseToken: string,
 		sequence: number,
-		now = new Date()
+		now = new Date(),
+		leaseMs = 60_000
 	): Promise<AgentCommand | null> {
 		const existing = await this.getCommandForAgent(agentId, commandId);
 		if (!existing) return null;
-		if (existing.state === 'completed' || existing.state === 'failed') return existing;
+		if (
+			existing.state === 'completed' ||
+			existing.state === 'failed' ||
+			existing.state === 'cancelled'
+		) {
+			return existing;
+		}
 		if (
 			existing.leaseOwner !== leaseToken ||
 			!existing.leaseExpiresAt ||
@@ -347,7 +371,12 @@ export class AgentStore {
 
 		const updated = await this.db
 			.update(agentCommands)
-			.set({ state: 'running', lastEventSequence: sequence })
+			.set({
+				state: 'running',
+				lastEventSequence: sequence,
+				// A long Restic run keeps its durable lease while it sends bounded progress.
+				leaseExpiresAt: new Date(now.getTime() + leaseMs),
+			})
 			.where(
 				and(
 					eq(agentCommands.id, commandId),
@@ -373,7 +402,13 @@ export class AgentStore {
 	): Promise<AgentCommand | null> {
 		const existing = await this.getCommandForAgent(agentId, commandId);
 		if (!existing) return null;
-		if (existing.state === 'completed' || existing.state === 'failed') return existing;
+		if (
+			existing.state === 'completed' ||
+			existing.state === 'failed' ||
+			existing.state === 'cancelled'
+		) {
+			return existing;
+		}
 		if (
 			existing.leaseOwner !== leaseToken ||
 			!existing.leaseExpiresAt ||
@@ -411,5 +446,63 @@ export class AgentStore {
 				where: and(eq(agentCommands.id, commandId), eq(agentCommands.agentId, agentId)),
 			})) || null
 		);
+	}
+
+	/**
+	 * Marks a durable command cancelled without deleting its audit trail. A
+	 * running agent observes this through its signed status poll and terminates
+	 * the Restic process group itself.
+	 */
+	async cancelCommand(commandId: string): Promise<AgentCommand | null> {
+		const existing = await this.db.query.agentCommands.findFirst({
+			where: eq(agentCommands.id, commandId),
+		});
+		if (!existing) return null;
+		if (['completed', 'failed', 'cancelled'].includes(existing.state)) return existing;
+		const updated = await this.db
+			.update(agentCommands)
+			.set({ state: 'cancelled', completedAt: new Date(), lastError: 'Cancelled by user.' })
+			.where(
+				and(
+					eq(agentCommands.id, commandId),
+					inArray(agentCommands.state, ['queued', 'leased', 'acknowledged', 'running'])
+				)
+			)
+			.returning();
+		return updated[0] || existing;
+	}
+
+	/** Refreshes an active lease and tells the agent whether a user cancelled it. */
+	async getCommandStatus(
+		agentId: string,
+		commandId: string,
+		leaseToken: string,
+		leaseMs: number,
+		now = new Date()
+	): Promise<{ command: AgentCommand; cancelled: boolean } | null> {
+		const existing = await this.getCommandForAgent(agentId, commandId);
+		if (!existing || existing.leaseOwner !== leaseToken) return null;
+		if (existing.state === 'cancelled') return { command: existing, cancelled: true };
+		if (
+			['completed', 'failed'].includes(existing.state) ||
+			!existing.leaseExpiresAt ||
+			existing.leaseExpiresAt <= now
+		) {
+			return null;
+		}
+		const renewed = await this.db
+			.update(agentCommands)
+			.set({ leaseExpiresAt: new Date(now.getTime() + leaseMs) })
+			.where(
+				and(
+					eq(agentCommands.id, commandId),
+					eq(agentCommands.agentId, agentId),
+					eq(agentCommands.leaseOwner, leaseToken),
+					inArray(agentCommands.state, ['leased', 'acknowledged', 'running']),
+					gt(agentCommands.leaseExpiresAt, now)
+				)
+			)
+			.returning();
+		return renewed[0] ? { command: renewed[0], cancelled: false } : null;
 	}
 }

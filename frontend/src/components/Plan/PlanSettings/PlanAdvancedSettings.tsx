@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Icon from '../../common/Icon/Icon';
 import classes from './PlanSettings.module.scss';
 import PlanNotificationSettings from './PlanNotificationSettings';
@@ -19,11 +19,26 @@ interface PlanAdvancedSettingsProps {
    isEditing: boolean;
    runSettings?: PlanAddRunSettings;
    setRunSettings?: (runSettings: PlanAddRunSettings) => void;
+   allowScripts?: boolean;
 }
 
-const PlanAdvancedSettings = ({ plan, appSettings, device, onUpdate, isEditing, runSettings, setRunSettings }: PlanAdvancedSettingsProps) => {
+const PlanAdvancedSettings = ({
+   plan,
+   appSettings,
+   device,
+   onUpdate,
+   isEditing,
+   runSettings,
+   setRunSettings,
+   allowScripts = true,
+}: PlanAdvancedSettingsProps) => {
    const [advancedTab, setAdvancedTab] = useState('General');
    const settings = plan.settings;
+
+   useEffect(() => {
+      if (!allowScripts && advancedTab === 'Scripts') setAdvancedTab('General');
+   }, [allowScripts, advancedTab]);
+
    const integrationTypes = useMemo(() => {
       const types: string[] = [];
       if (appSettings?.integration) {
@@ -67,9 +82,11 @@ const PlanAdvancedSettings = ({ plan, appSettings, device, onUpdate, isEditing, 
                   <li onClick={() => setAdvancedTab('Notification')} className={advancedTab === 'Notification' ? classes.advancedTabActive : ''}>
                      <Icon size={13} type="notification" /> Notification
                   </li>
-                  <li onClick={() => setAdvancedTab('Scripts')} className={advancedTab === 'Scripts' ? classes.advancedTabActive : ''}>
-                     <Icon size={13} type="cli" /> Scripts
-                  </li>
+                  {allowScripts && (
+                     <li onClick={() => setAdvancedTab('Scripts')} className={advancedTab === 'Scripts' ? classes.advancedTabActive : ''}>
+                        <Icon size={13} type="cli" /> Scripts
+                     </li>
+                  )}
                   <li onClick={() => setAdvancedTab('Misc')} className={advancedTab === 'Misc' ? classes.advancedTabActive : ''}>
                      <Icon size={14} type="settings-alt" /> Misc.
                   </li>
@@ -108,7 +125,7 @@ const PlanAdvancedSettings = ({ plan, appSettings, device, onUpdate, isEditing, 
                   <TagsInput fieldValue={plan.tags || []} onUpdate={(val) => onUpdate({ ...plan, tags: val })} />
                </div>
             )}
-            {advancedTab === 'Scripts' && (
+            {allowScripts && advancedTab === 'Scripts' && (
                <PlanScriptsSettings
                   settings={plan.settings?.scripts || {}}
                   platform={device?.platform || undefined}

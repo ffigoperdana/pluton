@@ -30,19 +30,57 @@ const AgentStatus = ({ deviceId, agent }: AgentStatusProps) => {
             <span className={`${classes.status} ${classes[agent.status]}`}>{agent.status.toUpperCase()}</span>
          </div>
          <dl className={classes.details}>
-            <div><dt>Hostname</dt><dd>{agent.hostname}</dd></div>
-            <div><dt>Agent ID</dt><dd className={classes.monospace}>{agent.agentId}</dd></div>
-            <div><dt>Last seen</dt><dd>{displayDate(agent.lastSeen)}</dd></div>
-            <div><dt>Operating system</dt><dd>{agent.os}</dd></div>
-            <div><dt>Architecture</dt><dd>{agent.architecture}</dd></div>
-            <div><dt>Agent version</dt><dd>{agent.agentVersion}</dd></div>
-            <div><dt>Restic</dt><dd>{agent.resticVersion || 'Not reported'}</dd></div>
-            <div><dt>Rclone</dt><dd>{agent.rcloneVersion || 'Not reported'}</dd></div>
-            <div><dt>Allowed roots configured</dt><dd>{agent.capabilities.filesystemRootsConfigured ? 'Yes' : 'No'}</dd></div>
-            <div><dt>Safe command capabilities</dt><dd>{agent.capabilities.commandTypes?.join(', ') || 'None'}</dd></div>
+            <div>
+               <dt>Hostname</dt>
+               <dd>{agent.hostname}</dd>
+            </div>
+            <div>
+               <dt>Agent ID</dt>
+               <dd className={classes.monospace}>{agent.agentId}</dd>
+            </div>
+            <div>
+               <dt>Last seen</dt>
+               <dd>{displayDate(agent.lastSeen)}</dd>
+            </div>
+            <div>
+               <dt>Operating system</dt>
+               <dd>{agent.os}</dd>
+            </div>
+            <div>
+               <dt>Architecture</dt>
+               <dd>{agent.architecture}</dd>
+            </div>
+            <div>
+               <dt>Agent version</dt>
+               <dd>{agent.agentVersion}</dd>
+            </div>
+            <div>
+               <dt>Restic</dt>
+               <dd>{agent.resticVersion || 'Not reported'}</dd>
+            </div>
+            <div>
+               <dt>Rclone</dt>
+               <dd>{agent.rcloneVersion || 'Not reported'}</dd>
+            </div>
+            <div>
+               <dt>Allowed roots configured</dt>
+               <dd>{agent.capabilities.filesystemRootsConfigured ? 'Yes' : 'No'}</dd>
+            </div>
+            <div>
+               <dt>Agent capabilities</dt>
+               <dd>{agent.capabilities.commandTypes?.join(', ') || 'None'}</dd>
+            </div>
          </dl>
          {revokeError && <p className={classes.error}>{revokeError}</p>}
-         {agent.status !== 'revoked' && <Button text={revoke.isPending ? 'Revoking…' : 'Revoke remote machine'} variant="danger" size="sm" disabled={revoke.isPending} onClick={revokeAgent} />}
+         {agent.status !== 'revoked' && (
+            <Button
+               text={revoke.isPending ? 'Revoking…' : 'Revoke remote machine'}
+               variant="danger"
+               size="sm"
+               disabled={revoke.isPending}
+               onClick={revokeAgent}
+            />
+         )}
       </section>
    );
 };

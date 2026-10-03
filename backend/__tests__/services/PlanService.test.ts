@@ -804,6 +804,28 @@ describe('PlanService', () => {
 	// -------------------------------
 	// Tests for pruning backups
 	// -------------------------------
+	describe('remote filesystem maintenance boundaries', () => {
+		const planId = 'remote-maintenance-plan';
+		const remotePlan = { id: planId, sourceId: 'remote-device-01', sourceType: 'device' } as any;
+
+		beforeEach(() => {
+			mockPlanStore.getById.mockResolvedValue(remotePlan);
+		});
+
+		it.each([
+			['pruneBackups', () => planService.pruneBackups(planId)],
+			['unlockRepo', () => planService.unlockRepo(planId)],
+			['checkIntegrity', () => planService.checkIntegrity(planId)],
+			['repairRepo', () => planService.repairRepo(planId, 'index')],
+		])('rejects %s before invoking a remote strategy', async (_operation, invoke) => {
+			await expect(invoke()).rejects.toHaveProperty('statusCode', 501);
+			expect(mockStrategy.pruneBackups).not.toHaveBeenCalled();
+			expect(mockStrategy.unlockRepo).not.toHaveBeenCalled();
+			expect(mockStrategy.checkIntegrity).not.toHaveBeenCalled();
+			expect(mockStrategy.repairRepo).not.toHaveBeenCalled();
+		});
+	});
+
 	describe('pruneBackups', () => {
 		const planId = 'plan-to-prune';
 		const mockPlan = { id: planId, sourceId: 'main', settings: {} } as any;
@@ -1412,9 +1434,10 @@ describe('PlanService', () => {
 			mockRestoreStore.getAll = jest
 				.fn()
 				.mockResolvedValue([{ id: 'r1', planId: 'p1', backupId: 'b1', inProgress: true }]);
-			mockPlanStore.getAll = jest
-				.fn()
-				.mockResolvedValue([{ id: 'p1', inProgress: true }, { id: 'p2', inProgress: false }]);
+			mockPlanStore.getAll = jest.fn().mockResolvedValue([
+				{ id: 'p1', inProgress: true },
+				{ id: 'p2', inProgress: false },
+			]);
 
 			mockBackupStore.update = jest.fn().mockImplementation((id: string) => ({ id }));
 			mockRestoreStore.update = jest.fn().mockImplementation((id: string) => ({ id }));
@@ -1452,9 +1475,11 @@ describe('PlanService', () => {
 			mockBackupStore.getAll = jest
 				.fn()
 				.mockResolvedValue([{ id: 'b1', planId: 'p1', sourceId: 'device-1', inProgress: true }]);
-			mockRestoreStore.getAll = jest.fn().mockResolvedValue([
-				{ id: 'r1', planId: 'p1', backupId: 'b1', sourceId: 'device-1', inProgress: true },
-			]);
+			mockRestoreStore.getAll = jest
+				.fn()
+				.mockResolvedValue([
+					{ id: 'r1', planId: 'p1', backupId: 'b1', sourceId: 'device-1', inProgress: true },
+				]);
 			mockPlanStore.getAll = jest
 				.fn()
 				.mockResolvedValue([{ id: 'p1', sourceId: 'device-1', inProgress: true }]);

@@ -2,7 +2,12 @@ import { relations, sql } from 'drizzle-orm';
 import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { devices } from './devices';
 
-export type AgentCommandType = 'PING' | 'INVENTORY_REFRESH';
+/**
+ * `BACKUP_FILESYSTEM` is intentionally the only execution command in the
+ * community agent. It is a fixed Restic/Rclone workflow, not a shell-command
+ * transport. All other remote strategy operations remain unavailable.
+ */
+export type AgentCommandType = 'PING' | 'INVENTORY_REFRESH' | 'BACKUP_FILESYSTEM';
 export type AgentCommandState =
 	| 'queued'
 	| 'leased'

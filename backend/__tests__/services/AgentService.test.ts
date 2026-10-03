@@ -93,7 +93,9 @@ describe('AgentService', () => {
 
 	it.each(['expired', 'reused', 'revoked'])('rejects a %s enrollment token', async () => {
 		store.enrollAgent.mockResolvedValue(null);
-		await expect(service.enroll({ token: 'a'.repeat(43), inventory })).rejects.toThrow('Enrollment token is invalid');
+		await expect(service.enroll({ token: 'a'.repeat(43), inventory })).rejects.toThrow(
+			'Enrollment token is invalid'
+		);
 	});
 
 	it('enrolls with a per-agent secret and queues only the safe inventory command', async () => {
@@ -110,17 +112,108 @@ describe('AgentService', () => {
 	});
 
 	it('issues a unique signed lease token with each command delivery', async () => {
-		store.leaseNext.mockImplementation(async (_agentId, leaseToken) => ({
-			id: 'command-1',
-			type: 'PING',
-			payload: {},
-			idempotencyKey: 'idem-1',
-			leaseOwner: leaseToken,
-			leaseExpiresAt: new Date(now.getTime() + 60_000),
-		} as any));
+		store.leaseNext.mockImplementation(
+			async (_agentId, leaseToken) =>
+				({
+					id: 'command-1',
+					type: 'PING',
+					payload: {},
+					idempotencyKey: 'idem-1',
+					leaseOwner: leaseToken,
+					leaseExpiresAt: new Date(now.getTime() + 60_000),
+				}) as any
+		);
 		const result = await service.poll({ agentId: agent.agentId, deviceId: agent.deviceId, secret });
 		expect(result.command?.leaseToken).toMatch(/^[A-Za-z0-9_-]{32}$/);
-		expect(store.leaseNext).toHaveBeenCalledWith(agent.agentId, result.command?.leaseToken, 60_000, now);
+		expect(store.leaseNext).toHaveBeenCalledWith(
+			agent.agentId,
+			result.command?.leaseToken,
+			60_000,
+			now
+		);
+	});
+
+	it('materializes BACKUP_FILESYSTEM credentials only for the signed leased response', async () => {
+		const remoteBackupService = {
+			materializeCommand: jest.fn().mockResolvedValue({
+				version: 1,
+				backupId: 'backup-01',
+				planId: 'plan-01',
+				sourcePath: '/srv/example-app',
+				excludes: [],
+				repository: { remoteName: 'pluton', path: 'managed/plan-01', initialize: true },
+				rclone: {
+					type: 'sftp',
+					options: {
+						host: 'sftp.example.internal',
+						user: 'backup-user',
+						pass: 'test-only-sftp-secret',
+					},
+				},
+				repositoryPassword: 'test-only-repository-secret',
+			}),
+			completeCommand: jest.fn(),
+		};
+		service = new AgentService(
+			store,
+			'agent-service-test-secret-that-is-long-enough',
+			() => now,
+			remoteBackupService as any
+		);
+		const persistedPayload = { backupId: 'backup-01', planId: 'plan-01', repositoryId: 'repo-01' };
+		store.leaseNext.mockImplementation(
+			async (_agentId, leaseToken) =>
+				({
+					id: 'command-backup-01',
+					type: 'BACKUP_FILESYSTEM',
+					payload: persistedPayload,
+					idempotencyKey: 'idem-backup-01',
+					leaseOwner: leaseToken,
+					leaseExpiresAt: new Date(now.getTime() + 60_000),
+					lastEventSequence: 0,
+				}) as any
+		);
+
+		const result = await service.poll({ agentId: agent.agentId, deviceId: agent.deviceId, secret });
+		expect(remoteBackupService.materializeCommand).toHaveBeenCalledWith(
+			agent.agentId,
+			expect.objectContaining({ id: 'command-backup-01', payload: persistedPayload })
+		);
+		expect(result.command?.payload).toMatchObject({
+			repositoryPassword: 'test-only-repository-secret',
+		});
+		expect(JSON.stringify(persistedPayload)).not.toContain('test-only-sftp-secret');
+		expect(JSON.stringify(persistedPayload)).not.toContain('test-only-repository-secret');
+	});
+
+	it('fails closed rather than sending a durable BACKUP_FILESYSTEM reference without a materializer', async () => {
+		store.leaseNext.mockImplementation(
+			async (_agentId, leaseToken) =>
+				({
+					id: 'command-backup-unavailable',
+					type: 'BACKUP_FILESYSTEM',
+					payload: { backupId: 'backup-01', planId: 'plan-01', repositoryId: 'repo-01' },
+					idempotencyKey: 'idem-backup-unavailable',
+					leaseOwner: leaseToken,
+					leaseExpiresAt: new Date(now.getTime() + 60_000),
+					lastEventSequence: 0,
+				}) as any
+		);
+		store.completeCommand.mockResolvedValue(null);
+		await expect(
+			service.poll({ agentId: agent.agentId, deviceId: agent.deviceId, secret })
+		).resolves.toEqual({
+			command: null,
+		});
+		expect(store.completeCommand).toHaveBeenCalledWith(
+			agent.agentId,
+			'command-backup-unavailable',
+			expect.any(String),
+			1,
+			false,
+			'Remote backup command could not be prepared.',
+			now
+		);
 	});
 
 	it('accepts a valid signed request and reserves its nonce', async () => {
@@ -128,26 +221,50 @@ describe('AgentService', () => {
 		const nonce = crypto.randomBytes(24).toString('base64url');
 		const body = JSON.stringify({ hello: 'world' });
 		const signature = signAgentRequest(secret, timestamp, nonce, 'POST', '/api/agent/poll', body);
-		const result = await service.authenticate({ agentId: agent.agentId, timestamp, nonce, signature, method: 'POST', path: '/api/agent/poll', body });
+		const result = await service.authenticate({
+			agentId: agent.agentId,
+			timestamp,
+			nonce,
+			signature,
+			method: 'POST',
+			path: '/api/agent/poll',
+			body,
+		});
 		expect(result).toEqual({ agentId: agent.agentId, deviceId: agent.deviceId, secret });
-		expect(store.reserveNonce).toHaveBeenCalledWith(agent.agentId, expect.any(String), expect.any(Date));
+		expect(store.reserveNonce).toHaveBeenCalledWith(
+			agent.agentId,
+			expect.any(String),
+			expect.any(Date)
+		);
 	});
 
-	it.each(['modified body', 'wrong secret', 'stale timestamp'])('rejects a %s signed request', async scenario => {
-		const timestamp = now.getTime().toString();
-		const nonce = crypto.randomBytes(24).toString('base64url');
-		const body = JSON.stringify({ hello: 'world' });
-		const signature = signAgentRequest(secret, timestamp, nonce, 'POST', '/api/agent/poll', body);
-		const override =
-			scenario === 'modified body'
-				? { body: JSON.stringify({ hello: 'tampered' }) }
-				: scenario === 'wrong secret'
-					? { signature: 'not-a-valid-signature' }
-					: { timestamp: (now.getTime() - 6 * 60 * 1000).toString() };
-		await expect(
-			service.authenticate({ agentId: agent.agentId, timestamp, nonce, signature, method: 'POST', path: '/api/agent/poll', body, ...override })
-		).rejects.toThrow('Agent authentication failed');
-	});
+	it.each(['modified body', 'wrong secret', 'stale timestamp'])(
+		'rejects a %s signed request',
+		async scenario => {
+			const timestamp = now.getTime().toString();
+			const nonce = crypto.randomBytes(24).toString('base64url');
+			const body = JSON.stringify({ hello: 'world' });
+			const signature = signAgentRequest(secret, timestamp, nonce, 'POST', '/api/agent/poll', body);
+			const override =
+				scenario === 'modified body'
+					? { body: JSON.stringify({ hello: 'tampered' }) }
+					: scenario === 'wrong secret'
+						? { signature: 'not-a-valid-signature' }
+						: { timestamp: (now.getTime() - 6 * 60 * 1000).toString() };
+			await expect(
+				service.authenticate({
+					agentId: agent.agentId,
+					timestamp,
+					nonce,
+					signature,
+					method: 'POST',
+					path: '/api/agent/poll',
+					body,
+					...override,
+				})
+			).rejects.toThrow('Agent authentication failed');
+		}
+	);
 
 	it('rejects a replayed nonce', async () => {
 		store.reserveNonce.mockResolvedValue(false);
@@ -155,12 +272,32 @@ describe('AgentService', () => {
 		const nonce = crypto.randomBytes(24).toString('base64url');
 		const body = '{}';
 		const signature = signAgentRequest(secret, timestamp, nonce, 'POST', '/api/agent/poll', body);
-		await expect(service.authenticate({ agentId: agent.agentId, timestamp, nonce, signature, method: 'POST', path: '/api/agent/poll', body })).rejects.toThrow('Agent authentication failed');
+		await expect(
+			service.authenticate({
+				agentId: agent.agentId,
+				timestamp,
+				nonce,
+				signature,
+				method: 'POST',
+				path: '/api/agent/poll',
+				body,
+			})
+		).rejects.toThrow('Agent authentication failed');
 	});
 
 	it('rejects a revoked agent before accepting a signature', async () => {
 		store.getAgentById.mockResolvedValue({ ...agent, revokedAt: now } as any);
-		await expect(service.authenticate({ agentId: agent.agentId, timestamp: now.getTime().toString(), nonce: crypto.randomBytes(24).toString('base64url'), signature: 'x', method: 'POST', path: '/api/agent/poll', body: '{}' })).rejects.toThrow('Agent authentication failed');
+		await expect(
+			service.authenticate({
+				agentId: agent.agentId,
+				timestamp: now.getTime().toString(),
+				nonce: crypto.randomBytes(24).toString('base64url'),
+				signature: 'x',
+				method: 'POST',
+				path: '/api/agent/poll',
+				body: '{}',
+			})
+		).rejects.toThrow('Agent authentication failed');
 	});
 
 	it('derives offline status from last seen instead of a stored flag', async () => {
@@ -172,7 +309,10 @@ describe('AgentService', () => {
 	it('updates heartbeat inventory and derives the resulting online status', async () => {
 		const updated = { ...agent, lastSeen: now, resticVersion: '0.17.3' };
 		store.updateHeartbeat.mockResolvedValue(updated as any);
-		const result = await service.heartbeat(agent.agentId, { ...inventory, resticVersion: '0.17.3' });
+		const result = await service.heartbeat(agent.agentId, {
+			...inventory,
+			resticVersion: '0.17.3',
+		});
 		expect(store.updateHeartbeat).toHaveBeenCalledWith(agent.agentId, {
 			...inventory,
 			resticVersion: '0.17.3',

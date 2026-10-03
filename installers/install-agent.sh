@@ -10,6 +10,14 @@ readonly AGENT_GROUP='pluton-agent'
 readonly SERVICE_NAME='pluton-agent.service'
 readonly NODE_VERSION='v22.18.0'
 readonly NODE_DIST_BASE='https://nodejs.org/dist'
+readonly RESTIC_VERSION='0.19.1'
+readonly RCLONE_VERSION='1.75.1'
+readonly RESTIC_RELEASE_BASE="https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}"
+readonly RCLONE_RELEASE_BASE="https://downloads.rclone.org/v${RCLONE_VERSION}"
+# Pinned release digests keep the private data-plane binaries independently
+# verifiable even if a remote checksum index is replaced.
+readonly RESTIC_LINUX_AMD64_SHA256='f415415624dcc452f2a02b8c33641791a8c6d6d3b65bbb3543fcf9a25151585c'
+readonly RCLONE_LINUX_AMD64_SHA256='982b5aa772841168f8e380f139e9e787b2a105403e32b94da8676a0e1c0a13ab'
 
 ACTION='install'
 SERVER_URL=''
@@ -32,6 +40,7 @@ INSTALL_ROOT=''
 INSTALL_PARENT=''
 RUNTIME_DIR=''
 APP_DIR=''
+BIN_DIR=''
 STATE_DIR=''
 CONFIG_FILE=''
 SYSTEMD_UNIT=''
@@ -105,6 +114,7 @@ configure_paths() {
 	INSTALL_PARENT="$(dirname -- "$INSTALL_ROOT")"
 	RUNTIME_DIR="$INSTALL_ROOT/runtime"
 	APP_DIR="$INSTALL_ROOT/app"
+	BIN_DIR="$INSTALL_ROOT/bin"
 }
 
 parse_arguments() {
@@ -180,7 +190,7 @@ require_root() {
 }
 
 require_commands() {
-	local -a commands=(awk cat chmod chown cp curl dirname getent grep groupadd head id install mktemp mv realpath rm runuser sed sha256sum systemctl tar uname useradd)
+	local -a commands=(awk bzip2 cat chmod chown cp curl dirname getent grep groupadd head id install mktemp mv realpath rm runuser sed sha256sum systemctl tar uname unzip useradd)
 	local command
 	for command in "${commands[@]}"; do
 		command -v "$command" >/dev/null 2>&1 || fail "Required utility is unavailable: $command"
@@ -389,6 +399,15 @@ verify_node_checksum() {
 	)
 }
 
+verify_pinned_checksum() {
+	local archive="$1" expected="$2" filename
+	filename="$(basename -- "$archive")"
+	(
+		cd -- "$(dirname -- "$archive")"
+		printf '%s  %s\n' "$expected" "$filename" | sha256sum --check --status -
+	)
+}
+
 prepare_private_node_runtime() {
 	create_directory 0755 "$STAGE_ROOT/runtime"
 	if is_test_mode; then
@@ -410,6 +429,35 @@ prepare_private_node_runtime() {
 	extracted="$download_dir/node-${NODE_VERSION}-linux-x64"
 	[[ -x "$extracted/bin/node" ]] || fail 'The verified Node.js archive did not contain an executable runtime.'
 	cp -a -- "$extracted/." "$STAGE_ROOT/runtime/"
+	rm -rf -- "$download_dir"
+}
+
+prepare_private_backup_binaries() {
+	create_directory 0755 "$STAGE_ROOT/bin"
+	if is_test_mode; then
+		printf '#!/usr/bin/env sh\nprintf "restic 0.19.1\\n"\n' > "$STAGE_ROOT/bin/restic"
+		printf '#!/usr/bin/env sh\nprintf "rclone v1.75.1\\n"\n' > "$STAGE_ROOT/bin/rclone"
+		chmod 0755 -- "$STAGE_ROOT/bin/restic" "$STAGE_ROOT/bin/rclone"
+		return
+	fi
+
+	local download_dir restic_archive rclone_archive rclone_dir
+	download_dir="$(mktemp -d)"
+	restic_archive="$download_dir/restic_${RESTIC_VERSION}_linux_amd64.bz2"
+	rclone_archive="$download_dir/rclone-v${RCLONE_VERSION}-linux-amd64.zip"
+	log "Downloading private Restic ${RESTIC_VERSION} and Rclone ${RCLONE_VERSION} binaries."
+	curl --fail --location --proto '=https' --tlsv1.2 --output "$restic_archive" "$RESTIC_RELEASE_BASE/$(basename -- "$restic_archive")"
+	curl --fail --location --proto '=https' --tlsv1.2 --output "$rclone_archive" "$RCLONE_RELEASE_BASE/$(basename -- "$rclone_archive")"
+	verify_pinned_checksum "$restic_archive" "$RESTIC_LINUX_AMD64_SHA256" || fail 'Restic checksum verification failed; the archive was not extracted.'
+	verify_pinned_checksum "$rclone_archive" "$RCLONE_LINUX_AMD64_SHA256" || fail 'Rclone checksum verification failed; the archive was not extracted.'
+	bzip2 -dc -- "$restic_archive" > "$STAGE_ROOT/bin/restic"
+	unzip -q "$rclone_archive" -d "$download_dir/rclone"
+	rclone_dir="$download_dir/rclone/rclone-v${RCLONE_VERSION}-linux-amd64"
+	[[ -x "$rclone_dir/rclone" ]] || fail 'The verified Rclone archive did not contain its executable.'
+	install -m 0755 -- "$rclone_dir/rclone" "$STAGE_ROOT/bin/rclone"
+	chmod 0755 -- "$STAGE_ROOT/bin/restic"
+	"$STAGE_ROOT/bin/restic" version >/dev/null || fail 'The private Restic binary could not be executed.'
+	"$STAGE_ROOT/bin/rclone" version >/dev/null || fail 'The private Rclone binary could not be executed.'
 	rm -rf -- "$download_dir"
 }
 
@@ -496,6 +544,7 @@ write_config() {
 		{
 			printf 'PLUTON_SERVER_URL="%s"\n' "$(escape_environment_value "$SERVER_URL")"
 			printf 'PLUTON_AGENT_DATA_DIR="%s"\n' "$(escape_environment_value "$STATE_DIR")"
+			printf 'PLUTON_AGENT_BIN_DIR="%s"\n' "$(escape_environment_value "$BIN_DIR")"
 			printf 'PLUTON_AGENT_ALLOWED_ROOTS="%s"\n' "$(escape_environment_value "$roots")"
 			printf 'ALLOW_INSECURE_HTTP="%s"\n' "$ALLOW_INSECURE_HTTP"
 			if [[ -n "$CA_FILE" ]]; then
@@ -545,7 +594,7 @@ agent_command_arguments() {
 	local mode="$1"
 	local roots
 	roots="$(join_allowed_roots)"
-	AGENT_COMMAND=("$mode" --server "$SERVER_URL" --data-dir "$STATE_DIR" --allowed-roots "$roots")
+	AGENT_COMMAND=("$mode" --server "$SERVER_URL" --data-dir "$STATE_DIR" --bin-dir "$BIN_DIR" --allowed-roots "$roots")
 	if [[ "$ALLOW_INSECURE_HTTP" == 'true' ]]; then AGENT_COMMAND+=(--allow-insecure-http); fi
 	if [[ -n "$CA_FILE" ]]; then AGENT_COMMAND+=(--ca-file "$CA_FILE"); fi
 }
@@ -647,6 +696,7 @@ install_agent() {
 	create_stage_root
 	prepare_update_rollback
 	prepare_private_node_runtime
+	prepare_private_backup_binaries
 	build_agent_app_from_source
 	stop_service_if_present
 	activate_staged_files

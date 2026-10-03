@@ -60,6 +60,19 @@ export class AgentController {
 		}
 	}
 
+	async commandStatus(req: AgentRequest, res: Response): Promise<void> {
+		try {
+			const result = await this.agentService.commandStatus(
+				req.agent!.agentId,
+				req.params.id,
+				req.body
+			);
+			res.json({ success: true, result });
+		} catch (error) {
+			this.respond(res, error);
+		}
+	}
+
 	private respond(res: Response, error: unknown): void {
 		const status = error instanceof AppError ? error.statusCode : 500;
 		const message = error instanceof AppError ? error.message : 'Agent request failed.';

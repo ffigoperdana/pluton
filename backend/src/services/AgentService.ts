@@ -15,6 +15,7 @@ import { generateUID } from '../utils/helpers';
 import { signAgentCommand, signAgentRequest, verifyAgentSignature } from '../utils/agentProtocol';
 import { configService } from './ConfigService';
 import { serverLogger } from '../utils/logger';
+import { RemoteBackupService } from './RemoteBackupService';
 
 const inventorySchema = z
 	.object({
@@ -24,11 +25,19 @@ const inventorySchema = z
 		agentVersion: z.string().trim().min(1).max(128),
 		resticVersion: z.string().trim().min(1).max(128).optional(),
 		rcloneVersion: z.string().trim().min(1).max(128).optional(),
-		uptimeSeconds: z.number().int().nonnegative().max(365 * 24 * 60 * 60).optional(),
+		uptimeSeconds: z
+			.number()
+			.int()
+			.nonnegative()
+			.max(365 * 24 * 60 * 60)
+			.optional(),
 		capabilities: z
 			.object({
 				filesystemRootsConfigured: z.boolean(),
-				commandTypes: z.array(z.enum(['PING', 'INVENTORY_REFRESH'])).min(1).max(2),
+				commandTypes: z
+					.array(z.enum(['PING', 'INVENTORY_REFRESH', 'BACKUP_FILESYSTEM']))
+					.min(1)
+					.max(3),
 			})
 			.strict(),
 	})
@@ -66,7 +75,8 @@ export class AgentService {
 	constructor(
 		private readonly agentStore: AgentStore,
 		private readonly encryptionSecret = configService.config.SECRET,
-		private readonly now: () => Date = () => new Date()
+		private readonly now: () => Date = () => new Date(),
+		private readonly remoteBackupService?: RemoteBackupService
 	) {}
 
 	async createEnrollment(input: unknown): Promise<{
@@ -174,7 +184,10 @@ export class AgentService {
 			return this.authenticationFailure();
 		}
 		const timestamp = Number(input.timestamp);
-		if (!Number.isSafeInteger(timestamp) || Math.abs(this.now().getTime() - timestamp) > AGENT_REQUEST_SKEW_MS) {
+		if (
+			!Number.isSafeInteger(timestamp) ||
+			Math.abs(this.now().getTime() - timestamp) > AGENT_REQUEST_SKEW_MS
+		) {
 			return this.authenticationFailure();
 		}
 
@@ -188,7 +201,14 @@ export class AgentService {
 		} catch {
 			return this.authenticationFailure();
 		}
-		const expected = signAgentRequest(secret, input.timestamp, input.nonce, input.method, input.path, input.body);
+		const expected = signAgentRequest(
+			secret,
+			input.timestamp,
+			input.nonce,
+			input.method,
+			input.path,
+			input.body
+		);
 		if (!verifyAgentSignature(expected, input.signature)) {
 			return this.authenticationFailure();
 		}
@@ -219,34 +239,75 @@ export class AgentService {
 	}
 
 	async poll(agent: AuthenticatedAgent): Promise<{
-		command: (Pick<AgentCommand, 'id' | 'type' | 'payload' | 'idempotencyKey' | 'leaseExpiresAt'> & {
-			leaseToken: string;
-			signature: string;
-			signatureTimestamp: string;
-		}) | null;
+		command:
+			| (Pick<AgentCommand, 'id' | 'type' | 'payload' | 'idempotencyKey' | 'leaseExpiresAt'> & {
+					leaseToken: string;
+					signature: string;
+					signatureTimestamp: string;
+			  })
+			| null;
 	}> {
 		const leaseToken = crypto.randomBytes(24).toString('base64url');
-		const command = await this.agentStore.leaseNext(agent.agentId, leaseToken, AGENT_COMMAND_LEASE_MS, this.now());
+		const command = await this.agentStore.leaseNext(
+			agent.agentId,
+			leaseToken,
+			AGENT_COMMAND_LEASE_MS,
+			this.now()
+		);
 		if (!command) return { command: null };
+		let payload = command.payload;
+		if (command.type === 'BACKUP_FILESYSTEM') {
+			try {
+				if (!this.remoteBackupService) {
+					throw new Error('Remote backup materializer is unavailable.');
+				}
+				payload = await this.remoteBackupService.materializeCommand(agent.agentId, command);
+			} catch {
+				// Do not lease a command whose ephemeral credentials or managed plan can no
+				// longer be prepared. Mark it terminal without disclosing provider details.
+				const failed = await this.agentStore.completeCommand(
+					agent.agentId,
+					command.id,
+					leaseToken,
+					command.lastEventSequence + 1,
+					false,
+					'Remote backup command could not be prepared.',
+					this.now()
+				);
+				if (failed) {
+					await this.remoteBackupService?.completeCommand(failed, {
+						success: false,
+						error: 'Remote backup command could not be prepared.',
+					});
+				}
+				return { command: null };
+			}
+		}
 		const signatureTimestamp = this.now().getTime().toString();
+		const signedCommand = { ...command, payload };
 		this.audit('command_leased');
 		return {
 			command: {
 				id: command.id,
 				type: command.type,
-				payload: command.payload,
+				payload,
 				idempotencyKey: command.idempotencyKey,
 				leaseExpiresAt: command.leaseExpiresAt,
 				leaseToken,
 				signatureTimestamp,
-				signature: signAgentCommand(agent.secret, signatureTimestamp, command, leaseToken),
+				signature: signAgentCommand(agent.secret, signatureTimestamp, signedCommand, leaseToken),
 			},
 		};
 	}
 
 	async acknowledge(agentId: string, commandId: string, input: unknown): Promise<void> {
 		const parsed = this.parseLeaseToken(input);
-		const command = await this.agentStore.acknowledgeCommand(agentId, commandId, parsed.leaseToken, this.now());
+		const command = await this.agentStore.acknowledgeCommand(
+			agentId,
+			commandId,
+			parsed.leaseToken,
+			this.now()
+		);
 		if (!command) throw new NotFoundError('Command not found.');
 	}
 
@@ -255,6 +316,41 @@ export class AgentService {
 			.object({
 				sequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
 				leaseToken: z.string().regex(/^[A-Za-z0-9_-]{32,128}$/),
+				event: z
+					.object({
+						phase: z.enum(['accepted', 'running']).optional(),
+						progress: z
+							.object({
+								bytesProcessed: z
+									.number()
+									.finite()
+									.nonnegative()
+									.max(Number.MAX_SAFE_INTEGER)
+									.optional(),
+								filesProcessed: z
+									.number()
+									.finite()
+									.nonnegative()
+									.max(Number.MAX_SAFE_INTEGER)
+									.optional(),
+								totalBytesProcessed: z
+									.number()
+									.finite()
+									.nonnegative()
+									.max(Number.MAX_SAFE_INTEGER)
+									.optional(),
+								totalFilesProcessed: z
+									.number()
+									.finite()
+									.nonnegative()
+									.max(Number.MAX_SAFE_INTEGER)
+									.optional(),
+							})
+							.strict()
+							.optional(),
+					})
+					.strict()
+					.optional(),
 			})
 			.strict()
 			.safeParse(input);
@@ -264,9 +360,12 @@ export class AgentService {
 			commandId,
 			parsed.data.leaseToken,
 			parsed.data.sequence,
-			this.now()
+			this.now(),
+			AGENT_COMMAND_LEASE_MS
 		);
 		if (!command) throw new NotFoundError('Command not found.');
+		if (parsed.data.event)
+			await this.remoteBackupService?.recordCommandEvent(command, parsed.data.event);
 	}
 
 	async complete(agentId: string, commandId: string, input: unknown): Promise<void> {
@@ -276,6 +375,38 @@ export class AgentService {
 				leaseToken: z.string().regex(/^[A-Za-z0-9_-]{32,128}$/),
 				success: z.boolean(),
 				error: z.string().trim().min(1).max(500).optional(),
+				cancelled: z.boolean().optional(),
+				result: z
+					.object({
+						snapshotId: z
+							.string()
+							.trim()
+							.regex(/^[A-Fa-f0-9]{8,128}$/),
+						summary: z
+							.object({
+								message_type: z.literal('summary'),
+								files_new: z.number().finite().nonnegative(),
+								files_changed: z.number().finite().nonnegative(),
+								files_unmodified: z.number().finite().nonnegative(),
+								dirs_new: z.number().finite().nonnegative(),
+								dirs_changed: z.number().finite().nonnegative(),
+								dirs_unmodified: z.number().finite().nonnegative(),
+								data_blobs: z.number().finite().nonnegative(),
+								tree_blobs: z.number().finite().nonnegative(),
+								data_added: z.number().finite().nonnegative(),
+								data_added_packed: z.number().finite().nonnegative(),
+								total_files_processed: z.number().finite().nonnegative(),
+								total_bytes_processed: z.number().finite().nonnegative(),
+								total_duration: z.number().finite().nonnegative(),
+								snapshot_id: z
+									.string()
+									.trim()
+									.regex(/^[A-Fa-f0-9]{8,128}$/),
+							})
+							.strict(),
+					})
+					.strict()
+					.optional(),
 			})
 			.strict()
 			.safeParse(input);
@@ -292,7 +423,30 @@ export class AgentService {
 			this.now()
 		);
 		if (!command) throw new NotFoundError('Command not found.');
+		await this.remoteBackupService?.completeCommand(command, {
+			success: parsed.data.success,
+			cancelled: parsed.data.cancelled,
+			error: parsed.data.error,
+			result: parsed.data.result,
+		});
 		this.audit(command.state === 'completed' ? 'command_completed' : 'command_failed');
+	}
+
+	async commandStatus(
+		agentId: string,
+		commandId: string,
+		input: unknown
+	): Promise<{ cancelled: boolean }> {
+		const parsed = this.parseLeaseToken(input);
+		const status = await this.agentStore.getCommandStatus(
+			agentId,
+			commandId,
+			parsed.leaseToken,
+			AGENT_COMMAND_LEASE_MS,
+			this.now()
+		);
+		if (!status) throw new NotFoundError('Command not found.');
+		return { cancelled: status.cancelled };
 	}
 
 	async revokeDevice(deviceId: string): Promise<void> {
@@ -340,7 +494,10 @@ export class AgentService {
 	}
 
 	private parseLeaseToken(input: unknown): { leaseToken: string } {
-		const parsed = z.object({ leaseToken: z.string().regex(/^[A-Za-z0-9_-]{32,128}$/) }).strict().safeParse(input);
+		const parsed = z
+			.object({ leaseToken: z.string().regex(/^[A-Za-z0-9_-]{32,128}$/) })
+			.strict()
+			.safeParse(input);
 		if (!parsed.success) throw new AppError(400, 'Command acknowledgement is invalid.');
 		return parsed.data;
 	}
