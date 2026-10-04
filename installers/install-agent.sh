@@ -513,10 +513,7 @@ stop_service_if_present() {
 
 activate_staged_files() {
 	PREVIOUS_INSTALL_ROOT="$INSTALL_PARENT/.pluton-agent-previous.$$"
-	if ! is_test_mode; then
-		chown -R root:root -- "$STAGE_ROOT"
-		chmod -R go-w -- "$STAGE_ROOT"
-	fi
+	normalize_staged_install_permissions
 	if [[ -e "$INSTALL_ROOT" ]]; then
 		rm -rf -- "$PREVIOUS_INSTALL_ROOT"
 		mv -- "$INSTALL_ROOT" "$PREVIOUS_INSTALL_ROOT"
@@ -525,6 +522,18 @@ activate_staged_files() {
 	fi
 	mv -- "$STAGE_ROOT" "$INSTALL_ROOT"
 	STAGE_ROOT=''
+}
+
+normalize_staged_install_permissions() {
+	# mktemp deliberately creates the staging root as 0700.  Removing write
+	# access alone preserves that mode and makes the moved install
+	# inaccessible to the unprivileged agent.  Make every directory traversable
+	# and readable, keep existing executable bits on binaries, and remove all
+	# group/other write access before the tree becomes live.
+	if ! is_test_mode; then
+		chown -R root:root -- "$STAGE_ROOT"
+	fi
+	chmod -R a+rX,u+w,go-w -- "$STAGE_ROOT"
 }
 
 escape_environment_value() {
@@ -675,6 +684,22 @@ verify_control_plane() {
 	runuser -u "$AGENT_USER" -- "$RUNTIME_DIR/bin/node" "$APP_DIR/dist/index.js" "${AGENT_COMMAND[@]}"
 }
 
+validate_installed_runtime_access() {
+	# Validate the complete private data-plane toolchain as the service account
+	# before enrollment or control-plane checks invoke the runtime themselves.
+	# This catches parent-directory and executable-bit regressions while the
+	# transaction is still protected by the rollback trap.
+	if is_test_mode; then
+		"$RUNTIME_DIR/bin/node" -v >/dev/null || fail 'The staged private Node runtime could not be executed.'
+		"$BIN_DIR/restic" version >/dev/null || fail 'The staged private Restic binary could not be executed.'
+		"$BIN_DIR/rclone" version >/dev/null || fail 'The staged private Rclone binary could not be executed.'
+		return
+	fi
+	runuser -u "$AGENT_USER" -- "$RUNTIME_DIR/bin/node" -v >/dev/null || fail 'The pluton-agent account cannot execute the private Node runtime.'
+	runuser -u "$AGENT_USER" -- "$BIN_DIR/restic" version >/dev/null || fail 'The pluton-agent account cannot execute the private Restic binary.'
+	runuser -u "$AGENT_USER" -- "$BIN_DIR/rclone" version >/dev/null || fail 'The pluton-agent account cannot execute the private Rclone binary.'
+}
+
 enable_and_start_service() {
 	if is_test_mode; then
 		touch "${PLUTON_AGENT_TEST_ROOT}/service-active"
@@ -700,6 +725,7 @@ install_agent() {
 	build_agent_app_from_source
 	stop_service_if_present
 	activate_staged_files
+	validate_installed_runtime_access
 	write_config
 	enroll_if_needed
 	verify_control_plane

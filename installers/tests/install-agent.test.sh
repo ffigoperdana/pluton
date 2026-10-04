@@ -34,6 +34,26 @@ assert_missing() {
 	[[ ! -e "$1" ]] || fail "Expected no path: $1"
 }
 
+assert_mode() {
+	local expected="$1" pathname="$2" actual
+	actual="$(stat -c '%a' -- "$pathname")" || fail "Could not inspect mode: $pathname"
+	[[ "$actual" == "$expected" ]] || fail "Expected mode $expected for $pathname, got $actual"
+}
+
+assert_private_runtime_access() {
+	local root="$1"
+	assert_mode 755 "$root/opt/pluton-agent"
+	assert_mode 755 "$root/opt/pluton-agent/runtime"
+	assert_mode 755 "$root/opt/pluton-agent/runtime/bin"
+	assert_mode 755 "$root/opt/pluton-agent/runtime/bin/node"
+	assert_mode 755 "$root/opt/pluton-agent/bin"
+	assert_mode 755 "$root/opt/pluton-agent/bin/restic"
+	assert_mode 755 "$root/opt/pluton-agent/bin/rclone"
+	"$root/opt/pluton-agent/runtime/bin/node" -v >/dev/null || fail 'The private Node runtime failed validation.'
+	"$root/opt/pluton-agent/bin/restic" version >/dev/null || fail 'The private Restic binary failed validation.'
+	"$root/opt/pluton-agent/bin/rclone" version >/dev/null || fail 'The private Rclone binary failed validation.'
+}
+
 make_root() {
 	local name="$1"
 	local root
@@ -81,14 +101,20 @@ test_fresh_install_and_generated_files() {
 	"$root/opt/pluton-agent/bin/rclone" version | grep -F '1.75.1' >/dev/null
 }
 
-test_reinstall_preserves_identity() {
+test_reinstall_preserves_identity_and_private_runtime_access() {
 	local root identity before
 	root="$(make_root reinstall)"
 	base_install "$root"
 	identity="$root/var/lib/pluton-agent/identity.json"
 	before="$(sha256sum "$identity")"
-	base_install "$root"
+	assert_private_runtime_access "$root"
+	(
+		umask 077
+		run_installer "$root" --server https://replacement.example.internal --allowed-root "$root/source"
+	)
 	[[ "$before" == "$(sha256sum "$identity")" ]] || fail 'A normal reinstall replaced the existing identity.'
+	grep -Fx 'PLUTON_SERVER_URL="https://replacement.example.internal"' "$root/etc/pluton-agent.env" >/dev/null || fail 'The reinstall did not activate the replacement configuration.'
+	assert_private_runtime_access "$root"
 }
 
 test_failed_update_restores_previous_installation() {
@@ -104,6 +130,7 @@ test_failed_update_restores_previous_installation() {
 	[[ "$identity_before" == "$(sha256sum "$root/var/lib/pluton-agent/identity.json")" ]] || fail 'A failed update replaced the prior identity.'
 	[[ "$config_before" == "$(cat "$root/etc/pluton-agent.env")" ]] || fail 'A failed update did not restore the prior configuration.'
 	grep -Fx 'previous-installation' "$root/opt/pluton-agent/app/dist/rollback-marker" >/dev/null || fail 'A failed update did not restore the prior application.'
+	assert_private_runtime_access "$root"
 }
 
 test_failed_reenrollment_restores_previous_installation() {
@@ -120,6 +147,7 @@ test_failed_reenrollment_restores_previous_installation() {
 	[[ "$before" == "$(sha256sum "$identity")" ]] || fail 'A failed re-enrollment did not restore the prior identity.'
 	[[ "$config_before" == "$(cat "$root/etc/pluton-agent.env")" ]] || fail 'A failed re-enrollment did not restore the prior configuration.'
 	grep -Fx 'previous-installation' "$root/opt/pluton-agent/app/dist/rollback-marker" >/dev/null || fail 'A failed re-enrollment did not restore the prior application.'
+	assert_private_runtime_access "$root"
 }
 
 test_http_requires_explicit_opt_in() {
@@ -218,7 +246,7 @@ test_uninstall_and_purge() {
 }
 
 test_fresh_install_and_generated_files
-test_reinstall_preserves_identity
+test_reinstall_preserves_identity_and_private_runtime_access
 test_failed_update_restores_previous_installation
 test_failed_reenrollment_restores_previous_installation
 test_http_requires_explicit_opt_in
