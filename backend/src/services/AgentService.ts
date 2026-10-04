@@ -15,7 +15,8 @@ import { generateUID } from '../utils/helpers';
 import { signAgentCommand, signAgentRequest, verifyAgentSignature } from '../utils/agentProtocol';
 import { configService } from './ConfigService';
 import { serverLogger } from '../utils/logger';
-import { RemoteBackupService } from './RemoteBackupService';
+import type { RemoteBackupService } from './RemoteBackupService';
+import { RemoteCommandPreparationError } from './remoteCommandPreparation';
 
 const inventorySchema = z
 	.object({
@@ -259,12 +260,13 @@ export class AgentService {
 		if (command.type === 'BACKUP_FILESYSTEM') {
 			try {
 				if (!this.remoteBackupService) {
-					throw new Error('Remote backup materializer is unavailable.');
+					throw new RemoteCommandPreparationError({ stage: 'materializer-unavailable' });
 				}
 				payload = await this.remoteBackupService.materializeCommand(agent.agentId, command);
-			} catch {
+			} catch (error) {
 				// Do not lease a command whose ephemeral credentials or managed plan can no
 				// longer be prepared. Mark it terminal without disclosing provider details.
+				this.logRemoteBackupPreparationFailure(agent, error);
 				const failed = await this.agentStore.completeCommand(
 					agent.agentId,
 					command.id,
@@ -505,6 +507,30 @@ export class AgentService {
 	private authenticationFailure(audit = true): never {
 		if (audit) this.audit('authentication_rejected');
 		throw new AppError(401, 'Agent authentication failed.');
+	}
+
+	private logRemoteBackupPreparationFailure(agent: AuthenticatedAgent, error: unknown): void {
+		const failure =
+			error instanceof RemoteCommandPreparationError
+				? error
+				: new RemoteCommandPreparationError({ stage: 'unexpected' });
+		// The structured context is intentionally limited to correlation IDs and
+		// fixed messages. Never log the caught error: provider/decryption errors can
+		// carry storage credentials or other secret material.
+		if (serverLogger) {
+			serverLogger.warn(
+				{
+					agentEvent: 'remote_backup_command_preparation_failed',
+					deviceId: agent.deviceId,
+					failureStage: failure.stage,
+					failureMessage: failure.safeMessage,
+					...(failure.planId ? { planId: failure.planId } : {}),
+					...(failure.backupId ? { backupId: failure.backupId } : {}),
+					...(failure.storageId ? { storageId: failure.storageId } : {}),
+				},
+				'Remote backup command preparation failed'
+			);
+		}
 	}
 
 	private audit(event: string): void {

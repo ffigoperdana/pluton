@@ -4,6 +4,8 @@ import { AgentService } from '../../src/services/AgentService';
 import { AgentStore } from '../../src/stores/AgentStore';
 import { signAgentRequest } from '../../src/utils/agentProtocol';
 import { configService } from '../../src/services/ConfigService';
+import { serverLogger } from '../../src/utils/logger';
+import { RemoteCommandPreparationError } from '../../src/services/remoteCommandPreparation';
 
 jest.mock('../../src/services/ConfigService', () => ({
 	configService: {
@@ -214,6 +216,107 @@ describe('AgentService', () => {
 			'Remote backup command could not be prepared.',
 			now
 		);
+	});
+
+	it('logs a sanitized remote command preparation failure with correlation IDs', async () => {
+		const fixtureStoragePassword = 'fixture-sftp-password-must-not-appear-in-logs';
+		const fixtureRepositoryPassword = 'fixture-repository-password-must-not-appear-in-logs';
+		const remoteBackupService = {
+			materializeCommand: jest.fn().mockRejectedValue(
+				new RemoteCommandPreparationError({
+					stage: 'sftp-credential-decryption',
+					planId: 'plan-01',
+					backupId: 'backup-01',
+					storageId: 'storage-01',
+				})
+			),
+			completeCommand: jest.fn(),
+		};
+		service = new AgentService(
+			store,
+			'agent-service-test-secret-that-is-long-enough',
+			() => now,
+			remoteBackupService as any
+		);
+		store.leaseNext.mockImplementation(
+			async (_agentId, leaseToken) =>
+				({
+					id: 'command-backup-01',
+					type: 'BACKUP_FILESYSTEM',
+					payload: { backupId: 'backup-01', planId: 'plan-01', repositoryId: 'repo-01' },
+					idempotencyKey: 'idem-backup-01',
+					leaseOwner: leaseToken,
+					leaseExpiresAt: new Date(now.getTime() + 60_000),
+					lastEventSequence: 0,
+				}) as any
+		);
+		store.completeCommand.mockResolvedValue(null);
+		const warn = jest.spyOn(serverLogger, 'warn').mockImplementation(() => undefined as any);
+
+		try {
+			await expect(
+				service.poll({ agentId: agent.agentId, deviceId: agent.deviceId, secret })
+			).resolves.toEqual({ command: null });
+			expect(warn).toHaveBeenCalledWith(
+				expect.objectContaining({
+					agentEvent: 'remote_backup_command_preparation_failed',
+					deviceId: agent.deviceId,
+					failureStage: 'sftp-credential-decryption',
+					failureMessage: 'Remote SFTP credentials could not be decrypted or validated.',
+					planId: 'plan-01',
+					backupId: 'backup-01',
+					storageId: 'storage-01',
+				}),
+				'Remote backup command preparation failed'
+			);
+			const logged = JSON.stringify(warn.mock.calls);
+			expect(logged).not.toContain(fixtureStoragePassword);
+			expect(logged).not.toContain(fixtureRepositoryPassword);
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it('does not log an unexpected materializer error verbatim', async () => {
+		const fixtureProviderError = 'fixture-provider-error-with-password-material';
+		const remoteBackupService = {
+			materializeCommand: jest.fn().mockRejectedValue(new Error(fixtureProviderError)),
+			completeCommand: jest.fn(),
+		};
+		service = new AgentService(
+			store,
+			'agent-service-test-secret-that-is-long-enough',
+			() => now,
+			remoteBackupService as any
+		);
+		store.leaseNext.mockImplementation(
+			async (_agentId, leaseToken) =>
+				({
+					id: 'command-backup-unexpected',
+					type: 'BACKUP_FILESYSTEM',
+					payload: { backupId: 'backup-01', planId: 'plan-01', repositoryId: 'repo-01' },
+					idempotencyKey: 'idem-backup-unexpected',
+					leaseOwner: leaseToken,
+					leaseExpiresAt: new Date(now.getTime() + 60_000),
+					lastEventSequence: 0,
+				}) as any
+		);
+		store.completeCommand.mockResolvedValue(null);
+		const warn = jest.spyOn(serverLogger, 'warn').mockImplementation(() => undefined as any);
+
+		try {
+			await service.poll({ agentId: agent.agentId, deviceId: agent.deviceId, secret });
+			expect(warn).toHaveBeenCalledWith(
+				expect.objectContaining({
+					failureStage: 'unexpected',
+					failureMessage: 'An unexpected remote command preparation error occurred.',
+				}),
+				'Remote backup command preparation failed'
+			);
+			expect(JSON.stringify(warn.mock.calls)).not.toContain(fixtureProviderError);
+		} finally {
+			warn.mockRestore();
+		}
 	});
 
 	it('accepts a valid signed request and reserves its nonce', async () => {

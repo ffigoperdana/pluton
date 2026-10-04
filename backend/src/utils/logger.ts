@@ -44,7 +44,12 @@ export function initializeLogger(): void {
 
 	let mainLogger: pino.Logger;
 
-	if (isPkg) {
+	// Unit tests must not write process-wide logs or mutate a real workspace
+	// data directory. The logger remains available for spies and
+	// behavior tests, but has no file transport in this environment.
+	if (process.env.NODE_ENV === 'test') {
+		mainLogger = pino({ level: 'silent' });
+	} else if (isPkg) {
 		// In pkg environment, use pino.destination (main thread) to avoid worker thread issues
 		const stream = pino.destination({ 
 			dest: `${logPath}/app.log`, 
