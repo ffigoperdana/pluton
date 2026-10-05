@@ -94,9 +94,12 @@ export async function runOnce(
           (await client.commandStatus(command.id, command.leaseToken))
             .cancelled,
         onEvent: recordEvent,
-        onStage: ({ stage, message }) =>
+        onStage: ({ stage, message, database }) =>
           console.info(
-            `[pluton-agent] BACKUP_FILESYSTEM ${message} stage=${stage}`,
+            `[pluton-agent] BACKUP_FILESYSTEM ${message} stage=${stage}` +
+              (database
+                ? ` databaseId=${database.databaseId || "legacy"} engine=${database.engine} ordinal=${database.ordinal}/${database.count}`
+                : ""),
           ),
       });
       completion = {
@@ -121,7 +124,10 @@ export async function runOnce(
       backupFailure?.code === "cancelled";
     if (command.type === "BACKUP_FILESYSTEM" && backupFailure) {
       console.error(
-        `[pluton-agent] BACKUP_FILESYSTEM failed stage=${backupFailure.stage} code=${backupFailure.code} reason=${backupFailure.message}`,
+        `[pluton-agent] BACKUP_FILESYSTEM failed stage=${backupFailure.stage} code=${backupFailure.code} reason=${backupFailure.message}` +
+          (backupFailure.databaseId
+            ? ` databaseId=${backupFailure.databaseId} engine=${backupFailure.engine}`
+            : ""),
       );
     }
     completion = {
@@ -137,6 +143,12 @@ export async function runOnce(
         ? {
             failureStage: backupFailure.stage,
             failureCode: backupFailure.code,
+            ...(backupFailure.databaseId
+              ? {
+                  databaseId: backupFailure.databaseId,
+                  engine: backupFailure.engine,
+                }
+              : {}),
           }
         : {}),
     };

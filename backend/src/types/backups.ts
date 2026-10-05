@@ -17,6 +17,7 @@ export interface BackupCompletionStats {
 	lifecycle?: {
 		warnings: import('./remoteLifecycle').LifecycleWarning[];
 		database?: { path: string; bytes: number; sha256: string };
+		databases?: import('./remoteLifecycle').DatabaseArtifact[];
 	};
 }
 

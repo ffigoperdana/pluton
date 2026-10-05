@@ -1,5 +1,9 @@
 export interface BackupCompletionStats {
-   lifecycle?: { warnings: { stage: 'post-backup' | 'cleanup'; code: string }[]; database?: { path: string; bytes: number; sha256: string } };
+   lifecycle?: {
+      warnings: { stage: 'post-backup' | 'cleanup'; code: string }[];
+      database?: { path: string; bytes: number; sha256: string };
+      databases?: { databaseId: string; engine: 'mysql' | 'mariadb' | 'postgresql'; database: string; path: string; bytes: number; sha256: string }[];
+   };
    files_new: number;
    files_changed: number;
    files_unmodified: number;

@@ -8,10 +8,15 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
+import { realpathSync } from "node:fs";
 import {
+  assertRootOwnedPath,
   detectDatabaseBinary,
+  lifecycleDatabases,
   validateHookExecutable,
   type BackupLifecycle,
+  type DatabaseBackup,
+  type DatabaseCheckpoint,
   type LifecycleCheckpoint,
   type LifecycleFailureCode,
   type LifecycleHook,
@@ -28,10 +33,32 @@ export class BackupLifecycleError extends Error {
   constructor(
     readonly stage: LifecycleStage,
     readonly code: LifecycleFailureCode | "cancelled",
+    readonly databaseId?: string,
+    readonly engine?: DatabaseBackup["engine"],
   ) {
     super("Remote backup lifecycle failed.");
     this.name = "BackupLifecycleError";
   }
+}
+
+// libpq escapes both separators and backslashes. No wildcard/connection string
+// inputs are allowed; newline-bearing PostgreSQL passwords are rejected upstream.
+export function postgresPasswordFile(db: DatabaseBackup): string {
+  const escape = (value: string) =>
+    value.replace(/\\/g, "\\\\").replace(/:/g, "\\:");
+  return (
+    [db.host, String(db.port), db.database, db.username, db.password]
+      .map(escape)
+      .join(":") + "\n"
+  );
+}
+
+function postgresTrustFile(): string {
+  return assertRootOwnedPath(
+    realpathSync("/etc/ssl/certs/ca-certificates.crt"),
+    false,
+    true,
+  );
 }
 
 function defaultsValue(value: string): string {
@@ -55,14 +82,20 @@ export class BackupLifecycleJob {
     readonly lifecycle: BackupLifecycle,
     private readonly config: AgentConfig,
     private readonly shouldCancel: () => Promise<boolean>,
-    private readonly stageEvent: (stage: LifecycleCheckpoint) => Promise<void>,
+    private readonly stageEvent: (
+      stage: LifecycleCheckpoint,
+      database?: DatabaseCheckpoint,
+    ) => Promise<void>,
   ) {}
 
   static async create(
     config: AgentConfig,
     lifecycle: BackupLifecycle,
     shouldCancel: () => Promise<boolean>,
-    stageEvent: (stage: LifecycleCheckpoint) => Promise<void>,
+    stageEvent: (
+      stage: LifecycleCheckpoint,
+      database?: DatabaseCheckpoint,
+    ) => Promise<void>,
   ): Promise<BackupLifecycleJob> {
     if (process.platform !== "linux" || process.getuid?.() === 0)
       throw new BackupLifecycleError(
@@ -84,14 +117,28 @@ export class BackupLifecycleJob {
           );
         }
       }
-    if (
-      lifecycle.database &&
-      !detectDatabaseBinary(lifecycle.database.engine, config.databaseBinDirs)
-    ) {
-      throw new BackupLifecycleError(
-        "lifecycle-validation",
-        "database-tool-unavailable",
-      );
+    for (const db of lifecycleDatabases(lifecycle)) {
+      if (!detectDatabaseBinary(db.engine, config.databaseBinDirs))
+        throw new BackupLifecycleError(
+          "lifecycle-validation",
+          lifecycle.version === 1
+            ? "database-tool-unavailable"
+            : "database-client-missing",
+          db.databaseId,
+          db.engine,
+        );
+      if (db.engine === "postgresql" && db.tls === "verify-identity") {
+        try {
+          postgresTrustFile();
+        } catch {
+          throw new BackupLifecycleError(
+            "lifecycle-validation",
+            "database-tls-verification-failed",
+            db.databaseId,
+            db.engine,
+          );
+        }
+      }
     }
     try {
       const jobs = path.join(config.dataDir, "jobs");
@@ -178,28 +225,60 @@ export class BackupLifecycleJob {
     }
   }
 
-  async prepare(): Promise<string | undefined> {
+  async prepare(): Promise<string[]> {
     if (this.lifecycle.preHook)
       await this.runHook(this.lifecycle.preHook, "pre-backup");
-    const db = this.lifecycle.database;
-    if (!db) return;
-    await this.stageEvent("database-dump-started");
-    const credentials = path.join(this.workspace, "database.cnf");
+    const databases = lifecycleDatabases(this.lifecycle);
+    if (!databases.length) return [];
+    const artifacts: string[] = [];
     const directory = path.join(this.workspace, "pluton", "database");
+    await mkdir(path.dirname(directory), { mode: 0o700 });
+    await mkdir(directory, { mode: 0o700 });
+    if (this.lifecycle.version === 2) this.report.databases = [];
+    for (let ordinal = 0; ordinal < databases.length; ordinal++) {
+      const db = databases[ordinal];
+      artifacts.push(
+        await this.dumpDatabase(db, ordinal + 1, databases.length, directory),
+      );
+    }
+    if (databases.length === 1 && this.report.databases?.[0]) {
+      const { path: artifactPath, bytes, sha256 } = this.report.databases[0];
+      this.report.database = { path: artifactPath, bytes, sha256 };
+    }
+    return artifacts;
+  }
+
+  private async dumpDatabase(
+    db: DatabaseBackup,
+    ordinal: number,
+    count: number,
+    directory: string,
+  ): Promise<string> {
+    const checkpoint = {
+      databaseId: db.databaseId,
+      engine: db.engine,
+      ordinal,
+      count,
+    };
+    await this.stageEvent("database-dump-started", checkpoint);
+    const credentials = path.join(
+      this.workspace,
+      `database-${ordinal}.${db.engine === "postgresql" ? "pgpass" : "cnf"}`,
+    );
     try {
-      const clientHome = path.join(this.workspace, "client-home");
+      const clientHome = path.join(this.workspace, `client-home-${ordinal}`);
       await mkdir(clientHome, { mode: 0o700 });
-      await mkdir(path.dirname(directory), { mode: 0o700 });
-      await mkdir(directory, { mode: 0o700 });
       await writeFile(
         credentials,
-        "[client]\nprotocol=tcp\n" +
-          `host=${defaultsValue(db.host)}\nport=${db.port}\nuser=${defaultsValue(db.username)}\npassword=${defaultsValue(db.password)}\n` +
-          (db.tls === "verify-identity"
-            ? db.engine === "mysql"
-              ? "ssl-mode=VERIFY_IDENTITY\n"
-              : "ssl=ON\nssl-verify-server-cert=ON\n"
-            : ""),
+        db.engine === "postgresql"
+          ? postgresPasswordFile(db)
+          : "[client]\nprotocol=tcp\n" +
+              `host=${defaultsValue(db.host)}\nport=${db.port}\nuser=${defaultsValue(db.username)}\npassword=${defaultsValue(db.password)}\n` +
+              (db.tls === "verify-identity"
+                ? db.engine === "mysql"
+                  ? "ssl-mode=VERIFY_IDENTITY\n"
+                  : "ssl=ON\nssl-verify-server-cert=ON\n"
+                : ""),
         { mode: 0o600, flag: "wx" },
       );
       await chmod(credentials, 0o600);
@@ -210,20 +289,40 @@ export class BackupLifecycleJob {
       if (!binary)
         throw new BackupLifecycleError(
           "database-dump",
-          "database-tool-unavailable",
+          this.lifecycle.version === 1
+            ? "database-tool-unavailable"
+            : "database-client-missing",
+          db.databaseId,
+          db.engine,
         );
-      const args = [
-        `--defaults-file=${credentials}`,
-        "--single-transaction",
-        "--quick",
-        "--skip-lock-tables",
-        "--hex-blob",
-      ];
+      const args =
+        db.engine === "postgresql"
+          ? [
+              "--format=plain",
+              "--no-password",
+              "--host",
+              db.host,
+              "--port",
+              String(db.port),
+              "--username",
+              db.username,
+              "--dbname",
+              db.database,
+            ]
+          : [
+              `--defaults-file=${credentials}`,
+              "--single-transaction",
+              "--quick",
+              "--skip-lock-tables",
+              "--hex-blob",
+            ];
       if (db.engine === "mysql")
         args.push("--set-gtid-purged=OFF", "--no-tablespaces");
-      if (db.includeRoutines) args.push("--routines");
-      if (db.includeEvents) args.push("--events");
-      args.push("--databases", db.database);
+      if (db.engine !== "postgresql") {
+        if (db.includeRoutines) args.push("--routines");
+        if (db.includeEvents) args.push("--events");
+        args.push("--databases", db.database);
+      }
       const relative = `pluton/database/${db.dumpFilename}`;
       const output = await runLifecycleProcess({
         binary,
@@ -237,7 +336,18 @@ export class BackupLifecycleJob {
           LC_ALL: "C",
           HOME: clientHome,
           TMPDIR: this.workspace,
-          MYSQL_TEST_LOGIN_FILE: path.join(clientHome, ".mylogin.cnf"),
+          ...(db.engine === "postgresql"
+            ? {
+                PGPASSFILE: credentials,
+                PGSSLMODE:
+                  db.tls === "verify-identity" ? "verify-full" : "disable",
+                // Do not let GSS encryption skip the requested certificate verification.
+                PGGSSENCMODE: "disable",
+                ...(db.tls === "verify-identity"
+                  ? { PGSSLROOTCERT: postgresTrustFile() }
+                  : {}),
+              }
+            : { MYSQL_TEST_LOGIN_FILE: path.join(clientHome, ".mylogin.cnf") }),
         },
         output: {
           file: path.join(directory, db.dumpFilename),
@@ -255,10 +365,20 @@ export class BackupLifecycleJob {
         throw new BackupLifecycleError(
           "database-dump-validation",
           "database-dump-invalid",
+          db.databaseId,
+          db.engine,
         );
       }
-      this.report.database = { path: "/" + relative, ...output };
-      await this.stageEvent("database-dump-completed");
+      if (this.lifecycle.version === 2)
+        this.report.databases!.push({
+          databaseId: db.databaseId!,
+          engine: db.engine,
+          database: db.database,
+          path: "/" + relative,
+          ...output,
+        });
+      else this.report.database = { path: "/" + relative, ...output };
+      await this.stageEvent("database-dump-completed", checkpoint);
       return relative;
     } catch (error) {
       if (error instanceof BackupLifecycleError) throw error;
@@ -268,22 +388,35 @@ export class BackupLifecycleJob {
         "database-dump",
         code === "cancelled"
           ? "cancelled"
-          : code === "auth-failed"
-            ? "database-auth-failed"
-            : code === "unavailable"
-              ? "database-unavailable"
-              : code === "timeout"
-                ? "database-dump-timeout"
-                : code === "output-limit"
-                  ? "database-dump-output-limit"
-                  : "database-dump-failed",
+          : code === "client-incompatible"
+            ? "database-client-incompatible"
+            : code === "tls-verification-failed"
+              ? "database-tls-verification-failed"
+              : code === "output-empty" && this.lifecycle.version === 2
+                ? "database-output-empty"
+                : code === "auth-failed"
+                  ? "database-auth-failed"
+                  : code === "unavailable"
+                    ? "database-unavailable"
+                    : code === "timeout"
+                      ? "database-dump-timeout"
+                      : code === "output-limit"
+                        ? "database-dump-output-limit"
+                        : "database-dump-failed",
+        db.databaseId,
+        db.engine,
       );
     } finally {
       // Credentials must be gone before Restic or the post hook starts.
       try {
         await rm(credentials, { force: true });
       } catch {
-        throw new BackupLifecycleError("database-dump", "database-dump-failed");
+        throw new BackupLifecycleError(
+          "database-dump",
+          "database-dump-failed",
+          db.databaseId,
+          db.engine,
+        );
       }
     }
   }

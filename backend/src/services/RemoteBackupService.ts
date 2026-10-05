@@ -16,8 +16,13 @@ import { generateUID } from '../utils/helpers';
 import type { PlanAddRunSettings, PlanSource } from '../types/plans';
 import type { BackupCompletionStats, BackupProgressStats } from '../types/backups';
 import { configService } from './ConfigService';
-import { materializeRemoteLifecycle, parseRemoteLifecycle } from '../utils/remoteLifecycle';
-import type { LifecycleWarning } from '../types/remoteLifecycle';
+import {
+	materializeRemoteLifecycle,
+	materializeRemoteLifecycleCollection,
+	parseRemoteLifecycle,
+	lifecycleDatabases,
+} from '../utils/remoteLifecycle';
+import type { DatabaseArtifact, LifecycleWarning } from '../types/remoteLifecycle';
 import { serverLogger } from '../utils/logger';
 import {
 	RemoteCommandPreparationError,
@@ -55,6 +60,10 @@ type SetPreparationStage = (
 type RemoteProgressEvent = {
 	phase?: string;
 	lifecycleStage?: string;
+	databaseId?: string;
+	engine?: 'mysql' | 'mariadb' | 'postgresql';
+	ordinal?: number;
+	count?: number;
 	progress?: {
 		bytesProcessed?: number;
 		filesProcessed?: number;
@@ -70,12 +79,15 @@ type RemoteCompletion = {
 	/** Closed, non-secret diagnostics sent by the Phase 4 agent. */
 	failureStage?: string;
 	failureCode?: string;
+	databaseId?: string;
+	engine?: 'mysql' | 'mariadb' | 'postgresql';
 	result?: {
 		snapshotId?: string;
 		summary?: BackupCompletionStats;
 		lifecycle?: {
 			warnings: LifecycleWarning[];
 			database?: { path: string; bytes: number; sha256: string };
+			databases?: DatabaseArtifact[];
 		};
 	};
 };
@@ -402,18 +414,38 @@ export class RemoteBackupService {
 			let lifecycle;
 			if (plan.settings.remoteLifecycle) {
 				setStage('database-credential-preparation');
-				const credential = plan.settings.remoteLifecycle.database
-					? await this.planStore.getDatabaseCredential(plan.id)
-					: null;
-				lifecycle = materializeRemoteLifecycle(
-					plan.settings.remoteLifecycle,
-					credential,
-					this.encryptionSecret
-				);
+				const agent = await this.getCapableAgent(plan.sourceId);
+				lifecycle =
+					plan.settings.remoteLifecycle.version === 1
+						? materializeRemoteLifecycle(
+								plan.settings.remoteLifecycle,
+								plan.settings.remoteLifecycle.database
+									? await this.planStore.getDatabaseCredential(plan.id)
+									: null,
+								this.encryptionSecret
+							)
+						: materializeRemoteLifecycleCollection(
+								plan.settings.remoteLifecycle,
+								await this.planStore.getDatabaseCredentials(plan.id),
+								this.encryptionSecret
+							);
+				const databases = lifecycleDatabases(lifecycle);
+				if (
+					(agent.capabilities as { backupLifecycleVersion?: number }).backupLifecycleVersion === 1
+				) {
+					const database = databases[0];
+					const { databaseId: _id, ...legacyDatabase } = database || {};
+					lifecycle = parseRemoteLifecycle({
+						version: 1,
+						...(database ? { database: legacyDatabase } : {}),
+						preHook: lifecycle.preHook,
+						postHook: lifecycle.postHook,
+					});
+				}
 			}
 			setStage('payload');
 			return {
-				version: lifecycle ? 2 : 1,
+				version: lifecycle ? (lifecycle.version === 2 ? 3 : 2) : 1,
 				...(lifecycle ? { lifecycle } : {}),
 				backupId: backup.id,
 				planId: plan.id,
@@ -452,6 +484,14 @@ export class RemoteBackupService {
 					planId: reference.planId,
 					backupId: reference.backupId,
 					lifecycleStage: event.lifecycleStage,
+					...(event.databaseId
+						? {
+								databaseId: event.databaseId,
+								engine: event.engine,
+								ordinal: event.ordinal,
+								count: event.count,
+							}
+						: {}),
 				},
 				'Remote backup lifecycle stage'
 			);
@@ -466,15 +506,23 @@ export class RemoteBackupService {
 			: undefined;
 		await this.backupStore.update(backup.id, {
 			status: event.phase === 'accepted' ? 'queued' : 'started',
-			...(event.lifecycleStage
+			...(event.lifecycleStage || progressStats
 				? {
 						progressStats: {
 							...(backup.progressStats || {}),
-							lifecycleStage: event.lifecycleStage,
+							...progressStats,
+							...(event.lifecycleStage ? { lifecycleStage: event.lifecycleStage } : {}),
+							...(event.databaseId
+								? {
+										databaseId: event.databaseId,
+										databaseEngine: event.engine,
+										databaseOrdinal: event.ordinal,
+										databaseCount: event.count,
+									}
+								: {}),
 						} as BackupProgressStats,
 					}
 				: {}),
-			...(progressStats ? { progressStats } : {}),
 		});
 	}
 
@@ -509,6 +557,38 @@ export class RemoteBackupService {
 			});
 			return;
 		}
+		const plan = await this.planStore.getById(reference.planId);
+		const lifecycleReport = completion.result?.lifecycle;
+		const configured = plan?.settings.remoteLifecycle
+			? lifecycleDatabases(parseRemoteLifecycle(plan.settings.remoteLifecycle))
+			: [];
+		const reported = lifecycleReport?.databases;
+		if (
+			(lifecycleReport && !/^[a-f0-9]{64}$/.test(snapshotId)) ||
+			(configured.length > 1 && !reported) ||
+			(reported &&
+				(reported.length !== configured.length ||
+					configured.some(
+						entry =>
+							!reported.some(
+								artifact =>
+									artifact.databaseId === entry.databaseId &&
+									artifact.engine === entry.engine &&
+									artifact.database === entry.database &&
+									artifact.path === `/pluton/database/${entry.dumpFilename}` &&
+									artifact.bytes > 0 &&
+									artifact.bytes <= entry.maxDumpBytes
+							)
+					)))
+		) {
+			await this.eventService.onBackupFailure({
+				planId: reference.planId,
+				backupId: reference.backupId,
+				error:
+					'Remote agent completed without valid database artifact metadata (snapshot-confirmation/snapshot-confirmation-failed).',
+			});
+			return;
+		}
 		await this.eventService.onBackupComplete({
 			planId: reference.planId,
 			backupId: reference.backupId,
@@ -537,7 +617,6 @@ export class RemoteBackupService {
 			);
 		}
 		await this.repositories.markInitialized(reference.repositoryId);
-		const plan = await this.planStore.getById(reference.planId);
 		if (plan) {
 			const snapshotIds = new Set([...(plan.stats?.snapshots || []), snapshotId]);
 			await this.planStore.update(plan.id, {
@@ -628,7 +707,8 @@ export class RemoteBackupService {
 		if (plan.settings.remoteLifecycle !== undefined) {
 			setPreparationStage?.('lifecycle-configuration');
 			const lifecycle = parseRemoteLifecycle(plan.settings.remoteLifecycle);
-			if (lifecycle.database?.password !== undefined)
+			const databases = lifecycleDatabases(lifecycle);
+			if (databases.some(db => db.password !== undefined))
 				throw new AppError(400, 'Database password cannot be stored in plan settings.');
 			const agent = await this.getCapableAgent(plan.sourceId);
 			const capabilities = agent.capabilities as {
@@ -637,9 +717,10 @@ export class RemoteBackupService {
 				hooksConfigured?: boolean;
 			};
 			if (
-				capabilities.backupLifecycleVersion !== 1 ||
-				(lifecycle.database &&
-					!capabilities.databaseEngines?.includes(lifecycle.database.engine)) ||
+				![1, 2].includes(capabilities.backupLifecycleVersion || 0) ||
+				(capabilities.backupLifecycleVersion === 1 &&
+					(databases.length > 1 || databases.some(db => db.engine === 'postgresql'))) ||
+				databases.some(db => !capabilities.databaseEngines?.includes(db.engine)) ||
 				((lifecycle.preHook || lifecycle.postHook) && capabilities.hooksConfigured !== true)
 			) {
 				throw new AppError(

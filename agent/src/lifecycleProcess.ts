@@ -11,6 +11,9 @@ export type ProcessFailureCode =
   | "output-limit"
   | "auth-failed"
   | "unavailable"
+  | "tls-verification-failed"
+  | "client-incompatible"
+  | "output-empty"
   | "failed"
   | "start-failed";
 export class LifecycleProcessError extends Error {
@@ -36,6 +39,8 @@ export async function runLifecycleProcess(input: {
   timeoutSeconds: number;
   shouldCancel: () => Promise<boolean>;
   output?: { file: string; maxBytes: number };
+  /** Replay-only hashing of an already confirmed SQL artifact; never buffers SQL. */
+  hashOutputMaxBytes?: number;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ bytes: number; sha256: string }> {
   if (await input.shouldCancel()) throw new LifecycleProcessError("cancelled");
@@ -124,7 +129,10 @@ export async function runLifecycleProcess(input: {
     const bounded = new Transform({
       transform(chunk: Buffer, _encoding, callback) {
         bytes += chunk.length;
-        if (bytes > (input.output?.maxBytes ?? 64 * 1024)) {
+        if (
+          bytes >
+          (input.output?.maxBytes ?? input.hashOutputMaxBytes ?? 64 * 1024)
+        ) {
           stop("output-limit");
           callback(new LifecycleProcessError("output-limit"));
           return;
@@ -157,13 +165,24 @@ export async function runLifecycleProcess(input: {
       if (failure) throw new LifecycleProcessError(failure);
       if (code !== 0) {
         // Provider text is consumed only for closed classification, never logged/returned.
-        const category = /(?:\b1045\b|Access denied)/i.test(stderr)
-          ? "auth-failed"
-          : /(?:\b200[2356]\b|Can't connect|Unknown MySQL server host)/i.test(
-                stderr,
-              )
-            ? "unavailable"
-            : "failed";
+        const category =
+          /(?:server version mismatch|aborting because of server version|unsupported server version)/i.test(
+            stderr,
+          )
+            ? "client-incompatible"
+            : /(?:certificate verify failed|certificate verification failed|server certificate.*(?:does not match|doesn't match)|root certificate file.*(?:does not exist|could not)|server does not support SSL)/i.test(
+                  stderr,
+                )
+              ? "tls-verification-failed"
+              : /(?:\b1045\b|Access denied|password authentication failed|no password supplied|no pg_hba.conf entry)/i.test(
+                    stderr,
+                  )
+                ? "auth-failed"
+                : /(?:\b200[2356]\b|Can't connect|Unknown MySQL server host|connection refused|could not translate host name|connection timed out|network is unreachable)/i.test(
+                      stderr,
+                    )
+                  ? "unavailable"
+                  : "failed";
         throw new LifecycleProcessError(category);
       }
     } finally {
@@ -189,8 +208,10 @@ export async function runLifecycleProcess(input: {
       info.size !== bytes ||
       !bytes
     )
-      throw new LifecycleProcessError("failed");
+      throw new LifecycleProcessError(!bytes ? "output-empty" : "failed");
     await chmod(input.output.file, 0o600);
   }
+  if (input.hashOutputMaxBytes !== undefined && !bytes)
+    throw new LifecycleProcessError("output-empty");
   return { bytes, sha256: hash.digest("hex") };
 }

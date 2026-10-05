@@ -20,8 +20,8 @@ export type AgentInventory = {
 	capabilities: {
 		filesystemRootsConfigured: boolean;
 		commandTypes: AgentCommandType[];
-		backupLifecycleVersion?: 1;
-		databaseEngines?: ('mysql' | 'mariadb')[];
+		backupLifecycleVersion?: 1 | 2;
+		databaseEngines?: ('mysql' | 'mariadb' | 'postgresql')[];
 		hooksConfigured?: boolean;
 	};
 };

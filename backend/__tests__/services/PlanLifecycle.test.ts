@@ -48,6 +48,7 @@ describe('Phase 5 plan write/read secret boundary', () => {
 			getById: jest.fn(),
 			getAll: jest.fn(),
 			getDatabaseCredential: jest.fn(),
+			getDatabaseCredentials: jest.fn().mockResolvedValue([]),
 			hasActiveBackups: jest.fn().mockResolvedValue(false),
 		};
 		remote = {
@@ -74,18 +75,28 @@ describe('Phase 5 plan write/read secret boundary', () => {
 		const result = await service.createPlan(input, { runNow: false });
 		expect(JSON.stringify(result)).not.toContain(database.password);
 		const [saved, encrypted] = store.create.mock.calls[0];
-		expect(saved.settings.remoteLifecycle.database).not.toHaveProperty('password');
-		expect(new Cryptr('synthetic-phase5-plan-secret').decrypt(encrypted)).toBe(database.password);
+		expect(saved.settings.remoteLifecycle).toMatchObject({
+			version: 2,
+			databases: [{ databaseId: expect.stringMatching(/^db_/), passwordConfigured: true }],
+		});
+		expect(saved.settings.remoteLifecycle.databases[0]).not.toHaveProperty('password');
+		expect(new Cryptr('synthetic-phase5-plan-secret').decrypt(encrypted[0].encryptedPassword)).toBe(
+			database.password
+		);
 		store.getById.mockResolvedValue(result);
 		store.getAll.mockResolvedValue([result]);
-		expect(JSON.stringify(await service.getPlan(result.id))).not.toContain(encrypted);
-		expect(JSON.stringify(await service.getAllPlans())).not.toContain(encrypted);
+		expect(JSON.stringify(await service.getPlan(result.id))).not.toContain(
+			encrypted[0].encryptedPassword
+		);
+		expect(JSON.stringify(await service.getAllPlans())).not.toContain(
+			encrypted[0].encryptedPassword
+		);
 	});
 	it('blank replacement preserves secret; scheduling failure rolls plan and credential back together', async () => {
 		const result = await service.createPlan(planInput(), { runNow: false });
 		const encrypted = store.create.mock.calls[0][1];
 		store.getById.mockResolvedValue(result);
-		store.getDatabaseCredential.mockResolvedValue(encrypted);
+		store.getDatabaseCredentials.mockResolvedValue(encrypted);
 		await service.updatePlan(result.id, { settings: result.settings });
 		expect(store.update).toHaveBeenLastCalledWith(result.id, expect.any(Object), encrypted);
 		remote.updateManagedPlan.mockRejectedValueOnce(new Error('synthetic schedule failure'));
@@ -109,13 +120,29 @@ describe('Phase 5 plan write/read secret boundary', () => {
 	it('disabling all lifecycle settings erases the saved credential and returns to filesystem-only settings', async () => {
 		const result = await service.createPlan(planInput(), { runNow: false });
 		store.getById.mockResolvedValue(result);
-		store.getDatabaseCredential.mockResolvedValue(store.create.mock.calls[0][1]);
+		store.getDatabaseCredentials.mockResolvedValue(store.create.mock.calls[0][1]);
 		const { remoteLifecycle: _removed, ...filesystemOnly } = result.settings;
-		await service.updatePlan(result.id, { settings: filesystemOnly });
+		await service.updatePlan(result.id, {
+			settings: { ...filesystemOnly, remoteLifecycle: { version: 2, databases: [] } },
+		});
 		expect(store.update).toHaveBeenLastCalledWith(
 			result.id,
-			expect.objectContaining({ settings: filesystemOnly }),
-			null
+			expect.objectContaining({ settings: { ...filesystemOnly, remoteLifecycle: undefined } }),
+			[]
 		);
+	});
+	it('unrelated partial settings and title updates preserve saved database identity and ciphertext', async () => {
+		const result = await service.createPlan(planInput(), { runNow: false });
+		const credentials = store.create.mock.calls[0][1];
+		store.getById.mockResolvedValue(result);
+		store.getDatabaseCredentials.mockResolvedValue(credentials);
+		await service.updatePlan(result.id, { settings: { compression: true } as any });
+		expect(store.update).toHaveBeenLastCalledWith(
+			result.id,
+			expect.objectContaining({ settings: { ...result.settings, compression: true } })
+		);
+		expect(store.getDatabaseCredentials).not.toHaveBeenCalled();
+		await service.updatePlan(result.id, { title: 'Unrelated title' });
+		expect(store.update.mock.calls.at(-1)).toHaveLength(2);
 	});
 });

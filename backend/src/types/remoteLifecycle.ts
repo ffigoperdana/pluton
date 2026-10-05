@@ -1,6 +1,8 @@
 /** Phase 5 remote managed plans only. Password is a write-only API input. */
 export type RemoteDatabaseBackup = {
-	engine: 'mysql' | 'mariadb';
+	/** Assigned by the server; never an array-index credential binding. */
+	databaseId?: string;
+	engine: 'mysql' | 'mariadb' | 'postgresql';
 	host: string;
 	port: number;
 	tls: 'verify-identity' | 'local';
@@ -23,10 +25,28 @@ export type RemoteLifecycleHook = {
 };
 
 export type RemoteBackupLifecycle = {
-	version: 1;
+	version: 1 | 2;
+	/** Accepted for old single-database API clients only. */
 	database?: RemoteDatabaseBackup;
+	databases?: RemoteDatabaseBackup[];
 	preHook?: RemoteLifecycleHook;
 	postHook?: RemoteLifecycleHook;
+};
+
+export type DatabaseCredential = {
+	databaseId: string;
+	encryptedPassword: string;
+	/** The additive migration preserves the old ciphertext until explicit edits. */
+	legacySingle: boolean;
+};
+
+export type DatabaseArtifact = {
+	databaseId: string;
+	engine: RemoteDatabaseBackup['engine'];
+	database: string;
+	path: string;
+	bytes: number;
+	sha256: string;
 };
 
 export type LifecycleWarning = {

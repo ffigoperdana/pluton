@@ -57,6 +57,13 @@
       "when": 1791189986647,
       "tag": "0007_phase5_remote_database_credentials",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1791199209644,
+      "tag": "0008_phase5_multiple_database_credentials",
+      "breakpoints": true
     }
   ]
 }

@@ -5,7 +5,11 @@ import { NewPlan, Plan, plans } from '../db/schema/plans';
 import { backups } from '../db/schema/backups';
 import { PlanBackupSettings, PlanFull } from '../types/plans';
 import { restores } from '../db/schema/restores';
-import { remotePlanDatabaseCredentials } from '../db/schema/remotePlanCredentials';
+import {
+	remotePlanDatabaseCredentials,
+	remotePlanDatabaseEntryCredentials,
+} from '../db/schema/remotePlanCredentials';
+import type { DatabaseCredential } from '../types/remoteLifecycle';
 
 /**
  * PlanStore is a class for managing plan records in the database.
@@ -228,6 +232,77 @@ export class PlanStore {
 		return record?.encryptedPassword || null;
 	}
 
+	async getDatabaseCredentials(planId: string): Promise<DatabaseCredential[]> {
+		return this.db
+			.select({
+				databaseId: remotePlanDatabaseEntryCredentials.databaseId,
+				encryptedPassword: remotePlanDatabaseEntryCredentials.encryptedPassword,
+				legacySingle: remotePlanDatabaseEntryCredentials.legacySingle,
+			})
+			.from(remotePlanDatabaseEntryCredentials)
+			.where(eq(remotePlanDatabaseEntryCredentials.planId, planId));
+	}
+
+	private writeDatabaseCredentials(
+		tx: Parameters<Parameters<DatabaseType['transaction']>[0]>[0],
+		planId: string,
+		credentials: DatabaseCredential[]
+	): void {
+		const old = tx
+			.select()
+			.from(remotePlanDatabaseEntryCredentials)
+			.where(eq(remotePlanDatabaseEntryCredentials.planId, planId))
+			.all();
+		const ownerPlan = tx.select().from(plans).where(eq(plans.id, planId)).get();
+		const expected = ownerPlan?.settings.remoteLifecycle?.databases || [];
+		if (
+			expected.length !== credentials.length ||
+			expected.some(
+				entry =>
+					entry.password !== undefined ||
+					!entry.databaseId ||
+					!credentials.some(item => item.databaseId === entry.databaseId)
+			)
+		)
+			throw new Error('Database credential bindings do not match the plan.');
+		if (new Set(credentials.map(item => item.databaseId)).size !== credentials.length)
+			throw new Error('Duplicate database credential identity.');
+		for (const credential of credentials) {
+			const owner = tx
+				.select()
+				.from(remotePlanDatabaseEntryCredentials)
+				.where(eq(remotePlanDatabaseEntryCredentials.databaseId, credential.databaseId))
+				.get();
+			if (owner && owner.planId !== planId)
+				throw new Error('Database credential ownership is invalid.');
+			tx.insert(remotePlanDatabaseEntryCredentials)
+				.values({ ...credential, planId })
+				.onConflictDoUpdate({
+					target: remotePlanDatabaseEntryCredentials.databaseId,
+					set: {
+						encryptedPassword: credential.encryptedPassword,
+						legacySingle: credential.legacySingle,
+					},
+				})
+				.run();
+			if (credential.legacySingle)
+				this.writeDatabaseCredential(tx, planId, credential.encryptedPassword);
+		}
+		for (const entry of old.filter(
+			item => !credentials.some(next => next.databaseId === item.databaseId)
+		)) {
+			tx.delete(remotePlanDatabaseEntryCredentials)
+				.where(
+					and(
+						eq(remotePlanDatabaseEntryCredentials.databaseId, entry.databaseId),
+						eq(remotePlanDatabaseEntryCredentials.planId, planId)
+					)
+				)
+				.run();
+			if (entry.legacySingle) this.writeDatabaseCredential(tx, planId, null);
+		}
+	}
+
 	private writeDatabaseCredential(
 		tx: Parameters<Parameters<DatabaseType['transaction']>[0]>[0],
 		planId: string,
@@ -248,7 +323,10 @@ export class PlanStore {
 		}
 	}
 
-	async create(planData: NewPlan, databaseCredential?: string | null): Promise<Plan | null> {
+	async create(
+		planData: NewPlan,
+		databaseCredential?: string | null | DatabaseCredential[]
+	): Promise<Plan | null> {
 		if (databaseCredential !== undefined) {
 			return this.db.transaction(tx => {
 				const [plan] = tx
@@ -261,7 +339,11 @@ export class PlanStore {
 					})
 					.returning()
 					.all();
-				if (plan) this.writeDatabaseCredential(tx, plan.id, databaseCredential);
+				if (plan) {
+					if (Array.isArray(databaseCredential))
+						this.writeDatabaseCredentials(tx, plan.id, databaseCredential);
+					else this.writeDatabaseCredential(tx, plan.id, databaseCredential);
+				}
 				return plan || null;
 			});
 		}
@@ -280,7 +362,7 @@ export class PlanStore {
 	async update(
 		id: string,
 		updates: Partial<PlanFull | Plan>,
-		databaseCredential?: string | null
+		databaseCredential?: string | null | DatabaseCredential[]
 	): Promise<Plan | null> {
 		// Only allow certain fields to be updated
 		const allowedFields = [
@@ -314,7 +396,11 @@ export class PlanStore {
 					.where(eq(plans.id, id))
 					.returning()
 					.all();
-				if (plan) this.writeDatabaseCredential(tx, id, databaseCredential);
+				if (plan) {
+					if (Array.isArray(databaseCredential))
+						this.writeDatabaseCredentials(tx, id, databaseCredential);
+					else this.writeDatabaseCredential(tx, id, databaseCredential);
+				}
 				return plan || null;
 			});
 		}
@@ -335,6 +421,9 @@ export class PlanStore {
 		return this.db.transaction(tx => {
 			// Existing migrations can leave FK checks disabled; erase the owned
 			// credential explicitly as well as using ON DELETE CASCADE.
+			tx.delete(remotePlanDatabaseEntryCredentials)
+				.where(eq(remotePlanDatabaseEntryCredentials.planId, id))
+				.run();
 			tx.delete(remotePlanDatabaseCredentials)
 				.where(eq(remotePlanDatabaseCredentials.planId, id))
 				.run();

@@ -6,8 +6,8 @@ export type AgentCommandType =
 export type AgentCapabilities = {
   filesystemRootsConfigured: boolean;
   commandTypes: AgentCommandType[];
-  backupLifecycleVersion?: 1;
-  databaseEngines?: ("mysql" | "mariadb")[];
+  backupLifecycleVersion?: 1 | 2;
+  databaseEngines?: ("mysql" | "mariadb" | "postgresql")[];
   hooksConfigured?: boolean;
 };
 
@@ -30,6 +30,8 @@ export type StoredCommandCompletion = {
   /** Closed, non-secret diagnostics for BACKUP_FILESYSTEM failures. */
   failureStage?: string;
   failureCode?: string;
+  databaseId?: string;
+  engine?: "mysql" | "mariadb" | "postgresql";
   /** A bounded, non-secret execution result such as a Restic snapshot ID. */
   result?: Record<string, unknown>;
   cancelled?: boolean;

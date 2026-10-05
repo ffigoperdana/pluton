@@ -108,7 +108,7 @@ const PlanAdvancedSettings = ({
                   onUpdate={(value) =>
                      onUpdate({
                         ...plan,
-                        settings: { ...settings, remoteLifecycle: value.database || value.preHook || value.postHook ? value : undefined },
+                        settings: { ...settings, remoteLifecycle: value },
                      })
                   }
                />
