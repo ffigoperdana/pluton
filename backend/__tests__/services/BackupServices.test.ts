@@ -73,6 +73,53 @@ describe('BackupService', () => {
 	});
 
 	describe('remote managed recovery routing', () => {
+		it('routes remote Download GET/POST only through the scoped session, preserving cancellation', async () => {
+			const descriptor = { fileName: 'backup-backup-01.tar', streamTo: jest.fn() };
+			const download = jest.fn().mockResolvedValue(descriptor);
+			const prepareDownload = jest.fn().mockResolvedValue({ streaming: true });
+			backupService = new BackupService(
+				mockSnapshotManager,
+				mockBackupManager,
+				mockPlanStore,
+				mockBackupStore,
+				mockRestoreStore,
+				mockStorageStore,
+				undefined,
+				{ download, prepareDownload } as any
+			);
+			mockBackupStore.getById.mockResolvedValue({
+				id: 'backup-01',
+				sourceId: 'app-01',
+				sourceType: 'device',
+				method: 'backup',
+			} as any);
+			const signal = new AbortController().signal;
+			await expect(backupService.getBackupDownload('backup-01')).resolves.toBe(descriptor);
+			await expect(
+				backupService.generateBackupDownload('backup-01', undefined, signal)
+			).resolves.toEqual({ streaming: true });
+			expect(download).toHaveBeenCalledWith('backup-01');
+			expect(prepareDownload).toHaveBeenCalledWith('backup-01', undefined, signal);
+			expect(mockSnapshotStrategy.getSnapshotDownload).not.toHaveBeenCalled();
+			expect(mockSnapshotStrategy.downloadSnapshot).not.toHaveBeenCalled();
+			expect(mockBackupStore.update).not.toHaveBeenCalled();
+		});
+		it('fails closed for remote Download when recovery is not wired; never falls back to local', async () => {
+			mockBackupStore.getById.mockResolvedValue({
+				id: 'backup-01',
+				sourceId: 'app-01',
+				sourceType: 'device',
+				method: 'backup',
+			} as any);
+			await expect(backupService.getBackupDownload('backup-01')).rejects.toMatchObject({
+				statusCode: 501,
+			});
+			await expect(backupService.generateBackupDownload('backup-01')).rejects.toMatchObject({
+				statusCode: 501,
+			});
+			expect(mockSnapshotStrategy.getSnapshotDownload).not.toHaveBeenCalled();
+			expect(mockSnapshotStrategy.downloadSnapshot).not.toHaveBeenCalled();
+		});
 		it('routes remote Browse through the scoped recovery service without using the local strategy', async () => {
 			const browse = jest.fn().mockResolvedValue([{ path: '/srv/example-app/index.txt' }]);
 			backupService = new BackupService(

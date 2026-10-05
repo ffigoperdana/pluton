@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { toast } from 'react-toastify';
 import { Plan } from '../../../@types/plans';
 import { Backup } from '../../../@types/backups';
+import { backupRowActions } from '../../../utils/backupDownload';
 import { formatBytes, formatDateTime, formatDuration, formatNumberToK, timeAgo } from '../../../utils/helpers';
 import Icon from '../../common/Icon/Icon';
 import classes from './Backups.module.scss';
@@ -157,7 +158,7 @@ const Backups = ({
    };
 
    const handleDownloadClick = (backup: Backup) => {
-      if (replicationSettings?.enabled && backup.mirrors && backup.mirrors.some((m) => m.status === 'completed')) {
+      if (!isRemoteManaged && replicationSettings?.enabled && backup.mirrors && backup.mirrors.some((m) => m.status === 'completed')) {
          setShowStorageSelector(backup);
       } else {
          downloadBackup(backup.id);
@@ -167,7 +168,7 @@ const Backups = ({
    const downloadBackup = (backupId: string, replicationId?: string) => {
       toast.promise(downloadBackupMutation.mutateAsync({ backupId, planId, replicationId }), {
          pending: 'Sending Download Request...',
-         success: 'Generating Download. This might take a while..',
+         success: isRemoteManaged ? 'Download started. Check your browser downloads.' : 'Generating Download. This might take a while..',
          error: {
             render({ data }: any) {
                return `Failed to Generate Download. ${data?.message || 'Unknown Error.'}`;
@@ -205,7 +206,8 @@ const Backups = ({
                .map((snapshot) => {
                   const { id, title, description, started, ended, download, status, errorMsg, duration, totalFiles, totalSize, changes, active } =
                      snapshot;
-                  const isDownloading = download && download.status === 'started';
+                  const isDownloading = !isRemoteManaged && download && download.status === 'started';
+                  const actions = backupRowActions(snapshot, isSync, isRemoteManaged);
 
                   return (
                      <div
@@ -290,7 +292,7 @@ const Backups = ({
                         </div>
                         {showSnapOptions === id && (
                            <div className={classes.settings}>
-                              {!isSync && !isRemoteManaged && status === 'completed' && active && (
+                              {actions.download && (
                                  <button
                                     className={downloadBackupMutation.isPending || cancelDownloadMutation.isPending ? 'notAllowed' : ''}
                                     disabled={downloadBackupMutation.isPending || cancelDownloadMutation.isPending}
@@ -306,7 +308,7 @@ const Backups = ({
                                     <Icon type={isDownloading ? 'close' : 'download'} size={14} /> {isDownloading ? 'Cancel Download' : 'Download'}
                                  </button>
                               )}
-                              {!isSync && status === 'completed' && active && (
+                              {actions.browse && (
                                  <button
                                     onClick={() => {
                                        toast.promise(browseSnapshotMutation.mutateAsync({ backupId: id }), {
@@ -320,7 +322,7 @@ const Backups = ({
                                     <Icon type="folders" size={14} /> Browse
                                  </button>
                               )}
-                              {status === 'completed' && active && (
+                              {actions.restore && (
                                  <button
                                     className={isDownloading ? 'notAllowed' : ''}
                                     disabled={isDownloading}
@@ -335,7 +337,7 @@ const Backups = ({
                                     <Icon type="restore" size={14} /> Restore
                                  </button>
                               )}
-                              {!isRemoteManaged && (
+                              {actions.remove && (
                                  <button
                                     className={isDownloading ? 'notAllowed' : ''}
                                     disabled={isDownloading}

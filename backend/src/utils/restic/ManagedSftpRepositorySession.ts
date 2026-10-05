@@ -3,6 +3,8 @@ import crypto from 'crypto';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
+import { Writable } from 'stream';
+import { pipeline } from 'stream/promises';
 import { z } from 'zod';
 import { AppError } from '../AppError';
 import { getBinaryPath } from '../binaryPathResolver';
@@ -25,6 +27,8 @@ export type RecoveryFailureCode =
 export class ManagedRepositoryAccessError extends AppError {
 	constructor(public readonly code: RecoveryFailureCode) {
 		super(502, `Managed repository access failed (${code}).`);
+		// AppError sets its own prototype; retain this closed-category subclass.
+		Object.setPrototypeOf(this, new.target.prototype);
 	}
 }
 
@@ -51,6 +55,8 @@ export interface ManagedRepositorySession {
 	snapshot(id: string): Promise<ManagedSnapshot>;
 	files(id: string): Promise<ManagedSnapshotNode[]>;
 	restore(id: string, selectedFiles: string[], stagingPath: string): Promise<ManagedRestoreSummary>;
+	/** Full snapshot TAR only; no client-controlled path, format or command. */
+	archive(id: string, destination: Writable): Promise<void>;
 }
 
 export type ManagedSftpAccess = {
@@ -157,6 +163,23 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 					throw new ManagedRepositoryAccessError('configuration-invalid');
 			};
 			return await consume({
+				archive: async (id, destination) => {
+					checkId(id);
+					await this.streamArchive(
+						restic,
+						[
+							...prefix.filter(argument => argument !== '--json'),
+							'dump',
+							'--archive',
+							'tar',
+							id,
+							'/',
+						],
+						resticEnvironment,
+						destination,
+						signal
+					);
+				},
 				snapshot: async id => {
 					checkId(id);
 					const snapshots = this.parse(z.array(snapshotSchema), await execute(['snapshots', id]));
@@ -226,6 +249,90 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			return schema.parse(JSON.parse(output));
 		} catch {
 			throw new ManagedRepositoryAccessError('invalid-output');
+		}
+	}
+
+	private async streamArchive(
+		binary: string,
+		args: string[],
+		env: NodeJS.ProcessEnv,
+		destination: Writable,
+		signal?: AbortSignal
+	): Promise<void> {
+		if (signal?.aborted || destination.destroyed)
+			throw new ManagedRepositoryAccessError('cancelled');
+		const child = spawn(binary, args, {
+			env,
+			shell: false,
+			windowsHide: true,
+			detached: process.platform !== 'win32',
+			stdio: ['ignore', 'pipe', 'pipe'],
+		});
+		const processId = `managed-download-${crypto.randomUUID()}`;
+		processManager.trackProcess(processId, child);
+		let failure: RecoveryFailureCode | undefined;
+		let hasClosed = false;
+		let pipelineFinished = false;
+		const transfer = new AbortController();
+		let timer: ReturnType<typeof setTimeout>;
+		const stop = (reason: RecoveryFailureCode) => {
+			failure ||= reason;
+			if (!hasClosed) killProcessTree(child, 'SIGKILL');
+			// Also interrupt a blocked destination after Restic's stdout has ended.
+			// Destroying only stdout cannot release that backpressure wait.
+			if (!pipelineFinished) {
+				transfer.abort();
+				// pipeline(end:false) deliberately leaves the consumer open.
+				// A failed/aborted TAR cannot be resumed or completed safely.
+				destination.destroy();
+			}
+		};
+		const abort = () => stop('cancelled');
+		// Inactivity bound, not a tiny archive size or total-transfer-time limit.
+		const activity = () => {
+			clearTimeout(timer);
+			timer = setTimeout(() => stop('timeout'), 10 * 60_000);
+			timer.unref();
+		};
+		const closed = new Promise<void>(resolve => {
+			child.once('close', code => {
+				hasClosed = true;
+				if (code !== 0)
+					failure ||=
+						code === 12
+							? 'wrong-password'
+							: code === 10
+								? 'repository-unavailable'
+								: 'execution-failed';
+				resolve();
+			});
+		});
+		child.on('error', () => {
+			failure ||= 'execution-failed';
+		});
+		child.stderr?.on('data', () => undefined); // never retain provider diagnostics
+		signal?.addEventListener('abort', abort, { once: true });
+		child.stdout?.on('data', activity);
+		destination.on('drain', activity);
+		activity();
+		try {
+			if (!child.stdout) throw new ManagedRepositoryAccessError('execution-failed');
+			// Backpressure propagates to Restic. No archive buffer or temporary TAR.
+			// Do not end HTTP at stdout EOF: first require a successful process exit.
+			await pipeline(child.stdout, destination, { end: false, signal: transfer.signal });
+			pipelineFinished = true;
+			await closed;
+			if (failure) throw new ManagedRepositoryAccessError(failure);
+		} catch {
+			stop(signal?.aborted ? 'cancelled' : failure || 'execution-failed');
+			await closed; // config cleanup must wait until Restic/Rclone have stopped
+			throw new ManagedRepositoryAccessError(failure || 'execution-failed');
+		} finally {
+			clearTimeout(timer!);
+			signal?.removeEventListener('abort', abort);
+			child.stdout?.removeListener('data', activity);
+			destination.removeListener('drain', activity);
+			processManager.untrackProcess(processId);
 		}
 	}
 

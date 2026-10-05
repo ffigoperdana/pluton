@@ -11,11 +11,18 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { execFile, spawn } from 'node:child_process';
+import { createWriteStream } from 'node:fs';
+import { Writable } from 'node:stream';
+import { finished } from 'node:stream/promises';
 import { promisify } from 'node:util';
 import Cryptr from 'cryptr';
 import { RemoteBackupService } from '../../src/services/RemoteBackupService';
 import { RemoteRepositoryRecoveryService } from '../../src/services/RemoteRepositoryRecoveryService';
-import { ManagedSftpRepositorySession } from '../../src/utils/restic/ManagedSftpRepositorySession';
+import {
+	ManagedSftpRepositorySession,
+	ManagedRepositoryAccessError,
+	type ManagedRepositorySessionProvider,
+} from '../../src/utils/restic/ManagedSftpRepositorySession';
 
 const executeFile = promisify(execFile);
 const restic = '/usr/local/bin/restic';
@@ -218,6 +225,27 @@ try {
 		stores.storage as any,
 		secret
 	);
+	const sessions: ManagedRepositorySessionProvider = {
+		withSession: (access, consume, signal) =>
+			new ManagedSftpRepositorySession().withSession(
+				access,
+				async session => {
+					const directories = (await fs.readdir(os.tmpdir())).filter(
+						name => name.startsWith('pluton-recovery-') && !beforeTemp.has(name)
+					);
+					assert.equal(
+						directories.length,
+						1,
+						'Exactly one private credential workspace per session.'
+					);
+					const directory = path.join(os.tmpdir(), directories[0]);
+					assert.equal((await fs.stat(directory)).mode & 0o777, 0o700);
+					assert.equal((await fs.stat(path.join(directory, 'rclone.conf'))).mode & 0o777, 0o600);
+					return consume(session);
+				},
+				signal
+			),
+	};
 	const service = new RemoteRepositoryRecoveryService(
 		stores.repositories as any,
 		stores.backups as any,
@@ -225,7 +253,7 @@ try {
 		stores.restores as any,
 		remote,
 		stores.agents as any,
-		new ManagedSftpRepositorySession(),
+		sessions,
 		secret,
 		path.join(scratch, 'staging')
 	);
@@ -236,6 +264,60 @@ try {
 		7
 	);
 	assert.equal((await service.browse('backup-02')).filter(file => file.type === 'file').length, 14);
+	assert.deepEqual(await service.prepareDownload('backup-01'), { streaming: true });
+	// Full native TAR downloads of both historical snapshots: no staged restore.
+	for (const backupId of ['backup-01', 'backup-02']) {
+		const descriptor = await service.download(backupId);
+		assert.match(descriptor.fileName, /^backup-[a-z0-9_-]+\.tar$/);
+		const archivePath = path.join(scratch, descriptor.fileName);
+		const output = createWriteStream(archivePath, { flags: 'wx', mode: 0o600 });
+		const done = finished(output);
+		let ready = false;
+		try {
+			await descriptor.streamTo(output, new AbortController().signal, () => {
+				ready = true;
+			});
+			output.end();
+			await done;
+		} catch (error) {
+			output.destroy();
+			await done.catch(() => undefined);
+			throw error;
+		}
+		assert.equal(ready, true);
+		assert.equal((await fs.stat(archivePath)).mode & 0o777, 0o600);
+		const extraction = path.join(scratch, `extract-${backupId}`);
+		await fs.mkdir(extraction, { mode: 0o700 });
+		await execute('/bin/tar', ['-xf', archivePath, '-C', extraction]);
+		assert.deepEqual(await hashTree(path.join(extraction, source.slice(1))), beforeSource);
+		assert.equal(rows.size, 0, 'Download never creates a staged restore job.');
+	}
+	// Cancel a real dump while its consumer is blocked: terminate Restic/Rclone,
+	// then remove scoped credentials. The read-only repository remains untouched.
+	const controller = new AbortController();
+	const blocked = new Writable({
+		highWaterMark: 1,
+		write(_chunk, _encoding, _done) {
+			controller.abort();
+		},
+	});
+	await assert.rejects(
+		(await service.download('backup-01')).streamTo(blocked, controller.signal, () => {}),
+		(error: unknown) => error instanceof ManagedRepositoryAccessError && error.code === 'cancelled'
+	);
+	blocked.destroy();
+	await assert.rejects(
+		sessions.withSession(
+			{
+				options: await remote.getSftpRecoveryOptions('storage-01'),
+				password: crypto.randomBytes(32).toString('base64url'),
+				repositoryPath: 'application',
+			},
+			session => session.snapshot(snapshots[0])
+		),
+		(error: unknown) =>
+			error instanceof ManagedRepositoryAccessError && error.code === 'wrong-password'
+	);
 	const selection = {
 		target: '',
 		overwrite: 'never' as const,
@@ -280,7 +362,7 @@ try {
 		'Every temporary Rclone config must be cleaned.'
 	);
 	console.log(
-		'PASS: real Restic 0.19.1 + Rclone 1.75.1, read-only SFTP, two exact historical snapshots, 14 files, full/granular/custom staging, matching hashes, repository/source unchanged, credential cleanup.'
+		'PASS: real Restic 0.19.1 + Rclone 1.75.1, read-only SFTP, two historical TAR downloads, cancellation, 14 files, full/granular/custom staging, matching hashes, repository/source unchanged, credential cleanup.'
 	);
 } finally {
 	if (sftp && sftp.exitCode === null && sftp.signalCode === null) {

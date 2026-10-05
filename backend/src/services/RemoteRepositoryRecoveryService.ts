@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import Cryptr from 'cryptr';
+import { Writable } from 'stream';
 import { BackupStore } from '../stores/BackupStore';
 import { PlanStore } from '../stores/PlanStore';
 import { RestoreStore } from '../stores/RestoreStore';
@@ -38,6 +39,11 @@ type RecoveryContext = {
 };
 type Selection = { files: SnapShotFile[]; includes: string[]; full: boolean; stats: RestoreStats };
 
+export type ManagedArchiveDownload = {
+	fileName: string;
+	streamTo: (destination: Writable, signal: AbortSignal, ready: () => void) => Promise<void>;
+};
+
 /**
  * Consumes managed Phase 4 metadata; never registers a Legacy repository, uses
  * the backup lifecycle executor, or issues commands to a source agent.
@@ -63,6 +69,71 @@ export class RemoteRepositoryRecoveryService {
 			throw new AppError(400, 'Remote recovery supports only the original managed repository.');
 		const context = await this.context(backupId);
 		return this.sessions.withSession(context.access, session => this.boundFiles(context, session));
+	}
+
+	/** Existing POST Download interaction: validate, but never materialize an archive. */
+	async prepareDownload(backupId: string, replicationId?: string, signal?: AbortSignal) {
+		if (replicationId)
+			throw new AppError(400, 'Remote downloads support only the original managed repository.');
+		const context = await this.context(backupId);
+		await this.sessions.withSession(
+			context.access,
+			async session => {
+				this.assertArchiveFiles(await this.boundFiles(context, session));
+			},
+			signal
+		);
+		return { streaming: true };
+	}
+
+	async download(backupId: string): Promise<ManagedArchiveDownload> {
+		const context = await this.context(backupId);
+		const safeId = context.backupId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80) || 'snapshot';
+		return {
+			fileName: `backup-${safeId}.tar`,
+			streamTo: async (destination, signal, ready) => {
+				let stage = 'repository-read';
+				try {
+					await this.sessions.withSession(
+						context.access,
+						async session => {
+							this.assertArchiveFiles(await this.boundFiles(context, session));
+							if (signal.aborted) throw new ManagedRepositoryAccessError('cancelled');
+							stage = 'archive-stream';
+							ready(); // headers are set only after exact snapshot/binding validation
+							await session.archive(context.snapshotId, destination);
+						},
+						signal
+					);
+				} catch (error) {
+					const safe =
+						error instanceof AppError
+							? error
+							: new ManagedRepositoryAccessError('execution-failed');
+					planLogger('download', context.planId, context.backupId).warn(
+						{
+							event: 'remote_download_failed',
+							stage,
+							code: signal.aborted
+								? 'cancelled'
+								: safe instanceof ManagedRepositoryAccessError
+									? safe.code
+									: 'validation-failed',
+						},
+						'Remote download failed.'
+					);
+					throw safe;
+				}
+			},
+		};
+	}
+
+	private assertArchiveFiles(files: SnapShotFile[]) {
+		if (files.some(file => !['file', 'dir'].includes(file.type) || file.path.includes(':')))
+			throw new AppError(
+				400,
+				'Managed snapshot downloads support safe regular files and directories only.'
+			);
 	}
 
 	async preview(backupId: string, config: RestoreConfig, planId?: string) {

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-toastify';
 import { API_URL } from '../utils/constants';
+import { startNativeBackupDownload } from '../utils/backupDownload';
 
 const notifiedBackupProgress = new Set<string>();
 
@@ -24,6 +25,7 @@ export function useDownloadBackup() {
    return useMutation({
       mutationFn: generateBackupDownload,
       onSuccess: (res, payload) => {
+         if (res.result?.streaming === true) startNativeBackupDownload(API_URL, payload.backupId);
          console.log('res :', payload, res);
          queryClient.invalidateQueries({ queryKey: ['plan', payload.planId] });
       },

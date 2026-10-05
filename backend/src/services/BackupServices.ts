@@ -108,6 +108,10 @@ export class BackupService {
 		if (!backup) {
 			throw new Error('Backup not found');
 		}
+		if (backup.method === 'backup' && RemoteBackupService.isRemoteFilesystemPlan(backup)) {
+			if (!this.remoteRecovery) throw new AppError(501, 'REMOTE_CAPABILITY_NOT_IMPLEMENTED');
+			return this.remoteRecovery.download(backupId);
+		}
 		const backupDevice = backup.sourceId ? backup.sourceId : 'main';
 		const strategy = this.getSnapshotStrategy(backupDevice, backup.method);
 		const downloadResult = await strategy.getSnapshotDownload(backup.planId as string, backupId);
@@ -121,10 +125,18 @@ export class BackupService {
 		return downloadResult.result;
 	}
 
-	async generateBackupDownload(backupId: string, replicationId?: string): Promise<any> {
+	async generateBackupDownload(
+		backupId: string,
+		replicationId?: string,
+		signal?: AbortSignal
+	): Promise<any> {
 		const backup = await this.backupStore.getById(backupId);
 		if (!backup) {
 			throw new Error('Backup not found');
+		}
+		if (backup.method === 'backup' && RemoteBackupService.isRemoteFilesystemPlan(backup)) {
+			if (!this.remoteRecovery) throw new AppError(501, 'REMOTE_CAPABILITY_NOT_IMPLEMENTED');
+			return this.remoteRecovery.prepareDownload(backupId, replicationId, signal);
 		}
 		// If replicationId is provided, download from mirror storage
 		let effectiveStorageId = backup.storageId as string;
