@@ -9,6 +9,7 @@ import { LocalStrategy as LocalSnapshotStrategy } from '../../src/strategies/sna
 import { LocalStrategy as LocalBackupStrategy } from '../../src/strategies/backup/LocalStrategy';
 import { jobQueue } from '../../src/jobs/JobQueue';
 import { initializeLogger } from '../../src/utils/logger';
+import { ManagedRepositoryAccessError } from '../../src/utils/restic/ManagedSftpRepositorySession';
 
 // Mock dependencies
 jest.mock('../../src/stores/BackupStore');
@@ -69,6 +70,95 @@ describe('BackupService', () => {
 			mockRestoreStore,
 			mockStorageStore
 		);
+	});
+
+	describe('remote managed recovery routing', () => {
+		it('routes remote Browse through the scoped recovery service without using the local strategy', async () => {
+			const browse = jest.fn().mockResolvedValue([{ path: '/srv/example-app/index.txt' }]);
+			backupService = new BackupService(
+				mockSnapshotManager,
+				mockBackupManager,
+				mockPlanStore,
+				mockBackupStore,
+				mockRestoreStore,
+				mockStorageStore,
+				undefined,
+				{ browse } as any
+			);
+			mockBackupStore.getById.mockResolvedValue({
+				id: 'backup-01',
+				sourceId: 'app-01',
+				sourceType: 'device',
+				method: 'backup',
+			} as any);
+			await expect(backupService.getSnapshotFiles('backup-01')).resolves.toEqual([
+				{ path: '/srv/example-app/index.txt' },
+			]);
+			expect(browse).toHaveBeenCalledWith('backup-01', undefined);
+			expect(mockSnapshotStrategy.getSnapshotFiles).not.toHaveBeenCalled();
+			expect(mockStorageStore.getById).not.toHaveBeenCalled();
+		});
+		it('preserves a sanitized repository failure without falling back to another snapshot strategy', async () => {
+			const failure = new ManagedRepositoryAccessError('wrong-password');
+			const browse = jest.fn().mockRejectedValue(failure);
+			backupService = new BackupService(
+				mockSnapshotManager,
+				mockBackupManager,
+				mockPlanStore,
+				mockBackupStore,
+				mockRestoreStore,
+				mockStorageStore,
+				undefined,
+				{ browse } as any
+			);
+			mockBackupStore.getById.mockResolvedValue({
+				id: 'backup-01',
+				sourceId: 'app-01',
+				sourceType: 'device',
+				method: 'backup',
+			} as any);
+			await expect(backupService.getSnapshotFiles('backup-01', 'mirror-01')).rejects.toBe(failure);
+			expect(browse).toHaveBeenCalledWith('backup-01', 'mirror-01');
+			expect(mockSnapshotStrategy.getSnapshotFiles).not.toHaveBeenCalled();
+		});
+		it('fails closed if remote recovery is not wired', async () => {
+			mockBackupStore.getById.mockResolvedValue({
+				id: 'backup-01',
+				sourceId: 'app-01',
+				sourceType: 'device',
+				method: 'backup',
+			} as any);
+			await expect(backupService.getSnapshotFiles('backup-01')).rejects.toMatchObject({
+				statusCode: 501,
+			});
+			expect(mockSnapshotStrategy.getSnapshotFiles).not.toHaveBeenCalled();
+		});
+		it('does not route remote sync into Phase 4 filesystem recovery', async () => {
+			const browse = jest.fn();
+			backupService = new BackupService(
+				mockSnapshotManager,
+				mockBackupManager,
+				mockPlanStore,
+				mockBackupStore,
+				mockRestoreStore,
+				mockStorageStore,
+				undefined,
+				{ browse } as any
+			);
+			mockBackupStore.getById.mockResolvedValue({
+				id: 'backup-01',
+				planId: 'plan-01',
+				sourceId: 'app-01',
+				sourceType: 'device',
+				method: 'sync',
+				storageId: 'local',
+				storagePath: 'application',
+			} as any);
+			await expect(backupService.getSnapshotFiles('backup-01')).rejects.toThrow(
+				'REMOTE_CAPABILITY_NOT_IMPLEMENTED'
+			);
+			expect(browse).not.toHaveBeenCalled();
+		});
 	});
 
 	// -------------------------

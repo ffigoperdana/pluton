@@ -153,6 +153,42 @@ describe('PlanStore', () => {
 	});
 
 	describe('handleBackupStats', () => {
+		it('uses remote completion counts and the exact snapshot ID for active rows', () => {
+			const snapshotId = 'a'.repeat(64);
+			const row = {
+				id: 'backup-remote',
+				taskStats: null,
+				completionStats: {
+					snapshot_id: snapshotId,
+					total_files_processed: 14,
+					total_bytes_processed: 1234,
+				},
+			};
+			const result = planStore.handleBackupStats('backup', [row] as any, {
+				size: 1234,
+				snapshots: [snapshotId],
+			}, true);
+			expect(result[0]).toMatchObject({ active: true, totalFiles: 14, totalSize: 1234 });
+			expect(
+				planStore.handleBackupStats('backup', [row] as any, {
+					size: 1234,
+					snapshots: ['b'.repeat(64)],
+				}, true)[0].active
+			).toBe(false);
+		});
+		it('preserves local task/dry-run statistics, including an intentional zero', () => {
+			const row = {
+				id: 'backup-local',
+				taskStats: { total_files_processed: 0, total_bytes_processed: 0 },
+				completionStats: { total_files_processed: 3, total_bytes_processed: 7 },
+			};
+			expect(
+				planStore.handleBackupStats('backup', [row] as any, {
+					size: 7,
+					snapshots: ['backup-local'],
+				})[0]
+			).toMatchObject({ active: true, totalFiles: 0, totalSize: 0 });
+		});
 		it('should correctly calculate derived stats for each backup', () => {
 			// Arrange
 			const backups = [

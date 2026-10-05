@@ -16,15 +16,16 @@ interface RestoreWizardProps {
    deviceId: string;
    planStorage: Plan['storage'];
    mirrors?: Backup['mirrors'];
+   stagingOnly?: boolean;
    close: () => void;
 }
 
-const RestoreWizard = ({ backupId, planId, deviceId, mirrors, planStorage, close }: RestoreWizardProps) => {
+const RestoreWizard = ({ backupId, planId, deviceId, mirrors, planStorage, stagingOnly = false, close }: RestoreWizardProps) => {
    const [step, setStep] = useState(1);
    const [restoreSettings, setRestoreSettings] = useState<RestoreSettings>({
       type: 'original',
       path: '',
-      overwrite: 'always',
+      overwrite: stagingOnly ? 'never' : 'always',
       includes: [],
       excludes: [],
       delete: false,
@@ -91,6 +92,7 @@ const RestoreWizard = ({ backupId, planId, deviceId, mirrors, planStorage, close
                   settings={restoreSettings}
                   primaryStorage={planStorage}
                   mirrors={mirrors}
+                  stagingOnly={stagingOnly}
                   updateSettings={(settings) => setRestoreSettings(settings)}
                   goNext={() => setStep(2)}
                   close={close}
@@ -113,6 +115,7 @@ const RestoreWizard = ({ backupId, planId, deviceId, mirrors, planStorage, close
             )}
             {step === 3 && (
                <RestorePreviewStep
+                  stagingOnly={stagingOnly}
                   backupId={backupId}
                   planId={planId}
                   settings={restoreSettings}
@@ -125,6 +128,7 @@ const RestoreWizard = ({ backupId, planId, deviceId, mirrors, planStorage, close
             )}
             {step === 4 && (
                <RestoreConfirmStep
+                  stagingOnly={stagingOnly}
                   backupId={backupId}
                   planId={planId}
                   settings={restoreSettings}

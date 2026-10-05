@@ -178,6 +178,11 @@ export class RemoteBackupService {
 		return plan.sourceType === 'device' && plan.sourceId !== 'main';
 	}
 
+	/** Internal server recovery shares the same narrow SFTP allowlist/decryption. */
+	async getSftpRecoveryOptions(storageId: string): Promise<Record<string, string>> {
+		return (await this.materializeSftpStorage(storageId)).options;
+	}
+
 	async validatePlanCreation(plan: NewPlan): Promise<void> {
 		await this.assertSupportedPlan(plan);
 	}
@@ -376,7 +381,9 @@ export class RemoteBackupService {
 			setStage('repository-secret-decryption');
 			let repositoryPassword: string;
 			try {
-				repositoryPassword = new Cryptr(this.encryptionSecret).decrypt(repository.encryptedPassword);
+				repositoryPassword = new Cryptr(this.encryptionSecret).decrypt(
+					repository.encryptedPassword
+				);
 			} catch {
 				throw new AppError(500, 'Remote repository credentials could not be prepared.');
 			}

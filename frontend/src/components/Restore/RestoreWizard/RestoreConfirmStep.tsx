@@ -11,12 +11,23 @@ interface RestoreConfirmStepProps {
    settings: RestoreSettings;
    stats: RestoredItemsStats | null;
    method: string;
+   stagingOnly?: boolean;
    snapshotsStats: { total_files: number; total_bytes: number };
    goBack: () => void;
    close: () => void;
 }
 
-const RestoreConfirmStep = ({ backupId, planId, settings, stats, snapshotsStats, method, goBack, close }: RestoreConfirmStepProps) => {
+const RestoreConfirmStep = ({
+   backupId,
+   planId,
+   settings,
+   stats,
+   snapshotsStats,
+   method,
+   stagingOnly = false,
+   goBack,
+   close,
+}: RestoreConfirmStepProps) => {
    const restoreMutation = useRestoreBackup();
    const navigate = useNavigate();
    const restoreStats = stats;
@@ -42,7 +53,9 @@ const RestoreConfirmStep = ({ backupId, planId, settings, stats, snapshotsStats,
                toast.success(`Restore Started`, { autoClose: 5000 });
                const targetPlanId = variables?.planId;
                if (targetPlanId) {
-                  navigate(`/plan/${targetPlanId}?pendingrestore=1`);
+                  // Staged restores already have a persisted record, even if
+                  // a small restore finishes before the next progress poll.
+                  navigate(`/plan/${targetPlanId}${stagingOnly ? '' : '?pendingrestore=1'}`);
                }
                close();
             },
@@ -66,7 +79,13 @@ const RestoreConfirmStep = ({ backupId, planId, settings, stats, snapshotsStats,
                      )}{' '}
                      will be restored to{' '}
                      <strong>
-                        {settings.type === 'original' ? (isSync ? 'the original source path' : 'their original source paths') : `"${settings.path}"`}
+                        {stagingOnly
+                           ? `a new internal server staging workspace${settings.type === 'custom' ? ` (subfolder: ${settings.path})` : ''}`
+                           : settings.type === 'original'
+                             ? isSync
+                                ? 'the original source path'
+                                : 'their original source paths'
+                             : `"${settings.path}"`}
                      </strong>
                      . Are you sure you want to proceed with the Restore?
                   </p>

@@ -42,6 +42,7 @@ import { ReplicationEventListener } from './services/listeners/ReplicationEventL
 import { BackupService } from './services/BackupServices';
 import { BaseSnapshotManager } from './managers/BaseSnapshotManager';
 import { RestoreService } from './services/RestoreService';
+import { RemoteRepositoryRecoveryService } from './services/RemoteRepositoryRecoveryService';
 import { RestoreEventListener } from './services/listeners/RestoreEventListener';
 import { DownloadEventListener } from './services/listeners/DownloadEventListener';
 import { DeviceService } from './services/DeviceService';
@@ -103,6 +104,14 @@ export async function createApp(): Promise<{ app: Express }> {
 		backupStore,
 		storageStore
 	);
+	const remoteRecoveryService = new RemoteRepositoryRecoveryService(
+		remoteManagedRepositoryStore,
+		backupStore,
+		planStore,
+		restoreStore,
+		remoteBackupService,
+		agentStore
+	);
 
 	// Event Listeners
 	new BackupEventListener(localPlanAgent, planStore, backupStore);
@@ -127,14 +136,16 @@ export async function createApp(): Promise<{ app: Express }> {
 		backupStore,
 		restoreStore,
 		storageStore,
-		remoteBackupService
+		remoteBackupService,
+		remoteRecoveryService
 	);
 	const restoreService = new RestoreService(
 		localRestoreAgent,
 		planStore,
 		backupStore,
 		restoreStore,
-		storageStore
+		storageStore,
+		remoteRecoveryService
 	);
 	const agentService = new AgentService(
 		agentStore,
