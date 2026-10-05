@@ -24,11 +24,23 @@ export type RemoteCommandPreparationStage =
 	| 'materializer-unavailable'
 	| 'unexpected';
 
+/**
+ * Non-secret rule identifiers used when an SFTP option is rejected. Keep this
+ * as a closed set so diagnostics can explain the validation rule without ever
+ * copying the rejected value into the log.
+ */
+export type RemoteCommandPreparationRuleCategory =
+	| 'unsupported-field'
+	| 'unsafe-control-character'
+	| 'value-too-long';
+
 export type RemoteCommandPreparationFailure = {
 	stage: RemoteCommandPreparationStage;
 	backupId?: string;
 	planId?: string;
 	storageId?: string;
+	rejectedField?: string;
+	ruleCategory?: RemoteCommandPreparationRuleCategory;
 };
 
 function preparationFailureMessage(stage: RemoteCommandPreparationStage): string {
@@ -69,6 +81,8 @@ export class RemoteCommandPreparationError extends Error {
 	readonly backupId?: string;
 	readonly planId?: string;
 	readonly storageId?: string;
+	readonly rejectedField?: string;
+	readonly ruleCategory?: RemoteCommandPreparationRuleCategory;
 
 	constructor(failure: RemoteCommandPreparationFailure, message = preparationFailureMessage(failure.stage)) {
 		super(message);
@@ -78,5 +92,21 @@ export class RemoteCommandPreparationError extends Error {
 		this.backupId = failure.backupId;
 		this.planId = failure.planId;
 		this.storageId = failure.storageId;
+		// Option names are useful for diagnosis, but do not allow arbitrary
+		// characters or unbounded input into structured server logs.
+		if (failure.rejectedField) {
+			const sanitizedField = failure.rejectedField
+				.replace(/[^A-Za-z0-9_.-]/g, '_')
+				.slice(0, 128);
+			if (sanitizedField) this.rejectedField = sanitizedField;
+		}
+		const ruleCategories: RemoteCommandPreparationRuleCategory[] = [
+			'unsupported-field',
+			'unsafe-control-character',
+			'value-too-long',
+		];
+		if (failure.ruleCategory && ruleCategories.includes(failure.ruleCategory)) {
+			this.ruleCategory = failure.ruleCategory;
+		}
 	}
 }

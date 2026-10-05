@@ -228,6 +228,8 @@ describe('AgentService', () => {
 					planId: 'plan-01',
 					backupId: 'backup-01',
 					storageId: 'storage-01',
+					rejectedField: 'host',
+					ruleCategory: 'unsafe-control-character',
 				})
 			),
 			completeCommand: jest.fn(),
@@ -266,6 +268,8 @@ describe('AgentService', () => {
 					planId: 'plan-01',
 					backupId: 'backup-01',
 					storageId: 'storage-01',
+					rejectedField: 'host',
+					ruleCategory: 'unsafe-control-character',
 				}),
 				'Remote backup command preparation failed'
 			);

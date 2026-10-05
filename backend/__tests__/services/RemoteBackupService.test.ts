@@ -224,6 +224,57 @@ describe('RemoteBackupService', () => {
 		expect(payload).not.toHaveProperty('encryptionKey');
 	});
 
+	it('ignores disabled and empty SFTP UI defaults without widening the agent allowlist', async () => {
+		const crypt = new Cryptr(encryptionSecret);
+		storageStore.getById.mockResolvedValue({
+			id: plan.storageId,
+			type: 'sftp',
+			// These are the values the normal Storage UI can persist when an
+			// optional switch is toggled and left off. Empty text fields are also
+			// retained by the edit form when it saves the storage.
+			settings: {
+				key_use_agent: false,
+				use_insecure_cipher: false,
+				disable_hashcheck: false,
+				ask_password: false,
+				known_hosts_file: '',
+				path_override: '',
+			},
+			credentials: {
+				host: crypt.encrypt('sftp.example.internal'),
+				port: crypt.encrypt('22'),
+				user: crypt.encrypt('backup-user'),
+				pass: crypt.encrypt(storagePassword),
+			},
+		});
+		const command = {
+			id: 'remote-backup-backup-example-01',
+			type: 'BACKUP_FILESYSTEM',
+			agentId: capableAgent.agentId,
+			payload: {
+				backupId: 'backup-example-01',
+				planId: plan.id,
+				repositoryId: 'remote-repo-example-01',
+			},
+		} as AgentCommand;
+
+		const payload = await service.materializeCommand(capableAgent.agentId, command);
+		expect(payload).toMatchObject({
+			rclone: {
+				type: 'sftp',
+				options: {
+					host: 'sftp.example.internal',
+					port: '22',
+					user: 'backup-user',
+					pass: storagePassword,
+				},
+			},
+		});
+		expect((payload.rclone as any).options).not.toHaveProperty('disable_hashcheck');
+		expect((payload.rclone as any).options).not.toHaveProperty('key_use_agent');
+		expect((payload.rclone as any).options).not.toHaveProperty('use_insecure_cipher');
+	});
+
 	it('classifies an SFTP credential decryption failure without retaining credential material', async () => {
 		const foreignSecret = 'foreign-fixture-secret-that-is-long-enough';
 		const foreignCrypt = new Cryptr(foreignSecret);
@@ -312,8 +363,56 @@ describe('RemoteBackupService', () => {
 				repositoryId: 'remote-repo-example-01',
 			},
 		} as AgentCommand;
-		await expect(service.materializeCommand(capableAgent.agentId, command)).rejects.toThrow(
-			'Remote filesystem backups support only SFTP host, port, username, and encrypted password credentials'
-		);
+		const error = await service
+			.materializeCommand(capableAgent.agentId, command)
+			.then(() => null)
+			.catch(error => error);
+		expect(error).toMatchObject({
+			stage: 'sftp-setting-allowlist',
+			rejectedField: 'ssh',
+			ruleCategory: 'unsupported-field',
+			message:
+				'Remote filesystem backups support only SFTP host, port, username, and encrypted password credentials.',
+		});
+	});
+
+	it('reports the rejected SFTP field and rule without retaining its value', async () => {
+		const crypt = new Cryptr(encryptionSecret);
+		const unsafeHost = 'sftp.example.internal\u0001';
+		storageStore.getById.mockResolvedValue({
+			id: plan.storageId,
+			type: 'sftp',
+			settings: {},
+			credentials: {
+				host: crypt.encrypt(unsafeHost),
+				user: crypt.encrypt('backup-user'),
+				pass: crypt.encrypt(storagePassword),
+			},
+		});
+		const command = {
+			id: 'remote-backup-backup-example-01',
+			type: 'BACKUP_FILESYSTEM',
+			agentId: capableAgent.agentId,
+			payload: {
+				backupId: 'backup-example-01',
+				planId: plan.id,
+				repositoryId: 'remote-repo-example-01',
+			},
+		} as AgentCommand;
+
+		const error = await service
+			.materializeCommand(capableAgent.agentId, command)
+			.then(() => null)
+			.catch(error => error);
+
+		expect(error).toBeInstanceOf(RemoteCommandPreparationError);
+		expect(error).toMatchObject({
+			stage: 'sftp-option-validation',
+			rejectedField: 'host',
+			ruleCategory: 'unsafe-control-character',
+			safeMessage: 'Remote SFTP configuration contains an unsafe value.',
+		});
+		expect(JSON.stringify(error)).not.toContain(unsafeHost);
+		expect(JSON.stringify(error)).not.toContain(storagePassword);
 	});
 });

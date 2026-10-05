@@ -514,9 +514,9 @@ export class AgentService {
 			error instanceof RemoteCommandPreparationError
 				? error
 				: new RemoteCommandPreparationError({ stage: 'unexpected' });
-		// The structured context is intentionally limited to correlation IDs and
-		// fixed messages. Never log the caught error: provider/decryption errors can
-		// carry storage credentials or other secret material.
+		// Never log the caught error: provider/decryption errors can carry storage
+		// credentials or other secret material. The optional field/rule metadata is
+		// produced from a closed, sanitized allowlist and contains no value.
 		if (serverLogger) {
 			serverLogger.warn(
 				{
@@ -527,6 +527,8 @@ export class AgentService {
 					...(failure.planId ? { planId: failure.planId } : {}),
 					...(failure.backupId ? { backupId: failure.backupId } : {}),
 					...(failure.storageId ? { storageId: failure.storageId } : {}),
+					...(failure.rejectedField ? { rejectedField: failure.rejectedField } : {}),
+					...(failure.ruleCategory ? { ruleCategory: failure.ruleCategory } : {}),
 				},
 				'Remote backup command preparation failed'
 			);

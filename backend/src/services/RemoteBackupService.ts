@@ -19,6 +19,7 @@ import { configService } from './ConfigService';
 import {
 	RemoteCommandPreparationError,
 	type RemoteCommandPreparationFailure,
+	type RemoteCommandPreparationRuleCategory,
 	type RemoteCommandPreparationStage,
 } from './remoteCommandPreparation';
 
@@ -37,6 +38,16 @@ const MAX_SOURCE_PATH_LENGTH = 4_096;
 const SFTP_AGENT_OPTION_KEYS = new Set(['host', 'port', 'user', 'pass']);
 
 type CommandReference = { backupId: string; planId: string; repositoryId: string };
+
+type PreparationStageDetails = {
+	rejectedField?: string;
+	ruleCategory?: RemoteCommandPreparationRuleCategory;
+};
+
+type SetPreparationStage = (
+	stage: RemoteCommandPreparationStage,
+	details?: PreparationStageDetails
+) => void;
 
 type RemoteProgressEvent = {
 	phase?: string;
@@ -310,8 +321,15 @@ export class RemoteBackupService {
 	): Promise<Record<string, unknown>> {
 		if (command.type !== 'BACKUP_FILESYSTEM') return command.payload;
 		const failure: RemoteCommandPreparationFailure = { stage: 'command-ownership' };
-		const setStage = (stage: RemoteCommandPreparationStage): void => {
+		const setStage: SetPreparationStage = (
+			stage: RemoteCommandPreparationStage,
+			details?: PreparationStageDetails
+		): void => {
 			failure.stage = stage;
+			delete failure.rejectedField;
+			delete failure.ruleCategory;
+			if (details?.rejectedField) failure.rejectedField = details.rejectedField;
+			if (details?.ruleCategory) failure.ruleCategory = details.ruleCategory;
 		};
 		try {
 			if (command.agentId !== agentId)
@@ -507,7 +525,7 @@ export class RemoteBackupService {
 
 	private async assertSupportedPlan(
 		plan: Plan | NewPlan,
-		setPreparationStage?: (stage: RemoteCommandPreparationStage) => void
+		setPreparationStage?: SetPreparationStage
 	): Promise<void> {
 		setPreparationStage?.('plan-shape');
 		if (!RemoteBackupService.isRemoteFilesystemPlan(plan) || plan.method !== 'backup') {
@@ -598,7 +616,7 @@ export class RemoteBackupService {
 
 	private async materializeSftpStorage(
 		storageId: string,
-		setPreparationStage?: (stage: RemoteCommandPreparationStage) => void
+		setPreparationStage?: SetPreparationStage
 	): Promise<{
 		type: 'sftp';
 		options: Record<string, string>;
@@ -628,6 +646,10 @@ export class RemoteBackupService {
 		for (const [key, value] of Object.entries(settings)) {
 			if (!isMeaningfulStorageValue(value)) continue;
 			if (!SFTP_AGENT_OPTION_KEYS.has(key) || key === 'pass') {
+				setPreparationStage?.('sftp-setting-allowlist', {
+					rejectedField: key,
+					ruleCategory: 'unsupported-field',
+				});
 				throw new AppError(
 					400,
 					'Remote filesystem backups support only SFTP host, port, username, and encrypted password credentials.'
@@ -636,12 +658,32 @@ export class RemoteBackupService {
 		}
 		setPreparationStage?.('sftp-option-validation');
 		for (const [key, value] of Object.entries({ ...settings, ...decrypted })) {
-			if (value === undefined || value === null || value === '') continue;
+			// The Storage UI keeps disabled boolean options (and zero-valued
+			// numeric defaults) in the JSON when a user toggles them. They mean
+			// "unset" for rclone and must not be mistaken for an unsafe option.
+			// Meaningful unsupported options were already rejected above, so this
+			// does not widen the agent allowlist.
+			if (!isMeaningfulStorageValue(value)) continue;
 			if (!SFTP_AGENT_OPTION_KEYS.has(key)) {
+				setPreparationStage?.('sftp-option-validation', {
+					rejectedField: key,
+					ruleCategory: 'unsupported-field',
+				});
 				throw new AppError(400, 'Remote filesystem backup SFTP configuration is unsupported.');
 			}
 			const normalized = String(value).replace(/\r?\n/g, '\\n');
-			if (!normalized || normalized.length > 16_384 || hasUnsafeControlCharacters(normalized)) {
+			if (normalized.length > 16_384) {
+				setPreparationStage?.('sftp-option-validation', {
+					rejectedField: key,
+					ruleCategory: 'value-too-long',
+				});
+				throw new AppError(400, 'SFTP configuration contains an unsafe value.');
+			}
+			if (hasUnsafeControlCharacters(normalized)) {
+				setPreparationStage?.('sftp-option-validation', {
+					rejectedField: key,
+					ruleCategory: 'unsafe-control-character',
+				});
 				throw new AppError(400, 'SFTP configuration contains an unsafe value.');
 			}
 			options[key] = normalized;
