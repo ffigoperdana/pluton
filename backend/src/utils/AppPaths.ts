@@ -51,8 +51,13 @@ class AppPaths {
 	 * Determines the base directory for all Pluton data based on the environment.
 	 */
 	private getTheBaseDir(): string {
-		// if dev use /data
+		// Development keeps its repository-local data directory. Jest may opt
+		// into a worker-private directory so parallel test workers never share a
+		// SQLite database or log file.
 		if (!(process as any).pkg && process.env.NODE_ENV !== 'production') {
+			if (process.env.NODE_ENV === 'test' && process.env.PLUTON_DATA_DIR) {
+				return process.env.PLUTON_DATA_DIR;
+			}
 			return path.join(process.cwd(), 'data');
 		}
 

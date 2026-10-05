@@ -16,6 +16,13 @@ import { generateUID } from '../utils/helpers';
 import type { PlanAddRunSettings, PlanSource } from '../types/plans';
 import type { BackupCompletionStats, BackupProgressStats } from '../types/backups';
 import { configService } from './ConfigService';
+import {
+	RemoteCommandPreparationError,
+	type RemoteCommandPreparationFailure,
+	type RemoteCommandPreparationStage,
+} from './remoteCommandPreparation';
+
+export { RemoteCommandPreparationError } from './remoteCommandPreparation';
 
 const MINIMUM_AGENT_VERSION = [0, 2, 0] as const;
 const MAX_SOURCE_PATH_LENGTH = 4_096;
@@ -302,55 +309,84 @@ export class RemoteBackupService {
 		command: AgentCommand
 	): Promise<Record<string, unknown>> {
 		if (command.type !== 'BACKUP_FILESYSTEM') return command.payload;
-		if (command.agentId !== agentId)
-			throw new AppError(403, 'Command does not belong to this agent.');
-		const reference = commandReference(command.payload);
-		const [repository, plan, backup] = await Promise.all([
-			this.repositories.getById(reference.repositoryId),
-			this.planStore.getById(reference.planId),
-			this.backupStore.getById(reference.backupId),
-		]);
-		if (
-			!repository ||
-			!plan ||
-			!backup ||
-			backup.planId !== plan.id ||
-			repository.planId !== plan.id ||
-			!backup.inProgress ||
-			backup.status === 'cancelled' ||
-			backup.sourceId !== plan.sourceId
-		) {
-			throw new AppError(409, 'Remote backup command no longer has a valid managed plan.');
-		}
-		if (repository.agentId !== agentId)
-			throw new AppError(403, 'Managed repository belongs to another agent.');
-		if (repository.storageId !== plan.storageId || repository.storagePath !== plan.storagePath) {
-			throw new AppError(409, 'Managed repository metadata no longer matches the plan.');
-		}
-		await this.assertSupportedPlan(plan);
-		validateRepositoryPath(repository.storagePath);
-		const storage = await this.materializeSftpStorage(repository.storageId);
-		let repositoryPassword: string;
-		try {
-			repositoryPassword = new Cryptr(this.encryptionSecret).decrypt(repository.encryptedPassword);
-		} catch {
-			throw new AppError(500, 'Remote repository credentials could not be prepared.');
-		}
-		const source = this.getSingleSource(plan.sourceConfig);
-		return {
-			version: 1,
-			backupId: backup.id,
-			planId: plan.id,
-			sourcePath: source,
-			excludes: this.getSafeExcludes(plan.sourceConfig),
-			repository: {
-				remoteName: 'pluton',
-				path: repository.storagePath,
-				initialize: !repository.initializedAt,
-			},
-			rclone: storage,
-			repositoryPassword,
+		const failure: RemoteCommandPreparationFailure = { stage: 'command-ownership' };
+		const setStage = (stage: RemoteCommandPreparationStage): void => {
+			failure.stage = stage;
 		};
+		try {
+			if (command.agentId !== agentId)
+				throw new AppError(403, 'Command does not belong to this agent.');
+			setStage('command-reference');
+			const reference = commandReference(command.payload);
+			failure.backupId = reference.backupId;
+			failure.planId = reference.planId;
+			setStage('managed-records');
+			const [repository, plan, backup] = await Promise.all([
+				this.repositories.getById(reference.repositoryId),
+				this.planStore.getById(reference.planId),
+				this.backupStore.getById(reference.backupId),
+			]);
+			if (
+				!repository ||
+				!plan ||
+				!backup ||
+				backup.planId !== plan.id ||
+				repository.planId !== plan.id ||
+				!backup.inProgress ||
+				backup.status === 'cancelled' ||
+				backup.sourceId !== plan.sourceId
+			) {
+				setStage('managed-plan-consistency');
+				throw new AppError(409, 'Remote backup command no longer has a valid managed plan.');
+			}
+			failure.storageId = repository.storageId;
+			if (repository.agentId !== agentId) {
+				setStage('repository-agent');
+				throw new AppError(403, 'Managed repository belongs to another agent.');
+			}
+			if (repository.storageId !== plan.storageId || repository.storagePath !== plan.storagePath) {
+				setStage('repository-metadata');
+				throw new AppError(409, 'Managed repository metadata no longer matches the plan.');
+			}
+			await this.assertSupportedPlan(plan, setStage);
+			setStage('repository-path');
+			validateRepositoryPath(repository.storagePath);
+			const storage = await this.materializeSftpStorage(repository.storageId, setStage);
+			setStage('repository-secret-decryption');
+			let repositoryPassword: string;
+			try {
+				repositoryPassword = new Cryptr(this.encryptionSecret).decrypt(repository.encryptedPassword);
+			} catch {
+				throw new AppError(500, 'Remote repository credentials could not be prepared.');
+			}
+			setStage('source-validation');
+			const source = this.getSingleSource(plan.sourceConfig);
+			const excludes = this.getSafeExcludes(plan.sourceConfig);
+			setStage('payload');
+			return {
+				version: 1,
+				backupId: backup.id,
+				planId: plan.id,
+				sourcePath: source,
+				excludes,
+				repository: {
+					remoteName: 'pluton',
+					path: repository.storagePath,
+					initialize: !repository.initializedAt,
+				},
+				rclone: storage,
+				repositoryPassword,
+			};
+		} catch (error) {
+			if (error instanceof RemoteCommandPreparationError) throw error;
+			// AgentService logs only RemoteCommandPreparationError.safeMessage.
+			// Preserve the established internal AppError text for callers that need it,
+			// but never retain arbitrary provider/decryption exception text.
+			throw new RemoteCommandPreparationError(
+				failure,
+				error instanceof AppError ? error.message : undefined
+			);
+		}
 	}
 
 	async recordCommandEvent(command: AgentCommand, event: RemoteProgressEvent): Promise<void> {
@@ -469,7 +505,11 @@ export class RemoteBackupService {
 		}
 	}
 
-	private async assertSupportedPlan(plan: Plan | NewPlan): Promise<void> {
+	private async assertSupportedPlan(
+		plan: Plan | NewPlan,
+		setPreparationStage?: (stage: RemoteCommandPreparationStage) => void
+	): Promise<void> {
+		setPreparationStage?.('plan-shape');
 		if (!RemoteBackupService.isRemoteFilesystemPlan(plan) || plan.method !== 'backup') {
 			throw new AppError(400, 'Only remote filesystem incremental backup is available.');
 		}
@@ -485,10 +525,14 @@ export class RemoteBackupService {
 				'Replication and scripts are not available for remote filesystem backups.'
 			);
 		}
+		setPreparationStage?.('source-validation');
 		this.getSingleSource(plan.sourceConfig);
 		this.getSafeExcludes(plan.sourceConfig);
+		setPreparationStage?.('repository-path');
 		validateRepositoryPath(plan.storagePath || '');
+		setPreparationStage?.('agent-capability');
 		await this.getCapableAgent(plan.sourceId);
+		setPreparationStage?.('sftp-storage-lookup');
 		const storage = await this.storageStore.getById(plan.storageId as string);
 		if (!storage || storage.type !== 'sftp') {
 			throw new AppError(400, 'Remote filesystem backups currently require an SFTP destination.');
@@ -552,16 +596,21 @@ export class RemoteBackupService {
 		});
 	}
 
-	private async materializeSftpStorage(storageId: string): Promise<{
+	private async materializeSftpStorage(
+		storageId: string,
+		setPreparationStage?: (stage: RemoteCommandPreparationStage) => void
+	): Promise<{
 		type: 'sftp';
 		options: Record<string, string>;
 	}> {
+		setPreparationStage?.('sftp-storage-lookup');
 		const storage = await this.storageStore.getById(storageId);
 		if (!storage || storage.type !== 'sftp') {
 			throw new AppError(400, 'Remote filesystem backups currently require an SFTP destination.');
 		}
 		const encrypted = storage.credentials || {};
 		const decrypted: Record<string, string> = {};
+		setPreparationStage?.('sftp-credential-decryption');
 		try {
 			const crypt = new Cryptr(this.encryptionSecret);
 			for (const [key, value] of Object.entries(encrypted)) {
@@ -575,6 +624,7 @@ export class RemoteBackupService {
 		}
 		const settings = storage.settings || {};
 		const options: Record<string, string> = {};
+		setPreparationStage?.('sftp-setting-allowlist');
 		for (const [key, value] of Object.entries(settings)) {
 			if (!isMeaningfulStorageValue(value)) continue;
 			if (!SFTP_AGENT_OPTION_KEYS.has(key) || key === 'pass') {
@@ -584,6 +634,7 @@ export class RemoteBackupService {
 				);
 			}
 		}
+		setPreparationStage?.('sftp-option-validation');
 		for (const [key, value] of Object.entries({ ...settings, ...decrypted })) {
 			if (value === undefined || value === null || value === '') continue;
 			if (!SFTP_AGENT_OPTION_KEYS.has(key)) {
@@ -595,6 +646,7 @@ export class RemoteBackupService {
 			}
 			options[key] = normalized;
 		}
+		setPreparationStage?.('sftp-required-credentials');
 		if (!options.host || !options.user || !options.pass) {
 			throw new AppError(
 				400,

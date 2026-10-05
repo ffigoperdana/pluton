@@ -1,5 +1,8 @@
 import Cryptr from 'cryptr';
-import { RemoteBackupService } from '../../src/services/RemoteBackupService';
+import {
+	RemoteBackupService,
+	RemoteCommandPreparationError,
+} from '../../src/services/RemoteBackupService';
 import type { AgentCommand } from '../../src/db/schema/agents';
 
 jest.mock('../../src/services/events/BackupEventService', () => ({
@@ -219,6 +222,49 @@ describe('RemoteBackupService', () => {
 		expect(JSON.stringify(command.payload)).not.toContain(storagePassword);
 		expect(JSON.stringify(command.payload)).not.toContain(repositoryPassword);
 		expect(payload).not.toHaveProperty('encryptionKey');
+	});
+
+	it('classifies an SFTP credential decryption failure without retaining credential material', async () => {
+		const foreignSecret = 'foreign-fixture-secret-that-is-long-enough';
+		const foreignCrypt = new Cryptr(foreignSecret);
+		const fixturePassword = 'fixture-sftp-password-must-not-appear-in-diagnostics';
+		storageStore.getById.mockResolvedValue({
+			id: plan.storageId,
+			type: 'sftp',
+			settings: {},
+			credentials: {
+				host: foreignCrypt.encrypt('sftp.example.internal'),
+				user: foreignCrypt.encrypt('backup-user'),
+				pass: foreignCrypt.encrypt(fixturePassword),
+			},
+		});
+		const command = {
+			id: 'remote-backup-backup-example-01',
+			type: 'BACKUP_FILESYSTEM',
+			agentId: capableAgent.agentId,
+			payload: {
+				backupId: 'backup-example-01',
+				planId: plan.id,
+				repositoryId: 'remote-repo-example-01',
+			},
+		} as AgentCommand;
+
+		const error = await service
+			.materializeCommand(capableAgent.agentId, command)
+			.then(() => null)
+			.catch(error => error);
+
+		expect(error).toBeInstanceOf(RemoteCommandPreparationError);
+		expect(error).toMatchObject({
+			stage: 'sftp-credential-decryption',
+			backupId: 'backup-example-01',
+			planId: plan.id,
+			storageId: plan.storageId,
+			message: 'Storage credentials could not be prepared for the remote agent.',
+			safeMessage: 'Remote SFTP credentials could not be decrypted or validated.',
+		});
+		expect(JSON.stringify(error)).not.toContain(fixturePassword);
+		expect(JSON.stringify(error)).not.toContain(foreignSecret);
 	});
 
 	it('does not materialize credentials for a finalized backup command', async () => {
