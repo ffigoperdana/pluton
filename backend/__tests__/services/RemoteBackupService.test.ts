@@ -415,4 +415,113 @@ describe('RemoteBackupService', () => {
 		expect(JSON.stringify(error)).not.toContain(unsafeHost);
 		expect(JSON.stringify(error)).not.toContain(storagePassword);
 	});
+
+	const database = {
+		engine: 'mariadb',
+		host: 'localhost',
+		port: 3306,
+		tls: 'local',
+		database: 'example_db',
+		username: 'backup_reader',
+		dumpFilename: 'app.sql',
+		timeoutSeconds: 60,
+		maxDumpBytes: 1024 ** 3,
+		includeRoutines: false,
+		includeEvents: false,
+		passwordConfigured: true,
+	};
+	const lifecyclePlan = () => ({
+		...plan,
+		settings: { ...plan.settings, remoteLifecycle: { version: 1, database } },
+	});
+	const backupCommand = () =>
+		({
+			id: 'remote-backup-backup-example-01',
+			type: 'BACKUP_FILESYSTEM',
+			agentId: capableAgent.agentId,
+			payload: {
+				backupId: 'backup-example-01',
+				planId: plan.id,
+				repositoryId: 'remote-repo-example-01',
+			},
+		}) as AgentCommand;
+	const advertiseLifecycle = () =>
+		agentStore.getAgentByDeviceId.mockResolvedValue({
+			...capableAgent,
+			lastSeen: new Date(),
+			capabilities: {
+				...capableAgent.capabilities,
+				backupLifecycleVersion: 1,
+				databaseEngines: ['mariadb'],
+				hooksConfigured: true,
+			},
+		});
+	it('Phase 5 requires declared lifecycle/client capabilities without breaking Phase 4', async () => {
+		await expect(service.validatePlanCreation(lifecyclePlan())).rejects.toThrow(
+			'does not support the selected'
+		);
+		await expect(service.validatePlanCreation(plan)).resolves.toBeUndefined();
+		advertiseLifecycle();
+		await expect(service.validatePlanCreation(lifecyclePlan())).resolves.toBeUndefined();
+		await expect(
+			service.validatePlanCreation({
+				...lifecyclePlan(),
+				settings: {
+					...lifecyclePlan().settings,
+					remoteLifecycle: { version: 1, database: { ...database, engine: 'mysql' } },
+				},
+			})
+		).rejects.toThrow('does not support the selected');
+	});
+	it('materializes database password only in the signed ephemeral version 2 payload', async () => {
+		advertiseLifecycle();
+		planStore.getById.mockResolvedValue(lifecyclePlan());
+		const dbPassword = 'test-only-db-password';
+		planStore.getDatabaseCredential = jest
+			.fn()
+			.mockResolvedValue(new Cryptr(encryptionSecret).encrypt(dbPassword));
+		const command = backupCommand();
+		const result = await service.materializeCommand(capableAgent.agentId, command);
+		expect(result).toMatchObject({
+			version: 2,
+			lifecycle: { version: 1, database: { password: dbPassword } },
+		});
+		expect(JSON.stringify(command.payload)).not.toContain(dbPassword);
+		expect(JSON.stringify(lifecyclePlan().settings)).not.toContain(dbPassword);
+	});
+	it('missing or undecryptable DB secret fails at a closed stage without provider text', async () => {
+		advertiseLifecycle();
+		planStore.getById.mockResolvedValue(lifecyclePlan());
+		planStore.getDatabaseCredential = jest.fn().mockResolvedValue('synthetic-invalid-ciphertext');
+		const error = await service
+			.materializeCommand(capableAgent.agentId, backupCommand())
+			.catch(error => error);
+		expect(error).toMatchObject({
+			stage: 'database-credential-preparation',
+			safeMessage: 'Database backup credentials could not be prepared.',
+		});
+		expect(JSON.stringify(error)).not.toContain('synthetic-invalid-ciphertext');
+	});
+	it('snapshot success with post/cleanup warnings remains completed and exposes a safe warning separately', async () => {
+		backupStore.update = jest.fn();
+		planStore.update = jest.fn();
+		const id = 'a'.repeat(64);
+		const summary = {
+			message_type: 'summary',
+			snapshot_id: id,
+			total_bytes_processed: 1024,
+		} as any;
+		const warnings = [{ stage: 'post-backup', code: 'hook-failed' }] as any;
+		await service.completeCommand(backupCommand(), {
+			success: true,
+			result: { snapshotId: id, summary, lifecycle: { warnings } },
+		});
+		expect((service as any).eventService.onBackupComplete).toHaveBeenCalledWith(
+			expect.objectContaining({ success: true, summary: { ...summary, lifecycle: { warnings } } })
+		);
+		expect((service as any).eventService.onBackupFailure).not.toHaveBeenCalled();
+		expect(backupStore.update).toHaveBeenCalledWith('backup-example-01', {
+			errorMsg: expect.stringContaining('post-backup/hook-failed'),
+		});
+	});
 });

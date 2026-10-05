@@ -20,6 +20,8 @@ export type RemoteCommandPreparationStage =
 	| 'sftp-option-validation'
 	| 'sftp-required-credentials'
 	| 'repository-secret-decryption'
+	| 'lifecycle-configuration'
+	| 'database-credential-preparation'
 	| 'payload'
 	| 'materializer-unavailable'
 	| 'unexpected';
@@ -56,16 +58,17 @@ function preparationFailureMessage(stage: RemoteCommandPreparationStage): string
 		'repository-path': 'The managed remote repository path is no longer valid.',
 		'agent-capability': 'The remote agent no longer supports filesystem backup.',
 		'sftp-storage-lookup': 'The remote SFTP destination could not be loaded.',
-		'sftp-credential-decryption':
-			'Remote SFTP credentials could not be decrypted or validated.',
+		'sftp-credential-decryption': 'Remote SFTP credentials could not be decrypted or validated.',
 		'sftp-setting-allowlist': 'Remote SFTP settings are not supported for filesystem backup.',
 		'sftp-option-validation': 'Remote SFTP configuration contains an unsafe value.',
 		'sftp-required-credentials':
 			'Remote filesystem backups require SFTP host, username, and password credentials.',
 		'repository-secret-decryption': 'The managed remote repository secret could not be decrypted.',
-		payload: 'The remote backup command payload could not be prepared.',
+		'lifecycle-configuration': 'The remote backup lifecycle configuration is not supported.',
+		'database-credential-preparation': 'Database backup credentials could not be prepared.',
+		'payload': 'The remote backup command payload could not be prepared.',
 		'materializer-unavailable': 'The remote backup materializer is unavailable.',
-		unexpected: 'An unexpected remote command preparation error occurred.',
+		'unexpected': 'An unexpected remote command preparation error occurred.',
 	};
 	return messages[stage];
 }
@@ -84,7 +87,10 @@ export class RemoteCommandPreparationError extends Error {
 	readonly rejectedField?: string;
 	readonly ruleCategory?: RemoteCommandPreparationRuleCategory;
 
-	constructor(failure: RemoteCommandPreparationFailure, message = preparationFailureMessage(failure.stage)) {
+	constructor(
+		failure: RemoteCommandPreparationFailure,
+		message = preparationFailureMessage(failure.stage)
+	) {
 		super(message);
 		this.name = 'RemoteCommandPreparationError';
 		this.stage = failure.stage;
@@ -95,9 +101,7 @@ export class RemoteCommandPreparationError extends Error {
 		// Option names are useful for diagnosis, but do not allow arbitrary
 		// characters or unbounded input into structured server logs.
 		if (failure.rejectedField) {
-			const sanitizedField = failure.rejectedField
-				.replace(/[^A-Za-z0-9_.-]/g, '_')
-				.slice(0, 128);
+			const sanitizedField = failure.rejectedField.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 128);
 			if (sanitizedField) this.rejectedField = sanitizedField;
 		}
 		const ruleCategories: RemoteCommandPreparationRuleCategory[] = [

@@ -1,9 +1,14 @@
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import type { AgentCapabilities, AgentInventory } from "./types.js";
+import {
+  assertRootOwnedPath,
+  detectDatabaseBinary,
+} from "./lifecyclePolicy.js";
 
-export const AGENT_VERSION = "0.2.0";
+export const AGENT_VERSION = "0.3.0";
 
 const SAFE_COMMANDS: AgentCapabilities["commandTypes"] = [
   "PING",
@@ -52,6 +57,8 @@ export function commandTypesForInventory(input: {
 export function collectInventory(input: {
   filesystemRootsConfigured: boolean;
   binDir?: string;
+  hookRoot?: string;
+  databaseBinDirs?: string[];
 }): AgentInventory {
   const resticVersion = installedVersion(
     privateBinaryPath(input.binDir, "restic"),
@@ -61,6 +68,28 @@ export function collectInventory(input: {
     privateBinaryPath(input.binDir, "rclone"),
     ["version"],
   );
+  const databaseEngines = (["mysql", "mariadb"] as const).filter(
+    (engine) => !!detectDatabaseBinary(engine, input.databaseBinDirs),
+  );
+  let hooksConfigured = false;
+  let immutableBackupTools = false;
+  try {
+    assertRootOwnedPath(
+      realpathSync(privateBinaryPath(input.binDir, "restic")),
+    );
+    assertRootOwnedPath(
+      realpathSync(privateBinaryPath(input.binDir, "rclone")),
+    );
+    immutableBackupTools = true;
+  } catch {
+    /* Phase 5 never advertises agent-writable executables. */
+  }
+  try {
+    assertRootOwnedPath(input.hookRoot || "/etc/pluton-agent/hooks", true);
+    hooksConfigured = true;
+  } catch {
+    /* Optional hooks not provisioned. */
+  }
   return {
     hostname: os.hostname(),
     os: `${os.type()} ${os.release()}`,
@@ -70,6 +99,15 @@ export function collectInventory(input: {
     rcloneVersion,
     uptimeSeconds: Math.floor(os.uptime()),
     capabilities: {
+      ...(process.platform === "linux" &&
+      process.getuid?.() !== 0 &&
+      immutableBackupTools
+        ? {
+            backupLifecycleVersion: 1 as const,
+            databaseEngines,
+            hooksConfigured,
+          }
+        : {}),
       filesystemRootsConfigured: input.filesystemRootsConfigured,
       commandTypes: commandTypesForInventory({
         filesystemRootsConfigured: input.filesystemRootsConfigured,

@@ -18,7 +18,6 @@ const EditPlan = ({ close, plan }: EditPlanProps) => {
       if (backingUp) {
          return toast.error(`Can't Update Plan Settings while a Backup is in progress.`);
       }
-      console.log('newPlan :', newPlan);
 
       // storagePath is immutable after a plan is created (the repository lives there),
       // so the client no longer sends it. The backend also refuses a change with a 400.

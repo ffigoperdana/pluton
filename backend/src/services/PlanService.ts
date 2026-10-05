@@ -34,6 +34,8 @@ import { BackupNotification } from '../notifications/BackupNotification';
 import { ScheduleReconciler } from './ScheduleReconciler';
 import { BackupRunConfig } from '../types/backups';
 import { RemoteBackupService } from './RemoteBackupService';
+import { prepareRemoteLifecycleSettings } from '../utils/remoteLifecycle';
+import { configService } from './ConfigService';
 
 /**
  * PlanService is the central orchestrator for all business logic related to backup plans.
@@ -179,6 +181,18 @@ export class PlanService {
 			settings,
 			tags,
 		};
+		let databaseCredential: string | null | undefined;
+		if (settings?.remoteLifecycle !== undefined) {
+			if (!RemoteBackupService.isRemoteFilesystemPlan(newPlanData)) {
+				throw new AppError(
+					400,
+					'Database lifecycle is available only for remote managed backup plans.'
+				);
+			}
+			const prepared = prepareRemoteLifecycleSettings(settings, null, configService.config.SECRET);
+			newPlanData.settings = prepared.settings;
+			databaseCredential = prepared.credential;
+		}
 
 		// Validate the plan data using the schema
 		try {
@@ -188,14 +202,17 @@ export class PlanService {
 				sourceType: parsedPlanData.sourceType as SourceTypes,
 			};
 		} catch (error) {
-			console.error('Error parsing plan data:', error);
+			console.error('Plan data validation failed.');
 			throw error;
 		}
 
 		if (RemoteBackupService.isRemoteFilesystemPlan(newPlanData)) {
 			const remote = this.requireRemoteBackupService();
 			await remote.validatePlanCreation(newPlanData);
-			const createdPlan = await this.planStore.create(newPlanData);
+			const createdPlan =
+				databaseCredential === undefined
+					? await this.planStore.create(newPlanData)
+					: await this.planStore.create(newPlanData, databaseCredential);
 			if (!createdPlan) throw new AppError(500, 'Failed to save the new remote backup plan.');
 			try {
 				await remote.createManagedPlan(createdPlan, runSettings);
@@ -249,6 +266,33 @@ export class PlanService {
 		if (!currentPlan) {
 			throw new NotFoundError('Plan not found.');
 		}
+		let databaseCredential: string | null | undefined;
+		let previousCredential: string | null = null;
+		if (
+			planData.settings &&
+			(planData.settings.remoteLifecycle !== undefined ||
+				currentPlan.settings.remoteLifecycle !== undefined)
+		) {
+			if (await this.planStore.hasActiveBackups(planId))
+				throw new AppError(
+					409,
+					'Wait for the active backup to finish before changing lifecycle settings.'
+				);
+			if (!RemoteBackupService.isRemoteFilesystemPlan(currentPlan)) {
+				throw new AppError(
+					400,
+					'Database lifecycle is available only for remote managed backup plans.'
+				);
+			}
+			previousCredential = await this.planStore.getDatabaseCredential(planId);
+			const prepared = prepareRemoteLifecycleSettings(
+				planData.settings,
+				previousCredential,
+				configService.config.SECRET
+			);
+			planData = { ...planData, settings: prepared.settings };
+			databaseCredential = prepared.credential === undefined ? null : prepared.credential;
+		}
 		let parsedPlanData;
 		try {
 			const parsedData = planUpdateSchema.parse(planData);
@@ -257,7 +301,7 @@ export class PlanService {
 				sourceType: (parsedData.sourceType || currentPlan.sourceType) as SourceTypes,
 			};
 		} catch (error) {
-			console.error('Error parsing plan data:', error);
+			console.error('Plan data validation failed.');
 			throw error;
 		}
 
@@ -312,14 +356,22 @@ export class PlanService {
 			const remote = this.requireRemoteBackupService();
 			const candidate = { ...currentPlan, ...parsedPlanData } as Plan;
 			await remote.validatePlanCreation(candidate as NewPlan);
-			const updated = await this.planStore.update(planId, parsedPlanData as Partial<Plan>);
+			const updated =
+				databaseCredential === undefined
+					? await this.planStore.update(planId, parsedPlanData as Partial<Plan>)
+					: await this.planStore.update(
+							planId,
+							parsedPlanData as Partial<Plan>,
+							databaseCredential
+						);
 			if (!updated) throw new AppError(500, 'Failed to update remote backup plan.');
 			try {
 				await remote.updateManagedPlan(updated);
 				planLogger('update', planId).info('Remote filesystem backup plan updated.');
 				return updated;
 			} catch (error) {
-				await this.planStore.update(planId, currentPlan);
+				if (databaseCredential === undefined) await this.planStore.update(planId, currentPlan);
+				else await this.planStore.update(planId, currentPlan, previousCredential);
 				throw error;
 			}
 		}

@@ -14,6 +14,10 @@ export interface BackupCompletionStats {
 	total_bytes_processed: number;
 	total_duration: number;
 	snapshot_id: string;
+	lifecycle?: {
+		warnings: import('./remoteLifecycle').LifecycleWarning[];
+		database?: { path: string; bytes: number; sha256: string };
+	};
 }
 
 export interface BackupTaskStats {
@@ -36,6 +40,7 @@ export interface BackupTaskStats {
 }
 
 export interface BackupProgressStats {
+	lifecycleStage?: string;
 	bytesProcessed: number;
 	filesProcessed: number;
 	total_files_processed: number;

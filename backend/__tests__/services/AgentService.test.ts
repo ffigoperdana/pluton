@@ -496,4 +496,80 @@ describe('AgentService', () => {
 			warn.mockRestore();
 		}
 	});
+
+	it('accepts Phase 5 capabilities and forwards only closed lifecycle stage events', async () => {
+		const extended = {
+			...inventory,
+			agentVersion: '0.3.0',
+			capabilities: {
+				...inventory.capabilities,
+				backupLifecycleVersion: 1,
+				databaseEngines: ['mysql', 'mariadb'],
+				hooksConfigured: true,
+			},
+		};
+		await service.heartbeat(agent.agentId, extended);
+		expect(store.updateHeartbeat).toHaveBeenCalledWith(agent.agentId, extended);
+		const command = {
+			id: 'command-01',
+			type: 'BACKUP_FILESYSTEM',
+			payload: { backupId: 'backup-01', planId: 'plan-01', repositoryId: 'repo-01' },
+		} as any;
+		store.recordCommandEvent.mockResolvedValue(command);
+		const remote = { recordCommandEvent: jest.fn() } as any;
+		const lifecycleService = new AgentService(store, 'synthetic-phase5-secret', () => now, remote);
+		await lifecycleService.recordEvent(agent.agentId, command.id, {
+			sequence: 2,
+			leaseToken: 'a'.repeat(32),
+			event: { lifecycleStage: 'database-dump-started' },
+		});
+		expect(remote.recordCommandEvent).toHaveBeenCalledWith(command, {
+			lifecycleStage: 'database-dump-started',
+		});
+		await expect(
+			lifecycleService.recordEvent(agent.agentId, command.id, {
+				sequence: 3,
+				leaseToken: 'a'.repeat(32),
+				event: { lifecycleStage: 'arbitrary provider secret' },
+			})
+		).rejects.toThrow('event is invalid');
+	});
+	it('Phase 5 failures reach server persistence/service without any raw agent/provider error', async () => {
+		const command = {
+			id: 'command-db-failure',
+			type: 'BACKUP_FILESYSTEM',
+			state: 'failed',
+			payload: { backupId: 'backup-01', planId: 'plan-01', repositoryId: 'repo-01' },
+		} as any;
+		store.completeCommand.mockResolvedValue(command);
+		const remote = { completeCommand: jest.fn() } as any;
+		const lifecycleService = new AgentService(store, 'synthetic-phase5-secret', () => now, remote);
+		const warn = jest.spyOn(serverLogger, 'warn').mockImplementation(() => undefined as any);
+		try {
+			await lifecycleService.complete(agent.agentId, command.id, {
+				sequence: 4,
+				leaseToken: 'a'.repeat(32),
+				success: false,
+				error: 'test-only-provider-secret',
+				failureStage: 'database-dump',
+				failureCode: 'database-auth-failed',
+			});
+			expect(JSON.stringify(store.completeCommand.mock.calls)).not.toContain(
+				'test-only-provider-secret'
+			);
+			expect(JSON.stringify(remote.completeCommand.mock.calls)).not.toContain(
+				'test-only-provider-secret'
+			);
+			expect(JSON.stringify(warn.mock.calls)).not.toContain('test-only-provider-secret');
+			expect(remote.completeCommand).toHaveBeenCalledWith(
+				command,
+				expect.objectContaining({
+					failureStage: 'database-dump',
+					failureCode: 'database-auth-failed',
+				})
+			);
+		} finally {
+			warn.mockRestore();
+		}
+	});
 });

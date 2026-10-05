@@ -5,6 +5,7 @@ import { NewPlan, Plan, plans } from '../db/schema/plans';
 import { backups } from '../db/schema/backups';
 import { PlanBackupSettings, PlanFull } from '../types/plans';
 import { restores } from '../db/schema/restores';
+import { remotePlanDatabaseCredentials } from '../db/schema/remotePlanCredentials';
 
 /**
  * PlanStore is a class for managing plan records in the database.
@@ -218,7 +219,52 @@ export class PlanStore {
 		});
 	}
 
-	async create(planData: NewPlan): Promise<Plan | null> {
+	async getDatabaseCredential(planId: string): Promise<string | null> {
+		const [record] = await this.db
+			.select()
+			.from(remotePlanDatabaseCredentials)
+			.where(eq(remotePlanDatabaseCredentials.planId, planId))
+			.limit(1);
+		return record?.encryptedPassword || null;
+	}
+
+	private writeDatabaseCredential(
+		tx: Parameters<Parameters<DatabaseType['transaction']>[0]>[0],
+		planId: string,
+		credential: string | null
+	): void {
+		if (credential === null) {
+			tx.delete(remotePlanDatabaseCredentials)
+				.where(eq(remotePlanDatabaseCredentials.planId, planId))
+				.run();
+		} else {
+			tx.insert(remotePlanDatabaseCredentials)
+				.values({ planId, encryptedPassword: credential })
+				.onConflictDoUpdate({
+					target: remotePlanDatabaseCredentials.planId,
+					set: { encryptedPassword: credential },
+				})
+				.run();
+		}
+	}
+
+	async create(planData: NewPlan, databaseCredential?: string | null): Promise<Plan | null> {
+		if (databaseCredential !== undefined) {
+			return this.db.transaction(tx => {
+				const [plan] = tx
+					.insert(plans)
+					.values({
+						...planData,
+						createdAt: sql`(unixepoch())`,
+						isActive: true,
+						stats: { size: 0, snapshots: [] },
+					})
+					.returning()
+					.all();
+				if (plan) this.writeDatabaseCredential(tx, plan.id, databaseCredential);
+				return plan || null;
+			});
+		}
 		const result = await this.db
 			.insert(plans)
 			.values({
@@ -231,7 +277,11 @@ export class PlanStore {
 		return result[0] || null;
 	}
 
-	async update(id: string, updates: Partial<PlanFull | Plan>): Promise<Plan | null> {
+	async update(
+		id: string,
+		updates: Partial<PlanFull | Plan>,
+		databaseCredential?: string | null
+	): Promise<Plan | null> {
 		// Only allow certain fields to be updated
 		const allowedFields = [
 			'title',
@@ -256,6 +306,18 @@ export class PlanStore {
 		if (Object.keys(updatedPlan).length === 0) {
 			return null;
 		}
+		if (databaseCredential !== undefined) {
+			return this.db.transaction(tx => {
+				const [plan] = tx
+					.update(plans)
+					.set({ ...updatedPlan, updatedAt: sql`(unixepoch())` })
+					.where(eq(plans.id, id))
+					.returning()
+					.all();
+				if (plan) this.writeDatabaseCredential(tx, id, databaseCredential);
+				return plan || null;
+			});
+		}
 
 		const result = await this.db
 			.update(plans)
@@ -270,9 +332,14 @@ export class PlanStore {
 	}
 
 	async delete(id: string): Promise<boolean> {
-		const result = await this.db.delete(plans).where(eq(plans.id, id));
-
-		return result.changes > 0;
+		return this.db.transaction(tx => {
+			// Existing migrations can leave FK checks disabled; erase the owned
+			// credential explicitly as well as using ON DELETE CASCADE.
+			tx.delete(remotePlanDatabaseCredentials)
+				.where(eq(remotePlanDatabaseCredentials.planId, id))
+				.run();
+			return tx.delete(plans).where(eq(plans.id, id)).run().changes > 0;
+		});
 	}
 
 	async hasActiveBackups(planId: string): Promise<boolean> {

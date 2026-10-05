@@ -57,7 +57,8 @@ describe('PlanStore', () => {
 			returning: jest.fn(),
 		};
 		const deleteQueryBuilder = {
-			where: jest.fn(),
+			where: jest.fn().mockReturnThis(),
+			run: jest.fn(),
 		};
 		const selectQueryBuilder = {
 			from: jest.fn().mockReturnThis(),
@@ -83,6 +84,7 @@ describe('PlanStore', () => {
 			delete: jest.fn().mockReturnValue(deleteQueryBuilder),
 			select: jest.fn().mockReturnValue(selectQueryBuilder),
 		};
+		mockDb.transaction = jest.fn((callback: (db: any) => any) => callback(mockDb));
 
 		planStore = new PlanStore(mockDb as DatabaseType);
 	});
@@ -164,16 +166,26 @@ describe('PlanStore', () => {
 					total_bytes_processed: 1234,
 				},
 			};
-			const result = planStore.handleBackupStats('backup', [row] as any, {
-				size: 1234,
-				snapshots: [snapshotId],
-			}, true);
+			const result = planStore.handleBackupStats(
+				'backup',
+				[row] as any,
+				{
+					size: 1234,
+					snapshots: [snapshotId],
+				},
+				true
+			);
 			expect(result[0]).toMatchObject({ active: true, totalFiles: 14, totalSize: 1234 });
 			expect(
-				planStore.handleBackupStats('backup', [row] as any, {
-					size: 1234,
-					snapshots: ['b'.repeat(64)],
-				}, true)[0].active
+				planStore.handleBackupStats(
+					'backup',
+					[row] as any,
+					{
+						size: 1234,
+						snapshots: ['b'.repeat(64)],
+					},
+					true
+				)[0].active
 			).toBe(false);
 		});
 		it('preserves local task/dry-run statistics, including an intentional zero', () => {
@@ -386,13 +398,16 @@ describe('PlanStore', () => {
 	describe('delete', () => {
 		it('should return true if a plan is deleted', async () => {
 			// Arrange
-			mockDb.delete().where.mockResolvedValue({ changes: 1 });
+			mockDb.delete().run.mockReturnValue({ changes: 1 });
 
 			// Act
 			const result = await planStore.delete('plan-1');
 
 			// Assert
 			expect(result).toBe(true);
+			expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+			// Credential erasure and plan deletion share the same transaction.
+			expect(mockDb.delete).toHaveBeenCalledTimes(3); // includes Arrange's builder lookup
 		});
 	});
 

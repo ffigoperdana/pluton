@@ -208,6 +208,7 @@ const Backups = ({
                      snapshot;
                   const isDownloading = !isRemoteManaged && download && download.status === 'started';
                   const actions = backupRowActions(snapshot, isSync, isRemoteManaged);
+                  const lifecycleWarning = status === 'completed' && !!snapshot.completionStats?.lifecycle?.warnings.length;
 
                   return (
                      <div
@@ -248,9 +249,13 @@ const Backups = ({
                            data-tooltip-id="htmlToolTip"
                            data-tooltip-html={`<div class="linebreak-tooltip-content"><string>Error</string>: ${errorMsg?.slice(0, 120) + (errorMsg && errorMsg.length > 120 ? '...' : '')}</div>`}
                            data-tooltip-hidden={!errorMsg}
-                           onClick={() => errorMsg && errorMsg.length > 120 && setShowBackupError(errorMsg)}
+                           onClick={() => errorMsg && (lifecycleWarning || errorMsg.length > 120) && setShowBackupError(errorMsg)}
                         >
-                           <StatusLabel status={status} hasError={!!errorMsg} />
+                           {lifecycleWarning ? (
+                              <span title="Snapshot completed; post-backup/cleanup needs attention">Complete · Cleanup warning</span>
+                           ) : (
+                              <StatusLabel status={status} hasError={!!errorMsg} />
+                           )}
                         </div>
                         <div title={duration + 's'}>{formatDuration(duration)}</div>
                         <div

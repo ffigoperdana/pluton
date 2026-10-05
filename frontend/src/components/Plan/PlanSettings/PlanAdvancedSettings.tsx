@@ -10,6 +10,7 @@ import { isMobile } from '../../../utils/helpers';
 import Select from '../../common/form/Select/Select';
 import PlanScriptsSettings from './PlanScriptsSettings';
 import { Device } from '../../../@types/devices';
+import PlanRemoteLifecycleSettings from './PlanRemoteLifecycleSettings';
 
 interface PlanAdvancedSettingsProps {
    plan: NewPlanSettings;
@@ -34,6 +35,7 @@ const PlanAdvancedSettings = ({
 }: PlanAdvancedSettingsProps) => {
    const [advancedTab, setAdvancedTab] = useState('General');
    const settings = plan.settings;
+   const remoteLifecycle = plan.sourceType === 'device' && plan.sourceId !== 'main';
 
    useEffect(() => {
       if (!allowScripts && advancedTab === 'Scripts') setAdvancedTab('General');
@@ -62,6 +64,7 @@ const PlanAdvancedSettings = ({
                   { label: 'Performance', value: 'Performance', icon: 'performance' },
                   { label: 'Notification', value: 'Notification', icon: 'notification' },
                   { label: 'Misc.', value: 'Misc', icon: 'settings-alt' },
+                  ...(remoteLifecycle ? [{ label: 'Database & Hooks', value: 'Lifecycle', icon: 'cli' as const }] : []),
                ]}
                fieldValue={advancedTab}
                full={true}
@@ -87,6 +90,11 @@ const PlanAdvancedSettings = ({
                         <Icon size={13} type="cli" /> Scripts
                      </li>
                   )}
+                  {remoteLifecycle && (
+                     <li onClick={() => setAdvancedTab('Lifecycle')} className={advancedTab === 'Lifecycle' ? classes.advancedTabActive : ''}>
+                        <Icon size={13} type="cli" /> Database & Hooks
+                     </li>
+                  )}
                   <li onClick={() => setAdvancedTab('Misc')} className={advancedTab === 'Misc' ? classes.advancedTabActive : ''}>
                      <Icon size={14} type="settings-alt" /> Misc.
                   </li>
@@ -94,6 +102,17 @@ const PlanAdvancedSettings = ({
             </>
          )}
          <div className={classes.advancedTabContent}>
+            {remoteLifecycle && advancedTab === 'Lifecycle' && (
+               <PlanRemoteLifecycleSettings
+                  value={settings.remoteLifecycle}
+                  onUpdate={(value) =>
+                     onUpdate({
+                        ...plan,
+                        settings: { ...settings, remoteLifecycle: value.database || value.preHook || value.postHook ? value : undefined },
+                     })
+                  }
+               />
+            )}
             {advancedTab === 'General' && (
                <PlanGeneralSettings
                   settings={settings}

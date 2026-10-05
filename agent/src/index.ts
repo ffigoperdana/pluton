@@ -34,6 +34,8 @@ function configFromArgs(args: string[]) {
     caFile: readOption(args, "--ca-file") || envConfig.PLUTON_AGENT_CA_FILE,
     clientCertFile: envConfig.PLUTON_AGENT_CLIENT_CERT_FILE,
     clientKeyFile: envConfig.PLUTON_AGENT_CLIENT_KEY_FILE,
+    hookRoot: envConfig.PLUTON_AGENT_HOOK_ROOT,
+    databaseBinDirs: envConfig.PLUTON_AGENT_DATABASE_BIN_DIRS,
   });
 }
 
@@ -69,6 +71,8 @@ async function main(): Promise<void> {
         collectInventory({
           filesystemRootsConfigured: roots.length > 0,
           binDir: config.binDir,
+          hookRoot: config.hookRoot,
+          databaseBinDirs: config.databaseBinDirs,
         }),
       ),
     );

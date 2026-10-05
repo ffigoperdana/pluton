@@ -145,7 +145,6 @@ export function useGetDownloadLogs() {
 // Create New Plan
 export async function createPlan({ newPlan, runSettings }: { newPlan: NewPlanSettings; runSettings: PlanAddRunSettings }) {
    const header = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
-   console.log('newPlan :', newPlan);
    const res = await fetch(`${API_URL}/plans`, {
       method: 'POST',
       credentials: 'include',
@@ -174,7 +173,6 @@ export function useCreatePlan() {
 // UpdatePlan
 export async function updatePlan(updatePayload: { id: string; data: Partial<Plan> }) {
    const header = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
-   console.log('newPlan :', updatePayload);
    const res = await fetch(`${API_URL}/plans/${updatePayload.id}`, {
       method: 'PUT',
       credentials: 'include',

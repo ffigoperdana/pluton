@@ -1,0 +1,40 @@
+.lifecycle {
+   h3 {
+      margin: 20px 0 12px;
+   }
+   p {
+      line-height: 1.6;
+      margin: 12px 0;
+   }
+   label {
+      display: block;
+      font-size: 13px;
+   }
+   input:not([type='checkbox']),
+   select,
+   textarea {
+      box-sizing: border-box;
+      width: 100%;
+      display: block;
+      margin-top: 7px;
+      padding: 9px;
+      border: 1px solid var(--line-color, #ddd);
+      border-radius: 5px;
+      background: var(--background-color, #fff);
+      color: inherit;
+   }
+}
+.grid {
+   display: grid;
+   grid-template-columns: repeat(2, minmax(0, 1fr));
+   gap: 18px;
+   margin-top: 18px;
+}
+.hook {
+   margin: 18px 0;
+}
+@media (max-width: 650px) {
+   .grid {
+      grid-template-columns: 1fr;
+   }
+}

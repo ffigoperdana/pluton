@@ -250,8 +250,8 @@ const PlanForm = ({
                   {isRemoteFilesystemSource && (
                      <div className={classes.field}>
                         <p className={classes.fieldNotice}>
-                           Remote filesystem backups currently use a direct SFTP destination. Replication, prune, scripts, restore, and repository
-                           maintenance are not enabled in this phase.
+                           Remote managed backups use SFTP. Database dumps and constrained hooks can be configured under Advanced → Database & Hooks.
+                           Replication, prune, arbitrary scripts, and remote repository maintenance remain unavailable.
                         </p>
                      </div>
                   )}

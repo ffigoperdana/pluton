@@ -6,6 +6,9 @@ export type AgentCommandType =
 export type AgentCapabilities = {
   filesystemRootsConfigured: boolean;
   commandTypes: AgentCommandType[];
+  backupLifecycleVersion?: 1;
+  databaseEngines?: ("mysql" | "mariadb")[];
+  hooksConfigured?: boolean;
 };
 
 export type AgentInventory = {
@@ -46,6 +49,9 @@ export type AgentConfig = {
   allowedRoots: string[];
   /** Private installer-owned binaries. Never resolve Restic/Rclone from host PATH. */
   binDir?: string;
+  /** Administrator-only local configuration; never supplied by a command. */
+  hookRoot?: string;
+  databaseBinDirs?: string[];
   allowInsecureHttp: boolean;
   caFile?: string;
   clientCertFile?: string;

@@ -1,6 +1,7 @@
 import { toast } from 'react-toastify';
 import { NewPlanSettings, PlanInterval } from '../@types/plans';
 import { isValidEmail } from './helpers';
+import { remoteLifecycleValidation } from './remoteLifecycle';
 
 export function planIntervalName(interval: PlanInterval): string {
    switch (interval.type) {
@@ -44,6 +45,13 @@ export function planIntervalAgeName(age: string) {
 }
 
 export function isPlanSettingsValid(newPlan: NewPlanSettings, step: number | false = false): boolean {
+   if (step === 4 || step === false) {
+      const error = remoteLifecycleValidation(newPlan.settings.remoteLifecycle);
+      if (error) {
+         toast.error(error);
+         return false;
+      }
+   }
    if ((step === 1 || step === false) && !newPlan.title) {
       toast.error(`Plan Title is required`);
       return false;
