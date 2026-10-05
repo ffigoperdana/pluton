@@ -22,6 +22,7 @@ import { BackupMirror } from '../types/backups';
 import { PlanStats } from '../types/plans';
 import { AppError, NotFoundError } from '../utils/AppError';
 import { RemoteBackupService } from './RemoteBackupService';
+import { RemoteRepositoryRecoveryService } from './RemoteRepositoryRecoveryService';
 
 export class BackupService {
 	constructor(
@@ -31,7 +32,8 @@ export class BackupService {
 		protected backupStore: BackupStore,
 		protected restoreStore: RestoreStore,
 		protected storageStore: StorageStore,
-		private readonly remoteBackupService?: RemoteBackupService
+		private readonly remoteBackupService?: RemoteBackupService,
+		private readonly remoteRecovery?: RemoteRepositoryRecoveryService
 	) {}
 
 	getSnapshotStrategy(deviceId: string, method?: string): SnapshotStrategy {
@@ -221,6 +223,10 @@ export class BackupService {
 		const backup = await this.backupStore.getById(backupId);
 		if (!backup) {
 			throw new Error('Backup not found');
+		}
+		if (backup.method === 'backup' && RemoteBackupService.isRemoteFilesystemPlan(backup)) {
+			if (!this.remoteRecovery) throw new AppError(501, 'REMOTE_CAPABILITY_NOT_IMPLEMENTED');
+			return this.remoteRecovery.browse(backupId, replicationId);
 		}
 		const backupDevice = backup.sourceId ? backup.sourceId : 'main';
 		const backupMethod = backup.method;

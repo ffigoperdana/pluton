@@ -112,6 +112,7 @@ const Backups = ({
    const getDownloadMutation = useGetBackupDownload();
    const browseSnapshotMutation = useBrowseSnapshot();
    const isSync = method === 'sync';
+   const isRemoteManaged = sourceType === 'device' && sourceId !== 'main' && method === 'backup';
 
    const snapshotFiles = browseSnapshotMutation.data?.result;
 
@@ -236,7 +237,9 @@ const Backups = ({
                            {replicationSettings?.enabled && snapshot.mirrors && snapshot.mirrors.length > 0 && (
                               <MirrorStatusBadge mirrors={snapshot.mirrors} planId={planId} backupId={id} replicationSettings={replicationSettings} />
                            )}
-                           {download && <DownloadLabel download={download} downloadBackup={() => getDownloadMutation.mutate(id)} />}
+                           {!isRemoteManaged && download && (
+                              <DownloadLabel download={download} downloadBackup={() => getDownloadMutation.mutate(id)} />
+                           )}
                         </div>
                         <div
                            className={`${classes.status} ${errorMsg ? classes.statusHasError : ''}`}
@@ -287,7 +290,7 @@ const Backups = ({
                         </div>
                         {showSnapOptions === id && (
                            <div className={classes.settings}>
-                              {!isSync && status === 'completed' && active && (
+                              {!isSync && !isRemoteManaged && status === 'completed' && active && (
                                  <button
                                     className={downloadBackupMutation.isPending || cancelDownloadMutation.isPending ? 'notAllowed' : ''}
                                     disabled={downloadBackupMutation.isPending || cancelDownloadMutation.isPending}
@@ -332,19 +335,21 @@ const Backups = ({
                                     <Icon type="restore" size={14} /> Restore
                                  </button>
                               )}
-                              <button
-                                 className={isDownloading ? 'notAllowed' : ''}
-                                 disabled={isDownloading}
-                                 onClick={() => {
-                                    if (isDownloading) {
-                                       return;
-                                    }
-                                    setShowDeleteModal(snapshot);
-                                    setShowSnapOptions(false);
-                                 }}
-                              >
-                                 <Icon type="trash" size={14} /> Remove
-                              </button>
+                              {!isRemoteManaged && (
+                                 <button
+                                    className={isDownloading ? 'notAllowed' : ''}
+                                    disabled={isDownloading}
+                                    onClick={() => {
+                                       if (isDownloading) {
+                                          return;
+                                       }
+                                       setShowDeleteModal(snapshot);
+                                       setShowSnapOptions(false);
+                                    }}
+                                 >
+                                    <Icon type="trash" size={14} /> Remove
+                                 </button>
+                              )}
                            </div>
                         )}
                      </div>
@@ -377,9 +382,13 @@ const Backups = ({
                planId={planId}
                backupId={showRestoreModal.id}
                deviceId={deviceId}
+               stagingOnly={isRemoteManaged}
                planStorage={storage}
                mirrors={
-                  replicationSettings?.enabled && showRestoreModal.mirrors && showRestoreModal.mirrors.some((m) => m.status === 'completed')
+                  !isRemoteManaged &&
+                  replicationSettings?.enabled &&
+                  showRestoreModal.mirrors &&
+                  showRestoreModal.mirrors.some((m) => m.status === 'completed')
                      ? showRestoreModal.mirrors
                      : []
                }
@@ -449,9 +458,10 @@ const Backups = ({
                   backup={showSnapshotViewer}
                   planId={planId}
                   isSync={isSync}
+                  stagingOnly={isRemoteManaged}
                   onClose={() => setShowSnapshotViewer(false)}
-                  mirrors={replicationSettings?.enabled ? showSnapshotViewer.mirrors : undefined}
-                  primaryStorage={replicationSettings?.enabled ? storage : undefined}
+                  mirrors={!isRemoteManaged && replicationSettings?.enabled ? showSnapshotViewer.mirrors : undefined}
+                  primaryStorage={!isRemoteManaged && replicationSettings?.enabled ? storage : undefined}
                />
             </SidePanel>
          )}

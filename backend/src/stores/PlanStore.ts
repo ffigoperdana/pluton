@@ -69,7 +69,12 @@ export class PlanStore {
 			const plans = result.map(async plan => {
 				return {
 					...plan,
-					backups: this.handleBackupStats(plan.method, plan.backups, plan.stats),
+					backups: this.handleBackupStats(
+						plan.method,
+						plan.backups,
+						plan.stats,
+						plan.sourceType === 'device' && plan.sourceId !== 'main'
+					),
 				};
 			});
 			return Promise.all(plans);
@@ -134,7 +139,12 @@ export class PlanStore {
 		});
 
 		if (thePlan && thePlan.backups) {
-			thePlan.backups = this.handleBackupStats(thePlan.method, thePlan.backups, thePlan.stats);
+			thePlan.backups = this.handleBackupStats(
+				thePlan.method,
+				thePlan.backups,
+				thePlan.stats,
+				thePlan.sourceType === 'device' && thePlan.sourceId !== 'main'
+			);
 		}
 		// clear out backup mirrors that are missing from the plan's replication settings
 		// e.g. if the storage was removed after the backup was taken
@@ -159,18 +169,29 @@ export class PlanStore {
 		return result;
 	}
 
-	handleBackupStats(method: string, backups: PlanFull['backups'], stats: PlanFull['stats']) {
+	handleBackupStats(
+		method: string,
+		backups: PlanFull['backups'],
+		stats: PlanFull['stats'],
+		remoteManaged = false
+	) {
+		const isRemoteManaged = remoteManaged && method === 'backup';
 		return backups.map(backup => {
 			const { completionStats: backupCompStats, taskStats: backupTaskStats } = backup;
 			const backupStarted = backup.started ? new Date(backup.started).getTime() : 0;
 			const backupEnded = backup.ended ? new Date(backup.ended).getTime() : 0;
 			const taskStats = backupCompStats || backupTaskStats;
+			const counts = isRemoteManaged ? backupCompStats : backupTaskStats;
 			return {
 				...backup,
-				totalFiles: backupTaskStats?.total_files_processed || 0,
-				totalSize: backupTaskStats?.total_bytes_processed || 0,
+				totalFiles: counts?.total_files_processed || 0,
+				totalSize: counts?.total_bytes_processed || 0,
 				duration: Math.floor((backupEnded - backupStarted) / 1000),
-				active: stats?.snapshots?.includes(backup.id) || false,
+				active: isRemoteManaged
+					? !!backupCompStats?.snapshot_id &&
+						/^[a-f0-9]{64}$/.test(backupCompStats.snapshot_id) &&
+						!!stats?.snapshots?.includes(backupCompStats.snapshot_id)
+					: stats?.snapshots?.includes(backup.id) || false,
 				changes: {
 					new: taskStats?.files_new || 0,
 					modified: taskStats?.files_changed || 0,

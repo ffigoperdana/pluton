@@ -260,7 +260,9 @@ export function useGetRestoreProgress(payload: { id: string; sourceId: string; s
                   console.log('Invalidate Plan and Reload It :', planId);
                   queryClient.invalidateQueries({ queryKey: ['plan', planId] });
                }
-               toast.success('Restoration Complete!');
+               if (progressData.status === 'cancelled') toast.info('Restoration Cancelled.');
+               else if (progressData.success === false) toast.error('Restoration Failed. See the restore record for details.');
+               else toast.success('Restoration Complete!');
             }
             return false;
          }
