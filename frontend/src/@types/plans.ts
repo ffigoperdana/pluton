@@ -160,7 +160,8 @@ export type PlanSettings = {
 };
 
 export type RemoteDatabaseBackup = {
-   engine: 'mysql' | 'mariadb';
+   databaseId?: string;
+   engine: 'mysql' | 'mariadb' | 'postgresql';
    host: string;
    port: number;
    tls: 'verify-identity' | 'local';
@@ -175,7 +176,13 @@ export type RemoteDatabaseBackup = {
    passwordConfigured?: boolean;
 };
 export type RemoteLifecycleHook = { id: string; args: string[]; timeoutSeconds: number };
-export type RemoteBackupLifecycle = { version: 1; database?: RemoteDatabaseBackup; preHook?: RemoteLifecycleHook; postHook?: RemoteLifecycleHook };
+export type RemoteBackupLifecycle = {
+   version: 1 | 2;
+   database?: RemoteDatabaseBackup;
+   databases?: RemoteDatabaseBackup[];
+   preHook?: RemoteLifecycleHook;
+   postHook?: RemoteLifecycleHook;
+};
 
 export type PlanStats = {
    size: number;

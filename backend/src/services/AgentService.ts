@@ -17,6 +17,7 @@ import { configService } from './ConfigService';
 import { serverLogger } from '../utils/logger';
 import type { RemoteBackupService } from './RemoteBackupService';
 import { RemoteCommandPreparationError } from './remoteCommandPreparation';
+import { databaseIdSchema } from '../utils/remoteLifecycle';
 
 const inventorySchema = z
 	.object({
@@ -39,10 +40,10 @@ const inventorySchema = z
 					.array(z.enum(['PING', 'INVENTORY_REFRESH', 'BACKUP_FILESYSTEM']))
 					.min(1)
 					.max(3),
-				backupLifecycleVersion: z.literal(1).optional(),
+				backupLifecycleVersion: z.union([z.literal(1), z.literal(2)]).optional(),
 				databaseEngines: z
-					.array(z.enum(['mysql', 'mariadb']))
-					.max(2)
+					.array(z.enum(['mysql', 'mariadb', 'postgresql']))
+					.max(3)
 					.optional(),
 				hooksConfigured: z.boolean().optional(),
 			})
@@ -104,6 +105,10 @@ const backupFailureCodeSchema = z.enum([
 	'lifecycle-invalid',
 	'workspace-failed',
 	'database-tool-unavailable',
+	'database-client-missing',
+	'database-client-incompatible',
+	'database-tls-verification-failed',
+	'database-output-empty',
 	'database-auth-failed',
 	'database-unavailable',
 	'database-dump-failed',
@@ -146,7 +151,7 @@ const lifecycleReportSchema = z
 			.max(3),
 		database: z
 			.object({
-				path: z.string().regex(/^\/pluton\/database\/[A-Za-z0-9_-][A-Za-z0-9_.-]{0,95}\.sql$/),
+				path: z.string().regex(/^\/pluton\/database\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,95}\.sql$/),
 				bytes: z
 					.number()
 					.int()
@@ -155,6 +160,30 @@ const lifecycleReportSchema = z
 				sha256: z.string().regex(/^[a-f0-9]{64}$/),
 			})
 			.strict()
+			.optional(),
+		databases: z
+			.array(
+				z
+					.object({
+						databaseId: databaseIdSchema,
+						engine: z.enum(['mysql', 'mariadb', 'postgresql']),
+						database: z.string().regex(/^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/),
+						path: z.string().regex(/^\/pluton\/database\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,95}\.sql$/),
+						bytes: z
+							.number()
+							.int()
+							.positive()
+							.max(100 * 1024 ** 3),
+						sha256: z.string().regex(/^[a-f0-9]{64}$/),
+					})
+					.strict()
+			)
+			.max(8)
+			.refine(
+				entries =>
+					new Set(entries.map(entry => entry.databaseId)).size === entries.length &&
+					new Set(entries.map(entry => entry.path.toLowerCase())).size === entries.length
+			)
 			.optional(),
 	})
 	.strict();
@@ -432,6 +461,10 @@ export class AgentService {
 					.object({
 						phase: z.enum(['accepted', 'running']).optional(),
 						lifecycleStage: lifecycleStageSchema.optional(),
+						databaseId: databaseIdSchema.optional(),
+						engine: z.enum(['mysql', 'mariadb', 'postgresql']).optional(),
+						ordinal: z.number().int().min(1).max(8).optional(),
+						count: z.number().int().min(1).max(8).optional(),
 						progress: z
 							.object({
 								bytesProcessed: z
@@ -490,6 +523,8 @@ export class AgentService {
 				error: z.string().trim().min(1).max(500).optional(),
 				failureStage: backupFailureStageSchema.optional(),
 				failureCode: backupFailureCodeSchema.optional(),
+				databaseId: databaseIdSchema.optional(),
+				engine: z.enum(['mysql', 'mariadb', 'postgresql']).optional(),
 				cancelled: z.boolean().optional(),
 				result: z
 					.object({
@@ -542,7 +577,7 @@ export class AgentService {
 				'post-backup',
 			].includes(parsed.data.failureStage);
 		const safeError = lifecycleFailure
-			? `Remote backup lifecycle failed (${parsed.data.failureStage}/${parsed.data.failureCode || 'unexpected'}).`
+			? `Remote backup lifecycle failed (${parsed.data.failureStage}/${parsed.data.failureCode || 'unexpected'}${parsed.data.databaseId ? `; databaseId=${parsed.data.databaseId}; engine=${parsed.data.engine || 'unknown'}` : ''}).`
 			: parsed.data.error;
 		const command = await this.agentStore.completeCommand(
 			agentId,
@@ -565,6 +600,9 @@ export class AgentService {
 					...(safeCommandReference(payload.backupId) ? { backupId: payload.backupId } : {}),
 					failureStage: parsed.data.failureStage,
 					failureCode: parsed.data.failureCode,
+					...(parsed.data.databaseId
+						? { databaseId: parsed.data.databaseId, engine: parsed.data.engine }
+						: {}),
 				},
 				'BACKUP_FILESYSTEM command failed'
 			);
@@ -575,6 +613,9 @@ export class AgentService {
 			error: safeError,
 			failureStage: parsed.data.failureStage,
 			failureCode: parsed.data.failureCode,
+			...(parsed.data.databaseId
+				? { databaseId: parsed.data.databaseId, engine: parsed.data.engine }
+				: {}),
 			result: parsed.data.result,
 		});
 		this.audit(command.state === 'completed' ? 'command_completed' : 'command_failed');

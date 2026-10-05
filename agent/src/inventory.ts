@@ -8,7 +8,7 @@ import {
   detectDatabaseBinary,
 } from "./lifecyclePolicy.js";
 
-export const AGENT_VERSION = "0.3.0";
+export const AGENT_VERSION = "0.4.0";
 
 const SAFE_COMMANDS: AgentCapabilities["commandTypes"] = [
   "PING",
@@ -68,7 +68,7 @@ export function collectInventory(input: {
     privateBinaryPath(input.binDir, "rclone"),
     ["version"],
   );
-  const databaseEngines = (["mysql", "mariadb"] as const).filter(
+  const databaseEngines = (["mysql", "mariadb", "postgresql"] as const).filter(
     (engine) => !!detectDatabaseBinary(engine, input.databaseBinDirs),
   );
   let hooksConfigured = false;
@@ -103,7 +103,7 @@ export function collectInventory(input: {
       process.getuid?.() !== 0 &&
       immutableBackupTools
         ? {
-            backupLifecycleVersion: 1 as const,
+            backupLifecycleVersion: 2 as const,
             databaseEngines,
             hooksConfigured,
           }

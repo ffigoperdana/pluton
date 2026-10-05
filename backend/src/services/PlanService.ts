@@ -34,7 +34,8 @@ import { BackupNotification } from '../notifications/BackupNotification';
 import { ScheduleReconciler } from './ScheduleReconciler';
 import { BackupRunConfig } from '../types/backups';
 import { RemoteBackupService } from './RemoteBackupService';
-import { prepareRemoteLifecycleSettings } from '../utils/remoteLifecycle';
+import { prepareRemoteLifecycleCollection } from '../utils/remoteLifecycle';
+import type { DatabaseCredential } from '../types/remoteLifecycle';
 import { configService } from './ConfigService';
 
 /**
@@ -181,7 +182,7 @@ export class PlanService {
 			settings,
 			tags,
 		};
-		let databaseCredential: string | null | undefined;
+		let databaseCredential: DatabaseCredential[] | undefined;
 		if (settings?.remoteLifecycle !== undefined) {
 			if (!RemoteBackupService.isRemoteFilesystemPlan(newPlanData)) {
 				throw new AppError(
@@ -189,9 +190,14 @@ export class PlanService {
 					'Database lifecycle is available only for remote managed backup plans.'
 				);
 			}
-			const prepared = prepareRemoteLifecycleSettings(settings, null, configService.config.SECRET);
+			const prepared = prepareRemoteLifecycleCollection(
+				settings,
+				undefined,
+				[],
+				configService.config.SECRET
+			);
 			newPlanData.settings = prepared.settings;
-			databaseCredential = prepared.credential;
+			databaseCredential = prepared.credentials;
 		}
 
 		// Validate the plan data using the schema
@@ -266,9 +272,17 @@ export class PlanService {
 		if (!currentPlan) {
 			throw new NotFoundError('Plan not found.');
 		}
-		let databaseCredential: string | null | undefined;
-		let previousCredential: string | null = null;
+		let databaseCredential: DatabaseCredential[] | undefined;
+		let previousCredential: DatabaseCredential[] = [];
+		const lifecycleSupplied =
+			!!planData.settings && Object.hasOwn(planData.settings, 'remoteLifecycle');
+		// Partial unrelated settings updates must not implicitly disable database backup.
+		// Disabling is an explicit version-2 empty collection (hooks may remain).
+		if (planData.settings) {
+			planData = { ...planData, settings: { ...currentPlan.settings, ...planData.settings } };
+		}
 		if (
+			lifecycleSupplied &&
 			planData.settings &&
 			(planData.settings.remoteLifecycle !== undefined ||
 				currentPlan.settings.remoteLifecycle !== undefined)
@@ -284,14 +298,18 @@ export class PlanService {
 					'Database lifecycle is available only for remote managed backup plans.'
 				);
 			}
-			previousCredential = await this.planStore.getDatabaseCredential(planId);
-			const prepared = prepareRemoteLifecycleSettings(
-				planData.settings,
-				previousCredential,
-				configService.config.SECRET
-			);
+			previousCredential = await this.planStore.getDatabaseCredentials(planId);
+			const prepared =
+				planData.settings.remoteLifecycle === undefined
+					? { settings: planData.settings, credentials: [] }
+					: prepareRemoteLifecycleCollection(
+							planData.settings,
+							currentPlan.settings.remoteLifecycle,
+							previousCredential,
+							configService.config.SECRET
+						);
 			planData = { ...planData, settings: prepared.settings };
-			databaseCredential = prepared.credential === undefined ? null : prepared.credential;
+			databaseCredential = prepared.credentials;
 		}
 		let parsedPlanData;
 		try {

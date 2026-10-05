@@ -2,7 +2,7 @@
 FROM pluton-ci-validation:phase4
 USER root
 COPY agent/package.json /app/agent/package.json
-RUN apk add --no-cache mariadb mariadb-client \
+RUN apk add --no-cache mariadb mariadb-client postgresql postgresql-client \
  && chown root:root /usr/local/bin/restic /usr/local/bin/rclone
 HEALTHCHECK NONE
 USER node

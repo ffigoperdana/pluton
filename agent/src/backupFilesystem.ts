@@ -14,10 +14,13 @@ import { assertPathWithinAllowedRoots } from "./filesystemPolicy.js";
 import { privateBinaryPath } from "./inventory.js";
 import type { AgentConfig } from "./types.js";
 import { BackupLifecycleJob, BackupLifecycleError } from "./backupLifecycle.js";
+import { runLifecycleProcess } from "./lifecycleProcess.js";
 import {
   parseBackupLifecycle,
   assertRootOwnedPath,
+  lifecycleDatabases,
   type BackupLifecycle,
+  type DatabaseCheckpoint,
   type LifecycleCheckpoint,
   type LifecycleFailureCode,
   type LifecycleReport,
@@ -36,7 +39,7 @@ const PROGRESS_INTERVAL_MS = 5_000;
 const SFTP_OPTION_KEYS = new Set(["host", "port", "user", "pass"]);
 
 export type BackupFilesystemPayload = {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   lifecycle?: BackupLifecycle;
   backupId: string;
   planId: string;
@@ -127,6 +130,7 @@ export type BackupFilesystemFailureCode =
   | LifecycleFailureCode;
 
 export type BackupFilesystemStageEvent = {
+  database?: DatabaseCheckpoint;
   stage: BackupFilesystemStage;
   message:
     | "command accepted"
@@ -177,6 +181,8 @@ export class BackupFilesystemError extends Error {
   constructor(
     readonly stage: BackupFilesystemStage,
     readonly code: BackupFilesystemFailureCode,
+    readonly databaseId?: string,
+    readonly engine?: "mysql" | "mariadb" | "postgresql",
   ) {
     super(BACKUP_FAILURE_MESSAGES[code] || "Remote backup lifecycle failed.");
     this.name = "BackupFilesystemError";
@@ -189,7 +195,12 @@ export function toBackupFilesystemError(
 ): BackupFilesystemError {
   if (error instanceof BackupFilesystemError) return error;
   if (error instanceof BackupLifecycleError)
-    return new BackupFilesystemError(error.stage, error.code);
+    return new BackupFilesystemError(
+      error.stage,
+      error.code,
+      error.databaseId,
+      error.engine,
+    );
   if (error instanceof BackupCancelledError) {
     return new BackupFilesystemError(stage, "cancelled");
   }
@@ -321,12 +332,12 @@ export function parseBackupFilesystemPayload(
     "repository",
     "rclone",
     "repositoryPassword",
-    ...(value.version === 2 ? ["lifecycle"] : []),
+    ...(value.version === 2 || value.version === 3 ? ["lifecycle"] : []),
   ]);
   if (Object.keys(value).some((key) => !allowed.has(key))) {
     throw new Error("Backup command contains unsupported fields.");
   }
-  if (value.version !== 1 && value.version !== 2)
+  if (value.version !== 1 && value.version !== 2 && value.version !== 3)
     throw new Error("Backup command version is unsupported.");
   const repository = asRecord(value.repository, "Repository configuration");
   const rclone = asRecord(value.rclone, "Rclone configuration");
@@ -344,11 +355,13 @@ export function parseBackupFilesystemPayload(
     512,
   );
   if (password.length < 20) throw new Error("Repository password is invalid.");
+  const lifecycle =
+    value.version === 1 ? undefined : parseBackupLifecycle(value.lifecycle);
+  if (lifecycle && lifecycle.version !== (value.version === 3 ? 2 : 1))
+    throw new Error("Incompatible lifecycle envelope.");
   return {
     version: value.version,
-    ...(value.version === 2
-      ? { lifecycle: parseBackupLifecycle(value.lifecycle) }
-      : {}),
+    ...(lifecycle ? { lifecycle } : {}),
     backupId: validateId(value.backupId, "Backup ID"),
     planId: validateId(value.planId, "Plan ID"),
     sourcePath: requiredString(value.sourcePath, "Source path", 4_096),
@@ -843,7 +856,8 @@ async function confirmLifecycleSnapshot(
   snapshotId: string,
   env: NodeJS.ProcessEnv,
   shouldCancel: () => Promise<boolean>,
-  expectedBytes?: number,
+  source: string,
+  expectedReport?: LifecycleReport,
 ): Promise<string> {
   try {
     const result = await runProgram(
@@ -872,31 +886,107 @@ async function confirmLifecycleSnapshot(
     );
     if (matches.length !== 1) throw new Error("Snapshot binding failed.");
     const fullId = matches[0].id as string;
-    if (payload.lifecycle?.database) {
-      const dumpPath = `/pluton/database/${payload.lifecycle.database.dumpFilename}`;
-      const listing = await runProgram(
+    if (payload.version === 3) {
+      if (
+        !Array.isArray(matches[0].paths) ||
+        !matches[0].paths.includes(source)
+      )
+        throw new Error("Application source not bound to snapshot.");
+      let sourceFound = false;
+      await runProgram(
+        restic,
+        ["-r", repository, "--no-lock", "ls", "--json", fullId, source],
+        {
+          env,
+          shouldCancel,
+          timeoutMs: 60_000,
+          onJsonLine: async (node) => {
+            if (
+              node.path === source &&
+              (node.type === "dir" || node.type === "file")
+            )
+              sourceFound = true;
+          },
+        },
+      );
+      if (!sourceFound)
+        throw new Error("Application source missing from snapshot.");
+    }
+    for (const db of payload.lifecycle
+      ? lifecycleDatabases(payload.lifecycle)
+      : []) {
+      const dumpPath = `/pluton/database/${db.dumpFilename}`;
+      const expected =
+        expectedReport?.databases?.find(
+          (item) => item.databaseId === db.databaseId,
+        ) || expectedReport?.database;
+      let files = 0;
+      let size: unknown;
+      await runProgram(
         restic,
         ["-r", repository, "--no-lock", "ls", "--json", fullId, dumpPath],
-        { env, shouldCancel, timeoutMs: 60_000 },
-      );
-      const nodes = listing.stdout
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
-      const files = nodes.filter(
-        (node) => node.path === dumpPath && node.type === "file",
+        {
+          env,
+          shouldCancel,
+          timeoutMs: 60_000,
+          onJsonLine: async (node) => {
+            if (node.path === dumpPath && node.type === "file") {
+              files++;
+              size = node.size;
+            }
+          },
+        },
       );
       if (
-        files.length !== 1 ||
-        !Number.isSafeInteger(files[0].size) ||
-        files[0].size <= 0 ||
-        (expectedBytes !== undefined && files[0].size !== expectedBytes)
+        files !== 1 ||
+        typeof size !== "number" ||
+        !Number.isSafeInteger(size) ||
+        size <= 0 ||
+        (expected !== undefined &&
+          (size !== expected.bytes || expected.path !== dumpPath))
       )
-        throw new Error("Dump missing from snapshot.");
+        throw new BackupLifecycleError(
+          "snapshot-confirmation",
+          "snapshot-confirmation-failed",
+          db.databaseId,
+          db.engine,
+        );
+      if (payload.version === 3 && expectedReport && !expected) {
+        // Local completion receipt lost: recover hashes from the existing tagged
+        // snapshot, never rerun hooks/dumps or materialize SQL in the live source.
+        const digest = await runLifecycleProcess({
+          binary: restic,
+          args: ["-r", repository, "--no-lock", "dump", fullId, dumpPath],
+          cwd: path.dirname(env.RCLONE_CONFIG!),
+          env,
+          shouldCancel,
+          timeoutSeconds: db.timeoutSeconds,
+          hashOutputMaxBytes: size,
+        });
+        if (digest.bytes !== size)
+          throw new BackupLifecycleError(
+            "snapshot-confirmation",
+            "snapshot-confirmation-failed",
+            db.databaseId,
+            db.engine,
+          );
+        (expectedReport.databases ||= []).push({
+          databaseId: db.databaseId!,
+          engine: db.engine,
+          database: db.database,
+          path: dumpPath,
+          ...digest,
+        });
+      }
+    }
+    if (expectedReport?.databases?.length === 1) {
+      const { path: artifactPath, bytes, sha256 } = expectedReport.databases[0];
+      expectedReport.database = { path: artifactPath, bytes, sha256 };
     }
     return fullId;
   } catch (error) {
     if (error instanceof BackupCancelledError) throw error;
+    if (error instanceof BackupLifecycleError) throw error;
     throw new BackupLifecycleError(
       "snapshot-confirmation",
       "snapshot-confirmation-failed",
@@ -926,14 +1016,19 @@ export async function executeFilesystemBackup(input: {
   };
   const lifecycleEvent = async (
     checkpoint: LifecycleCheckpoint,
+    database?: DatabaseCheckpoint,
   ): Promise<void> => {
     if (checkpoint === "pre-backup-started") stage = "pre-backup";
     if (checkpoint === "database-dump-started") stage = "database-dump";
     if (checkpoint === "post-backup-started") stage = "post-backup";
-    input.onStage?.({ stage, message: checkpoint });
+    input.onStage?.({
+      stage,
+      message: checkpoint,
+      ...(database ? { database } : {}),
+    });
     // Stage delivery is best-effort; failure must not undo a completed snapshot/cleanup.
     try {
-      await input.onEvent({ lifecycleStage: checkpoint });
+      await input.onEvent({ lifecycleStage: checkpoint, ...database });
     } catch {
       /* Status polling refreshes the lease as well. */
     }
@@ -1012,6 +1107,10 @@ export async function executeFilesystemBackup(input: {
     if (existing) {
       if (payload.lifecycle) {
         setStage("snapshot-confirmation");
+        const replayReport: LifecycleReport = {
+          warnings: [],
+          ...(payload.version === 3 ? { databases: [] } : {}),
+        };
         const fullId = await confirmLifecycleSnapshot(
           restic,
           repository,
@@ -1019,15 +1118,17 @@ export async function executeFilesystemBackup(input: {
           existing.snapshotId,
           env,
           input.shouldCancel,
+          source,
+          replayReport,
         );
         existing.snapshotId = fullId;
         existing.summary.snapshot_id = fullId;
-        existing.lifecycle = { warnings: [] };
+        existing.lifecycle = replayReport;
       }
       completedResult = existing;
       return existing;
     }
-    let artifact: string | undefined;
+    let artifacts: string[] = [];
     if (payload.lifecycle) {
       setStage("lifecycle-validation");
       if (source === "/pluton" || source.startsWith("/pluton/database"))
@@ -1041,7 +1142,7 @@ export async function executeFilesystemBackup(input: {
         input.shouldCancel,
         lifecycleEvent,
       );
-      artifact = await job.prepare();
+      artifacts = await job.prepare();
       if (await input.shouldCancel()) throw new BackupCancelledError();
     }
     setStage("repository-target-check");
@@ -1075,7 +1176,7 @@ export async function executeFilesystemBackup(input: {
       repository,
       "backup",
       source,
-      ...(artifact ? [artifact] : []),
+      ...artifacts,
       "--json",
       "--tag",
       `pluton-plan-${payload.planId}`,
@@ -1117,7 +1218,8 @@ export async function executeFilesystemBackup(input: {
         completedSummary.snapshot_id,
         env,
         input.shouldCancel,
-        job.report.database?.bytes,
+        source,
+        job.report,
       );
     }
     const result = {

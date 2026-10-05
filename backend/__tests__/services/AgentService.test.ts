@@ -572,4 +572,85 @@ describe('AgentService', () => {
 			warn.mockRestore();
 		}
 	});
+	it('accepts PostgreSQL/multi-DB inventory and safe entry diagnostics but refuses secret-bearing unknown fields', async () => {
+		const extended = {
+			...inventory,
+			agentVersion: '0.4.0',
+			capabilities: {
+				...inventory.capabilities,
+				backupLifecycleVersion: 2,
+				databaseEngines: ['mysql', 'mariadb', 'postgresql'],
+				hooksConfigured: true,
+			},
+		};
+		await service.heartbeat(agent.agentId, extended);
+		expect(store.updateHeartbeat).toHaveBeenCalledWith(agent.agentId, extended);
+		const command = {
+			id: 'command-mixed-db',
+			type: 'BACKUP_FILESYSTEM',
+			state: 'failed',
+			payload: { backupId: 'backup-01', planId: 'plan-01', repositoryId: 'repo-01' },
+		} as any;
+		store.recordCommandEvent.mockResolvedValue(command);
+		store.completeCommand.mockResolvedValue(command);
+		const remote = { recordCommandEvent: jest.fn(), completeCommand: jest.fn() } as any;
+		const lifecycleService = new AgentService(store, 'synthetic-phase5-secret', () => now, remote);
+		const event = {
+			lifecycleStage: 'database-dump-started',
+			databaseId: 'db_two',
+			engine: 'postgresql',
+			ordinal: 2,
+			count: 3,
+		};
+		await lifecycleService.recordEvent(agent.agentId, command.id, {
+			sequence: 2,
+			leaseToken: 'a'.repeat(32),
+			event,
+		});
+		expect(remote.recordCommandEvent).toHaveBeenCalledWith(command, event);
+		await expect(
+			lifecycleService.recordEvent(agent.agentId, command.id, {
+				sequence: 3,
+				leaseToken: 'a'.repeat(32),
+				event: { ...event, password: 'synthetic-provider-secret' },
+			})
+		).rejects.toThrow('event is invalid');
+		const warn = jest.spyOn(serverLogger, 'warn').mockImplementation(() => undefined as any);
+		try {
+			await lifecycleService.complete(agent.agentId, command.id, {
+				sequence: 4,
+				leaseToken: 'a'.repeat(32),
+				success: false,
+				error: 'synthetic-provider-secret',
+				failureStage: 'database-dump',
+				failureCode: 'database-client-incompatible',
+				databaseId: 'db_two',
+				engine: 'postgresql',
+			});
+			expect(remote.completeCommand).toHaveBeenCalledWith(
+				command,
+				expect.objectContaining({
+					databaseId: 'db_two',
+					engine: 'postgresql',
+					error: expect.stringContaining('databaseId=db_two'),
+				})
+			);
+			expect(warn).toHaveBeenCalledWith(
+				expect.objectContaining({
+					databaseId: 'db_two',
+					engine: 'postgresql',
+					failureCode: 'database-client-incompatible',
+				}),
+				'BACKUP_FILESYSTEM command failed'
+			);
+			for (const output of [
+				remote.completeCommand.mock.calls,
+				store.completeCommand.mock.calls,
+				warn.mock.calls,
+			])
+				expect(JSON.stringify(output)).not.toContain('synthetic-provider-secret');
+		} finally {
+			warn.mockRestore();
+		}
+	});
 });

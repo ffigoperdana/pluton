@@ -22,7 +22,10 @@ import {
 	remoteManagedRepositoryRelations,
 } from './schema/remoteManagedRepositories';
 import { appPaths } from '../utils/AppPaths';
-import { remotePlanDatabaseCredentials } from './schema/remotePlanCredentials';
+import {
+	remotePlanDatabaseCredentials,
+	remotePlanDatabaseEntryCredentials,
+} from './schema/remotePlanCredentials';
 
 const dbPath = path.join(appPaths.getDbDir(), 'pluton.db');
 export const sqlite: SqliteDatabase = new Database(dbPath);
@@ -54,6 +57,7 @@ export const db = drizzle(sqlite, {
 		remoteManagedRepositories,
 		remoteManagedRepositoryRelations,
 		remotePlanDatabaseCredentials,
+		remotePlanDatabaseEntryCredentials,
 	},
 });
 export type DatabaseType = typeof db;

@@ -1,6 +1,10 @@
 import { PlanStore } from '../../src/stores/PlanStore';
 import { DatabaseType } from '../../src/db';
-import { NewPlan, Plan } from '../../src/db/schema/plans';
+import { NewPlan, Plan, plans } from '../../src/db/schema/plans';
+import {
+	remotePlanDatabaseCredentials,
+	remotePlanDatabaseEntryCredentials,
+} from '../../src/db/schema/remotePlanCredentials';
 import { PlanFull } from '../../src/types/plans';
 
 // Mock the configService to provide a consistent secret for encryption/decryption tests
@@ -407,7 +411,10 @@ describe('PlanStore', () => {
 			expect(result).toBe(true);
 			expect(mockDb.transaction).toHaveBeenCalledTimes(1);
 			// Credential erasure and plan deletion share the same transaction.
-			expect(mockDb.delete).toHaveBeenCalledTimes(3); // includes Arrange's builder lookup
+			expect(mockDb.delete).toHaveBeenCalledTimes(4); // includes Arrange's builder lookup
+			expect(mockDb.delete).toHaveBeenNthCalledWith(2, remotePlanDatabaseEntryCredentials);
+			expect(mockDb.delete).toHaveBeenNthCalledWith(3, remotePlanDatabaseCredentials);
+			expect(mockDb.delete).toHaveBeenNthCalledWith(4, plans);
 		});
 	});
 

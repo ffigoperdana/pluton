@@ -90,11 +90,23 @@ export class AgentClient {
       error?: string;
       failureStage?: string;
       failureCode?: string;
+      databaseId?: string;
+      engine?: "mysql" | "mariadb" | "postgresql";
       result?: Record<string, unknown>;
       cancelled?: boolean;
     },
   ): Promise<void> {
-    const { sequence, success, error, failureStage, failureCode, result, cancelled } = completion;
+    const {
+      sequence,
+      success,
+      error,
+      failureStage,
+      failureCode,
+      databaseId,
+      engine,
+      result,
+      cancelled,
+    } = completion;
     await this.postSigned(
       `/api/agent/commands/${encodeURIComponent(commandId)}/complete`,
       {
@@ -104,6 +116,7 @@ export class AgentClient {
         ...(error ? { error } : {}),
         ...(failureStage ? { failureStage } : {}),
         ...(failureCode ? { failureCode } : {}),
+        ...(databaseId ? { databaseId, engine } : {}),
         ...(result ? { result } : {}),
         ...(cancelled ? { cancelled: true } : {}),
       },

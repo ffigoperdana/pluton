@@ -502,6 +502,75 @@ describe('RemoteBackupService', () => {
 		});
 		expect(JSON.stringify(error)).not.toContain('synthetic-invalid-ciphertext');
 	});
+	it('materializes a mixed collection with independent password binding only into ephemeral version 3', async () => {
+		const databases = [
+			{ ...database, databaseId: 'db_maria' },
+			{
+				...database,
+				databaseId: 'db_pg',
+				engine: 'postgresql',
+				port: 5432,
+				database: 'analytics',
+				dumpFilename: 'analytics.sql',
+			},
+		];
+		const mixedPlan = {
+			...plan,
+			settings: { ...plan.settings, remoteLifecycle: { version: 2, databases } },
+		};
+		planStore.getById.mockResolvedValue(mixedPlan);
+		agentStore.getAgentByDeviceId.mockResolvedValue({
+			...capableAgent,
+			lastSeen: new Date(),
+			capabilities: {
+				...capableAgent.capabilities,
+				backupLifecycleVersion: 2,
+				databaseEngines: ['mariadb', 'postgresql'],
+			},
+		});
+		planStore.getDatabaseCredentials = jest.fn().mockResolvedValue([
+			{
+				databaseId: 'db_pg',
+				encryptedPassword: new Cryptr(encryptionSecret).encrypt('synthetic-pg-password'),
+				legacySingle: false,
+			},
+			{
+				databaseId: 'db_maria',
+				encryptedPassword: new Cryptr(encryptionSecret).encrypt('synthetic-maria-password'),
+				legacySingle: false,
+			},
+		]);
+		const command = backupCommand();
+		const payload = await service.materializeCommand(capableAgent.agentId, command);
+		expect(payload).toMatchObject({
+			version: 3,
+			lifecycle: {
+				version: 2,
+				databases: [
+					{ databaseId: 'db_maria', password: 'synthetic-maria-password' },
+					{ databaseId: 'db_pg', password: 'synthetic-pg-password' },
+				],
+			},
+		});
+		expect(JSON.stringify(mixedPlan)).not.toContain('synthetic-pg-password');
+		expect(JSON.stringify(command)).not.toContain('synthetic-maria-password');
+		advertiseLifecycle();
+		await expect(service.validatePlanCreation(mixedPlan)).rejects.toThrow('does not support');
+		const single = {
+			...mixedPlan,
+			settings: {
+				...mixedPlan.settings,
+				remoteLifecycle: { version: 2, databases: [databases[0]] },
+			},
+		};
+		planStore.getById.mockResolvedValue(single);
+		const legacy = await service.materializeCommand(capableAgent.agentId, command);
+		expect(legacy).toMatchObject({
+			version: 2,
+			lifecycle: { version: 1, database: { password: 'synthetic-maria-password' } },
+		});
+		expect((legacy.lifecycle as any).database).not.toHaveProperty('databaseId');
+	});
 	it('snapshot success with post/cleanup warnings remains completed and exposes a safe warning separately', async () => {
 		backupStore.update = jest.fn();
 		planStore.update = jest.fn();
@@ -523,5 +592,56 @@ describe('RemoteBackupService', () => {
 		expect(backupStore.update).toHaveBeenCalledWith('backup-example-01', {
 			errorMsg: expect.stringContaining('post-backup/hook-failed'),
 		});
+	});
+	it('accepts only complete multi-DB snapshot metadata bound to every configured entry', async () => {
+		planStore.update = jest.fn();
+		const databases = [
+			{ ...database, databaseId: 'db_one' },
+			{
+				...database,
+				databaseId: 'db_two',
+				engine: 'postgresql',
+				database: 'analytics',
+				dumpFilename: 'analytics.sql',
+			},
+		];
+		planStore.getById.mockResolvedValue({
+			...plan,
+			settings: { ...plan.settings, remoteLifecycle: { version: 2, databases } },
+		});
+		const id = 'a'.repeat(64);
+		const artifacts = databases.map(entry => ({
+			databaseId: entry.databaseId,
+			engine: entry.engine,
+			database: entry.database,
+			path: `/pluton/database/${entry.dumpFilename}`,
+			bytes: 1024,
+			sha256: 'b'.repeat(64),
+		})) as any;
+		const summary = { message_type: 'summary', snapshot_id: id } as any;
+		for (const reported of [
+			undefined,
+			artifacts.slice(0, 1),
+			[{ ...artifacts[0], databaseId: 'db_foreign' }, artifacts[1]],
+			[{ ...artifacts[0], bytes: 1024 ** 4 }, artifacts[1]],
+		]) {
+			await service.completeCommand(backupCommand(), {
+				success: true,
+				result: { snapshotId: id, summary, lifecycle: { warnings: [], databases: reported } },
+			});
+			expect((service as any).eventService.onBackupFailure).toHaveBeenLastCalledWith(
+				expect.objectContaining({ error: expect.stringContaining('snapshot-confirmation-failed') })
+			);
+		}
+		expect((service as any).eventService.onBackupComplete).not.toHaveBeenCalled();
+		await service.completeCommand(backupCommand(), {
+			success: true,
+			result: { snapshotId: id, summary, lifecycle: { warnings: [], databases: artifacts } },
+		});
+		expect((service as any).eventService.onBackupComplete).toHaveBeenCalledWith(
+			expect.objectContaining({
+				summary: { ...summary, lifecycle: { warnings: [], databases: artifacts } },
+			})
+		);
 	});
 });

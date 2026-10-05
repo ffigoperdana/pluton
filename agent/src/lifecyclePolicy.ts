@@ -1,9 +1,16 @@
-import { accessSync, constants, lstatSync, realpathSync } from "node:fs";
+import {
+  accessSync,
+  constants,
+  lstatSync,
+  realpathSync,
+  readdirSync,
+} from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-export type DatabaseEngine = "mysql" | "mariadb";
+export type DatabaseEngine = "mysql" | "mariadb" | "postgresql";
 export type DatabaseBackup = {
+  databaseId?: string;
   engine: DatabaseEngine;
   host: string;
   port: number;
@@ -23,8 +30,9 @@ export type LifecycleHook = {
   timeoutSeconds: number;
 };
 export type BackupLifecycle = {
-  version: 1;
+  version: 1 | 2;
   database?: DatabaseBackup;
+  databases?: DatabaseBackup[];
   preHook?: LifecycleHook;
   postHook?: LifecycleHook;
 };
@@ -40,6 +48,10 @@ export type LifecycleFailureCode =
   | "lifecycle-invalid"
   | "workspace-failed"
   | "database-tool-unavailable"
+  | "database-client-missing"
+  | "database-client-incompatible"
+  | "database-tls-verification-failed"
+  | "database-output-empty"
   | "database-auth-failed"
   | "database-unavailable"
   | "database-dump-failed"
@@ -63,7 +75,32 @@ export type LifecycleWarning = {
 export type LifecycleReport = {
   warnings: LifecycleWarning[];
   database?: { path: string; bytes: number; sha256: string };
+  databases?: DatabaseArtifact[];
 };
+export type DatabaseArtifact = {
+  databaseId: string;
+  engine: DatabaseEngine;
+  database: string;
+  path: string;
+  bytes: number;
+  sha256: string;
+};
+export type DatabaseCheckpoint = {
+  databaseId?: string;
+  engine: DatabaseEngine;
+  ordinal: number;
+  count: number;
+};
+
+export function lifecycleDatabases(
+  lifecycle: BackupLifecycle,
+): DatabaseBackup[] {
+  return lifecycle.version === 2
+    ? lifecycle.databases || []
+    : lifecycle.database
+      ? [lifecycle.database]
+      : [];
+}
 export type LifecycleCheckpoint =
   | "pre-backup-started"
   | "database-dump-started"
@@ -127,12 +164,31 @@ function hook(value: unknown): LifecycleHook {
 /** Independent agent boundary: signed payloads still cannot choose commands/options. */
 export function parseBackupLifecycle(value: unknown): BackupLifecycle {
   const input = record(value);
-  keys(input, ["version", "database", "preHook", "postHook"]);
-  if (input.version !== 1) throw new Error("Invalid lifecycle version.");
-  const output: BackupLifecycle = { version: 1 };
-  if (input.database !== undefined) {
-    const db = record(input.database);
+  if (input.version !== 1 && input.version !== 2)
+    throw new Error("Invalid lifecycle version.");
+  keys(
+    input,
+    input.version === 1
+      ? ["version", "database", "preHook", "postHook"]
+      : ["version", "databases", "preHook", "postHook"],
+  );
+  if (
+    input.version === 2 &&
+    (!Array.isArray(input.databases) || input.databases.length > 8)
+  )
+    throw new Error("Invalid database collection.");
+  const output: BackupLifecycle = { version: input.version };
+  const entries =
+    input.version === 2
+      ? (input.databases as unknown[])
+      : input.database === undefined
+        ? []
+        : [input.database];
+  const databases: DatabaseBackup[] = [];
+  for (const entry of entries) {
+    const db = record(entry);
     keys(db, [
+      ...(input.version === 2 ? ["databaseId"] : []),
       "engine",
       "host",
       "port",
@@ -146,7 +202,11 @@ export function parseBackupLifecycle(value: unknown): BackupLifecycle {
       "includeRoutines",
       "includeEvents",
     ]);
-    if (db.engine !== "mysql" && db.engine !== "mariadb")
+    if (
+      db.engine !== "mysql" &&
+      db.engine !== "mariadb" &&
+      !(input.version === 2 && db.engine === "postgresql")
+    )
       throw new Error("Invalid database engine.");
     if (db.tls !== "verify-identity" && db.tls !== "local")
       throw new Error("Invalid database TLS policy.");
@@ -156,25 +216,54 @@ export function parseBackupLifecycle(value: unknown): BackupLifecycle {
     )
       throw new Error("Plaintext database transport is loopback-only.");
     const password = text(db.password, /^[^\0]+$/, 1024);
-    output.database = {
+    if (
+      db.engine === "postgresql" &&
+      (/[\r\n]/.test(password) ||
+        db.includeEvents !== false ||
+        db.includeRoutines !== false)
+    )
+      throw new Error("Invalid PostgreSQL configuration.");
+    databases.push({
+      ...(input.version === 2
+        ? { databaseId: text(db.databaseId, /^db_[A-Za-z0-9_-]+$/, 67) }
+        : {}),
       engine: db.engine,
       password,
       tls: db.tls,
       host: text(db.host, /^(?:[A-Za-z0-9][A-Za-z0-9.:-]*|::1)$/, 253),
       port: integer(db.port, 1, 65535),
-      database: text(db.database, /^[A-Za-z0-9_][A-Za-z0-9_-]*$/, 64),
-      username: text(db.username, /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/, 80),
+      database: text(
+        db.database,
+        /^[A-Za-z0-9_][A-Za-z0-9_-]*$/,
+        db.engine === "postgresql" ? 63 : 64,
+      ),
+      username: text(
+        db.username,
+        /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/,
+        db.engine === "postgresql" ? 63 : 80,
+      ),
       dumpFilename: text(
         db.dumpFilename,
-        /^[A-Za-z0-9_-][A-Za-z0-9_.-]*\.sql$/,
+        /^[A-Za-z0-9_][A-Za-z0-9_.-]*\.sql$/,
         100,
       ),
       timeoutSeconds: integer(db.timeoutSeconds, 1, 3600),
       maxDumpBytes: integer(db.maxDumpBytes, 1024, 100 * 1024 ** 3),
       includeRoutines: bool(db.includeRoutines),
       includeEvents: bool(db.includeEvents),
-    };
+    });
   }
+  const filenames = databases.map((db) =>
+    db.dumpFilename.normalize("NFKC").toLowerCase(),
+  );
+  const ids = databases.map((db) => db.databaseId);
+  if (
+    new Set(filenames).size !== filenames.length ||
+    new Set(ids).size !== ids.length
+  )
+    throw new Error("Duplicate database artifact or identity.");
+  if (input.version === 2) output.databases = databases;
+  else output.database = databases[0];
   if (input.preHook !== undefined) output.preHook = hook(input.preHook);
   if (input.postHook !== undefined) output.postHook = hook(input.postHook);
   return output;
@@ -184,6 +273,7 @@ export function parseBackupLifecycle(value: unknown): BackupLifecycle {
 export function assertRootOwnedPath(
   candidate: string,
   directory = false,
+  readableFile = false,
 ): string {
   if (process.platform !== "linux" || !path.isAbsolute(candidate))
     throw new Error("Linux administrator-owned path required.");
@@ -211,7 +301,11 @@ export function assertRootOwnedPath(
   }
   accessSync(
     resolved,
-    directory ? constants.R_OK | constants.X_OK : constants.X_OK,
+    directory
+      ? constants.R_OK | constants.X_OK
+      : readableFile
+        ? constants.R_OK
+        : constants.X_OK,
   );
   return resolved;
 }
@@ -227,35 +321,69 @@ export function validateHookExecutable(
 }
 
 /** Client selection never searches an untrusted PATH or accepts a UI executable. */
+function postgresPackageBinDirs(): string[] {
+  try {
+    // Debian/Ubuntu /usr/bin/pg_dump resolves to pg_wrapper, which cannot be
+    // invoked under that canonical name. Use the actual packaged executable,
+    // not a wrapper that selects user cluster/environment defaults.
+    const root = assertRootOwnedPath("/usr/lib/postgresql", true);
+    return readdirSync(root)
+      .filter((version) => /^(?:[1-9][0-9])$/.test(version))
+      .sort((a, b) => Number(b) - Number(a))
+      .slice(0, 8)
+      .map((version) => path.join(root, version, "bin"));
+  } catch {
+    return [];
+  }
+}
+
 export function detectDatabaseBinary(
   engine: DatabaseEngine,
-  binDirs = ["/usr/bin", "/usr/local/bin"],
+  binDirs?: string[],
 ): string | undefined {
   if (process.platform !== "linux") return undefined;
   const names =
-    engine === "mariadb" ? ["mariadb-dump", "mysqldump"] : ["mysqldump"];
+    engine === "mariadb"
+      ? ["mariadb-dump", "mysqldump"]
+      : engine === "postgresql"
+        ? ["pg_dump"]
+        : ["mysqldump"];
   for (const name of names)
-    for (const directory of binDirs) {
+    for (const directory of binDirs || [
+      "/usr/bin",
+      "/usr/local/bin",
+      ...(engine === "postgresql" ? postgresPackageBinDirs() : []),
+    ]) {
       try {
         const binary = assertRootOwnedPath(
           realpathSync(path.join(directory, name)),
         );
-        const version = spawnSync(binary, ["--no-defaults", "--version"], {
-          shell: false,
-          timeout: 2000,
-          maxBuffer: 4096,
-          env: {
-            PATH: "/usr/bin:/bin",
-            LANG: "C",
-            LC_ALL: "C",
-            HOME: "/nonexistent",
+        const version = spawnSync(
+          binary,
+          engine === "postgresql"
+            ? ["--version"]
+            : ["--no-defaults", "--version"],
+          {
+            shell: false,
+            timeout: 2000,
+            maxBuffer: 4096,
+            env: {
+              PATH: "/usr/bin:/bin",
+              LANG: "C",
+              LC_ALL: "C",
+              HOME: "/nonexistent",
+            },
+            encoding: "utf8",
           },
-          encoding: "utf8",
-        });
+        );
         if (version.status !== 0 || version.error) continue;
         const isMaria = /MariaDB/i.test(version.stdout);
         if (
           (engine === "mariadb" && isMaria) ||
+          (engine === "postgresql" &&
+            /^pg_dump \(PostgreSQL\) \d+(?:\.\d+)*\b/.test(
+              version.stdout.trim(),
+            )) ||
           (engine === "mysql" &&
             !isMaria &&
             /mysqldump.*(?:Ver|Distrib)\s+\d/i.test(version.stdout))
