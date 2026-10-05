@@ -2,6 +2,9 @@ import { EventEmitter } from 'events';
 import fs from 'fs/promises';
 import path from 'path';
 import { spawn } from 'child_process';
+import { PassThrough, Writable } from 'stream';
+import { killProcessTree } from '../../../src/utils/processTree';
+import { processManager } from '../../../src/managers/ProcessManager';
 import { getBinaryPath } from '../../../src/utils/binaryPathResolver';
 import { ManagedSftpRepositorySession } from '../../../src/utils/restic/ManagedSftpRepositorySession';
 
@@ -36,19 +39,30 @@ const node = {
 };
 
 describe('ManagedSftpRepositorySession credential/operation boundary', () => {
-	let responses: Array<{ stdout?: string; code?: number; error?: boolean }>;
+	let responses: Array<{
+		stdout?: string | Buffer;
+		code?: number;
+		error?: boolean;
+		held?: boolean;
+	}>;
 	let children: any[];
 	beforeEach(() => {
 		jest.clearAllMocks();
 		responses = [{ stdout: 'Obscured_synthetic-value\n', code: 0 }];
 		children = [];
+		(killProcessTree as jest.Mock).mockImplementation(child => {
+			setImmediate(() => {
+				child.stdout.end();
+				child.emit('close', null);
+			});
+		});
 		(getBinaryPath as jest.Mock).mockImplementation(name =>
 			path.resolve('synthetic-tools', process.platform === 'win32' ? `${name}.exe` : name)
 		);
 		(spawn as jest.Mock).mockImplementation(() => {
 			const response = responses.shift() || { stdout: '', code: 0 };
 			const child = Object.assign(new EventEmitter(), {
-				stdout: Object.assign(new EventEmitter(), { setEncoding: jest.fn() }),
+				stdout: new PassThrough(),
 				stderr: new EventEmitter(),
 				stdin: Object.assign(new EventEmitter(), { end: jest.fn() }),
 				kill: jest.fn(),
@@ -60,8 +74,11 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 					Buffer.from(`${access.options.pass} ${access.password} raw provider config`)
 				);
 				if (response.error) child.emit('error', new Error(`${access.password} spawn failed`));
-				if (response.stdout) child.stdout.emit('data', response.stdout);
-				child.emit('close', response.code ?? 0);
+				if (response.stdout) child.stdout.write(response.stdout);
+				if (!response.held) {
+					child.stdout.end();
+					child.emit('close', response.code ?? 0);
+				}
 			});
 			return child;
 		});
@@ -124,7 +141,7 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 			stdout: JSON.stringify({ message_type: 'summary', files_restored: 1, bytes_restored: 7 }),
 		});
 		await new ManagedSftpRepositorySession().withSession(access, async session => {
-			expect(Object.keys(session).sort()).toEqual(['files', 'restore', 'snapshot']);
+			expect(Object.keys(session).sort()).toEqual(['archive', 'files', 'restore', 'snapshot']);
 			await expect(
 				session.restore(id, ['/srv/example-app/index.txt'], path.resolve('synthetic-staging'))
 			).resolves.toEqual({ files_restored: 1, bytes_restored: 7 });
@@ -144,6 +161,204 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 			expect.arrayContaining(['init', 'backup', 'forget', 'prune', 'unlock', 'repair', '--delete'])
 		);
 	});
+	function sink() {
+		const chunks: Buffer[] = [];
+		const destination = new Writable({
+			write(chunk, _, done) {
+				chunks.push(chunk);
+				done();
+			},
+		});
+		return { destination, chunks };
+	}
+	it('streams binary TAR of the exact snapshot using a fixed read-only dump, then removes credentials', async () => {
+		const bytes = Buffer.from([0, 255, 128, 1, 0, 65]);
+		responses.push({ stdout: bytes });
+		const { destination, chunks } = sink();
+		await new ManagedSftpRepositorySession().withSession(access, session =>
+			session.archive(id, destination)
+		);
+		expect(Buffer.concat(chunks)).toEqual(bytes);
+		expect(destination.writableEnded).toBe(false); // caller ends HTTP after exit/cleanup
+		const [, args, options] = (spawn as jest.Mock).mock.calls[1];
+		expect(args.slice(-5)).toEqual(['dump', '--archive', 'tar', id, '/']);
+		expect(args).toEqual(
+			expect.arrayContaining(['--no-lock', '--no-cache', 'rclone:pluton:application'])
+		);
+		for (const forbidden of [
+			'--json',
+			'latest',
+			'init',
+			'backup',
+			'forget',
+			'prune',
+			'unlock',
+			'restore',
+		])
+			expect(args).not.toContain(forbidden);
+		expect(options.shell).toBe(false);
+		expect(options.env.RESTIC_PASSWORD).toBe(access.password);
+		expect(args.join(' ')).not.toMatch(/synthetic-.*password/);
+		await expect(fs.stat(path.dirname(options.env.RCLONE_CONFIG))).rejects.toMatchObject({
+			code: 'ENOENT',
+		});
+		destination.end();
+	});
+	it.each([
+		[1, 'execution-failed'],
+		[12, 'wrong-password'],
+		[10, 'repository-unavailable'],
+	])('sanitizes archive exit %s and cleans after process close', async (code, category) => {
+		responses.push({ code: Number(code) });
+		const { destination } = sink();
+		await expect(
+			new ManagedSftpRepositorySession().withSession(access, session =>
+				session.archive(id, destination)
+			)
+		).rejects.toMatchObject({
+			code: category,
+			message: `Managed repository access failed (${category}).`,
+		});
+		const configPath = (spawn as jest.Mock).mock.calls[1][2].env.RCLONE_CONFIG;
+		await expect(fs.stat(configPath)).rejects.toMatchObject({ code: 'ENOENT' });
+		expect(killProcessTree).not.toHaveBeenCalled(); // never kill an already-reaped/reused PID
+		destination.destroy();
+	});
+	it('honors backpressure without buffering a large archive or applying the JSON output cap', async () => {
+		responses.push({ held: true });
+		let release: (() => void) | undefined;
+		let received = 0;
+		const destination = new Writable({
+			highWaterMark: 1024,
+			write(chunk, _, done) {
+				received += chunk.length;
+				if (!release) release = done;
+				else done();
+			},
+		});
+		let completed = false;
+		const transfer = new ManagedSftpRepositorySession()
+			.withSession(access, session => session.archive(id, destination))
+			.then(() => {
+				completed = true;
+			});
+		while (children.length < 2) await new Promise<void>(resolve => setImmediate(resolve));
+		const child = children[1];
+		child.stdout.write(Buffer.alloc(64 * 1024));
+		await new Promise<void>(resolve => setImmediate(resolve));
+		expect(completed).toBe(false);
+		expect(child.stdout.isPaused()).toBe(true);
+		const configPath = (spawn as jest.Mock).mock.calls[1][2].env.RCLONE_CONFIG;
+		await expect(fs.stat(configPath)).resolves.toBeDefined();
+		release!();
+		// Stream beyond the 32 MiB metadata limit, respecting producer backpressure.
+		for (let i = 0; i < 520; i++) {
+			if (!child.stdout.write(Buffer.alloc(64 * 1024)))
+				await new Promise<void>(resolve => child.stdout.once('drain', resolve));
+		}
+		child.stdout.end();
+		child.emit('close', 0);
+		await transfer;
+		expect(received).toBe(521 * 64 * 1024);
+		await expect(fs.stat(configPath)).rejects.toMatchObject({ code: 'ENOENT' });
+		destination.end();
+	});
+	it.each(['abort', 'disconnect'])(
+		'kills the process tree and cleans config on %s during streaming',
+		async mode => {
+			responses.push({ stdout: 'partial-tar', held: true });
+			const controller = new AbortController();
+			const { destination } = sink();
+			const untrack = jest.spyOn(processManager, 'untrackProcess');
+			const transfer = new ManagedSftpRepositorySession().withSession(
+				access,
+				session => session.archive(id, destination),
+				controller.signal
+			);
+			const assertion = expect(transfer).rejects.toMatchObject({
+				code: mode === 'abort' ? 'cancelled' : 'execution-failed',
+			});
+			while (children.length < 2) await new Promise<void>(resolve => setImmediate(resolve));
+			const configPath = (spawn as jest.Mock).mock.calls[1][2].env.RCLONE_CONFIG;
+			if (mode === 'abort') controller.abort();
+			else destination.destroy(new Error(`${access.password} disconnect`));
+			await assertion;
+			expect(killProcessTree).toHaveBeenCalledWith(children[1], 'SIGKILL');
+			expect(untrack).toHaveBeenCalledWith(expect.stringMatching(/^managed-download-/));
+			await expect(fs.stat(path.dirname(configPath))).rejects.toMatchObject({ code: 'ENOENT' });
+			untrack.mockRestore();
+		}
+	);
+	it('sanitizes archive spawn errors and refuses non-full selectors before dump', async () => {
+		responses.push({ error: true });
+		const { destination } = sink();
+		await expect(
+			new ManagedSftpRepositorySession().withSession(access, session =>
+				session.archive(id, destination)
+			)
+		).rejects.toMatchObject({ code: 'execution-failed' });
+		const configPath = (spawn as jest.Mock).mock.calls[1][2].env.RCLONE_CONFIG;
+		await expect(fs.stat(configPath)).rejects.toMatchObject({ code: 'ENOENT' });
+		responses.push({ stdout: 'Obscured_synthetic-value' });
+		await expect(
+			new ManagedSftpRepositorySession().withSession(access, session =>
+				session.archive('latest', destination)
+			)
+		).rejects.toMatchObject({ code: 'configuration-invalid' });
+		expect(spawn).toHaveBeenCalledTimes(3);
+		destination.destroy();
+	});
+	it.each(['cancelled', 'timeout'])(
+		'releases a blocked consumer after stdout EOF on %s, without killing a reaped PID',
+		async category => {
+			responses.push({ stdout: Buffer.alloc(64 * 1024) });
+			const originalTimer = global.setTimeout;
+			let idle: (() => void) | undefined;
+			const timerSpy = jest.spyOn(global, 'setTimeout').mockImplementation(((
+				callback: (...args: any[]) => void,
+				delay?: number,
+				...args: any[]
+			) => {
+				if (delay === 10 * 60_000) {
+					idle = () => callback(...args);
+					return { unref: jest.fn() } as any;
+				}
+				return originalTimer(callback, delay, ...args);
+			}) as any);
+			const controller = new AbortController();
+			let consuming: () => void;
+			const started = new Promise<void>(resolve => {
+				consuming = resolve;
+			});
+			const destination = new Writable({
+				highWaterMark: 1,
+				write(_chunk, _encoding, _done) {
+					consuming();
+				},
+			});
+			try {
+				const download = new ManagedSftpRepositorySession().withSession(
+					access,
+					session => session.archive(id, destination),
+					controller.signal
+				);
+				const assertion = expect(download).rejects.toMatchObject({ code: category });
+				await started;
+				await new Promise<void>(resolve => setImmediate(resolve)); // mock process has closed
+				if (category === 'cancelled') controller.abort();
+				else idle!();
+				await assertion;
+				expect(destination.destroyed).toBe(true);
+				expect(killProcessTree).not.toHaveBeenCalled();
+				await expect(
+					fs.stat((spawn as jest.Mock).mock.calls[1][2].env.RCLONE_CONFIG)
+				).rejects.toMatchObject({ code: 'ENOENT' });
+			} finally {
+				timerSpy.mockRestore();
+				destination.destroy();
+			}
+		}
+	);
 	it.each([
 		['auth/transport', 1, 'execution-failed'],
 		['password', 12, 'wrong-password'],
@@ -209,6 +424,13 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 				session.snapshot(id)
 			)
 		).rejects.toMatchObject({ code: 'configuration-invalid' });
+		const { destination } = sink();
+		await expect(
+			new ManagedSftpRepositorySession().withSession({ ...access, ...invalid }, session =>
+				session.archive(id, destination)
+			)
+		).rejects.toMatchObject({ code: 'configuration-invalid' });
+		destination.destroy();
 		expect(spawn).not.toHaveBeenCalled();
 	});
 	it('refuses fallback binaries rather than running unpinned PATH tools', async () => {

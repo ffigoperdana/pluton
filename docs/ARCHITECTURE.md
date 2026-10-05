@@ -125,7 +125,12 @@ git diff --check
 The backend's Jest/ts-jest suites in `backend/__tests__/` cover routes, controllers,
 services, stores, managers, jobs, utilities, and notifications. Restic/process unit
 tests mock command execution; do not point validation at a real repository.
-The frontend currently has no `test` script or checked-in test suite.
+The frontend has no `test` script. Focused Phase 4 backup-menu and native-download
+regressions use Node.js 24's built-in test runner without additional dependencies:
+
+```sh
+node --experimental-strip-types --test frontend/__tests__/backupDownload.test.ts
+```
 
 Backend CI runs installation, backend lint, tests, and backend build; the pre-push
 hook for `main` also builds the frontend. The root build orders the frontend build

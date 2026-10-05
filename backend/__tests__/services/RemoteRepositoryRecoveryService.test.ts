@@ -2,6 +2,8 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import Cryptr from 'cryptr';
+import { Writable } from 'stream';
+import { planLogger } from '../../src/utils/logger';
 import { RemoteRepositoryRecoveryService } from '../../src/services/RemoteRepositoryRecoveryService';
 import { ManagedRepositoryAccessError } from '../../src/utils/restic/ManagedSftpRepositorySession';
 import type {
@@ -117,6 +119,9 @@ describe('Phase 4 remote managed repository recovery', () => {
 			port: '22',
 		}));
 		session = {
+			archive: jest.fn(async (_, destination) => {
+				destination.write(Buffer.from('synthetic-tar'));
+			}),
 			snapshot: jest.fn(async () => ({
 				id: snapshotId,
 				tags: ['pluton-plan-plan-01', 'pluton-backup-backup-01'],
@@ -169,6 +174,199 @@ describe('Phase 4 remote managed repository recovery', () => {
 			await job.done;
 		}
 		await fs.rm(scratch, { recursive: true, force: true });
+	});
+
+	describe('remote full-snapshot Download', () => {
+		function sink() {
+			const chunks: Buffer[] = [];
+			return {
+				chunks,
+				destination: new Writable({
+					write(chunk, _, done) {
+						chunks.push(chunk);
+						done();
+					},
+				}),
+			};
+		}
+		async function transfer(backupId = 'backup-01') {
+			const descriptor = await service.download(backupId);
+			const { destination, chunks } = sink();
+			const ready = jest.fn();
+			try {
+				await descriptor.streamTo(destination, new AbortController().signal, ready);
+				return { descriptor, chunks, ready };
+			} finally {
+				destination.destroy();
+			}
+		}
+		it('downloads a historical successful backup with its exact persisted ID, without staging or agent contact', async () => {
+			await expect(service.prepareDownload('backup-01')).resolves.toEqual({ streaming: true });
+			const { descriptor, chunks, ready } = await transfer();
+			expect(descriptor.fileName).toBe('backup-backup-01.tar');
+			expect(Buffer.concat(chunks).toString()).toBe('synthetic-tar');
+			expect(ready).toHaveBeenCalledTimes(1);
+			expect(session.archive).toHaveBeenCalledWith(snapshotId, expect.any(Writable));
+			expect(session.snapshot).toHaveBeenCalledWith(snapshotId);
+			expect(session.files).toHaveBeenCalledWith(snapshotId);
+			expect(withSession.mock.calls[1][0]).toEqual({
+				options: await options(),
+				password,
+				repositoryPath: 'application',
+			});
+			expect(session.restore).not.toHaveBeenCalled();
+			expect(stores.restores.create).not.toHaveBeenCalled();
+			await expect(fs.stat(staging)).rejects.toMatchObject({ code: 'ENOENT' });
+			// The only agent dependency is persisted identity metadata; no polling/enqueue/client.
+			expect(Object.keys(stores.agents)).toEqual(['getAgentById']);
+		});
+		it.each([undefined, 'aaaaaaaa', 'latest', '../snapshot', 'b'.repeat(63), 'z'.repeat(64)])(
+			'refuses invalid snapshot selector %s before repository access',
+			async invalid => {
+				backup.completionStats.snapshot_id = invalid;
+				await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({
+					statusCode: 409,
+				});
+				await expect(service.download('backup-01')).rejects.toMatchObject({ statusCode: 409 });
+				expect(withSession).not.toHaveBeenCalled();
+				expect(session.archive).not.toHaveBeenCalled();
+			}
+		);
+		it.each(['failed', 'started', 'cancelled', 'pending', 'retrying'])(
+			'refuses %s backup downloads',
+			async status => {
+				backup.status = status;
+				await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({
+					statusCode: 400,
+				});
+				await expect(service.download('backup-01')).rejects.toMatchObject({ statusCode: 400 });
+				expect(withSession).not.toHaveBeenCalled();
+			}
+		);
+		it.each([{ inProgress: true }, { success: false }])(
+			'refuses inconsistent completed state %p',
+			async state => {
+				Object.assign(backup, state);
+				await expect(service.download('backup-01')).rejects.toMatchObject({ statusCode: 400 });
+			}
+		);
+		it('refuses an unknown backup and alternate storage/mirror selection', async () => {
+			await expect(service.prepareDownload('backup-01', 'mirror-01')).rejects.toMatchObject({
+				statusCode: 400,
+			});
+			backup = null;
+			await expect(service.prepareDownload('missing')).rejects.toMatchObject({ statusCode: 404 });
+			await expect(service.download('missing')).rejects.toMatchObject({ statusCode: 404 });
+			expect(withSession).not.toHaveBeenCalled();
+		});
+		it.each(['agentId', 'planId', 'storageId', 'storagePath'])(
+			'refuses changed repository binding %s before access',
+			async field => {
+				repository[field] = 'other-binding';
+				await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({
+					statusCode: 409,
+				});
+				await expect(service.download('backup-01')).rejects.toMatchObject({ statusCode: 409 });
+				expect(withSession).not.toHaveBeenCalled();
+			}
+		);
+		it.each([
+			{ id: 'b'.repeat(64), tags: ['pluton-plan-plan-01', 'pluton-backup-backup-01'] },
+			{ id: snapshotId, tags: ['pluton-plan-plan-02', 'pluton-backup-backup-01'] },
+			{ id: snapshotId, tags: ['pluton-plan-plan-01', 'pluton-backup-backup-02'] },
+		])('revalidates exact snapshot/plan/backup ownership on POST and GET', async snapshot => {
+			session.snapshot.mockResolvedValue({ ...snapshot, paths: ['/srv/example-app'] });
+			await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({ statusCode: 409 });
+			await expect(transfer()).rejects.toMatchObject({ statusCode: 409 });
+			expect(session.files).not.toHaveBeenCalled();
+			expect(session.archive).not.toHaveBeenCalled();
+		});
+		it.each(['symlink', 'dev', 'fifo', 'socket'])(
+			'refuses %s archive entries before sending headers',
+			async type => {
+				session.files.mockResolvedValue([{ ...nodes[2], type } as any]);
+				await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({
+					statusCode: 400,
+				});
+				const descriptor = await service.download('backup-01');
+				const { destination } = sink();
+				const ready = jest.fn();
+				await expect(
+					descriptor.streamTo(destination, new AbortController().signal, ready)
+				).rejects.toMatchObject({ statusCode: 400 });
+				expect(ready).not.toHaveBeenCalled();
+				expect(session.archive).not.toHaveBeenCalled();
+				destination.destroy();
+			}
+		);
+		it.each([
+			'/srv/../escape',
+			'/srv/%2e%2e/escape',
+			'/srv/example\\escape',
+			'/srv/C:escape',
+			'relative/file',
+		])('refuses traversal/unsafe path %s before archive', async unsafe => {
+			session.files.mockResolvedValue([{ ...nodes[2], path: unsafe } as any]);
+			await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({ statusCode: 400 });
+			await expect(transfer()).rejects.toMatchObject({ statusCode: 400 });
+			expect(session.archive).not.toHaveBeenCalled();
+		});
+		it('sanitizes the filename even for malformed stored identifiers', async () => {
+			const unsafeId = 'backup-01"\r\nInjected: value/..';
+			session.snapshot.mockResolvedValue({
+				id: snapshotId,
+				tags: ['pluton-plan-plan-01', `pluton-backup-${unsafeId}`],
+				paths: ['/srv/example-app'],
+			});
+			const { descriptor } = await transfer(unsafeId);
+			expect(descriptor.fileName).toMatch(/^backup-[A-Za-z0-9_-]{1,80}\.tar$/);
+			expect(descriptor.fileName).not.toMatch(/[\r\n"/]/);
+		});
+		it.each(['execution-failed', 'wrong-password', 'repository-unavailable'] as const)(
+			'sanitizes %s archive failures in errors and logs',
+			async code => {
+				session.archive.mockRejectedValue(new ManagedRepositoryAccessError(code));
+				await expect(transfer()).rejects.toMatchObject({
+					code,
+					message: `Managed repository access failed (${code}).`,
+				});
+				const logged = JSON.stringify(
+					(planLogger as jest.Mock).mock.results.map(result => result.value.warn.mock.calls)
+				);
+				expect(logged).toContain('archive-stream');
+				expect(logged).toContain(code);
+				expect(logged).not.toMatch(/synthetic-.*password|encryptedPassword|rclone\.conf/);
+			}
+		);
+		it('does not expose arbitrary exceptions or credential materialization failures', async () => {
+			session.archive.mockRejectedValue(new Error(`${password} synthetic-sftp-password`));
+			await expect(transfer()).rejects.toMatchObject({
+				code: 'execution-failed',
+				message: 'Managed repository access failed (execution-failed).',
+			});
+			options.mockRejectedValue(new Error('synthetic-sftp-password raw config'));
+			await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({
+				code: 'credentials-unavailable',
+			});
+			expect(
+				JSON.stringify(
+					(planLogger as jest.Mock).mock.results.map(result => result.value.warn.mock.calls)
+				)
+			).not.toMatch(/synthetic-.*password/);
+		});
+		it('passes the HTTP abort signal through and refuses a cancelled preparation before any session operation', async () => {
+			const controller = new AbortController();
+			controller.abort();
+			await expect(
+				service.prepareDownload('backup-01', undefined, controller.signal)
+			).rejects.toMatchObject({ code: 'cancelled' });
+			expect(withSession).toHaveBeenCalledWith(
+				expect.any(Object),
+				expect.any(Function),
+				controller.signal
+			);
+			expect(session.archive).not.toHaveBeenCalled();
+		});
 	});
 
 	it('browses a historical completed backup by its persisted FULL ID, never latest or tag search', async () => {

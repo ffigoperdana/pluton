@@ -57,6 +57,7 @@ export type Backup = {
    duration: number;
    status: 'completed' | 'cancelled' | 'failed' | 'started' | 'retrying' | 'initializing';
    inProgress: boolean;
+   success?: boolean;
    totalFiles: number;
    totalSize: number;
    changes: { new: number; modified: number; removed: number; newDirs?: number; modifiedDirs?: number };
