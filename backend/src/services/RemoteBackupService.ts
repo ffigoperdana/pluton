@@ -63,6 +63,9 @@ type RemoteCompletion = {
 	success: boolean;
 	cancelled?: boolean;
 	error?: string;
+	/** Closed, non-secret diagnostics sent by the Phase 4 agent. */
+	failureStage?: string;
+	failureCode?: string;
 	result?: {
 		snapshotId?: string;
 		summary?: BackupCompletionStats;

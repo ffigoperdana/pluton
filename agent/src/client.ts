@@ -88,11 +88,13 @@ export class AgentClient {
       sequence: number;
       success: boolean;
       error?: string;
+      failureStage?: string;
+      failureCode?: string;
       result?: Record<string, unknown>;
       cancelled?: boolean;
     },
   ): Promise<void> {
-    const { sequence, success, error, result, cancelled } = completion;
+    const { sequence, success, error, failureStage, failureCode, result, cancelled } = completion;
     await this.postSigned(
       `/api/agent/commands/${encodeURIComponent(commandId)}/complete`,
       {
@@ -100,6 +102,8 @@ export class AgentClient {
         sequence,
         success,
         ...(error ? { error } : {}),
+        ...(failureStage ? { failureStage } : {}),
+        ...(failureCode ? { failureCode } : {}),
         ...(result ? { result } : {}),
         ...(cancelled ? { cancelled: true } : {}),
       },

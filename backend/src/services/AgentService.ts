@@ -53,6 +53,47 @@ const enrollmentSchema = z
 
 const enrollmentNameSchema = z.object({ name: z.string().trim().min(1).max(100) }).strict();
 
+// The agent may report only this closed set of non-secret execution metadata.
+// Do not accept provider errors, command arguments, or arbitrary text here.
+const backupFailureStageSchema = z.enum([
+	'payload-validation',
+	'source-validation',
+	'state-validation',
+	'tool-validation',
+	'sftp-password-obscure',
+	'temporary-storage-config',
+	'repository-check',
+	'repository-target-check',
+	'repository-initialization',
+	'restic-backup',
+	'cleanup',
+]);
+const backupFailureCodeSchema = z.enum([
+	'invalid-payload',
+	'source-validation-failed',
+	'state-overlap',
+	'state-validation-failed',
+	'tool-unavailable',
+	'sftp-password-obscure-failed',
+	'temporary-config-failed',
+	'repository-check-failed',
+	'repository-target-check-failed',
+	'repository-target-not-empty',
+	'target-check-access-failed',
+	'target-check-auth-failed',
+	'target-check-transport-failed',
+	'repository-initialization-failed',
+	'restic-backup-failed',
+	'restic-summary-missing',
+	'cleanup-failed',
+	'cancelled',
+	'unexpected',
+]);
+
+function safeCommandReference(value: unknown): string | undefined {
+	return typeof value === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(value) ? value : undefined;
+}
+
 export type AgentPublic = {
 	agentId: string;
 	deviceId: string;
@@ -377,6 +418,8 @@ export class AgentService {
 				leaseToken: z.string().regex(/^[A-Za-z0-9_-]{32,128}$/),
 				success: z.boolean(),
 				error: z.string().trim().min(1).max(500).optional(),
+				failureStage: backupFailureStageSchema.optional(),
+				failureCode: backupFailureCodeSchema.optional(),
 				cancelled: z.boolean().optional(),
 				result: z
 					.object({
@@ -425,10 +468,27 @@ export class AgentService {
 			this.now()
 		);
 		if (!command) throw new NotFoundError('Command not found.');
+		if (!parsed.data.success && command.type === 'BACKUP_FILESYSTEM' && serverLogger) {
+			const payload = command.payload as Record<string, unknown>;
+			serverLogger.warn(
+				{
+					agentEvent: 'command_failed',
+					agentId,
+					commandId: command.id,
+					...(safeCommandReference(payload.planId) ? { planId: payload.planId } : {}),
+					...(safeCommandReference(payload.backupId) ? { backupId: payload.backupId } : {}),
+					failureStage: parsed.data.failureStage,
+					failureCode: parsed.data.failureCode,
+				},
+				'BACKUP_FILESYSTEM command failed'
+			);
+		}
 		await this.remoteBackupService?.completeCommand(command, {
 			success: parsed.data.success,
 			cancelled: parsed.data.cancelled,
 			error: parsed.data.error,
+			failureStage: parsed.data.failureStage,
+			failureCode: parsed.data.failureCode,
 			result: parsed.data.result,
 		});
 		this.audit(command.state === 'completed' ? 'command_completed' : 'command_failed');

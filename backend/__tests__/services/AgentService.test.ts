@@ -439,4 +439,61 @@ describe('AgentService', () => {
 		expect(() => service.assertTransportIsAllowed(false)).not.toThrow();
 		(configService.config as any).ALLOW_INSECURE_AGENT_HTTP = false;
 	});
+
+	it.each([
+		'repository-target-not-empty',
+		'target-check-access-failed',
+		'target-check-auth-failed',
+		'target-check-transport-failed',
+	])('logs only closed, sanitized BACKUP_FILESYSTEM failure metadata: %s', async failureCode => {
+		const command = {
+			id: 'command-backup-failure',
+			agentId: agent.agentId,
+			type: 'BACKUP_FILESYSTEM',
+			state: 'failed',
+			payload: { backupId: 'backup-01', planId: 'plan-01', repositoryId: 'repo-01' },
+		} as any;
+		store.completeCommand.mockResolvedValue(command);
+		const warn = jest.spyOn(serverLogger, 'warn').mockImplementation(() => undefined as any);
+		const fixtureSecret = 'fixture-provider-secret-must-not-be-logged';
+		try {
+			await expect(
+				service.complete(agent.agentId, command.id, {
+					sequence: 4,
+					leaseToken: 'a'.repeat(32),
+					success: false,
+					error: 'Remote filesystem backup failed.',
+					failureStage: 'repository-target-check',
+					failureCode,
+					providerError: fixtureSecret,
+				})
+			).rejects.toThrow('Command completion is invalid');
+			// Unknown fields must be rejected before anything is logged.
+			expect(warn).not.toHaveBeenCalled();
+			warn.mockClear();
+			await service.complete(agent.agentId, command.id, {
+				sequence: 4,
+				leaseToken: 'a'.repeat(32),
+				success: false,
+				error: 'Remote filesystem backup failed.',
+				failureStage: 'repository-target-check',
+				failureCode,
+			});
+			expect(warn).toHaveBeenCalledWith(
+				expect.objectContaining({
+					agentEvent: 'command_failed',
+					agentId: agent.agentId,
+					commandId: command.id,
+					planId: 'plan-01',
+					backupId: 'backup-01',
+					failureStage: 'repository-target-check',
+					failureCode,
+				}),
+				'BACKUP_FILESYSTEM command failed'
+			);
+			expect(JSON.stringify(warn.mock.calls)).not.toContain(fixtureSecret);
+		} finally {
+			warn.mockRestore();
+		}
+	});
 });

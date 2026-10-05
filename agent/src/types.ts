@@ -24,6 +24,9 @@ export type StoredCommandCompletion = {
   sequence: number;
   success: boolean;
   error?: string;
+  /** Closed, non-secret diagnostics for BACKUP_FILESYSTEM failures. */
+  failureStage?: string;
+  failureCode?: string;
   /** A bounded, non-secret execution result such as a Restic snapshot ID. */
   result?: Record<string, unknown>;
   cancelled?: boolean;

@@ -72,14 +72,154 @@ export class BackupCancelledError extends Error {
   }
 }
 
+/**
+ * Safe, bounded checkpoints for the remote data-plane operation.  These names
+ * are intentionally closed rather than derived from provider output, paths, or
+ * command arguments so they can be written to the local journal and returned
+ * to the server without disclosing credentials.
+ */
+export type BackupFilesystemStage =
+  | "payload-validation"
+  | "source-validation"
+  | "state-validation"
+  | "tool-validation"
+  | "sftp-password-obscure"
+  | "temporary-storage-config"
+  | "repository-check"
+  | "repository-target-check"
+  | "repository-initialization"
+  | "restic-backup"
+  | "cleanup";
+
+export type BackupFilesystemFailureCode =
+  | "invalid-payload"
+  | "source-validation-failed"
+  | "state-overlap"
+  | "state-validation-failed"
+  | "tool-unavailable"
+  | "sftp-password-obscure-failed"
+  | "temporary-config-failed"
+  | "repository-check-failed"
+  | "repository-target-check-failed"
+  | "repository-target-not-empty"
+  | "target-check-access-failed"
+  | "target-check-auth-failed"
+  | "target-check-transport-failed"
+  | "repository-initialization-failed"
+  | "restic-backup-failed"
+  | "restic-summary-missing"
+  | "cleanup-failed"
+  | "cancelled"
+  | "unexpected";
+
+export type BackupFilesystemStageEvent = {
+  stage: BackupFilesystemStage;
+  message:
+    | "command accepted"
+    | "source validated"
+    | "temporary storage config created"
+    | "repository check started"
+    | "target-not-found"
+    | "target-empty"
+    | "repository initialization started"
+    | "restic backup started"
+    | "backup completed";
+};
+
+const BACKUP_FAILURE_MESSAGES: Record<BackupFilesystemFailureCode, string> = {
+  "invalid-payload": "The backup command payload is invalid.",
+  "source-validation-failed": "The backup source could not be validated.",
+  "state-overlap": "The backup source overlaps the agent state directory.",
+  "state-validation-failed":
+    "The agent state directory could not be validated.",
+  "tool-unavailable": "The private backup tools are unavailable.",
+  "sftp-password-obscure-failed":
+    "The SFTP authentication configuration could not be prepared.",
+  "temporary-config-failed":
+    "The temporary storage configuration could not be prepared.",
+  "repository-check-failed": "The Restic repository could not be checked.",
+  "repository-target-check-failed":
+    "The managed repository target could not be verified.",
+  "repository-target-not-empty": "The managed repository target is not empty.",
+  "target-check-access-failed":
+    "Access to the managed repository target was denied.",
+  "target-check-auth-failed":
+    "Authentication for the managed repository target failed.",
+  "target-check-transport-failed":
+    "The connection to the managed repository target failed.",
+  "repository-initialization-failed":
+    "The Restic repository could not be initialized.",
+  "restic-backup-failed": "Restic backup failed.",
+  "restic-summary-missing": "Restic did not return a snapshot summary.",
+  "cleanup-failed": "Temporary backup state could not be cleaned up.",
+  cancelled: "Backup was cancelled.",
+  unexpected: "Remote filesystem backup failed.",
+};
+
+export class BackupFilesystemError extends Error {
+  constructor(
+    readonly stage: BackupFilesystemStage,
+    readonly code: BackupFilesystemFailureCode,
+  ) {
+    super(BACKUP_FAILURE_MESSAGES[code]);
+    this.name = "BackupFilesystemError";
+  }
+}
+
+export function toBackupFilesystemError(
+  error: unknown,
+  stage: BackupFilesystemStage,
+): BackupFilesystemError {
+  if (error instanceof BackupFilesystemError) return error;
+  if (error instanceof BackupCancelledError) {
+    return new BackupFilesystemError(stage, "cancelled");
+  }
+  const code: BackupFilesystemFailureCode =
+    stage === "payload-validation"
+      ? "invalid-payload"
+      : stage === "source-validation"
+        ? "source-validation-failed"
+        : stage === "state-validation"
+          ? error instanceof Error &&
+            error.message ===
+              "The backup source must not include the agent state directory."
+            ? "state-overlap"
+            : "state-validation-failed"
+          : stage === "tool-validation"
+            ? "tool-unavailable"
+            : stage === "sftp-password-obscure"
+              ? "sftp-password-obscure-failed"
+              : stage === "temporary-storage-config"
+                ? "temporary-config-failed"
+                : stage === "repository-check"
+                  ? "repository-check-failed"
+                  : stage === "repository-target-check"
+                    ? "repository-target-check-failed"
+                    : stage === "repository-initialization"
+                      ? "repository-initialization-failed"
+                      : stage === "restic-backup"
+                        ? "restic-backup-failed"
+                        : stage === "cleanup"
+                          ? "cleanup-failed"
+                          : "unexpected";
+  return new BackupFilesystemError(stage, code);
+}
+
 type ProcessResult = {
   code: number | null;
   stdout: string;
+  targetFailureCode?: RepositoryTargetFailureCode;
 };
+
+type RepositoryTargetFailureCode =
+  | "target-check-access-failed"
+  | "target-check-auth-failed"
+  | "target-check-transport-failed";
 
 type ProcessOptions = {
   env: NodeJS.ProcessEnv;
   allowFailure?: boolean;
+  classifyTargetFailure?: boolean;
   stdin?: string;
   shouldCancel: () => Promise<boolean>;
   onJsonLine?: (value: Record<string, unknown>) => Promise<void>;
@@ -226,6 +366,34 @@ function appendBounded(existing: string, chunk: string): string {
   return (existing + chunk).slice(0, MAX_OUTPUT_BYTES);
 }
 
+/** Provider text is used only to categorize failures, never to permit init or log it. */
+function classifyTargetFailure(
+  diagnostics: string,
+): RepositoryTargetFailureCode | undefined {
+  if (
+    /unable to authenticate|authentication failed|no supported methods remain|permission denied \((?:publickey|password|keyboard-interactive)/i.test(
+      diagnostics,
+    )
+  ) {
+    return "target-check-auth-failed";
+  }
+  if (
+    /permission denied|access denied|SSH_FX_PERMISSION_DENIED|operation not permitted/i.test(
+      diagnostics,
+    )
+  ) {
+    return "target-check-access-failed";
+  }
+  if (
+    /dial tcp|connection refused|connection reset|connection closed|i\/o timeout|connection timed out|broken pipe|no route to host|network is unreachable|no such host|(?:^|[\s:])(?:unexpected )?EOF(?:\s|$)/i.test(
+      diagnostics,
+    )
+  ) {
+    return "target-check-transport-failed";
+  }
+  return undefined;
+}
+
 function terminateProcessTree(child: ChildProcessWithoutNullStreams): void {
   if (child.exitCode !== null || child.killed) return;
   try {
@@ -292,6 +460,7 @@ async function runProgram(
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
+    let diagnostics = "";
     let stdoutBuffer = "";
     let cancelled = false;
     let eventChain = Promise.resolve();
@@ -338,10 +507,11 @@ async function runProgram(
       }
     });
     child.stderr.on("data", (chunk) => {
-      // Consume diagnostics so a child process cannot block on a full pipe. They
-      // are deliberately never returned or forwarded: provider diagnostics can
-      // include storage paths and credential-adjacent details.
-      void chunk;
+      // Only the target probe needs a bounded in-memory diagnostic classifier.
+      // Raw provider text is never returned, logged, or forwarded to the server.
+      if (options.classifyTargetFailure) {
+        diagnostics = appendBounded(diagnostics, String(chunk));
+      }
     });
     child.stdin.end(options.stdin || "");
     child.once("error", (error) => {
@@ -363,7 +533,13 @@ async function runProgram(
               ),
             );
           }
-          resolve({ code, stdout });
+          resolve({
+            code,
+            stdout,
+            ...(options.classifyTargetFailure
+              ? { targetFailureCode: classifyTargetFailure(diagnostics) }
+              : {}),
+          });
         },
         (error) => reject(error),
       );
@@ -377,7 +553,7 @@ function rcloneConfigValue(value: string): string {
   return value;
 }
 
-async function writeTemporaryRcloneConfig(
+export async function writeTemporaryRcloneConfig(
   dataDir: string,
   options: Record<string, string>,
 ): Promise<{ directory: string; configPath: string }> {
@@ -412,8 +588,9 @@ async function obscureSensitiveSftpOptions(
     });
     const value = result.stdout.trim();
     if (!value || /[\r\n\x00]/.test(value)) {
-      throw new Error(
-        "Could not prepare the SFTP authentication configuration.",
+      throw new BackupFilesystemError(
+        "sftp-password-obscure",
+        "sftp-password-obscure-failed",
       );
     }
     obscured[key] = value;
@@ -479,6 +656,8 @@ async function ensureManagedRepository(
   resticEnv: NodeJS.ProcessEnv,
   rcloneEnv: NodeJS.ProcessEnv,
   shouldCancel: () => Promise<boolean>,
+  onRepositoryInitializationStarted?: () => void,
+  onTargetChecked?: (result: "target-not-found" | "target-empty") => void,
 ): Promise<void> {
   if (!payload.repository.initialize) return;
   const snapshots = await runProgram(
@@ -498,21 +677,31 @@ async function ensureManagedRepository(
     {
       env: rcloneEnv,
       allowFailure: true,
+      classifyTargetFailure: true,
       shouldCancel,
     },
   );
-  if (listing.code !== 0) {
-    throw new Error(
-      "Could not verify that the managed repository target is empty.",
+  // Rclone reserves exit code 3 for fs.ErrorDirNotFound. Do not infer absence
+  // from free-form "not found" text (e.g. a missing config or SSH key), exit
+  // code 4 (file not found), or any authentication/access/transport failure.
+  const missingTarget = listing.code === 3 && !listing.targetFailureCode;
+  if (listing.code !== 0 && !missingTarget) {
+    throw new BackupFilesystemError(
+      "repository-target-check",
+      listing.targetFailureCode || "repository-target-check-failed",
     );
   }
-  if (listing.stdout.trim()) {
-    throw new Error(
-      "Managed repository target is not empty; refusing to initialize it.",
+  // Even whitespace-only filenames or partial output must refuse initialization.
+  if (listing.stdout.length > 0) {
+    throw new BackupFilesystemError(
+      "repository-target-check",
+      "repository-target-not-empty",
     );
   }
+  onTargetChecked?.(missingTarget ? "target-not-found" : "target-empty");
 
   try {
+    onRepositoryInitializationStarted?.();
     await runProgram(restic, ["-r", repository, "init"], {
       env: resticEnv,
       shouldCancel,
@@ -529,7 +718,12 @@ async function ensureManagedRepository(
         shouldCancel,
       },
     );
-    if (retry.code !== 0) throw error;
+    if (retry.code !== 0) {
+      throw new BackupFilesystemError(
+        "repository-initialization",
+        "repository-initialization-failed",
+      );
+    }
   }
 }
 
@@ -611,43 +805,76 @@ export async function executeFilesystemBackup(input: {
   allowedRoots: string[];
   shouldCancel: () => Promise<boolean>;
   onEvent: (event: Record<string, unknown>) => Promise<void>;
+  onStage?: (event: BackupFilesystemStageEvent) => void;
 }): Promise<BackupFilesystemResult> {
-  const payload = parseBackupFilesystemPayload(input.payload);
-  const source = await assertPathWithinAllowedRoots(
-    payload.sourcePath,
-    input.allowedRoots,
-  );
-  await assertSourceDoesNotOverlapState(source, input.config.dataDir);
-  if (await input.shouldCancel()) throw new BackupCancelledError();
-
-  const restic = privateBinaryPath(input.config.binDir, "restic");
-  const rclone = privateBinaryPath(input.config.binDir, "rclone");
-  await Promise.all([
-    access(restic, constants.X_OK),
-    access(rclone, constants.X_OK),
-  ]);
-
+  let stage: BackupFilesystemStage = "payload-validation";
   let temporary: { directory: string; configPath: string } | undefined;
+  let operationError: unknown;
+  const setStage = (
+    next: BackupFilesystemStage,
+    message?: BackupFilesystemStageEvent["message"],
+  ): void => {
+    stage = next;
+    if (message) input.onStage?.({ stage: next, message });
+  };
+
   try {
+    const payload = parseBackupFilesystemPayload(input.payload);
+    setStage("payload-validation", "command accepted");
+
+    setStage("source-validation");
+    const source = await assertPathWithinAllowedRoots(
+      payload.sourcePath,
+      input.allowedRoots,
+    );
+    input.onStage?.({
+      stage: "source-validation",
+      message: "source validated",
+    });
+
+    setStage("state-validation");
+    await assertSourceDoesNotOverlapState(source, input.config.dataDir);
+    if (await input.shouldCancel()) throw new BackupCancelledError();
+
+    setStage("tool-validation");
+    const restic = privateBinaryPath(input.config.binDir, "restic");
+    const rclone = privateBinaryPath(input.config.binDir, "rclone");
+    await Promise.all([
+      access(restic, constants.X_OK),
+      access(rclone, constants.X_OK),
+    ]);
+
     const env: NodeJS.ProcessEnv = {
       PATH: `${path.dirname(restic)}${path.delimiter}${process.env.PATH || ""}`,
       RESTIC_PASSWORD: payload.repositoryPassword,
       RESTIC_CACHE_DIR: path.join(input.config.dataDir, "restic-cache"),
     };
     const rcloneEnv: NodeJS.ProcessEnv = { PATH: env.PATH };
+    setStage("sftp-password-obscure");
     const rcloneOptions = await obscureSensitiveSftpOptions(
       rclone,
       payload.rclone.options,
       rcloneEnv,
       input.shouldCancel,
     );
+    setStage("temporary-storage-config");
     temporary = await writeTemporaryRcloneConfig(
       input.config.dataDir,
       rcloneOptions,
     );
+    input.onStage?.({
+      stage: "temporary-storage-config",
+      message: "temporary storage config created",
+    });
     env.RCLONE_CONFIG = temporary.configPath;
     rcloneEnv.RCLONE_CONFIG = temporary.configPath;
     const repository = `rclone:${payload.repository.remoteName}:${payload.repository.path}`;
+
+    setStage("repository-check");
+    input.onStage?.({
+      stage: "repository-check",
+      message: "repository check started",
+    });
     const existing = await findExistingBackupSnapshot(
       restic,
       repository,
@@ -656,6 +883,7 @@ export async function executeFilesystemBackup(input: {
       input.shouldCancel,
     );
     if (existing) return existing;
+    setStage("repository-target-check");
     await ensureManagedRepository(
       payload,
       restic,
@@ -664,8 +892,20 @@ export async function executeFilesystemBackup(input: {
       env,
       rcloneEnv,
       input.shouldCancel,
+      () => {
+        setStage(
+          "repository-initialization",
+          "repository initialization started",
+        );
+      },
+      (result) => setStage("repository-target-check", result),
     );
 
+    setStage("restic-backup");
+    input.onStage?.({
+      stage: "restic-backup",
+      message: "restic backup started",
+    });
     let summary: ResticSummary | null = null;
     let lastProgress = 0;
     const args = [
@@ -697,16 +937,34 @@ export async function executeFilesystemBackup(input: {
       },
     });
     if (!summary)
-      throw new Error("Restic completed without a snapshot summary.");
+      throw new BackupFilesystemError(
+        "restic-backup",
+        "restic-summary-missing",
+      );
     // TypeScript cannot observe the assignment performed by the async JSON-line
     // callback, but runProgram awaits that callback chain before returning.
     const completedSummary = summary as ResticSummary;
-    return {
+    const result = {
       snapshotId: completedSummary.snapshot_id,
       summary: completedSummary,
     };
+    input.onStage?.({ stage: "restic-backup", message: "backup completed" });
+    return result;
+  } catch (error) {
+    operationError = error;
+    throw toBackupFilesystemError(error, stage);
   } finally {
-    if (temporary)
-      await rm(temporary.directory, { recursive: true, force: true });
+    if (temporary) {
+      try {
+        setStage("cleanup");
+        await rm(temporary.directory, { recursive: true, force: true });
+      } catch (error) {
+        // Never replace the actionable operation failure with a cleanup error.
+        // If cleanup is the only failure, return a safe cleanup classification.
+        if (!operationError) {
+          throw toBackupFilesystemError(error, "cleanup");
+        }
+      }
+    }
   }
 }

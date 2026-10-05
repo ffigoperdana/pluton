@@ -1,6 +1,7 @@
 import { AgentClient } from "./client.js";
 import {
   BackupCancelledError,
+  BackupFilesystemError,
   executeFilesystemBackup,
 } from "./backupFilesystem.js";
 import {
@@ -79,17 +80,19 @@ export async function runOnce(config: AgentConfig): Promise<void> {
   let completion: StoredAgentIdentity["completedCommands"][number];
   try {
     if (command.type === "BACKUP_FILESYSTEM") {
-      const result = await atAgentStage("backup-filesystem", () =>
-        executeFilesystemBackup({
-          payload: command.payload,
-          config,
-          allowedRoots: roots,
-          shouldCancel: async () =>
-            (await client.commandStatus(command.id, command.leaseToken))
-              .cancelled,
-          onEvent: recordEvent,
-        }),
-      );
+      const result = await executeFilesystemBackup({
+        payload: command.payload,
+        config,
+        allowedRoots: roots,
+        shouldCancel: async () =>
+          (await client.commandStatus(command.id, command.leaseToken))
+            .cancelled,
+        onEvent: recordEvent,
+        onStage: ({ stage, message }) =>
+          console.info(
+            `[pluton-agent] BACKUP_FILESYSTEM ${message} stage=${stage}`,
+          ),
+      });
       completion = {
         commandId: command.id,
         sequence: sequence + 1,
@@ -105,16 +108,31 @@ export async function runOnce(config: AgentConfig): Promise<void> {
       };
     }
   } catch (error) {
+    const backupFailure =
+      error instanceof BackupFilesystemError ? error : undefined;
+    const cancelled =
+      error instanceof BackupCancelledError ||
+      backupFailure?.code === "cancelled";
+    if (command.type === "BACKUP_FILESYSTEM" && backupFailure) {
+      console.error(
+        `[pluton-agent] BACKUP_FILESYSTEM failed stage=${backupFailure.stage} code=${backupFailure.code} reason=${backupFailure.message}`,
+      );
+    }
     completion = {
       commandId: command.id,
       sequence: sequence + 1,
       success: false,
-      cancelled: error instanceof BackupCancelledError,
+      cancelled,
       // Process output and storage details never leave the machine through command errors.
-      error:
-        error instanceof BackupCancelledError
-          ? "Backup was cancelled."
-          : "Remote filesystem backup failed.",
+      error: cancelled
+        ? "Backup was cancelled."
+        : "Remote filesystem backup failed.",
+      ...(backupFailure
+        ? {
+            failureStage: backupFailure.stage,
+            failureCode: backupFailure.code,
+          }
+        : {}),
     };
   }
   // Persist before acknowledging completion so a retry cannot execute a backup twice.
