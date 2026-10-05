@@ -12,7 +12,7 @@ managed backup lifecycle.
 | Workspace      | TypeScript monorepo with pnpm `10.20.0`, `backend/` and `frontend/` packages, and Turborepo build orchestration. Backend CI uses Node.js 24. See [package.json](../package.json), [pnpm-workspace.yaml](../pnpm-workspace.yaml), and [turbo.json](../turbo.json).                                                                                                                                                                                |
 | Backend        | Node.js, Express 5, and TypeScript. [index.ts](../backend/src/index.ts) handles startup; [createApp.ts](../backend/src/createApp.ts) wires stores, managers, services, controllers, routes, middleware, and jobs. Routes/controllers call services, stores access the database, and managers/handlers run backup and restore operations.                                                                                                         |
 | Frontend       | React 18, Vite 6, React Router 7, TanStack Query, and SCSS modules. [main.tsx](../frontend/src/main.tsx) installs providers; [router.tsx](../frontend/src/router.tsx) maps pages. `routes/`, `components/`, `services/`, and `hooks/` organize screens, UI, API access, and state. Snapshot browsing also uses Dexie/IndexedDB through [useSnapshotDatabase.ts](../frontend/src/components/common/SnapshotBrowser/hooks/useSnapshotDatabase.ts). |
-| Database       | SQLite through `better-sqlite3` and Drizzle ORM, with WAL enabled in [db/index.ts](../backend/src/db/index.ts). Schemas live in `backend/src/db/schema/`, migrations in `backend/drizzle/`, and persistence helpers in `backend/src/stores/`. Tables cover plans, backups, restores, devices, storages, settings, separate read-only legacy registrations, and separate legacy staged-restore jobs.                                                                                  |
+| Database       | SQLite through `better-sqlite3` and Drizzle ORM, with WAL enabled in [db/index.ts](../backend/src/db/index.ts). Schemas live in `backend/src/db/schema/`, migrations in `backend/drizzle/`, and persistence helpers in `backend/src/stores/`. Tables cover plans, backups, restores, devices, storages, settings, separate read-only legacy registrations, and separate legacy staged-restore jobs.                                              |
 | Local state    | [AppPaths.ts](../backend/src/utils/AppPaths.ts) locates the database, config, schedules, logs, temporary files, cache, downloads, and restores. Unpackaged development/test execution uses the current working directory's `data/`; production paths depend on installation mode and configuration.                                                                                                                                              |
 | Backup storage | Restic repositories are accessed via Rclone storage definitions. [generateResticRepoPath](../backend/src/utils/restic/helpers.ts) produces `rclone:<storage-name>:<storage-path>`. The [storages schema](../backend/src/db/schema/storages.ts) includes settings and credential fields, and execution also uses local Rclone configuration. Database/runtime files and credentials must stay out of Git.                                         |
 
@@ -131,6 +131,21 @@ regressions use Node.js 24's built-in test runner without additional dependencie
 ```sh
 node --experimental-strip-types --test frontend/__tests__/backupDownload.test.ts
 ```
+
+Phase 5 remote database lifecycle is documented separately in
+[PHASE5_DATABASE_LIFECYCLE.md](PHASE5_DATABASE_LIFECYCLE.md), including secure
+workspace/credential handling, constrained hooks, compatibility and the required
+disposable pilot. Its optional settings do not extend local or Legacy behavior.
+Additional checks:
+
+```sh
+pnpm --filter @plutonhq/pluton-agent typecheck
+pnpm --filter @plutonhq/pluton-agent test
+node --experimental-strip-types --test frontend/__tests__/remoteLifecycle.test.ts
+```
+
+Run the agent execution/permission tests on Linux as described in that document;
+Windows-only runs skip those cases and are not sufficient acceptance evidence.
 
 Backend CI runs installation, backend lint, tests, and backend build; the pre-push
 hook for `main` also builds the frontend. The root build orders the frontend build

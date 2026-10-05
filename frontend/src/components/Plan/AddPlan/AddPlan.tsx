@@ -20,7 +20,6 @@ const AddPlan = ({ close }: AddPlanProps) => {
    const navigate = useNavigate();
 
    const createBackup = () => {
-      console.log('newPlan :', newPlan);
 
       createPlanMutation.mutate(
          { newPlan, runSettings },

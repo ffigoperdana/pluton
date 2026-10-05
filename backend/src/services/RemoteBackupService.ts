@@ -16,6 +16,9 @@ import { generateUID } from '../utils/helpers';
 import type { PlanAddRunSettings, PlanSource } from '../types/plans';
 import type { BackupCompletionStats, BackupProgressStats } from '../types/backups';
 import { configService } from './ConfigService';
+import { materializeRemoteLifecycle, parseRemoteLifecycle } from '../utils/remoteLifecycle';
+import type { LifecycleWarning } from '../types/remoteLifecycle';
+import { serverLogger } from '../utils/logger';
 import {
 	RemoteCommandPreparationError,
 	type RemoteCommandPreparationFailure,
@@ -51,6 +54,7 @@ type SetPreparationStage = (
 
 type RemoteProgressEvent = {
 	phase?: string;
+	lifecycleStage?: string;
 	progress?: {
 		bytesProcessed?: number;
 		filesProcessed?: number;
@@ -69,6 +73,10 @@ type RemoteCompletion = {
 	result?: {
 		snapshotId?: string;
 		summary?: BackupCompletionStats;
+		lifecycle?: {
+			warnings: LifecycleWarning[];
+			database?: { path: string; bytes: number; sha256: string };
+		};
 	};
 };
 
@@ -154,7 +162,8 @@ function isSafeSnapshotId(value: unknown): value is string {
 /**
  * A narrow orchestration path for a managed remote filesystem backup. It is
  * intentionally not a replacement for RemoteStrategy: repair, unlock, prune,
- * restores, scripts, database dumps and generic commands remain unavailable.
+ * Local script execution and generic commands remain unavailable. Phase 5 adds
+ * only optional declarative database dumps and administrator-deployed hooks.
  */
 export class RemoteBackupService {
 	private readonly cronManager: CronManager<any>;
@@ -390,9 +399,22 @@ export class RemoteBackupService {
 			setStage('source-validation');
 			const source = this.getSingleSource(plan.sourceConfig);
 			const excludes = this.getSafeExcludes(plan.sourceConfig);
+			let lifecycle;
+			if (plan.settings.remoteLifecycle) {
+				setStage('database-credential-preparation');
+				const credential = plan.settings.remoteLifecycle.database
+					? await this.planStore.getDatabaseCredential(plan.id)
+					: null;
+				lifecycle = materializeRemoteLifecycle(
+					plan.settings.remoteLifecycle,
+					credential,
+					this.encryptionSecret
+				);
+			}
 			setStage('payload');
 			return {
-				version: 1,
+				version: lifecycle ? 2 : 1,
+				...(lifecycle ? { lifecycle } : {}),
 				backupId: backup.id,
 				planId: plan.id,
 				sourcePath: source,
@@ -423,6 +445,17 @@ export class RemoteBackupService {
 		const backup = await this.backupStore.getById(reference.backupId);
 		if (!backup || !backup.inProgress || backup.status === 'cancelled') return;
 		const progress = event.progress;
+		if (event.lifecycleStage && serverLogger) {
+			serverLogger.info(
+				{
+					agentEvent: 'backup_lifecycle_stage',
+					planId: reference.planId,
+					backupId: reference.backupId,
+					lifecycleStage: event.lifecycleStage,
+				},
+				'Remote backup lifecycle stage'
+			);
+		}
 		const progressStats: BackupProgressStats | undefined = progress
 			? {
 					bytesProcessed: toFiniteNumber(progress.bytesProcessed) || 0,
@@ -433,6 +466,14 @@ export class RemoteBackupService {
 			: undefined;
 		await this.backupStore.update(backup.id, {
 			status: event.phase === 'accepted' ? 'queued' : 'started',
+			...(event.lifecycleStage
+				? {
+						progressStats: {
+							...(backup.progressStats || {}),
+							lifecycleStage: event.lifecycleStage,
+						} as BackupProgressStats,
+					}
+				: {}),
 			...(progressStats ? { progressStats } : {}),
 		});
 	}
@@ -440,7 +481,10 @@ export class RemoteBackupService {
 	async completeCommand(command: AgentCommand, completion: RemoteCompletion): Promise<void> {
 		if (command.type !== 'BACKUP_FILESYSTEM') return;
 		const reference = commandReference(command.payload);
-		if (command.state === 'cancelled' || completion.cancelled) {
+		if (
+			(command.state === 'cancelled' || completion.cancelled) &&
+			!(completion.success && completion.result?.lifecycle)
+		) {
 			await this.eventService.onBackupCancelled({
 				planId: reference.planId,
 				backupId: reference.backupId,
@@ -469,8 +513,29 @@ export class RemoteBackupService {
 			planId: reference.planId,
 			backupId: reference.backupId,
 			success: true,
-			summary,
+			summary: {
+				...summary,
+				...(completion.result?.lifecycle ? { lifecycle: completion.result.lifecycle } : {}),
+			},
 		});
+		if (completion.result?.lifecycle?.warnings.length) {
+			await this.backupStore.update(reference.backupId, {
+				errorMsg:
+					'Snapshot completed; lifecycle cleanup needs attention: ' +
+					completion.result.lifecycle.warnings
+						.map(warning => `${warning.stage}/${warning.code}`)
+						.join(', '),
+			});
+			serverLogger?.warn(
+				{
+					agentEvent: 'backup_lifecycle_warning',
+					planId: reference.planId,
+					backupId: reference.backupId,
+					warnings: completion.result.lifecycle.warnings,
+				},
+				'Snapshot completed with lifecycle warnings'
+			);
+		}
 		await this.repositories.markInitialized(reference.repositoryId);
 		const plan = await this.planStore.getById(reference.planId);
 		if (plan) {
@@ -560,6 +625,29 @@ export class RemoteBackupService {
 		validateRepositoryPath(plan.storagePath || '');
 		setPreparationStage?.('agent-capability');
 		await this.getCapableAgent(plan.sourceId);
+		if (plan.settings.remoteLifecycle !== undefined) {
+			setPreparationStage?.('lifecycle-configuration');
+			const lifecycle = parseRemoteLifecycle(plan.settings.remoteLifecycle);
+			if (lifecycle.database?.password !== undefined)
+				throw new AppError(400, 'Database password cannot be stored in plan settings.');
+			const agent = await this.getCapableAgent(plan.sourceId);
+			const capabilities = agent.capabilities as {
+				backupLifecycleVersion?: number;
+				databaseEngines?: string[];
+				hooksConfigured?: boolean;
+			};
+			if (
+				capabilities.backupLifecycleVersion !== 1 ||
+				(lifecycle.database &&
+					!capabilities.databaseEngines?.includes(lifecycle.database.engine)) ||
+				((lifecycle.preHook || lifecycle.postHook) && capabilities.hooksConfigured !== true)
+			) {
+				throw new AppError(
+					409,
+					'Remote agent does not support the selected database lifecycle or hooks. Update the agent and install the required dump client/hooks first.'
+				);
+			}
+		}
 		setPreparationStage?.('sftp-storage-lookup');
 		const storage = await this.storageStore.getById(plan.storageId as string);
 		if (!storage || storage.type !== 'sftp') {

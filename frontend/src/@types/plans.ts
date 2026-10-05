@@ -139,6 +139,7 @@ export interface PlanReplicationSettings {
 }
 
 export type PlanSettings = {
+   remoteLifecycle?: RemoteBackupLifecycle;
    interval: PlanInterval;
    prune: PlanPrune;
    encryption: boolean;
@@ -157,6 +158,24 @@ export type PlanSettings = {
    };
    replication?: PlanReplicationSettings;
 };
+
+export type RemoteDatabaseBackup = {
+   engine: 'mysql' | 'mariadb';
+   host: string;
+   port: number;
+   tls: 'verify-identity' | 'local';
+   database: string;
+   username: string;
+   dumpFilename: string;
+   timeoutSeconds: number;
+   maxDumpBytes: number;
+   includeRoutines: boolean;
+   includeEvents: boolean;
+   password?: string;
+   passwordConfigured?: boolean;
+};
+export type RemoteLifecycleHook = { id: string; args: string[]; timeoutSeconds: number };
+export type RemoteBackupLifecycle = { version: 1; database?: RemoteDatabaseBackup; preHook?: RemoteLifecycleHook; postHook?: RemoteLifecycleHook };
 
 export type PlanStats = {
    size: number;

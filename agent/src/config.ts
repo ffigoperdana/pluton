@@ -28,6 +28,8 @@ export function createAgentConfig(input: {
   caFile?: string;
   clientCertFile?: string;
   clientKeyFile?: string;
+  hookRoot?: string;
+  databaseBinDirs?: string;
 }): AgentConfig {
   if (!input.serverUrl)
     throw new Error("PLUTON_SERVER_URL or --server is required.");
@@ -62,6 +64,12 @@ export function createAgentConfig(input: {
     caFile: input.caFile,
     clientCertFile: input.clientCertFile,
     clientKeyFile: input.clientKeyFile,
+    hookRoot: path.resolve(input.hookRoot || "/etc/pluton-agent/hooks"),
+    databaseBinDirs: input.databaseBinDirs
+      ? parseAllowedRoots(input.databaseBinDirs).map((value) =>
+          path.resolve(value),
+        )
+      : undefined,
   };
 }
 
@@ -79,5 +87,7 @@ export function configFromEnvironment(
     caFile: overrides.PLUTON_AGENT_CA_FILE,
     clientCertFile: overrides.PLUTON_AGENT_CLIENT_CERT_FILE,
     clientKeyFile: overrides.PLUTON_AGENT_CLIENT_KEY_FILE,
+    hookRoot: overrides.PLUTON_AGENT_HOOK_ROOT,
+    databaseBinDirs: overrides.PLUTON_AGENT_DATABASE_BIN_DIRS,
   });
 }

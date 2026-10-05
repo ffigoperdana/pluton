@@ -39,6 +39,12 @@ const inventorySchema = z
 					.array(z.enum(['PING', 'INVENTORY_REFRESH', 'BACKUP_FILESYSTEM']))
 					.min(1)
 					.max(3),
+				backupLifecycleVersion: z.literal(1).optional(),
+				databaseEngines: z
+					.array(z.enum(['mysql', 'mariadb']))
+					.max(2)
+					.optional(),
+				hooksConfigured: z.boolean().optional(),
 			})
 			.strict(),
 	})
@@ -67,6 +73,13 @@ const backupFailureStageSchema = z.enum([
 	'repository-initialization',
 	'restic-backup',
 	'cleanup',
+	'lifecycle-validation',
+	'workspace-creation',
+	'pre-backup',
+	'database-dump',
+	'database-dump-validation',
+	'snapshot-confirmation',
+	'post-backup',
 ]);
 const backupFailureCodeSchema = z.enum([
 	'invalid-payload',
@@ -88,7 +101,63 @@ const backupFailureCodeSchema = z.enum([
 	'cleanup-failed',
 	'cancelled',
 	'unexpected',
+	'lifecycle-invalid',
+	'workspace-failed',
+	'database-tool-unavailable',
+	'database-auth-failed',
+	'database-unavailable',
+	'database-dump-failed',
+	'database-dump-timeout',
+	'database-dump-output-limit',
+	'database-dump-invalid',
+	'hook-invalid',
+	'hook-failed',
+	'hook-timeout',
+	'hook-output-limit',
+	'snapshot-confirmation-failed',
 ]);
+const lifecycleStageSchema = z.enum([
+	'pre-backup-started',
+	'database-dump-started',
+	'database-dump-completed',
+	'backup-started',
+	'backup-completed',
+	'post-backup-started',
+	'cleanup-completed',
+	'cleanup-warning',
+]);
+const lifecycleReportSchema = z
+	.object({
+		warnings: z
+			.array(
+				z
+					.object({
+						stage: z.enum(['post-backup', 'cleanup']),
+						code: z.enum([
+							'hook-invalid',
+							'hook-failed',
+							'hook-timeout',
+							'hook-output-limit',
+							'cleanup-failed',
+						]),
+					})
+					.strict()
+			)
+			.max(3),
+		database: z
+			.object({
+				path: z.string().regex(/^\/pluton\/database\/[A-Za-z0-9_-][A-Za-z0-9_.-]{0,95}\.sql$/),
+				bytes: z
+					.number()
+					.int()
+					.positive()
+					.max(100 * 1024 ** 3),
+				sha256: z.string().regex(/^[a-f0-9]{64}$/),
+			})
+			.strict()
+			.optional(),
+	})
+	.strict();
 
 function safeCommandReference(value: unknown): string | undefined {
 	return typeof value === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(value) ? value : undefined;
@@ -362,6 +431,7 @@ export class AgentService {
 				event: z
 					.object({
 						phase: z.enum(['accepted', 'running']).optional(),
+						lifecycleStage: lifecycleStageSchema.optional(),
 						progress: z
 							.object({
 								bytesProcessed: z
@@ -449,6 +519,7 @@ export class AgentService {
 									.regex(/^[A-Fa-f0-9]{8,128}$/),
 							})
 							.strict(),
+						lifecycle: lifecycleReportSchema.optional(),
 					})
 					.strict()
 					.optional(),
@@ -458,13 +529,28 @@ export class AgentService {
 		if (!parsed.success || (!parsed.data.success && !parsed.data.error)) {
 			throw new AppError(400, 'Command completion is invalid.');
 		}
+		// Phase 5 diagnostics use closed codes, not agent-supplied provider text.
+		const lifecycleFailure =
+			parsed.data.failureStage &&
+			[
+				'lifecycle-validation',
+				'workspace-creation',
+				'pre-backup',
+				'database-dump',
+				'database-dump-validation',
+				'snapshot-confirmation',
+				'post-backup',
+			].includes(parsed.data.failureStage);
+		const safeError = lifecycleFailure
+			? `Remote backup lifecycle failed (${parsed.data.failureStage}/${parsed.data.failureCode || 'unexpected'}).`
+			: parsed.data.error;
 		const command = await this.agentStore.completeCommand(
 			agentId,
 			commandId,
 			parsed.data.leaseToken,
 			parsed.data.sequence,
 			parsed.data.success,
-			parsed.data.error,
+			safeError,
 			this.now()
 		);
 		if (!command) throw new NotFoundError('Command not found.');
@@ -486,7 +572,7 @@ export class AgentService {
 		await this.remoteBackupService?.completeCommand(command, {
 			success: parsed.data.success,
 			cancelled: parsed.data.cancelled,
-			error: parsed.data.error,
+			error: safeError,
 			failureStage: parsed.data.failureStage,
 			failureCode: parsed.data.failureCode,
 			result: parsed.data.result,

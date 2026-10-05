@@ -32,7 +32,10 @@ function rememberCompletion(
   ].slice(-100);
 }
 
-export async function runOnce(config: AgentConfig): Promise<void> {
+export async function runOnce(
+  config: AgentConfig,
+  signal?: AbortSignal,
+): Promise<void> {
   const identity = await atAgentStage("load-identity", () =>
     loadIdentity(config.dataDir),
   );
@@ -43,6 +46,8 @@ export async function runOnce(config: AgentConfig): Promise<void> {
   const inventory = collectInventory({
     filesystemRootsConfigured: roots.length > 0,
     binDir: config.binDir,
+    hookRoot: config.hookRoot,
+    databaseBinDirs: config.databaseBinDirs,
   });
 
   await atAgentStage("heartbeat", () => client.heartbeat(inventory));
@@ -85,6 +90,7 @@ export async function runOnce(config: AgentConfig): Promise<void> {
         config,
         allowedRoots: roots,
         shouldCancel: async () =>
+          signal?.aborted ||
           (await client.commandStatus(command.id, command.leaseToken))
             .cancelled,
         onEvent: recordEvent,
@@ -151,11 +157,12 @@ export async function run(config: AgentConfig): Promise<void> {
   );
   let stopped = false;
   let running = false;
+  const shutdown = new AbortController();
   const execute = async () => {
     if (stopped || running) return;
     running = true;
     try {
-      await runOnce(config);
+      await runOnce(config, shutdown.signal);
     } catch (error) {
       console.error(`[pluton-agent] ${formatAgentFailure(error)}`);
     } finally {
@@ -168,6 +175,7 @@ export async function run(config: AgentConfig): Promise<void> {
   );
   const stop = () => {
     stopped = true;
+    shutdown.abort();
     clearInterval(timer);
   };
   process.once("SIGINT", stop);

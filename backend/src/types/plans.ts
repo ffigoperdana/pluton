@@ -1,6 +1,7 @@
 import { NewPlan, Plan } from '../db/schema/plans';
 import { Restore } from '../db/schema/restores';
 import { IntegrationTypes } from './settings';
+import type { RemoteBackupLifecycle } from './remoteLifecycle';
 import { SourceTypes } from './source';
 import { Backup } from '../db/schema/backups';
 import { Device } from '../db/schema/devices';
@@ -183,6 +184,7 @@ export interface PlanBackupSettings {
 	scripts?: PlanScripts;
 	rescue?: PlanRescueSettings;
 	replication?: PlanReplicationSettings;
+	remoteLifecycle?: RemoteBackupLifecycle;
 }
 
 export type PlanError = {

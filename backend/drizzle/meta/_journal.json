@@ -50,6 +50,13 @@
       "when": 1790821109418,
       "tag": "0006_panoramic_gwen_stacy",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1791189986647,
+      "tag": "0007_phase5_remote_database_credentials",
+      "breakpoints": true
     }
   ]
 }
