@@ -1,6 +1,7 @@
 import type { RemoteBackupLifecycle, RemoteDatabaseBackup, RemoteLifecycleHook } from '../../../@types/plans';
 import { useRef } from 'react';
 import { lifecycleDatabases, reorderLifecycleDatabase } from '../../../utils/remoteLifecycle';
+import { createTemporaryId } from '../../../utils/temporaryId';
 import classes from './PlanSettings.module.scss';
 import styles from './PlanRemoteLifecycleSettings.module.scss';
 
@@ -29,7 +30,7 @@ export default function PlanRemoteLifecycleSettings({
    const uiKeys = useRef(new WeakMap<RemoteDatabaseBackup, string>());
    const cardKey = (db: RemoteDatabaseBackup) => {
       if (db.databaseId) return db.databaseId;
-      if (!uiKeys.current.has(db)) uiKeys.current.set(db, crypto.randomUUID());
+      if (!uiKeys.current.has(db)) uiKeys.current.set(db, createTemporaryId());
       return uiKeys.current.get(db)!;
    };
    const updateDatabases = (entries: RemoteDatabaseBackup[]) =>
