@@ -148,7 +148,7 @@ const PlanItem = ({ plan, layout = 'list' }: PlanItemProps) => {
                      )}
                      {verified && verified.hasError && (
                         <i data-tooltip-id="appTooltip" data-tooltip-content={`Plan Has Error`} data-tooltip-place="top">
-                           <Icon size={14} type={'error-circle-filled'} color="#dd6b6b" />
+                           <Icon size={14} type={'error-circle-filled'} color="var(--error-text-color)" />
                         </i>
                      )}
                   </div>

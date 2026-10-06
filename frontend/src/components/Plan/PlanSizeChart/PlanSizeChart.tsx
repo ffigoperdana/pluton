@@ -3,7 +3,8 @@ import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement
 import { Line } from 'react-chartjs-2';
 import Icon from '../../common/Icon/Icon';
 import { Backup } from '../../../@types/backups';
-import { formatBytes, formatNumberToK, isDarkMode } from '../../../utils/helpers';
+import { formatBytes, formatNumberToK } from '../../../utils/helpers';
+import { useTheme } from '../../../context/ThemeContext';
 import classes from './PlanSizeChart.module.scss';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Filler, Tooltip, Legend);
@@ -23,6 +24,17 @@ interface PlanSizeChartProps {
 }
 
 const PlanSizeChart = ({ backups }: PlanSizeChartProps) => {
+   const { theme } = useTheme();
+   // Canvas cannot resolve CSS var() colors. Re-read the shared palette when the
+   // applied app theme changes, not the OS preference captured at module load.
+   const tooltipColors = useMemo(() => {
+      const palette = getComputedStyle(document.documentElement);
+      return {
+         background: palette.getPropertyValue('--content-background-color').trim(),
+         title: palette.getPropertyValue('--content-title-color').trim(),
+         body: palette.getPropertyValue('--content-text-color').trim(),
+      };
+   }, [theme]);
    const [range, setRange] = useState<RangeKey>('3m');
    const [open, setOpen] = useState(false);
    const dropdownRef = useRef<HTMLDivElement>(null);
@@ -99,9 +111,9 @@ const PlanSizeChart = ({ backups }: PlanSizeChartProps) => {
          legend: { display: false },
          tooltip: {
             displayColors: false,
-            backgroundColor: isDarkMode ? 'rgba(0, 0, 0, 0.9)' : 'rgba(255, 255, 255, 1)',
-            titleColor: isDarkMode ? '#fff' : '#666',
-            bodyColor: isDarkMode ? '#ccc' : '#888',
+            backgroundColor: tooltipColors.background,
+            titleColor: tooltipColors.title,
+            bodyColor: tooltipColors.body,
             padding: 8,
             titleFont: { size: 11 },
             bodyFont: { size: 11 },

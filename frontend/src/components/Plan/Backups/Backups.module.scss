@@ -80,8 +80,8 @@
                & > .downloadLabel {
                   padding: 1px 4px;
                   padding-right: 6px;
-                  background: #e0eaff;
-                  color: #7e90c5;
+                  background: var(--primary-color-light);
+                  color: var(--primary-color-foreground);
                   border-radius: 12px;
                   margin-left: 5px;
                   font-size: 0.6875rem;
@@ -117,13 +117,13 @@
                right: -3px;
             }
             .changesNew {
-               color: cornflowerblue;
+               color: var(--primary-color-foreground);
             }
             .changesModified {
-               color: darkseagreen;
+               color: var(--success-text-color);
             }
             .changesRemoved {
-               color: indianred;
+               color: var(--error-text-color);
             }
          }
          .target {
@@ -164,7 +164,7 @@
                color: var(--content-text-color-light);
                &:hover {
                   background-color: var(--primary-color-light);
-                  color: var(--primary-color);
+                  color: var(--primary-color-foreground);
                }
             }
          }

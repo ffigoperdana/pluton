@@ -27,7 +27,7 @@
 
       &:global(.active) {
          background-color: var(--content-background-color);
-         color: var(--primary-color);
+         color: var(--primary-color-foreground);
       }
    }
 }

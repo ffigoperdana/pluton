@@ -58,7 +58,7 @@
    &:hover {
       color: inherit;
       h4 {
-         color: var(--primary-color);
+         color: var(--primary-color-foreground);
       }
    }
 }
@@ -102,7 +102,7 @@
    border-radius: 4px;
    &.moreBtnActive {
       background-color: var(--primary-color-light);
-      color: var(--primary-color);
+      color: var(--primary-color-foreground);
    }
 }
 
@@ -113,7 +113,7 @@
    cursor: pointer;
    &:hover {
       background-color: var(--primary-color-light);
-      color: var(--primary-color);
+      color: var(--primary-color-foreground);
    }
 }
 
@@ -138,7 +138,7 @@
       color: var(--content-text-color-light);
       &:hover {
          background-color: var(--primary-color-light);
-         color: var(--primary-color);
+         color: var(--primary-color-foreground);
       }
    }
 }
