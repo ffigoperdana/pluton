@@ -72,10 +72,16 @@ import { AgentAdminController } from './controllers/AgentAdminController';
 import { createAgentRouter } from './routes/agents';
 import { createAgentAdminRouter } from './routes/agentAdmin';
 import type { AgentRequest } from './types/agents';
+import { RecoveryTestStore } from './stores/RecoveryTestStore';
+import { RecoveryTestService } from './services/RecoveryTestService';
+import { RecoveryTestController } from './controllers/RecoveryTestController';
+import { createRecoveryTestRouter } from './routes/recoveryTests';
+import { RecoveryTestTask } from './jobs/tasks/RecoveryTestTask';
+import { jobQueue } from './jobs/JobQueue';
 
 const MemoryStore = createMemoryStore(session);
 
-export async function createApp(): Promise<{ app: Express }> {
+export async function createApp(): Promise<{ app: Express; shutdown: () => Promise<void> }> {
 	// Initialize Logger
 	initializeLogger();
 
@@ -112,6 +118,13 @@ export async function createApp(): Promise<{ app: Express }> {
 		remoteBackupService,
 		agentStore
 	);
+	const recoveryTestStore = new RecoveryTestStore(db, configService.config.SECRET);
+	const recoveryTestService = new RecoveryTestService(
+		recoveryTestStore,
+		planStore,
+		backupStore,
+		remoteRecoveryService
+	);
 
 	// Event Listeners
 	new BackupEventListener(localPlanAgent, planStore, backupStore);
@@ -127,7 +140,8 @@ export async function createApp(): Promise<{ app: Express }> {
 		storageStore,
 		deviceStore,
 		restoreStore,
-		remoteBackupService
+		remoteBackupService,
+		recoveryTestStore
 	);
 	const backupService = new BackupService(
 		localBackupAgent,
@@ -316,6 +330,10 @@ export async function createApp(): Promise<{ app: Express }> {
 	app.use('/api/legacy-repositories', createLegacyRepositoryRouter(legacyRepositoryController));
 	app.use('/api/agent', createAgentRouter(agentController, agentService));
 	app.use('/api/agent-admin', createAgentAdminRouter(agentAdminController));
+	app.use(
+		'/api/recovery-testing',
+		createRecoveryTestRouter(new RecoveryTestController(recoveryTestService))
+	);
 	app.use('/api/health', createHealthRouter());
 
 	// For any other request that doesn't match an API route or a static file,
@@ -327,6 +345,7 @@ export async function createApp(): Promise<{ app: Express }> {
 	// Clean up backups/restores left "in progress" by a previous shutdown, before any schedule job starts.
 	await new StartupRecovery(planService).run();
 	await legacyRepositoryService.recoverInterruptedRestores();
+	await recoveryTestService.recoverInterrupted();
 
 	// Reconcile CronManager schedules with the database (fixes drift on restart)
 	try {
@@ -347,8 +366,20 @@ export async function createApp(): Promise<{ app: Express }> {
 
 	// Self Backup Task
 	jobProcessor.addTask(new SelfBackupTask(selfBackupService));
+	jobProcessor.addTask(new RecoveryTestTask(recoveryTestService));
+	// The durable recovery queue is reconciled independently of backup completion
+	// callbacks, including a crash between completion persistence and dispatch.
+	const recoveryTick = setInterval(() => jobQueue.add('RecoveryTest', undefined, 1), 5000);
+	recoveryTick.unref();
+	jobQueue.add('RecoveryTest', undefined, 1);
 
 	jobProcessor.start();
 
-	return { app };
+	return {
+		app,
+		shutdown: async () => {
+			clearInterval(recoveryTick);
+			await recoveryTestService.shutdown();
+		},
+	};
 }

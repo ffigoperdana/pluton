@@ -22,9 +22,9 @@ export class ProcessManager {
 		return false;
 	}
 
-	killAll() {
+	killAll(signal: NodeJS.Signals = 'SIGTERM') {
 		for (const process of this.processes.values()) {
-			killProcessTree(process, 'SIGTERM');
+			killProcessTree(process, signal);
 		}
 		this.processes.clear();
 	}

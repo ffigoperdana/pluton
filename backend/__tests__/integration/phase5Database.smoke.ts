@@ -17,10 +17,25 @@ import {
 } from '../../../agent/dist/backupFilesystem.js';
 import { RemoteBackupService } from '../../src/services/RemoteBackupService';
 import { RemoteRepositoryRecoveryService } from '../../src/services/RemoteRepositoryRecoveryService';
+import { verifyPhase6Recovery } from './phase6Database.smoke';
 
 const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'phase5-db-smoke-'));
 const mode = process.argv[2] || 'single';
-assert.ok(['single', 'two-mariadb', 'mixed'].includes(mode));
+assert.ok(
+	[
+		'single',
+		'two-mariadb',
+		'mixed',
+		'phase6-filesystem',
+		'phase6-mariadb',
+		'phase6-postgresql',
+		'phase6-mixed',
+		'phase6-mixed-failure',
+	].includes(mode)
+);
+const phase6 = mode.startsWith('phase6-');
+const needsPg =
+	mode === 'mixed' || ['phase6-postgresql', 'phase6-mixed', 'phase6-mixed-failure'].includes(mode);
 const executeFile = promisify(execFile);
 async function execute(binary: string, args: string[], input?: string) {
 	try {
@@ -61,6 +76,7 @@ async function waitPort(value: number) {
 }
 const hash = (value: Buffer) => crypto.createHash('sha256').update(value).digest('hex');
 const children: ReturnType<typeof spawn>[] = [];
+const sourceDatabases: ReturnType<typeof spawn>[] = [];
 try {
 	assert.notEqual(process.getuid?.(), 0);
 	const dbDirectory = path.join(scratch, 'mysql');
@@ -93,6 +109,7 @@ try {
 			{ stdio: 'ignore' }
 		)
 	);
+	sourceDatabases.push(children[children.length - 1]);
 	await waitPort(dbPort);
 	const dbPassword = crypto.randomBytes(24).toString('base64url');
 	const logsPassword = crypto.randomBytes(24).toString('base64url');
@@ -106,7 +123,7 @@ CREATE USER 'backup_logs'@'127.0.0.1' IDENTIFIED BY '${logsPassword}'; GRANT SEL
 	);
 	let pgPort = 0;
 	const pgPassword = crypto.randomBytes(24).toString('base64url') + ':with\\escape';
-	if (mode === 'mixed') {
+	if (needsPg) {
 		const pgDirectory = path.join(scratch, 'postgresql');
 		await execute('/usr/bin/initdb', [
 			'--pgdata',
@@ -145,6 +162,7 @@ CREATE USER 'backup_logs'@'127.0.0.1' IDENTIFIED BY '${logsPassword}'; GRANT SEL
 				{ stdio: 'ignore' }
 			)
 		);
+		sourceDatabases.push(children[children.length - 1]);
 		await waitPort(pgPort);
 		const adminArgs = [
 			'--no-password',
@@ -162,12 +180,12 @@ CREATE USER 'backup_logs'@'127.0.0.1' IDENTIFIED BY '${logsPassword}'; GRANT SEL
 		await execute(
 			'/usr/bin/psql',
 			adminArgs,
-			`CREATE DATABASE analytics; CREATE ROLE backup_pg LOGIN PASSWORD '${pgPassword}'; GRANT CONNECT ON DATABASE analytics TO backup_pg;`
+			`${phase6 ? 'CREATE ROLE app_owner NOLOGIN;' : ''} CREATE DATABASE analytics ${phase6 ? 'OWNER app_owner' : ''}; CREATE ROLE backup_pg LOGIN PASSWORD '${pgPassword}'; GRANT CONNECT ON DATABASE analytics TO backup_pg;`
 		);
 		await execute(
 			'/usr/bin/psql',
 			[...adminArgs.slice(0, -4), '--dbname', 'analytics', '--set', 'ON_ERROR_STOP=1'],
-			"CREATE TABLE public.metrics (id INT PRIMARY KEY, value VARCHAR(64)); INSERT INTO public.metrics VALUES (3, 'synthetic-postgres-fixture'); GRANT USAGE ON SCHEMA public TO backup_pg; GRANT SELECT ON ALL TABLES IN SCHEMA public TO backup_pg;"
+			`${phase6 ? 'SET ROLE app_owner;' : ''} CREATE TABLE public.metrics (id INT PRIMARY KEY, value VARCHAR(64)); INSERT INTO public.metrics VALUES (3, 'synthetic-postgres-fixture'); GRANT USAGE ON SCHEMA public TO backup_pg; GRANT SELECT ON ALL TABLES IN SCHEMA public TO backup_pg;`
 		);
 	}
 	const source = path.join(scratch, 'source', 'app-01');
@@ -226,7 +244,7 @@ CREATE USER 'backup_logs'@'127.0.0.1' IDENTIFIED BY '${logsPassword}'; GRANT SEL
 			password: logsPassword,
 			dumpFilename: 'logs.sql',
 		});
-	if (mode === 'mixed')
+	if (needsPg)
 		databases.push({
 			...database,
 			databaseId: 'db_analytics',
@@ -237,9 +255,11 @@ CREATE USER 'backup_logs'@'127.0.0.1' IDENTIFIED BY '${logsPassword}'; GRANT SEL
 			password: pgPassword,
 			dumpFilename: 'analytics.sql',
 		});
+	if (mode === 'phase6-postgresql') databases.shift();
+	if (mode === 'phase6-filesystem') databases.length = 0;
 	const input = {
 		payload: {
-			version: mode === 'single' ? 2 : 3,
+			version: mode === 'phase6-filesystem' ? 1 : mode === 'single' ? 2 : 3,
 			backupId,
 			planId,
 			sourcePath: source,
@@ -255,7 +275,9 @@ CREATE USER 'backup_logs'@'127.0.0.1' IDENTIFIED BY '${logsPassword}'; GRANT SEL
 					pass: sftpPassword,
 				},
 			},
-			lifecycle: mode === 'single' ? { version: 1, database } : { version: 2, databases },
+			...(mode === 'phase6-filesystem'
+				? {}
+				: { lifecycle: mode === 'single' ? { version: 1, database } : { version: 2, databases } }),
 		},
 		config: {
 			dataDir: state,
@@ -270,18 +292,29 @@ CREATE USER 'backup_logs'@'127.0.0.1' IDENTIFIED BY '${logsPassword}'; GRANT SEL
 	};
 	const result = await executeFilesystemBackup(input);
 	assert.match(result.snapshotId, /^[a-f0-9]{64}$/);
-	assert.deepEqual(result.lifecycle?.warnings, []);
-	assert.deepEqual(await fs.readdir(path.join(state, 'jobs')), []);
+	assert.deepEqual(result.lifecycle?.warnings || [], []);
+	assert.deepEqual(
+		await fs.readdir(path.join(state, 'jobs')).catch((error: NodeJS.ErrnoException) => {
+			// Phase 4 filesystem-only execution has no Phase 5 lifecycle workspace.
+			if (mode === 'phase6-filesystem' && error.code === 'ENOENT') return [];
+			throw error;
+		}),
+		[]
+	);
 	assert.equal(sourceBefore, hash(await fs.readFile(path.join(source, 'app.txt'))));
-	const artifacts = result.lifecycle!.databases || [
-		{
-			databaseId: 'db_app',
-			engine: 'mariadb',
-			database: 'example_db',
-			...result.lifecycle!.database!,
-		},
-	];
-	assert.equal(artifacts.length, mode === 'single' ? 1 : 2);
+	const artifacts =
+		result.lifecycle?.databases ||
+		(result.lifecycle?.database
+			? [
+					{
+						databaseId: 'db_app',
+						engine: 'mariadb',
+						database: 'example_db',
+						...result.lifecycle!.database!,
+					},
+				]
+			: []);
+	assert.equal(artifacts.length, phase6 ? databases.length : mode === 'single' ? 1 : 2);
 	const secret = crypto.randomBytes(32).toString('base64url');
 	const crypt = new Cryptr(secret);
 	const plan = {
@@ -303,6 +336,7 @@ CREATE USER 'backup_logs'@'127.0.0.1' IDENTIFIED BY '${logsPassword}'; GRANT SEL
 		method: 'backup',
 		storageId: plan.storageId,
 		storagePath: plan.storagePath,
+		sourceConfig: plan.sourceConfig,
 		status: 'completed',
 		inProgress: false,
 		success: true,
@@ -443,10 +477,33 @@ CREATE USER 'backup_logs'@'127.0.0.1' IDENTIFIED BY '${logsPassword}'; GRANT SEL
 	}
 	const versions = [
 		(await execute('/usr/bin/mariadb-dump', ['--no-defaults', '--version'])).trim(),
-		...(mode === 'mixed' ? [(await execute('/usr/bin/pg_dump', ['--version'])).trim()] : []),
+		...(needsPg ? [(await execute('/usr/bin/pg_dump', ['--version'])).trim()] : []),
 		(await execute('/usr/local/bin/restic', ['version'])).trim(),
 		(await execute('/usr/local/bin/rclone', ['version'])).split('\n')[0].trim(),
 	];
+	if (phase6) {
+		// Stop source database servers before recovery: credentials/endpoints used
+		// for backup cannot possibly supply recovery contents or accept an import.
+		for (const child of sourceDatabases) {
+			child.kill('SIGTERM');
+			await new Promise<void>(resolve => child.once('close', () => resolve()));
+		}
+		await verifyPhase6Recovery({
+			mode,
+			scratch,
+			plan,
+			backup,
+			repository,
+			recovery,
+			secret,
+			children,
+			execute,
+			port,
+			waitPort,
+			sftpRoot,
+		});
+		assert.equal(sourceBefore, hash(await fs.readFile(path.join(source, 'app.txt'))));
+	}
 	console.log(
 		JSON.stringify({
 			mode,
