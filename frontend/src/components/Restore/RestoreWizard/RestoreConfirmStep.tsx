@@ -108,7 +108,7 @@ const RestoreConfirmStep = ({
             )}
             {restoreMutation.isError && (
                <div className={classes.restoreError}>
-                  <Icon type="error" size={14} color="red" /> {restoreMutation.error?.message || 'Failed to Generate Preview'}
+                  <Icon type="error" size={14} color="var(--error-text-color)" /> {restoreMutation.error?.message || 'Failed to Generate Preview'}
                </div>
             )}
          </div>

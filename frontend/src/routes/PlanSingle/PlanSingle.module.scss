@@ -8,12 +8,12 @@
 }
 
 .planError {
-   border: 1px solid #f3cfcf;
+   border: 1px solid var(--error-bg-color-active);
    padding-top: 0;
    cursor: pointer;
    transition: all 0.12s linear;
    &:hover {
-      background-color: #f3cfcf;
+      background-color: var(--error-bg-color-active);
    }
 }
 
@@ -45,7 +45,7 @@
 
          &:hover {
             background-color: var(--primary-color-light);
-            color: var(--primary-color);
+            color: var(--primary-color-foreground);
          }
       }
    }
@@ -66,7 +66,7 @@
 
 .actionBtn {
    &:hover {
-      color: var(--primary-color);
+      color: var(--primary-color-foreground);
    }
    &.actionBtnHighlight {
       font-weight: 600;

@@ -23,13 +23,13 @@
    background-color: var(--success-label);
 }
 .historyItemFailed {
-   background-color: #e88b84;
+   background-color: var(--error-button-color);
 }
 .historyItemCancelled {
-   background-color: #aaa;
+   background-color: var(--icon-color);
 }
 .historyItemPending {
-   background-color: #e8e184;
+   background-color: var(--warning-text-color);
 }
 
 @media only screen and (max-width: 768px) {

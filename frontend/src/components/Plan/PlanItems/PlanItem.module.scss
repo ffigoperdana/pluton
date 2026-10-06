@@ -44,7 +44,7 @@
    }
 
    .statusPaused {
-      background-color: #e4e4e4;
+      background-color: var(--line-color);
       button {
          color: inherit;
       }
@@ -59,7 +59,7 @@
          &:hover {
             color: inherit;
             h4 {
-               color: var(--primary-color);
+               color: var(--primary-color-foreground);
             }
          }
       }
@@ -156,7 +156,7 @@
       border-radius: 4px;
       &.moreBtnActive {
          background-color: var(--primary-color-light);
-         color: var(--primary-color);
+         color: var(--primary-color-foreground);
       }
    }
 
@@ -181,7 +181,7 @@
          color: var(--content-text-color-light);
          &:hover {
             background-color: var(--primary-color-light);
-            color: var(--primary-color);
+            color: var(--primary-color-foreground);
          }
       }
    }
