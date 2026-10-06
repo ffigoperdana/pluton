@@ -5,6 +5,7 @@ import { Plan } from '../../../@types/plans';
 import Restores from '../Restores/Restores';
 import Backups from '../Backups/Backups';
 import { useComponentOverride } from '../../../context/ComponentOverrideContext';
+import RecoverySummary from '../RecoveryTesting/RecoverySummary';
 
 interface PlanBackupsProps {
    plan: Plan;
@@ -25,6 +26,7 @@ const PlanBackups = ({ plan }: PlanBackupsProps) => {
 
    return (
       <div className={classes.backups}>
+         <RecoverySummary plan={plan} />
          <div className={classes.backupsHeader}>
             <div className={classes.historyTabs}>
                <button onClick={() => setHistoryTab('backups')} className={historyTab === 'backups' ? classes.historyTabActive : ''}>

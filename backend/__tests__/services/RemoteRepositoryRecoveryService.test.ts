@@ -176,6 +176,142 @@ describe('Phase 4 remote managed repository recovery', () => {
 		await fs.rm(scratch, { recursive: true, force: true });
 	});
 
+	describe('Phase 6 reuse of exact staged restore', () => {
+		const binding = () => ({
+			planId: 'plan-01',
+			backupId: 'backup-01',
+			repositoryId: 'remote-repo-01',
+			snapshotId,
+		});
+		async function workspace() {
+			const target = path.join(scratch, 'phase6', 'files');
+			await fs.mkdir(target, { recursive: true, mode: 0o700 });
+			return target;
+		}
+		it('measures actual files/bytes against listing, verifies source tree, and uses no agent content calls', async () => {
+			backup.sourceConfig = { includes: ['/srv/example-app'] };
+			const target = await workspace();
+			const check = jest.fn();
+			const stages = jest.fn();
+			await expect(
+				service.testRestore(binding(), target, new AbortController().signal, stages, check)
+			).resolves.toEqual({
+				files: 2,
+				bytes: 12,
+				sourceTrees: 1,
+				integrity: 'restic-restore-and-structure',
+				databaseArtifactPaths: [],
+			});
+			expect(session.restore).toHaveBeenCalledWith(snapshotId, [], target);
+			expect(stores.restores.create).not.toHaveBeenCalled();
+			expect(Object.keys(stores.agents)).toEqual(['getAgentById']);
+			expect(withSession.mock.calls[0][3]).toEqual(
+				expect.objectContaining({
+					restoreTimeoutMs: 24 * 60 * 60_000,
+					temporaryRoot: path.dirname(target),
+				})
+			);
+		});
+		it('historical snapshot paths containing private absolute SQL locations are not mistaken for application directories', async () => {
+			session.snapshot.mockResolvedValue({
+				id: snapshotId,
+				tags: ['pluton-plan-plan-01', 'pluton-backup-backup-01'],
+				paths: [
+					'/srv/example-app',
+					'/var/lib/example-agent/jobs/job-example/pluton/database/app.sql',
+				],
+			});
+			const result = await service.testRestore(
+				binding(),
+				await workspace(),
+				new AbortController().signal,
+				jest.fn(),
+				jest.fn()
+			);
+			expect(result.sourceTrees).toBe(1);
+		});
+		it.each([{ repositoryId: 'other-repository' }, { snapshotId: 'b'.repeat(64) }])(
+			'refuses changed binding before starting Restic',
+			async patch => {
+				await expect(
+					service.testRestore(
+						{ ...binding(), ...patch },
+						await workspace(),
+						new AbortController().signal,
+						jest.fn(),
+						jest.fn()
+					)
+				).rejects.toMatchObject({ code: 'snapshot-binding-mismatch' });
+				expect(session.restore).not.toHaveBeenCalled();
+			}
+		);
+		it('refuses wrong snapshot tags, unsupported special files and staging escapes before restore', async () => {
+			session.files.mockResolvedValue([
+				...nodes,
+				{ path: '/srv/example-app/link', type: 'symlink' },
+			] as any);
+			await expect(
+				service.testRestore(
+					binding(),
+					await workspace(),
+					new AbortController().signal,
+					jest.fn(),
+					jest.fn()
+				)
+			).rejects.toMatchObject({ code: 'unsupported-snapshot-file' });
+			expect(session.restore).not.toHaveBeenCalled();
+			session.files.mockResolvedValue([{ path: '/../escape', type: 'file', size: 2 }] as any);
+			await expect(
+				service.testRestore(
+					binding(),
+					path.join(scratch, 'phase6/files'),
+					new AbortController().signal,
+					jest.fn(),
+					jest.fn()
+				)
+			).rejects.toBeDefined();
+			expect(session.restore).not.toHaveBeenCalled();
+		});
+		it('refuses missing archived source tree and oversized/insufficient-disk workspaces', async () => {
+			backup.sourceConfig = { includes: ['/srv/missing-source'] };
+			const target = await workspace();
+			await expect(
+				service.testRestore(binding(), target, new AbortController().signal, jest.fn(), jest.fn())
+			).rejects.toMatchObject({ code: 'source-tree-missing' });
+			backup.sourceConfig = { includes: ['/srv/example-app'] };
+			await expect(
+				service.testRestore(
+					binding(),
+					target,
+					new AbortController().signal,
+					jest.fn(),
+					jest.fn(),
+					1
+				)
+			).rejects.toMatchObject({ code: 'workspace-size-limit' });
+			const space = jest.spyOn(fs, 'statfs').mockResolvedValue({ bavail: 0, bsize: 4096 } as any);
+			try {
+				await expect(
+					service.testRestore(binding(), target, new AbortController().signal, jest.fn(), jest.fn())
+				).rejects.toMatchObject({ code: 'insufficient-space' });
+			} finally {
+				space.mockRestore();
+			}
+			expect(session.restore).not.toHaveBeenCalled();
+		});
+		it('fails when actual staged files are incomplete, despite a successful Restic summary', async () => {
+			session.restore.mockResolvedValue({ files_restored: 999, bytes_restored: 999 });
+			await expect(
+				service.testRestore(
+					binding(),
+					await workspace(),
+					new AbortController().signal,
+					jest.fn(),
+					jest.fn()
+				)
+			).rejects.toMatchObject({ code: 'restored-file-count-mismatch' });
+		});
+	});
 	describe('remote full-snapshot Download', () => {
 		function sink() {
 			const chunks: Buffer[] = [];

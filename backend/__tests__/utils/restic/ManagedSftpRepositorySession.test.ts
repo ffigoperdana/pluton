@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import fs from 'fs/promises';
 import path from 'path';
+import os from 'os';
 import { spawn } from 'child_process';
 import { PassThrough, Writable } from 'stream';
 import { killProcessTree } from '../../../src/utils/processTree';
@@ -465,5 +466,91 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 			)
 		).rejects.toMatchObject({ code: 'cancelled' });
 		expect(spawn).not.toHaveBeenCalled();
+	});
+	it('Phase 6 keeps its private session credentials inside the caller-owned workspace', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phase6-session-'));
+		let configPath = '';
+		responses.push({ stdout: JSON.stringify([snapshot]) });
+		try {
+			await new ManagedSftpRepositorySession().withSession(
+				access,
+				async session => {
+					await session.snapshot(id);
+					configPath = (spawn as jest.Mock).mock.calls[1][2].env.RCLONE_CONFIG;
+					expect(path.dirname(path.dirname(configPath))).toBe(root);
+					if (process.platform !== 'win32') {
+						expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);
+						expect((await fs.stat(path.dirname(configPath))).mode & 0o777).toBe(0o700);
+					}
+				},
+				undefined,
+				{ restoreTimeoutMs: 24 * 60 * 60_000, temporaryRoot: root }
+			);
+			expect(await fs.readdir(root)).toEqual([]);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+	it('Phase 6 cleanup failure preserves successful validation and reports only a safe warning', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phase6-session-'));
+		const warning = jest.fn();
+		const remove = jest
+			.spyOn(fs, 'rm')
+			.mockRejectedValue(new Error('synthetic-private-provider-error'));
+		try {
+			await expect(
+				new ManagedSftpRepositorySession().withSession(
+					access,
+					async () => ({ files: 1 }),
+					undefined,
+					{ restoreTimeoutMs: 24 * 60 * 60_000, temporaryRoot: root, cleanupWarning: warning }
+				)
+			).resolves.toEqual({ files: 1 });
+			expect(warning).toHaveBeenCalledWith();
+		} finally {
+			remove.mockRestore();
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+	it('Phase 6 cleanup warning does not mask the original sanitized failure', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phase6-session-'));
+		const warning = jest.fn();
+		const remove = jest
+			.spyOn(fs, 'rm')
+			.mockRejectedValue(new Error('synthetic-private-cleanup-error'));
+		responses.push({ stdout: 'invalid JSON' });
+		try {
+			await expect(
+				new ManagedSftpRepositorySession().withSession(
+					access,
+					session => session.snapshot(id),
+					undefined,
+					{ restoreTimeoutMs: 24 * 60 * 60_000, temporaryRoot: root, cleanupWarning: warning }
+				)
+			).rejects.toMatchObject({ code: 'invalid-output' });
+			expect(warning).toHaveBeenCalledWith();
+		} finally {
+			remove.mockRestore();
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+	it('ordinary Phase 4 callers retain their closed fatal cleanup error', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'phase6-session-'));
+		const remove = jest
+			.spyOn(fs, 'rm')
+			.mockRejectedValue(new Error('synthetic-private-cleanup-error'));
+		try {
+			await expect(
+				new ManagedSftpRepositorySession().withSession(
+					access,
+					async () => ({ files: 1 }),
+					undefined,
+					{ restoreTimeoutMs: 30 * 60_000, temporaryRoot: root }
+				)
+			).rejects.toMatchObject({ code: 'cleanup-failed' });
+		} finally {
+			remove.mockRestore();
+			await fs.rm(root, { recursive: true, force: true });
+		}
 	});
 });

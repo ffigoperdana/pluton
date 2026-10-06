@@ -23,6 +23,12 @@ import {
 } from './schema/remoteManagedRepositories';
 import { appPaths } from '../utils/AppPaths';
 import {
+	recoveryTests,
+	recoveryTargets,
+	recoveryTestPolicies,
+	recoveryImportLeases,
+} from './schema/recoveryTests';
+import {
 	remotePlanDatabaseCredentials,
 	remotePlanDatabaseEntryCredentials,
 } from './schema/remotePlanCredentials';
@@ -58,6 +64,10 @@ export const db = drizzle(sqlite, {
 		remoteManagedRepositoryRelations,
 		remotePlanDatabaseCredentials,
 		remotePlanDatabaseEntryCredentials,
+		recoveryTests,
+		recoveryTargets,
+		recoveryTestPolicies,
+		recoveryImportLeases,
 	},
 });
 export type DatabaseType = typeof db;

@@ -11,6 +11,7 @@ import Select from '../../common/form/Select/Select';
 import PlanScriptsSettings from './PlanScriptsSettings';
 import { Device } from '../../../@types/devices';
 import PlanRemoteLifecycleSettings from './PlanRemoteLifecycleSettings';
+import RecoverySettings from '../RecoveryTesting/RecoverySettings';
 
 interface PlanAdvancedSettingsProps {
    plan: NewPlanSettings;
@@ -65,6 +66,9 @@ const PlanAdvancedSettings = ({
                   { label: 'Notification', value: 'Notification', icon: 'notification' },
                   { label: 'Misc.', value: 'Misc', icon: 'settings-alt' },
                   ...(remoteLifecycle ? [{ label: 'Database & Hooks', value: 'Lifecycle', icon: 'cli' as const }] : []),
+                  ...(remoteLifecycle && plan.method === 'backup'
+                     ? [{ label: 'Recovery Testing', value: 'Recovery', icon: 'restore' as const }]
+                     : []),
                ]}
                fieldValue={advancedTab}
                full={true}
@@ -95,6 +99,11 @@ const PlanAdvancedSettings = ({
                         <Icon size={13} type="cli" /> Database & Hooks
                      </li>
                   )}
+                  {remoteLifecycle && plan.method === 'backup' && (
+                     <li onClick={() => setAdvancedTab('Recovery')} className={advancedTab === 'Recovery' ? classes.advancedTabActive : ''}>
+                        <Icon type="restore" size={13} /> Recovery Testing
+                     </li>
+                  )}
                   <li onClick={() => setAdvancedTab('Misc')} className={advancedTab === 'Misc' ? classes.advancedTabActive : ''}>
                      <Icon size={14} type="settings-alt" /> Misc.
                   </li>
@@ -102,6 +111,9 @@ const PlanAdvancedSettings = ({
             </>
          )}
          <div className={classes.advancedTabContent}>
+            {remoteLifecycle && plan.method === 'backup' && advancedTab === 'Recovery' && (
+               <RecoverySettings planId={isEditing ? plan.id : undefined} />
+            )}
             {remoteLifecycle && advancedTab === 'Lifecycle' && (
                <PlanRemoteLifecycleSettings
                   value={settings.remoteLifecycle}

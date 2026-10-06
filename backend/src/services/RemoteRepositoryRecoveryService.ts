@@ -29,12 +29,20 @@ import {
 } from '../utils/restic/ManagedSftpRepositorySession';
 import { configService } from './ConfigService';
 import { RemoteBackupService } from './RemoteBackupService';
+import {
+	checkRecoveryCancellation,
+	RecoveryTestError,
+	validateRestoredFiles,
+} from '../utils/recoveryValidation';
+import type { RecoveryStage } from '../types/recoveryTests';
 
 type RecoveryContext = {
 	backupId: string;
 	planId: string;
 	storageId: string;
+	repositoryId: string;
 	snapshotId: string;
+	sourcePaths: string[];
 	access: ManagedSftpAccess;
 };
 type Selection = { files: SnapShotFile[]; includes: string[]; full: boolean; stats: RestoreStats };
@@ -63,6 +71,113 @@ export class RemoteRepositoryRecoveryService {
 		private readonly secret = configService.config.SECRET,
 		private readonly stagingRoot = path.join(appPaths.getDataDir(), 'managed-remote-restores')
 	) {}
+
+	/** Metadata only. Source agent identity is checked in SQLite, never contacted. */
+	async testBinding(backupId: string, planId?: string) {
+		const context = await this.context(backupId, planId);
+		return {
+			planId: context.planId,
+			backupId,
+			repositoryId: context.repositoryId,
+			snapshotId: context.snapshotId,
+		};
+	}
+
+	/** Same allowlisted Phase 4 session/selection/restore, with a caller-owned private workspace. */
+	async testRestore(
+		binding: { backupId: string; planId: string; repositoryId: string; snapshotId: string },
+		target: string,
+		signal: AbortSignal,
+		stage: (value: RecoveryStage) => void,
+		assertWorkspace: () => Promise<void>,
+		maxBytes = 1024 ** 4,
+		cleanupWarning?: () => void
+	) {
+		stage('snapshot-validation');
+		const context = await this.context(binding.backupId, binding.planId);
+		if (context.snapshotId !== binding.snapshotId || context.repositoryId !== binding.repositoryId)
+			throw new RecoveryTestError('snapshot-validation', 'snapshot-binding-mismatch');
+		stage('repository-access');
+		await assertWorkspace(); // before creating any temporary session credentials
+		return this.sessions.withSession(
+			context.access,
+			async session => {
+				stage('snapshot-validation');
+				const listed = await this.boundFiles(context, session);
+				if (listed.some(node => !['file', 'dir'].includes(node.type)))
+					throw new RecoveryTestError('snapshot-validation', 'unsupported-snapshot-file');
+				const selection = this.select(listed, {
+					target: '',
+					overwrite: 'never',
+					delete: false,
+					includes: [],
+					excludes: [],
+				});
+				const snapshot = await session.snapshot(context.snapshotId);
+				// Restic paths may record Phase 5 dump files by their agent-private
+				// absolute cwd, while the listing exposes /pluton/database/*.sql.
+				// For historical rows use only directory sources proven by the exact
+				// snapshot listing, never guess that every snapshot path is a source tree.
+				const sources = context.sourcePaths.length
+					? context.sourcePaths
+					: snapshot.paths.filter(value =>
+							selection.files.some(node => node.path === value && node.type === 'dir')
+						);
+				if (
+					!sources.length ||
+					sources.some(
+						source =>
+							!source.startsWith('/') ||
+							!snapshot.paths.includes(source) ||
+							!selection.files.some(node => node.path === source && node.type === 'dir')
+					)
+				)
+					throw new RecoveryTestError('snapshot-validation', 'source-tree-missing');
+				if (
+					!Number.isSafeInteger(selection.stats.total_bytes) ||
+					selection.stats.total_bytes > maxBytes
+				)
+					throw new RecoveryTestError('staged-restore', 'workspace-size-limit');
+				await assertWorkspace();
+				const stat = await fs.lstat(target);
+				if (!stat.isDirectory() || stat.isSymbolicLink() || (await fs.readdir(target)).length)
+					throw new RecoveryTestError('staged-restore', 'unsafe-workspace');
+				const disk = await fs.statfs(target);
+				if (disk.bavail * disk.bsize < selection.stats.total_bytes + 512 * 1024 ** 2)
+					throw new RecoveryTestError('staged-restore', 'insufficient-space');
+				stage('staged-restore');
+				checkRecoveryCancellation(signal);
+				await session.restore(context.snapshotId, [], target);
+				await assertWorkspace();
+				stage('filesystem-validation');
+				const measured = await validateRestoredFiles(selection.files, target, signal);
+				await this.boundFiles(context, session); // exact binding remains valid, not latest
+				const current = await this.context(binding.backupId, binding.planId);
+				if (
+					current.snapshotId !== context.snapshotId ||
+					current.repositoryId !== context.repositoryId
+				)
+					throw new RecoveryTestError('snapshot-validation', 'snapshot-binding-mismatch');
+				for (const source of sources) {
+					const stat = await fs.lstat(
+						resolvePathWithin(target, normalizeLegacySnapshotPath(source.slice(1), false))
+					);
+					if (!stat.isDirectory() || stat.isSymbolicLink())
+						throw new RecoveryTestError('filesystem-validation', 'source-tree-missing');
+				}
+				return {
+					...measured,
+					sourceTrees: sources.length,
+					integrity: 'restic-restore-and-structure' as const,
+					databaseArtifactPaths: selection.files
+						.filter(node => node.type === 'file' && node.path.startsWith('/pluton/database/'))
+						.map(node => node.path),
+				};
+			},
+			signal,
+			{ restoreTimeoutMs: 24 * 60 * 60_000, temporaryRoot: path.dirname(target), cleanupWarning }
+		);
+	}
 
 	async browse(backupId: string, replicationId?: string): Promise<SnapShotFile[]> {
 		if (replicationId)
@@ -336,7 +451,9 @@ export class RemoteRepositoryRecoveryService {
 			backupId,
 			planId: plan.id,
 			storageId: repository.storageId,
+			repositoryId: repository.id,
 			snapshotId: snapshotId!,
+			sourcePaths: backup.sourceConfig?.includes || [],
 			access: { options, password, repositoryPath: repository.storagePath },
 		};
 	}

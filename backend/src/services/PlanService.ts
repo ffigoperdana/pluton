@@ -37,6 +37,7 @@ import { RemoteBackupService } from './RemoteBackupService';
 import { prepareRemoteLifecycleCollection } from '../utils/remoteLifecycle';
 import type { DatabaseCredential } from '../types/remoteLifecycle';
 import { configService } from './ConfigService';
+import type { RecoveryTestStore } from '../stores/RecoveryTestStore';
 
 /**
  * PlanService is the central orchestrator for all business logic related to backup plans.
@@ -53,7 +54,8 @@ export class PlanService {
 		protected storageStore: StorageStore,
 		protected deviceStore: DeviceStore,
 		protected restoreStore: RestoreStore,
-		private readonly remoteBackupService?: RemoteBackupService
+		private readonly remoteBackupService?: RemoteBackupService,
+		private readonly recoveryTests?: Pick<RecoveryTestStore, 'assertPlanRemovable'>
 	) {
 		this.scheduleReconciler = new ScheduleReconciler(
 			this.localAgent,
@@ -451,6 +453,7 @@ export class PlanService {
 		if (!plan) throw new NotFoundError('Plan not found.');
 		const storageName = plan.storage?.name || '';
 		if (RemoteBackupService.isRemoteFilesystemPlan(plan)) {
+			await this.recoveryTests?.assertPlanRemovable(planId);
 			const remote = this.requireRemoteBackupService();
 			const retained = await remote.removeManagedPlan(plan);
 			await this.restoreStore.deleteByPlanId(planId);

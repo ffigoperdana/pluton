@@ -147,6 +147,23 @@ node --experimental-strip-types --test frontend/__tests__/remoteLifecycle.test.t
 Run the agent execution/permission tests on Linux as described in that document;
 Windows-only runs skip those cases and are not sufficient acceptance evidence.
 
+## Phase 6 managed recovery testing
+
+Remote managed SFTP backups have a separate durable recovery-test model, opt-in
+after-backup reconciliation and manual execution. The service reuses the Phase 4
+exact-snapshot session/restore boundary, writes only to its own private workspace,
+validates Phase 5 artifacts, and optionally imports into explicitly dedicated
+disposable DB targets. No source-agent recovery call, Legacy lifecycle handoff or
+repository mutation is added. Backup and recovery status remain independent.
+
+See [PHASE6_RECOVERY_TESTING.md](PHASE6_RECOVERY_TESTING.md) for migration 0009,
+encrypted target credentials, resource/cleanup/cancellation controls, native-client
+requirements, validation evidence and the future one-dataset shadow pilot gates.
+Its Linux runner is `scripts/validate-phase6.ps1`; automation defaults to off and
+requires an explicitly provisioned recovery-only DB target for Required imports.
+
+## Build validation
+
 Backend CI runs installation, backend lint, tests, and backend build; the pre-push
 hook for `main` also builds the frontend. The root build orders the frontend build
 (`tsc -b` and Vite) before the backend build (TypeScript, template copying/minification,

@@ -68,7 +68,8 @@ export interface ManagedRepositorySessionProvider {
 	withSession<T>(
 		access: ManagedSftpAccess,
 		consume: (session: ManagedRepositorySession) => Promise<T>,
-		signal?: AbortSignal
+		signal?: AbortSignal,
+		limits?: { restoreTimeoutMs: number; temporaryRoot?: string; cleanupWarning?: () => void }
 	): Promise<T>;
 }
 
@@ -97,7 +98,8 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 	async withSession<T>(
 		access: ManagedSftpAccess,
 		consume: (session: ManagedRepositorySession) => Promise<T>,
-		signal?: AbortSignal
+		signal?: AbortSignal,
+		limits?: { restoreTimeoutMs: number; temporaryRoot?: string; cleanupWarning?: () => void }
 	): Promise<T> {
 		const keys = Object.keys(access.options);
 		if (
@@ -130,7 +132,9 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			if (!obscured || !/^[A-Za-z0-9_-]+$/.test(obscured)) {
 				throw new ManagedRepositoryAccessError('credentials-unavailable');
 			}
-			directory = await fs.mkdtemp(path.join(os.tmpdir(), 'pluton-recovery-'));
+			directory = await fs.mkdtemp(
+				path.join(limits?.temporaryRoot || os.tmpdir(), 'pluton-recovery-')
+			);
 			await fs.chmod(directory, 0o700);
 			const configPath = path.join(directory, 'rclone.conf');
 			const options = { ...access.options, pass: obscured };
@@ -157,7 +161,15 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 				`rclone.program=${rclone}`,
 			];
 			const execute = (args: string[], restore = false) =>
-				this.run(restic, [...prefix, ...args], resticEnvironment, signal, undefined, restore);
+				this.run(
+					restic,
+					[...prefix, ...args],
+					resticEnvironment,
+					signal,
+					undefined,
+					restore,
+					limits?.restoreTimeoutMs
+				);
 			const checkId = (id: string) => {
 				if (!fullSnapshotId.safeParse(id).success)
 					throw new ManagedRepositoryAccessError('configuration-invalid');
@@ -232,7 +244,17 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			if (error instanceof AppError) throw error;
 			throw new ManagedRepositoryAccessError('credentials-unavailable');
 		} finally {
-			if (directory) await this.cleanup(directory);
+			if (directory) {
+				// Phase 6 owns this session directory durably; preserve completed
+				// validation and retry cleanup of its exact workspace after restart.
+				if (limits?.cleanupWarning) {
+					try {
+						await this.cleanup(directory);
+					} catch {
+						limits.cleanupWarning();
+					}
+				} else await this.cleanup(directory);
+			}
 		}
 	}
 
@@ -342,7 +364,8 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		env: NodeJS.ProcessEnv,
 		signal?: AbortSignal,
 		input?: string,
-		restore = false
+		restore = false,
+		restoreTimeoutMs = 30 * 60_000
 	): Promise<string> {
 		if (signal?.aborted) return Promise.reject(new ManagedRepositoryAccessError('cancelled'));
 		return new Promise((resolve, reject) => {
@@ -364,7 +387,10 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			};
 			const abort = () => stop('cancelled');
 			signal?.addEventListener('abort', abort, { once: true });
-			const timer = setTimeout(() => stop('timeout'), restore ? 30 * 60_000 : 60_000);
+			const timer = setTimeout(
+				() => stop('timeout'),
+				restore ? Math.min(24 * 60 * 60_000, Math.max(1000, restoreTimeoutMs)) : 60_000
+			);
 			child.on('error', () => {
 				failure ||= 'execution-failed';
 			});
@@ -381,6 +407,14 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			// Drain, but never retain/return stderr (may contain secrets/locations).
 			child.stderr?.on('data', () => undefined);
 			child.on('close', code => {
+				// Also stop descendants that survived a normally exiting parent.
+				if (process.platform !== 'win32' && child.pid) {
+					try {
+						process.kill(-child.pid, 'SIGKILL');
+					} catch {
+						/* Already stopped. */
+					}
+				}
 				processManager.untrackProcess(processId);
 				clearTimeout(timer);
 				signal?.removeEventListener('abort', abort);

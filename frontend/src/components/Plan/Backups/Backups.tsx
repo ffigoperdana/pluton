@@ -23,6 +23,10 @@ import Input from '../../common/form/Input/Input';
 import MirrorStatusBadge from '../Mirrors/MirrorStatusBadge';
 import MirrorStorageSelectorModal from '../Mirrors/MirrorStorageSelectorModal';
 import { Modal, SidePanel, SnapshotViewer } from '../..';
+import { useRecoveryAction, useRecoveryTests } from '../../../services/recoveryTests';
+import { canTestRecovery, recoveryActive, recoveryForBackup, recoveryStatusLabel } from '../../../utils/recoveryTests';
+import RecoveryResult from '../RecoveryTesting/RecoveryResult';
+import recoveryClasses from '../RecoveryTesting/RecoveryTesting.module.scss';
 
 const DownloadLabel = ({ download, downloadBackup }: { download: Backup['download']; downloadBackup: () => void }) => {
    if (download?.status === 'started') {
@@ -114,6 +118,22 @@ const Backups = ({
    const browseSnapshotMutation = useBrowseSnapshot();
    const isSync = method === 'sync';
    const isRemoteManaged = sourceType === 'device' && sourceId !== 'main' && method === 'backup';
+   const recoveryTests = useRecoveryTests(
+      planId,
+      isRemoteManaged,
+      backups.map((backup) => backup.id),
+   );
+   const recoveryAction = useRecoveryAction(planId);
+   const [recoveryResultId, setRecoveryResultId] = useState<string>();
+   const shownRecovery = recoveryTests.data?.find((test) => test.id === recoveryResultId);
+   const runRecovery = (backupId: string) =>
+      recoveryAction.mutate(
+         { backupId },
+         {
+            onSuccess: (test) => setRecoveryResultId(test.id),
+            onError: (error) => toast.error(error.message),
+         },
+      );
 
    const snapshotFiles = browseSnapshotMutation.data?.result;
 
@@ -209,6 +229,7 @@ const Backups = ({
                   const isDownloading = !isRemoteManaged && download && download.status === 'started';
                   const actions = backupRowActions(snapshot, isSync, isRemoteManaged);
                   const lifecycleWarning = status === 'completed' && !!snapshot.completionStats?.lifecycle?.warnings.length;
+                  const recovery = recoveryForBackup(recoveryTests.data || [], id, snapshot.completionStats?.snapshot_id);
 
                   return (
                      <div
@@ -256,6 +277,11 @@ const Backups = ({
                            ) : (
                               <StatusLabel status={status} hasError={!!errorMsg} />
                            )}
+                           {isRemoteManaged && status === 'completed' && (
+                              <span className={recoveryClasses.badge}>
+                                 Recovery: {recoveryTests.error ? 'Unavailable' : recovery ? recoveryStatusLabel[recovery.status] : 'Not tested'}
+                              </span>
+                           )}
                         </div>
                         <div title={duration + 's'}>{formatDuration(duration)}</div>
                         <div
@@ -297,6 +323,27 @@ const Backups = ({
                         </div>
                         {showSnapOptions === id && (
                            <div className={classes.settings}>
+                              {isRemoteManaged && canTestRecovery(snapshot) && (
+                                 <button
+                                    disabled={recoveryAction.isPending || (recoveryTests.data || []).some(recoveryActive)}
+                                    onClick={() => {
+                                       runRecovery(id);
+                                       setShowSnapOptions(false);
+                                    }}
+                                 >
+                                    <Icon type="restore" size={14} /> Run Recovery Test
+                                 </button>
+                              )}
+                              {isRemoteManaged && recovery && (
+                                 <button
+                                    onClick={() => {
+                                       setRecoveryResultId(recovery.id);
+                                       setShowSnapOptions(false);
+                                    }}
+                                 >
+                                    <Icon type="note" size={14} /> View Recovery Result
+                                 </button>
+                              )}
                               {actions.download && (
                                  <button
                                     className={downloadBackupMutation.isPending || cancelDownloadMutation.isPending ? 'notAllowed' : ''}
@@ -364,6 +411,14 @@ const Backups = ({
                })}
             {backups.length === 0 && <div className={classes.noBackups}>Hasn't been backed up yet.</div>}
          </div>
+         {shownRecovery && (
+            <RecoveryResult
+               test={shownRecovery}
+               close={() => setRecoveryResultId(undefined)}
+               pending={recoveryAction.isPending}
+               cancel={() => recoveryAction.mutate({ cancelId: shownRecovery.id }, { onError: (error) => toast.error(error.message) })}
+            />
+         )}
          {showDeleteModal && (
             <ActionModal
                title="Remove Backup"
