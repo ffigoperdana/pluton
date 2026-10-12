@@ -108,6 +108,15 @@ if (args.includes("--version")) {
         : "1045 Access denied (test-only-db-secret must never leave classifier)",
     );
     process.exitCode = 2;
+  } else if (database === "events_denied") {
+    // Login/configuration succeeded and SQL has started; SHOW EVENTS is a separate privilege.
+    process.stdout.write(
+      "-- synthetic partial SQL\nCREATE TABLE partial_dump(id INT);\n",
+    );
+    console.error(
+      "mariadb-dump: Error 1044: Access denied for user to database when executing SHOW EVENTS (test-only-db-secret)",
+    );
+    process.exitCode = 2;
   } else if (database === "unavailable") {
     console.error(
       isPostgres

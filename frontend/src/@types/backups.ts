@@ -104,6 +104,9 @@ export interface ReplicationProgressData {
 }
 
 export interface BackupProgressData {
+   remote?: boolean;
+   backupStage?: string;
+   attempt?: number;
    planId: string;
    backupId: string;
    status: string;

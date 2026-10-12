@@ -172,7 +172,9 @@ export function useGetBackupProgress(payload: { id: string; sourceId: string; so
                   console.log('Invalidate Plan and Reload It :', planId);
                   queryClient.invalidateQueries({ queryKey: ['plan', planId] });
                }
-               toast.success('Process Complete!');
+               if (progressData?.status === 'failed') toast.error('Backup failed. Review the backup details.');
+               else if (progressData?.status === 'cancelled') toast.info('Backup cancelled.');
+               else toast.success('Process Complete!');
             }
             return false;
          }

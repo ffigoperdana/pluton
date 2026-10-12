@@ -442,6 +442,8 @@ describe('AgentService', () => {
 
 	it.each([
 		'repository-target-not-empty',
+		'database-insufficient-privileges',
+		'source-parent-not-traversable',
 		'target-check-access-failed',
 		'target-check-auth-failed',
 		'target-check-transport-failed',
@@ -514,6 +516,8 @@ describe('AgentService', () => {
 			id: 'command-01',
 			type: 'BACKUP_FILESYSTEM',
 			payload: { backupId: 'backup-01', planId: 'plan-01', repositoryId: 'repo-01' },
+			state: 'running',
+			lastEventSequence: 2,
 		} as any;
 		store.recordCommandEvent.mockResolvedValue(command);
 		const remote = { recordCommandEvent: jest.fn() } as any;
@@ -523,9 +527,13 @@ describe('AgentService', () => {
 			leaseToken: 'a'.repeat(32),
 			event: { lifecycleStage: 'database-dump-started' },
 		});
-		expect(remote.recordCommandEvent).toHaveBeenCalledWith(command, {
-			lifecycleStage: 'database-dump-started',
-		});
+		expect(remote.recordCommandEvent).toHaveBeenCalledWith(
+			command,
+			{
+				lifecycleStage: 'database-dump-started',
+			},
+			2
+		);
 		await expect(
 			lifecycleService.recordEvent(agent.agentId, command.id, {
 				sequence: 3,
@@ -591,7 +599,11 @@ describe('AgentService', () => {
 			state: 'failed',
 			payload: { backupId: 'backup-01', planId: 'plan-01', repositoryId: 'repo-01' },
 		} as any;
-		store.recordCommandEvent.mockResolvedValue(command);
+		store.recordCommandEvent.mockResolvedValue({
+			...command,
+			state: 'running',
+			lastEventSequence: 2,
+		});
 		store.completeCommand.mockResolvedValue(command);
 		const remote = { recordCommandEvent: jest.fn(), completeCommand: jest.fn() } as any;
 		const lifecycleService = new AgentService(store, 'synthetic-phase5-secret', () => now, remote);
@@ -607,7 +619,11 @@ describe('AgentService', () => {
 			leaseToken: 'a'.repeat(32),
 			event,
 		});
-		expect(remote.recordCommandEvent).toHaveBeenCalledWith(command, event);
+		expect(remote.recordCommandEvent).toHaveBeenCalledWith(
+			{ ...command, state: 'running', lastEventSequence: 2 },
+			event,
+			2
+		);
 		await expect(
 			lifecycleService.recordEvent(agent.agentId, command.id, {
 				sequence: 3,

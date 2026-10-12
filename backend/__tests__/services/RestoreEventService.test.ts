@@ -28,6 +28,9 @@ jest.mock('../../src/stores/BackupStore');
 jest.mock('../../src/stores/RestoreStore');
 jest.mock('../../src/managers/BaseRestoreManager');
 jest.mock('fs/promises');
+jest.mock('../../src/services/ConfigService', () => ({
+	configService: { config: { APP_TITLE: 'Pluton Test', SECRET: 'synthetic-restore-event-secret' } },
+}));
 
 // Mock the logger
 jest.mock('../../src/utils/logger', () => ({

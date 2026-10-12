@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm/sql';
 import { DatabaseType } from '../db';
 import { Backup, NewBackup, backups } from '../db/schema/backups';
 import { BackupMirror } from '../types/backups';
+import { mergeRemoteProgress, type RemoteProgressEvent } from '../utils/remoteBackupProgress';
 
 /**
  * BackupStore is a class for managing backup records in the database.
@@ -50,6 +51,30 @@ export class BackupStore {
 			.returning();
 
 		return result[0] || null;
+	}
+
+	async updateRemoteProgress(
+		id: string,
+		planId: string,
+		commandId: string,
+		attempt: number,
+		sequence: number,
+		event: RemoteProgressEvent
+	): Promise<Backup | null> {
+		return this.db.transaction(tx => {
+			const current = tx.select().from(backups).where(eq(backups.id, id)).get();
+			if (!current || current.planId !== planId || current.sourceId === 'main') return null;
+			const update = mergeRemoteProgress(current, commandId, attempt, sequence, event);
+			if (!update) return null;
+			return (
+				tx
+					.update(backups)
+					.set({ ...update, updatedAt: sql`(unixepoch())` })
+					.where(eq(backups.id, id))
+					.returning()
+					.get() || null
+			);
+		});
 	}
 
 	async updateMirrorStatus(

@@ -4,7 +4,7 @@ import { appPaths } from '../utils/AppPaths';
 import path from 'path';
 import { requiresDesktopSetup } from '../utils/installHelpers';
 import { isCliCommandInvocation } from '../utils/cliCommands';
-import { readEncryptionKeyFromEnvFile, verifyFilePermissions } from '../utils/envFileHelpers';
+import { verifyFilePermissions } from '../utils/envFileHelpers';
 import { credentialManager } from './CredentialManager';
 
 // Schema for the .env config file (with optional sensitive fields for setup mode)
@@ -133,9 +133,10 @@ class ConfigService {
 		}
 
 		// 1b. Load ENCRYPTION_KEY from pluton.enc.env if not already in process env
-		const dataDir = appPaths.getDataDir();
+		const envFileKey = credentialManager.validatePersistedEncryptionKey(
+			normalizedEnv.ENCRYPTION_KEY
+		);
 		if (!normalizedEnv.ENCRYPTION_KEY) {
-			const envFileKey = readEncryptionKeyFromEnvFile(dataDir);
 			if (envFileKey) {
 				normalizedEnv.ENCRYPTION_KEY = envFileKey;
 				console.log('[ConfigService] Loaded ENCRYPTION_KEY from pluton.enc.env');
@@ -173,9 +174,9 @@ class ConfigService {
 			} else {
 				console.log(`[ConfigService] No config.json found at ${configPath}`);
 			}
-		} catch (error) {
+		} catch {
 			console.log(
-				`[ConfigService] Could not load or parse config.json at ${configPath}. Using defaults. Error: ${error}`
+				'[ConfigService] Could not read or validate config.json; using defaults. Configuration values were not logged.'
 			);
 		}
 

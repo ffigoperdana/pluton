@@ -1,4 +1,5 @@
 export interface BackupCompletionStats {
+	sourcePaths?: string[];
 	message_type: string;
 	files_new: number;
 	files_changed: number;
@@ -41,6 +42,14 @@ export interface BackupTaskStats {
 }
 
 export interface BackupProgressStats {
+	backupStage?: string;
+	remoteCommandId?: string;
+	remoteAttempt?: number;
+	remoteEventSequence?: number;
+	databaseId?: string;
+	databaseEngine?: string;
+	databaseOrdinal?: number;
+	databaseCount?: number;
 	lifecycleStage?: string;
 	bytesProcessed: number;
 	filesProcessed: number;

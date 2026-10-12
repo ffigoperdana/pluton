@@ -245,6 +245,53 @@ test_uninstall_and_purge() {
 	assert_missing "$root/etc/pluton-agent.env"
 }
 
+test_verified_configuration_only_reinstall_reuses_application() {
+	local root output before identity
+	root="$(make_root cache)"; base_install "$root"
+	before="$(sha256sum "$root/opt/pluton-agent/app/dist/index.js")"; identity="$(sha256sum "$root/var/lib/pluton-agent/identity.json")"
+	mkdir -- "$root/second-source"
+	output="$(run_installer "$root" --server https://pluton.example.internal --allowed-root "$root/source" --allowed-root "$root/second-source")"
+	[[ "$output" == *'Reusing verified application build; configuration-only reinstall.'* ]] || fail 'Verified configuration-only install did not reuse the app.'
+	[[ "$before" == "$(sha256sum "$root/opt/pluton-agent/app/dist/index.js")" && "$identity" == "$(sha256sum "$root/var/lib/pluton-agent/identity.json")" ]] || fail 'Reuse changed application or identity.'
+	grep -Fx "PLUTON_AGENT_ALLOWED_ROOTS=\"$root/source,$root/second-source\"" "$root/etc/pluton-agent.env" >/dev/null
+}
+
+test_cache_rejects_unverified_or_tampered_install() {
+	local root mode output
+	for mode in absent binary writable symlink unhashed-link version; do
+		root="$(make_root "cache-$mode")"; base_install "$root"
+		case "$mode" in
+			absent) rm -- "$root/opt/pluton-agent/.verified-install" ;;
+			binary) printf 'tampered\n' >> "$root/opt/pluton-agent/bin/rclone" ;;
+			writable) chmod 0775 -- "$root/opt/pluton-agent/runtime/bin" ;;
+			symlink) ln -s /etc/passwd "$root/opt/pluton-agent/app/external" ;;
+			unhashed-link) printf 'unverified\n' > "$root/opt/pluton-agent/unverified"; ln -s ../unverified "$root/opt/pluton-agent/app/unhashed" ;;
+			version) sed -i 's/node=v22.18.0/node=v99.0.0/' "$root/opt/pluton-agent/.verified-install" ;;
+		esac
+		output="$(base_install "$root")"
+		[[ "$output" == *'No reusable verified installation'* ]] || fail "Unsafe $mode cache was reused."
+		assert_private_runtime_access "$root"
+	done
+}
+
+test_verified_reuse_rollback_preserves_previous_tree() {
+	local root before identity config
+	root="$(make_root cache-rollback)"; base_install "$root"
+	before="$(sha256sum "$root/opt/pluton-agent/.verified-install")"; identity="$(sha256sum "$root/var/lib/pluton-agent/identity.json")"; config="$(sha256sum "$root/etc/pluton-agent.env")"
+	if PLUTON_AGENT_TEST_MODE=1 PLUTON_AGENT_TEST_ROOT="$root" PLUTON_AGENT_TEST_CONTROL_PLANE_FAIL=1 "$INSTALLER" --server https://replacement.example.internal --allowed-root "$root/source" > "$root/failure.log" 2>&1; then fail 'Cache rollback fixture succeeded unexpectedly.'; fi
+	grep -F 'configuration-only reinstall' "$root/failure.log" >/dev/null || fail 'Rollback test did not exercise verified reuse.'
+	[[ "$before" == "$(sha256sum "$root/opt/pluton-agent/.verified-install")" && "$identity" == "$(sha256sum "$root/var/lib/pluton-agent/identity.json")" && "$config" == "$(sha256sum "$root/etc/pluton-agent.env")" ]] || fail 'Verified reuse rollback changed prior tree/config/identity.'
+}
+
+test_changed_source_reuses_tools_but_rebuilds_app() {
+	local root output
+	root="$(make_root source-rebuild)"; base_install "$root"
+	sed -i 's/^source=.*/source=not-current-source/' "$root/opt/pluton-agent/.verified-install"
+	output="$(base_install "$root")"
+	[[ "$output" == *'Reusing root-protected'* && "$output" != *'Reusing verified application build'* ]] || fail 'Source change did not rebuild application with verified tools.'
+	assert_private_runtime_access "$root"
+}
+
 test_fresh_install_and_generated_files
 test_reinstall_preserves_identity_and_private_runtime_access
 test_failed_update_restores_previous_installation
@@ -257,4 +304,8 @@ test_platform_rejections
 test_checksum_mismatch_is_rejected
 test_private_binary_checksum_mismatch_is_rejected
 test_uninstall_and_purge
+test_verified_configuration_only_reinstall_reuses_application
+test_cache_rejects_unverified_or_tampered_install
+test_verified_reuse_rollback_preserves_previous_tree
+test_changed_source_reuses_tools_but_rebuilds_app
 printf 'PASS: install-agent installer tests\n'

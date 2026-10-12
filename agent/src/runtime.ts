@@ -13,6 +13,27 @@ import { resolveAllowedRoots } from "./filesystemPolicy.js";
 import { loadIdentity, saveIdentity } from "./identity.js";
 import { collectInventory } from "./inventory.js";
 import type { AgentConfig, StoredAgentIdentity } from "./types.js";
+import { ProgressDelivery, backupProgressStage } from "./progressDelivery.js";
+
+/** Installer validation must not lease or execute queued work. Identity is only read. */
+export async function checkConnection(config: AgentConfig): Promise<void> {
+  const identity = await atAgentStage("load-identity", () =>
+    loadIdentity(config.dataDir),
+  );
+  const roots = await atAgentStage("resolve-allowed-roots", () =>
+    resolveAllowedRoots(config.allowedRoots),
+  );
+  await atAgentStage("heartbeat", () =>
+    new AgentClient(config, identity).heartbeat(
+      collectInventory({
+        filesystemRootsConfigured: roots.length > 0,
+        binDir: config.binDir,
+        hookRoot: config.hookRoot,
+        databaseBinDirs: config.databaseBinDirs,
+      }),
+    ),
+  );
+}
 
 const SAFE_COMMANDS = new Set([
   "PING",
@@ -39,9 +60,10 @@ export async function runOnce(
   const identity = await atAgentStage("load-identity", () =>
     loadIdentity(config.dataDir),
   );
-  const roots = await atAgentStage("resolve-allowed-roots", () =>
-    resolveAllowedRoots(config.allowedRoots),
-  );
+  // Availability of a source is validated within the backup, so losing source
+  // access does not silence heartbeat or prevent a safe actionable job failure.
+  // Configuration roots are re-resolved/contained by preflightSource, never trusted as canonical here.
+  const roots = config.allowedRoots;
   const client = new AgentClient(config, identity);
   const inventory = collectInventory({
     filesystemRootsConfigured: roots.length > 0,
@@ -81,6 +103,11 @@ export async function runOnce(
     await client.event(command.id, command.leaseToken, sequence, event);
   };
   await atAgentStage("record-event", () => recordEvent({ phase: "accepted" }));
+  const progress = new ProgressDelivery(recordEvent, () =>
+    console.warn(
+      "[pluton-agent] progress delivery temporarily unavailable; backup execution continues.",
+    ),
+  );
 
   let completion: StoredAgentIdentity["completedCommands"][number];
   try {
@@ -93,14 +120,20 @@ export async function runOnce(
           signal?.aborted ||
           (await client.commandStatus(command.id, command.leaseToken))
             .cancelled,
-        onEvent: recordEvent,
-        onStage: ({ stage, message, database }) =>
+        onEvent: async (event) => progress.enqueue(event),
+        onStage: ({ stage, message, database }) => {
+          progress.enqueue({
+            phase: "running",
+            backupStage: backupProgressStage(stage),
+            ...database,
+          });
           console.info(
             `[pluton-agent] BACKUP_FILESYSTEM ${message} stage=${stage}` +
               (database
                 ? ` databaseId=${database.databaseId || "legacy"} engine=${database.engine} ordinal=${database.ordinal}/${database.count}`
                 : ""),
-          ),
+          );
+        },
       });
       completion = {
         commandId: command.id,
@@ -153,6 +186,8 @@ export async function runOnce(
         : {}),
     };
   }
+  await progress.flush();
+  completion.sequence = sequence + 1;
   // Persist before acknowledging completion so a retry cannot execute a backup twice.
   rememberCompletion(identity, completion);
   await atAgentStage("save-identity", () =>

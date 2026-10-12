@@ -396,13 +396,19 @@ export class BackupLifecycleJob {
                 ? "database-output-empty"
                 : code === "auth-failed"
                   ? "database-auth-failed"
-                  : code === "unavailable"
-                    ? "database-unavailable"
-                    : code === "timeout"
-                      ? "database-dump-timeout"
-                      : code === "output-limit"
-                        ? "database-dump-output-limit"
-                        : "database-dump-failed",
+                  : code === "insufficient-privileges"
+                    ? "database-insufficient-privileges"
+                    : code === "invalid-configuration"
+                      ? "database-invalid-configuration"
+                      : code === "unavailable"
+                        ? "database-unavailable"
+                        : code === "timeout"
+                          ? "database-dump-timeout"
+                          : code === "output-limit"
+                            ? "database-dump-output-limit"
+                            : code === "start-failed"
+                              ? "database-client-missing"
+                              : "database-dump-failed",
         db.databaseId,
         db.engine,
       );

@@ -10,7 +10,11 @@ import {
 } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
-import { assertPathWithinAllowedRoots } from "./filesystemPolicy.js";
+import {
+  preflightSource,
+  SourceAccessError,
+  type SourceAccessCode,
+} from "./filesystemPolicy.js";
 import { privateBinaryPath } from "./inventory.js";
 import type { AgentConfig } from "./types.js";
 import { BackupLifecycleJob, BackupLifecycleError } from "./backupLifecycle.js";
@@ -77,6 +81,7 @@ export type ResticSummary = {
 
 export type BackupFilesystemResult = {
   snapshotId: string;
+  sourcePaths?: string[];
   summary: ResticSummary;
   lifecycle?: LifecycleReport;
 };
@@ -110,6 +115,7 @@ export type BackupFilesystemStage =
 export type BackupFilesystemFailureCode =
   | "invalid-payload"
   | "source-validation-failed"
+  | SourceAccessCode
   | "state-overlap"
   | "state-validation-failed"
   | "tool-unavailable"
@@ -134,6 +140,7 @@ export type BackupFilesystemStageEvent = {
   stage: BackupFilesystemStage;
   message:
     | "command accepted"
+    | "stage started"
     | "source validated"
     | "temporary storage config created"
     | "repository check started"
@@ -150,6 +157,18 @@ const BACKUP_FAILURE_MESSAGES: Partial<
 > = {
   "invalid-payload": "The backup command payload is invalid.",
   "source-validation-failed": "The backup source could not be validated.",
+  "source-parent-not-traversable":
+    "A source parent directory is not traversable by the service account. Run local read-only preflight.",
+  "source-root-not-readable":
+    "The canonical source root is not readable/traversable by the service account.",
+  "source-entry-inaccessible":
+    "A source entry is inaccessible. Run the explicit local read-only source scan.",
+  "source-missing": "The source or an expected source entry is missing.",
+  "source-symlink-escape":
+    "The source symlink escaped its allowed root or changed during validation.",
+  "source-unsupported-type": "The source type is not supported.",
+  "source-policy-violation":
+    "The source violates the allowed-root path policy.",
   "state-overlap": "The backup source overlaps the agent state directory.",
   "state-validation-failed":
     "The agent state directory could not be validated.",
@@ -194,6 +213,8 @@ export function toBackupFilesystemError(
   stage: BackupFilesystemStage,
 ): BackupFilesystemError {
   if (error instanceof BackupFilesystemError) return error;
+  if (error instanceof SourceAccessError)
+    return new BackupFilesystemError(stage, error.code);
   if (error instanceof BackupLifecycleError)
     return new BackupFilesystemError(
       error.stage,
@@ -255,6 +276,7 @@ type ProcessOptions = {
   stdin?: string;
   shouldCancel: () => Promise<boolean>;
   onJsonLine?: (value: Record<string, unknown>) => Promise<void>;
+  source?: string;
 };
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {
@@ -501,6 +523,8 @@ async function runProgram(
     let stdout = "";
     let diagnostics = "";
     let stdoutBuffer = "";
+    let stderrBuffer = "";
+    let sourceFailure: SourceAccessCode | undefined;
     let cancelled = false;
     let eventChain = Promise.resolve();
     let settled = false;
@@ -543,7 +567,7 @@ async function runProgram(
     child.stdout.on("data", (chunk) => {
       const text = String(chunk);
       stdout = appendBounded(stdout, text);
-      stdoutBuffer += text;
+      stdoutBuffer = appendBounded(stdoutBuffer, text);
       for (;;) {
         const newline = stdoutBuffer.indexOf("\n");
         if (newline < 0) break;
@@ -557,6 +581,13 @@ async function runProgram(
       // Raw provider text is never returned, logged, or forwarded to the server.
       if (options.classifyTargetFailure) {
         diagnostics = appendBounded(diagnostics, String(chunk));
+      }
+      if (options.source) {
+        stderrBuffer = appendBounded(stderrBuffer, String(chunk));
+        const lines = stderrBuffer.split("\n");
+        stderrBuffer = lines.pop() || "";
+        for (const line of lines)
+          sourceFailure ||= sourceFailureFromRestic(line, options.source);
       }
     });
     child.stdin.end(options.stdin || "");
@@ -576,6 +607,13 @@ async function runProgram(
           if (cancelled) return reject(new BackupCancelledError());
           if (timedOut) return reject(new Error("Backup process timed out."));
           if (code !== 0 && !options.allowFailure) {
+            if (options.source)
+              sourceFailure ||= sourceFailureFromRestic(
+                stderrBuffer,
+                options.source,
+              );
+            if (sourceFailure)
+              return reject(new SourceAccessError(sourceFailure));
             return reject(
               new Error(
                 `Backup process exited with status ${code ?? "unknown"}.`,
@@ -653,6 +691,36 @@ function numeric(value: unknown): number {
     : 0;
 }
 
+/** Only classify JSON source errors, not arbitrary storage/provider text. Raw output stays local in memory. */
+export function sourceFailureFromRestic(
+  line: string,
+  source: string,
+): SourceAccessCode | undefined {
+  try {
+    const error = JSON.parse(line);
+    if (
+      error.message_type !== "error" ||
+      !["scan", "archival"].includes(error.during) ||
+      typeof error.item !== "string"
+    )
+      return;
+    const relative = path.relative(source, error.item);
+    if (
+      relative === ".." ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    )
+      return;
+    const message =
+      typeof error.error?.message === "string" ? error.error.message : "";
+    if (/permission denied|operation not permitted/i.test(message))
+      return "source-entry-inaccessible";
+    if (/no such file|not found/i.test(message)) return "source-missing";
+  } catch {
+    /* Not a safe Restic source record. */
+  }
+}
+
 function summaryFromRestic(
   value: Record<string, unknown>,
 ): ResticSummary | null {
@@ -682,17 +750,18 @@ function summaryFromRestic(
   };
 }
 
-function progressFromRestic(
+export function progressFromRestic(
   value: Record<string, unknown>,
 ): Record<string, unknown> | null {
   if (value.message_type !== "status") return null;
   return {
     phase: "running",
+    backupStage: "backing-up",
     progress: {
-      bytesProcessed: numeric(value.bytes_processed),
-      filesProcessed: numeric(value.files_processed),
-      totalBytesProcessed: numeric(value.total_bytes_processed),
-      totalFilesProcessed: numeric(value.total_files_processed),
+      bytesProcessed: numeric(value.bytes_done),
+      filesProcessed: numeric(value.files_done),
+      totalBytesProcessed: numeric(value.total_bytes),
+      totalFilesProcessed: numeric(value.total_files),
     },
   };
 }
@@ -1012,7 +1081,7 @@ export async function executeFilesystemBackup(input: {
     message?: BackupFilesystemStageEvent["message"],
   ): void => {
     stage = next;
-    if (message) input.onStage?.({ stage: next, message });
+    input.onStage?.({ stage: next, message: message || "stage started" });
   };
   const lifecycleEvent = async (
     checkpoint: LifecycleCheckpoint,
@@ -1039,10 +1108,9 @@ export async function executeFilesystemBackup(input: {
     setStage("payload-validation", "command accepted");
 
     setStage("source-validation");
-    const source = await assertPathWithinAllowedRoots(
-      payload.sourcePath,
-      input.allowedRoots,
-    );
+    const source = (
+      await preflightSource(payload.sourcePath, input.allowedRoots)
+    ).resolvedPath;
     input.onStage?.({
       stage: "source-validation",
       message: "source validated",
@@ -1126,6 +1194,7 @@ export async function executeFilesystemBackup(input: {
         existing.lifecycle = replayReport;
       }
       completedResult = existing;
+      existing.sourcePaths = [source];
       return existing;
     }
     let artifacts: string[] = [];
@@ -1164,6 +1233,12 @@ export async function executeFilesystemBackup(input: {
     );
 
     setStage("restic-backup");
+    // Re-check the selected root after preparation; do not follow a changed symlink.
+    if (
+      (await preflightSource(payload.sourcePath, input.allowedRoots))
+        .resolvedPath !== source
+    )
+      throw new SourceAccessError("source-symlink-escape");
     if (job) await lifecycleEvent("backup-started");
     input.onStage?.({
       stage: "restic-backup",
@@ -1186,6 +1261,7 @@ export async function executeFilesystemBackup(input: {
     for (const exclude of payload.excludes) args.push("--exclude", exclude);
     await runProgram(restic, args, {
       env,
+      source,
       ...(job ? { cwd: job.workspace, timeoutMs: 24 * 60 * 60 * 1000 } : {}),
       shouldCancel: input.shouldCancel,
       onJsonLine: async (event) => {
@@ -1224,6 +1300,7 @@ export async function executeFilesystemBackup(input: {
     }
     const result = {
       snapshotId: completedSummary.snapshot_id,
+      sourcePaths: [source],
       summary: completedSummary,
       ...(job ? { lifecycle: job.report } : {}),
     };

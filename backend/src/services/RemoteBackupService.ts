@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { remoteBackupFailure } from '../utils/remoteBackupDiagnostics';
 import Cryptr from 'cryptr';
 import { Plan, NewPlan } from '../db/schema/plans';
 import { type AgentCommand, type AgentIdentity } from '../db/schema/agents';
@@ -14,7 +15,8 @@ import { intervalToCron } from '../utils/intervalToCron';
 import { AppError, NotFoundError } from '../utils/AppError';
 import { generateUID } from '../utils/helpers';
 import type { PlanAddRunSettings, PlanSource } from '../types/plans';
-import type { BackupCompletionStats, BackupProgressStats } from '../types/backups';
+import type { BackupCompletionStats } from '../types/backups';
+import { projectRemoteProgress, type RemoteProgressEvent } from '../utils/remoteBackupProgress';
 import { configService } from './ConfigService';
 import {
 	materializeRemoteLifecycle,
@@ -57,21 +59,6 @@ type SetPreparationStage = (
 	details?: PreparationStageDetails
 ) => void;
 
-type RemoteProgressEvent = {
-	phase?: string;
-	lifecycleStage?: string;
-	databaseId?: string;
-	engine?: 'mysql' | 'mariadb' | 'postgresql';
-	ordinal?: number;
-	count?: number;
-	progress?: {
-		bytesProcessed?: number;
-		filesProcessed?: number;
-		totalBytesProcessed?: number;
-		totalFilesProcessed?: number;
-	};
-};
-
 type RemoteCompletion = {
 	success: boolean;
 	cancelled?: boolean;
@@ -82,6 +69,7 @@ type RemoteCompletion = {
 	databaseId?: string;
 	engine?: 'mysql' | 'mariadb' | 'postgresql';
 	result?: {
+		sourcePaths?: string[];
 		snapshotId?: string;
 		summary?: BackupCompletionStats;
 		lifecycle?: {
@@ -334,13 +322,13 @@ export class RemoteBackupService {
 		return { success: true, result: 'Remote backup cancellation requested.' };
 	}
 
-	async getBackupProgress(backupId: string): Promise<BackupProgressStats | null> {
+	async getBackupProgress(backupId: string) {
 		const backup = await this.backupStore.getById(backupId);
 		const repository = backup?.planId ? await this.repositories.getByPlanId(backup.planId) : null;
 		if (!backup || !repository || backup.sourceId === 'main') {
 			throw new AppError(501, 'REMOTE_CAPABILITY_NOT_IMPLEMENTED');
 		}
-		return backup.progressStats || null;
+		return projectRemoteProgress(backup);
 	}
 
 	/** Called during authenticated poll; returned data is never persisted in agent_commands. */
@@ -471,12 +459,22 @@ export class RemoteBackupService {
 		}
 	}
 
-	async recordCommandEvent(command: AgentCommand, event: RemoteProgressEvent): Promise<void> {
+	async recordCommandEvent(
+		command: AgentCommand,
+		event: RemoteProgressEvent,
+		sequence = command.lastEventSequence
+	): Promise<void> {
 		if (command.type !== 'BACKUP_FILESYSTEM') return;
 		const reference = commandReference(command.payload);
-		const backup = await this.backupStore.getById(reference.backupId);
-		if (!backup || !backup.inProgress || backup.status === 'cancelled') return;
-		const progress = event.progress;
+		const updated = await this.backupStore.updateRemoteProgress(
+			reference.backupId,
+			reference.planId,
+			command.id,
+			command.attemptCount,
+			sequence,
+			event
+		);
+		if (!updated) return;
 		if (event.lifecycleStage && serverLogger) {
 			serverLogger.info(
 				{
@@ -496,39 +494,18 @@ export class RemoteBackupService {
 				'Remote backup lifecycle stage'
 			);
 		}
-		const progressStats: BackupProgressStats | undefined = progress
-			? {
-					bytesProcessed: toFiniteNumber(progress.bytesProcessed) || 0,
-					filesProcessed: toFiniteNumber(progress.filesProcessed) || 0,
-					total_bytes_processed: toFiniteNumber(progress.totalBytesProcessed) || 0,
-					total_files_processed: toFiniteNumber(progress.totalFilesProcessed) || 0,
-				}
-			: undefined;
-		await this.backupStore.update(backup.id, {
-			status: event.phase === 'accepted' ? 'queued' : 'started',
-			...(event.lifecycleStage || progressStats
-				? {
-						progressStats: {
-							...(backup.progressStats || {}),
-							...progressStats,
-							...(event.lifecycleStage ? { lifecycleStage: event.lifecycleStage } : {}),
-							...(event.databaseId
-								? {
-										databaseId: event.databaseId,
-										databaseEngine: event.engine,
-										databaseOrdinal: event.ordinal,
-										databaseCount: event.count,
-									}
-								: {}),
-						} as BackupProgressStats,
-					}
-				: {}),
-		});
 	}
 
 	async completeCommand(command: AgentCommand, completion: RemoteCompletion): Promise<void> {
 		if (command.type !== 'BACKUP_FILESYSTEM') return;
 		const reference = commandReference(command.payload);
+		const current = await this.backupStore.getById(reference.backupId);
+		if (
+			current &&
+			['completed', 'failed', 'cancelled'].includes(current.status || '') &&
+			!(current.status === 'cancelled' && completion.success && completion.result?.lifecycle)
+		)
+			return;
 		if (
 			(command.state === 'cancelled' || completion.cancelled) &&
 			!(completion.success && completion.result?.lifecycle)
@@ -543,7 +520,7 @@ export class RemoteBackupService {
 			await this.eventService.onBackupFailure({
 				planId: reference.planId,
 				backupId: reference.backupId,
-				error: completion.error || 'Remote filesystem backup failed.',
+				error: remoteBackupFailure(completion),
 			});
 			return;
 		}
@@ -595,6 +572,7 @@ export class RemoteBackupService {
 			success: true,
 			summary: {
 				...summary,
+				...(completion.result?.sourcePaths ? { sourcePaths: completion.result.sourcePaths } : {}),
 				...(completion.result?.lifecycle ? { lifecycle: completion.result.lifecycle } : {}),
 			},
 		});

@@ -48,6 +48,8 @@ PREVIOUS_INSTALL_ROOT=''
 PREVIOUS_CONFIG_FILE=''
 PREVIOUS_SYSTEMD_UNIT=''
 SERVICE_WAS_ACTIVE='false'
+NODE_ARCHIVE_SHA256=''
+REUSED_TOOLCHAIN='false'
 
 log() {
 	printf '[pluton-agent-installer] %s\n' "$*"
@@ -255,12 +257,13 @@ validate_allowed_roots() {
 	local root canonical existing duplicate
 	for root in "${REQUESTED_ROOTS[@]}"; do
 		[[ "$root" == /* ]] || fail "Allowed roots must be absolute: $root"
-		[[ "$root" != *','* && "$root" != *$'\n'* && "$root" != *$'\r'* ]] || fail "Allowed roots cannot contain commas or line breaks: $root"
+		[[ "$root" != *','* && ! "$root" =~ [[:cntrl:]] && ! "$root" =~ (password|token|secret|credential|key)= && "$root" != *'://'* ]] || fail 'Allowed roots contain unsafe diagnostic characters.'
 		case "$root/" in
 			*'/../'*) fail "Allowed roots cannot contain parent traversal: $root" ;;
 		esac
 		canonical="$(realpath -e -- "$root")" || fail "Allowed root does not exist: $root"
 		[[ -d "$canonical" ]] || fail "Allowed root must be a directory: $root"
+		if [[ "$root" != "$canonical" ]]; then log "Source alias resolves to canonical path: $root -> $canonical"; fi
 		duplicate='false'
 		for existing in "${ALLOWED_ROOTS[@]}"; do
 			if [[ "$existing" == "$canonical" ]]; then
@@ -299,10 +302,16 @@ ensure_agent_account() {
 
 validate_agent_access_to_roots() {
 	if is_test_mode; then return; fi
-	local root
+	local root parent component
 	for root in "${ALLOWED_ROOTS[@]}"; do
-		runuser -u "$AGENT_USER" -- test -r "$root" || fail "The pluton-agent account cannot read allowed root: $root"
+		parent='/'; local remainder="${root#/}"
+		while [[ "$remainder" == */* ]]; do
+			component="${remainder%%/*}"; remainder="${remainder#*/}"
+			parent="${parent%/}/$component"
+			runuser -u "$AGENT_USER" -- test -x "$parent" || fail "source-parent-not-traversable: pluton-agent cannot traverse $parent (canonical source $root). Review narrowly scoped read-only access; installer did not change permissions."
+		done
 		runuser -u "$AGENT_USER" -- test -x "$root" || fail "The pluton-agent account cannot traverse allowed root: $root"
+		runuser -u "$AGENT_USER" -- test -r "$root" || fail "source-root-not-readable: pluton-agent cannot read canonical source $root. Review read-only access; installer did not change permissions."
 	done
 	if [[ -n "$CA_FILE" ]]; then
 		[[ "$CA_FILE" == /* && -f "$CA_FILE" ]] || fail '--ca-file must be an existing absolute file.'
@@ -412,7 +421,9 @@ prepare_private_node_runtime() {
 	create_directory 0755 "$STAGE_ROOT/runtime"
 	if is_test_mode; then
 		create_directory 0755 "$STAGE_ROOT/runtime/bin"
-		printf '#!/usr/bin/env sh\nexit 0\n' > "$STAGE_ROOT/runtime/bin/node"
+		printf '#!/usr/bin/env sh\nprintf "v22.18.0\\n"\n' > "$STAGE_ROOT/runtime/bin/node"
+		chmod 0755 -- "$STAGE_ROOT/runtime/bin/node"
+		NODE_ARCHIVE_SHA256='test-mode-no-archive'
 		return
 	fi
 
@@ -425,6 +436,7 @@ prepare_private_node_runtime() {
 	curl --fail --location --proto '=https' --tlsv1.2 --output "$archive" "$NODE_DIST_BASE/$NODE_VERSION/$distribution"
 	curl --fail --location --proto '=https' --tlsv1.2 --output "$checksums" "$NODE_DIST_BASE/$NODE_VERSION/SHASUMS256.txt"
 	verify_node_checksum "$archive" "$checksums" || fail 'Node.js checksum verification failed; the archive was not extracted.'
+	NODE_ARCHIVE_SHA256="$(sha256sum "$archive" | cut -d ' ' -f 1)"
 	tar -xJf "$archive" -C "$download_dir"
 	extracted="$download_dir/node-${NODE_VERSION}-linux-x64"
 	[[ -x "$extracted/bin/node" ]] || fail 'The verified Node.js archive did not contain an executable runtime.'
@@ -503,6 +515,83 @@ build_agent_app_from_source() {
 	rm -rf -- "$build_dir"
 }
 
+source_fingerprint() {
+	(
+		cd -- "$REPOSITORY_ROOT"
+		[[ -f package.json && -f pnpm-lock.yaml && -f pnpm-workspace.yaml && -f agent/package.json && -f agent/tsconfig.json ]] || return 1
+		# Source links would make a source-only fingerprint incomplete; refuse reuse.
+		[[ -z "$(find agent/src -type l -print -quit)" ]] || return 1
+		{ printf '%s\0' package.json pnpm-lock.yaml pnpm-workspace.yaml agent/package.json agent/tsconfig.json; find agent/src -type f -print0; } | sort -z | xargs -0 sha256sum | sha256sum | cut -d ' ' -f 1
+	)
+}
+
+verified_tree_digest() {
+	local root="$1" entry owner mode target expected_owner=0
+	if is_test_mode; then expected_owner="$(id -u)"; fi
+	(
+		cd -- "$root" || return 1
+		[[ -d runtime && -d bin && -d app && ! -L runtime && ! -L bin && ! -L app ]] || return 1
+		while IFS= read -r -d '' entry; do
+			[[ ! "$entry" =~ [[:cntrl:]] ]] || return 1
+			owner="$(stat -c '%u' -- "$entry")"; [[ "$owner" == "$expected_owner" ]] || return 1
+			if [[ -L "$entry" ]]; then
+				target="$(realpath -e -- "$entry")" || return 1
+				[[ "$target" == "$root/runtime/"* || "$target" == "$root/bin/"* || "$target" == "$root/app/"* ]] || return 1
+				printf 'link %s %s\n' "$entry" "$(readlink -- "$entry")"
+			elif [[ -d "$entry" || -f "$entry" ]]; then
+				mode="$(stat -c '%a' -- "$entry")"
+				(( (8#$mode & 0022) == 0 )) || return 1
+				if [[ -d "$entry" ]]; then (( (8#$mode & 0005) == 0005 )) || return 1; fi
+				printf 'mode %s %s\n' "$mode" "$entry"
+				if [[ -f "$entry" ]]; then sha256sum -- "$entry"; fi
+			else return 1; fi
+		done < <(find runtime bin app -print0 | sort -z)
+	) | sha256sum | cut -d ' ' -f 1
+}
+
+try_reuse_verified_install() {
+	[[ -d "$INSTALL_ROOT" && ! -L "$INSTALL_ROOT" && -f "$INSTALL_ROOT/.verified-install" && ! -L "$INSTALL_ROOT/.verified-install" ]] || return 1
+	local expected_owner=0 current source_hash tree_hash metadata parent="$INSTALL_ROOT"
+	if is_test_mode; then expected_owner="$(id -u)"; fi
+	# Metadata and every ancestor must be protected from modification by the agent.
+	while [[ "$parent" != '/' ]]; do
+		[[ ! -L "$parent" && "$(stat -c '%u' -- "$parent")" == "$expected_owner" ]] || return 1
+		local mode; mode="$(stat -c '%a' -- "$parent")"; (( (8#$mode & 0022) == 0 )) || return 1
+		if is_test_mode && [[ "$parent" == "${PLUTON_AGENT_TEST_ROOT}" ]]; then break; fi
+		parent="$(dirname -- "$parent")"
+	done
+	[[ "$(stat -c '%u' "$INSTALL_ROOT/.verified-install")" == "$expected_owner" ]] || return 1
+	[[ "$(stat -c '%a' "$INSTALL_ROOT/.verified-install")" == '644' ]] || return 1
+	metadata="$(<"$INSTALL_ROOT/.verified-install")"
+	[[ "$metadata" == 'format=1'$'\n'* ]] || return 1
+	[[ "$metadata" == *$'\n'"node=$NODE_VERSION"$'\n'"restic=$RESTIC_VERSION:$RESTIC_LINUX_AMD64_SHA256"$'\n'"rclone=$RCLONE_VERSION:$RCLONE_LINUX_AMD64_SHA256"$'\n'* ]] || return 1
+	NODE_ARCHIVE_SHA256="$(sed -n 's/^node_archive=//p' "$INSTALL_ROOT/.verified-install")"
+	if is_test_mode; then [[ "$NODE_ARCHIVE_SHA256" == 'test-mode-no-archive' ]] || return 1
+	else [[ "$NODE_ARCHIVE_SHA256" =~ ^[a-f0-9]{64}$ ]] || return 1; fi
+	tree_hash="$(verified_tree_digest "$INSTALL_ROOT")" || return 1
+	grep -Fx "tree=$tree_hash" "$INSTALL_ROOT/.verified-install" >/dev/null || return 1
+	# Execute only after ownership/mode/content validation, not just a version string.
+	[[ "$("$INSTALL_ROOT/runtime/bin/node" -v)" == "$NODE_VERSION" ]] || return 1
+	"$INSTALL_ROOT/bin/restic" version | grep -F "restic $RESTIC_VERSION" >/dev/null || return 1
+	"$INSTALL_ROOT/bin/rclone" version | grep -F "rclone v$RCLONE_VERSION" >/dev/null || return 1
+	cp -a -- "$INSTALL_ROOT/runtime" "$INSTALL_ROOT/bin" "$STAGE_ROOT/"
+	REUSED_TOOLCHAIN='true'
+	log 'Reusing root-protected, SHA-256/version-verified private runtime and binaries.'
+	source_hash="$(source_fingerprint)" || source_hash='not-reusable'
+	if [[ "$source_hash" != 'not-reusable' ]] && grep -Fx "source=$source_hash" "$INSTALL_ROOT/.verified-install" >/dev/null; then
+		cp -a -- "$INSTALL_ROOT/app" "$STAGE_ROOT/"
+		log 'Reusing verified application build; configuration-only reinstall.'
+	else build_agent_app_from_source; fi
+}
+
+write_install_provenance() {
+	local source_hash tree_hash
+	source_hash="$(source_fingerprint)" || source_hash='not-reusable'
+	tree_hash="$(verified_tree_digest "$STAGE_ROOT")" || fail 'Staged installation failed ownership/mode/integrity validation.'
+	printf 'format=1\nnode=%s\nrestic=%s:%s\nrclone=%s:%s\nnode_archive=%s\nsource=%s\ntree=%s\n' "$NODE_VERSION" "$RESTIC_VERSION" "$RESTIC_LINUX_AMD64_SHA256" "$RCLONE_VERSION" "$RCLONE_LINUX_AMD64_SHA256" "$NODE_ARCHIVE_SHA256" "$source_hash" "$tree_hash" > "$STAGE_ROOT/.verified-install"
+	chmod 0644 -- "$STAGE_ROOT/.verified-install"
+}
+
 stop_service_if_present() {
 	if is_test_mode; then return; fi
 	if [[ -f "$SYSTEMD_UNIT" ]]; then
@@ -514,6 +603,7 @@ stop_service_if_present() {
 activate_staged_files() {
 	PREVIOUS_INSTALL_ROOT="$INSTALL_PARENT/.pluton-agent-previous.$$"
 	normalize_staged_install_permissions
+	write_install_provenance
 	if [[ -e "$INSTALL_ROOT" ]]; then
 		rm -rf -- "$PREVIOUS_INSTALL_ROOT"
 		mv -- "$INSTALL_ROOT" "$PREVIOUS_INSTALL_ROOT"
@@ -679,8 +769,7 @@ verify_control_plane() {
 		[[ "${PLUTON_AGENT_TEST_CONTROL_PLANE_FAIL:-0}" != '1' ]] || fail 'Test control-plane validation failure.'
 		return
 	fi
-	agent_command_arguments 'run'
-	AGENT_COMMAND+=(--once)
+	agent_command_arguments 'check'
 	runuser -u "$AGENT_USER" -- "$RUNTIME_DIR/bin/node" "$APP_DIR/dist/index.js" "${AGENT_COMMAND[@]}"
 }
 
@@ -720,9 +809,12 @@ install_agent() {
 	validate_agent_access_to_roots
 	create_stage_root
 	prepare_update_rollback
-	prepare_private_node_runtime
-	prepare_private_backup_binaries
-	build_agent_app_from_source
+	if ! try_reuse_verified_install; then
+		log 'No reusable verified installation; performing pinned download/build.'
+		prepare_private_node_runtime
+		prepare_private_backup_binaries
+		build_agent_app_from_source
+	fi
 	stop_service_if_present
 	activate_staged_files
 	validate_installed_runtime_access

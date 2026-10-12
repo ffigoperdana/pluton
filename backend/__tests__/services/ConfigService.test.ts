@@ -9,13 +9,35 @@ const mockGetConfigDir = jest.fn() as jest.MockedFunction<() => string>;
 const mockGetDataDir = jest.fn() as jest.MockedFunction<() => string>;
 const mockGetEncEnvFilePath = jest.fn() as jest.MockedFunction<() => string>;
 const mockDotenvConfig = jest.fn();
+// Model private key-file IO separately from config.json. A generic config-file
+// response is not a valid keys.json or encryption-key file, especially fail-closed.
+const mockPrivateFiles = new Map<string, string>();
+const privatePath = (value: unknown) =>
+	/(?:keys\.json|\.keys-[^\\/]+\.tmp|pluton\.enc\.env|pluton\.db)$/.test(String(value));
 
 // Mock fs module
 jest.mock('fs', () => ({
 	...jest.requireActual<typeof fs>('fs'),
-	existsSync: mockExistsSync,
-	readFileSync: mockReadFileSync,
-	writeFileSync: mockWriteFileSync,
+	existsSync: (file: unknown) =>
+		privatePath(file) ? mockPrivateFiles.has(String(file)) : mockExistsSync(file as any),
+	readFileSync: (file: unknown, options: any) => {
+		if (!privatePath(file)) return mockReadFileSync(file as any, options);
+		if (mockPrivateFiles.has(String(file))) return mockPrivateFiles.get(String(file));
+		throw Object.assign(new Error('synthetic file missing'), { code: 'ENOENT' });
+	},
+	writeFileSync: (file: unknown, content: any, options: any) => {
+		if (privatePath(file)) mockPrivateFiles.set(String(file), String(content));
+		return mockWriteFileSync(file, content, options);
+	},
+	renameSync: (source: unknown, target: unknown) => {
+		if (privatePath(target)) {
+			mockPrivateFiles.set(String(target), mockPrivateFiles.get(String(source))!);
+			mockPrivateFiles.delete(String(source));
+		}
+	},
+	rmSync: (file: unknown) => {
+		if (privatePath(file)) mockPrivateFiles.delete(String(file));
+	},
 	mkdirSync: mockMkdirSync,
 }));
 
@@ -77,6 +99,7 @@ describe('ConfigService', () => {
 		mockGetConfigDir.mockReset();
 		mockGetDataDir.mockReset();
 		mockGetEncEnvFilePath.mockReset();
+		mockPrivateFiles.clear();
 
 		// Mock appPaths to return a predictable directory
 		mockGetConfigDir.mockReturnValue('/fake/config/dir');
@@ -282,7 +305,7 @@ describe('ConfigService', () => {
 		expect(config.APP_TITLE).toBe('From Env');
 		expect(mockExit).not.toHaveBeenCalled();
 		expect(mockConsoleLog).toHaveBeenCalledWith(
-			expect.stringContaining('Could not load or parse config.json')
+			expect.stringContaining('Could not read or validate config.json')
 		);
 	});
 

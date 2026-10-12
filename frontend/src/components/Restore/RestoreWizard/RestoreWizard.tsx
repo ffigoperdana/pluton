@@ -9,6 +9,7 @@ import { RestoredFileItem, RestoredItemsStats, RestoreFileItem, RestoreSettings 
 import { useGetSnapshotFiles } from '../../../services/backups';
 import RestoreFileSelectorStep from './RestoreFileSelectorStep';
 import { Backup, Plan } from '../../..';
+import { restoreSelectionSummary } from '../../../utils/restoreSelection';
 
 interface RestoreWizardProps {
    backupId: string;
@@ -39,9 +40,10 @@ const RestoreWizard = ({ backupId, planId, deviceId, mirrors, planStorage, stagi
    const files: RestoreFileItem[] = snapshotData?.result && Array.isArray(snapshotData.result) ? snapshotData.result : [];
 
    const snapShotsStats = useMemo(() => {
+      const counts = restoreSelectionSummary(files, { includes: new Set(), excludes: new Set() });
       return {
-         total_files: files.length,
-         total_bytes: files.reduce((acc, file) => acc + file.size, 0),
+         total_files: counts.totalFiles,
+         total_bytes: counts.totalBytes,
       };
    }, [files]);
 
@@ -133,6 +135,10 @@ const RestoreWizard = ({ backupId, planId, deviceId, mirrors, planStorage, stagi
                   planId={planId}
                   settings={restoreSettings}
                   stats={restorePreview.stats}
+                  selectionCounts={restoreSelectionSummary(files, {
+                     includes: new Set(restoreSettings.includes),
+                     excludes: new Set(restoreSettings.excludes),
+                  })}
                   snapshotsStats={snapShotsStats}
                   method="backup"
                   goBack={() => step > 0 && setStep(step - 1)}

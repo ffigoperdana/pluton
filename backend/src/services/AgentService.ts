@@ -1,6 +1,8 @@
 import crypto from 'crypto';
 import Cryptr from 'cryptr';
 import { z } from 'zod';
+import { remoteBackupFailure } from '../utils/remoteBackupDiagnostics';
+import { remoteBackupStages } from '../utils/remoteBackupProgress';
 import { type AgentCommand, type AgentIdentity } from '../db/schema/agents';
 import { AgentStore } from '../stores/AgentStore';
 import {
@@ -85,6 +87,13 @@ const backupFailureStageSchema = z.enum([
 const backupFailureCodeSchema = z.enum([
 	'invalid-payload',
 	'source-validation-failed',
+	'source-parent-not-traversable',
+	'source-root-not-readable',
+	'source-entry-inaccessible',
+	'source-missing',
+	'source-symlink-escape',
+	'source-unsupported-type',
+	'source-policy-violation',
 	'state-overlap',
 	'state-validation-failed',
 	'tool-unavailable',
@@ -110,7 +119,9 @@ const backupFailureCodeSchema = z.enum([
 	'database-tls-verification-failed',
 	'database-output-empty',
 	'database-auth-failed',
+	'database-insufficient-privileges',
 	'database-unavailable',
+	'database-invalid-configuration',
 	'database-dump-failed',
 	'database-dump-timeout',
 	'database-dump-output-limit',
@@ -460,6 +471,7 @@ export class AgentService {
 				event: z
 					.object({
 						phase: z.enum(['accepted', 'running']).optional(),
+						backupStage: z.enum(remoteBackupStages).optional(),
 						lifecycleStage: lifecycleStageSchema.optional(),
 						databaseId: databaseIdSchema.optional(),
 						engine: z.enum(['mysql', 'mariadb', 'postgresql']).optional(),
@@ -510,8 +522,16 @@ export class AgentService {
 			AGENT_COMMAND_LEASE_MS
 		);
 		if (!command) throw new NotFoundError('Command not found.');
-		if (parsed.data.event)
-			await this.remoteBackupService?.recordCommandEvent(command, parsed.data.event);
+		if (
+			parsed.data.event &&
+			command.state === 'running' &&
+			command.lastEventSequence === parsed.data.sequence
+		)
+			await this.remoteBackupService?.recordCommandEvent(
+				command,
+				parsed.data.event,
+				parsed.data.sequence
+			);
 	}
 
 	async complete(agentId: string, commandId: string, input: unknown): Promise<void> {
@@ -532,6 +552,23 @@ export class AgentService {
 							.string()
 							.trim()
 							.regex(/^[A-Fa-f0-9]{8,128}$/),
+						sourcePaths: z
+							.array(
+								z
+									.string()
+									.max(4096)
+									.refine(
+										value =>
+											value.startsWith('/') &&
+											![...value].some(
+												character =>
+													character.charCodeAt(0) <= 0x1f || character.charCodeAt(0) === 0x7f
+											) &&
+											!value.split(/[\\/]+/).includes('..')
+									)
+							)
+							.length(1)
+							.optional(),
 						summary: z
 							.object({
 								message_type: z.literal('summary'),
@@ -565,20 +602,7 @@ export class AgentService {
 			throw new AppError(400, 'Command completion is invalid.');
 		}
 		// Phase 5 diagnostics use closed codes, not agent-supplied provider text.
-		const lifecycleFailure =
-			parsed.data.failureStage &&
-			[
-				'lifecycle-validation',
-				'workspace-creation',
-				'pre-backup',
-				'database-dump',
-				'database-dump-validation',
-				'snapshot-confirmation',
-				'post-backup',
-			].includes(parsed.data.failureStage);
-		const safeError = lifecycleFailure
-			? `Remote backup lifecycle failed (${parsed.data.failureStage}/${parsed.data.failureCode || 'unexpected'}${parsed.data.databaseId ? `; databaseId=${parsed.data.databaseId}; engine=${parsed.data.engine || 'unknown'}` : ''}).`
-			: parsed.data.error;
+		const safeError = parsed.data.success ? undefined : remoteBackupFailure(parsed.data);
 		const command = await this.agentStore.completeCommand(
 			agentId,
 			commandId,
@@ -589,6 +613,7 @@ export class AgentService {
 			this.now()
 		);
 		if (!command) throw new NotFoundError('Command not found.');
+		if (command.state === 'completed' && !parsed.data.success) return;
 		if (!parsed.data.success && command.type === 'BACKUP_FILESYSTEM' && serverLogger) {
 			const payload = command.payload as Record<string, unknown>;
 			serverLogger.warn(
