@@ -1,5 +1,5 @@
 import type { RecoveryTest } from '../../../@types/recoveryTests';
-import { recoveryActive, recoveryStatusLabel } from '../../../utils/recoveryTests';
+import { recoveryActive, recoveryStatusLabel, recoveryStatusExplanation, databaseImportLabel } from '../../../utils/recoveryTests';
 import { formatBytes } from '../../../utils/helpers';
 import Modal from '../../common/Modal/Modal';
 import classes from './RecoveryTesting.module.scss';
@@ -40,6 +40,7 @@ export default function RecoveryResult({
                   </div>
                )}
             </div>
+            {recoveryStatusExplanation[test.status] && <p>{recoveryStatusExplanation[test.status]}</p>}
             <h4>Filesystem</h4>
             {test.result?.filesystem ? (
                <p>
@@ -58,13 +59,14 @@ export default function RecoveryResult({
                      {database.database || database.path}
                   </div>
                   <div>
-                     Artifact: {database.artifactValidation} · {formatBytes(database.bytes)}
+                     Artifact integrity: {database.artifactValidation === 'passed' ? 'PASSED' : database.artifactValidation} ·{' '}
+                     {formatBytes(database.bytes)}
                   </div>
                   <code>SHA-256: {database.sha256}</code>
                   <div>
-                     Import: {database.importValidation.replace(/_/g, ' ')} {database.failureCode && `· ${database.failureCode}`}
+                     {databaseImportLabel(database.importValidation)} {database.failureCode && `· ${database.failureCode}`}
                   </div>
-                  {database.tables !== undefined && (
+                  {database.importValidation === 'passed' && database.tables !== undefined && (
                      <div>
                         Catalog verified: {database.tables} tables · {database.views || 0} views
                      </div>

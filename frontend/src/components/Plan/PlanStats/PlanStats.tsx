@@ -48,7 +48,7 @@ const PlanStats = ({ plan, isSync, lastBackupItem, storageAction }: PlanStatsPro
       <div className={classes.planStats}>
          <div className={classes.sources}>
             <div className={classes.widgetTitle}>
-               <Icon type={getBackupIconName(plan.method, plan.sourceType)} size={12} /> {isSync ? 'Syncing' : 'Backing Up'}
+               <Icon type={getBackupIconName(plan.method, plan.sourceType)} size={12} /> {isSync ? 'Sync source' : 'Backup source'}
             </div>
             <div className={classes.sourceContent}>
                <div data-tooltip-id="htmlToolTip" data-tooltip-place="top" data-tooltip-html={sourceTooltipHTML(sourceConfig)}>
@@ -58,7 +58,9 @@ const PlanStats = ({ plan, isSync, lastBackupItem, storageAction }: PlanStatsPro
                <div
                   data-tooltip-id="htmlToolTip"
                   data-tooltip-place="top"
-                  data-tooltip-html={isActive ? `${isSync ? 'Syncing' : 'Copying'} changes ${formatIntervalDisplay(interval)}` : 'Plan is Not Active'}
+                  data-tooltip-html={
+                     isActive ? `Scheduled to ${isSync ? 'sync' : 'back up'} ${formatIntervalDisplay(interval)}` : 'Plan is Not Active'
+                  }
                >
                   <Icon type={isActive ? (isSync ? 'reload' : 'copy') : 'pause'} size={16} />
                   <div className={classes.sourceArrow}>→</div>

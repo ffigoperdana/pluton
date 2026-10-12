@@ -28,11 +28,9 @@ const EditPlan = ({ close, plan }: EditPlanProps) => {
          { id: plan.id, data: updatedPlan },
          {
             onError: (error: any) => {
-               console.log('error :', error);
                toast.error(error.message || `Error Updating Backup Plan.`);
             },
-            onSuccess: (data: any) => {
-               console.log('Success :', data);
+            onSuccess: () => {
                toast.success(`Backup Plan Updated!`, { autoClose: 5000 });
             },
          },

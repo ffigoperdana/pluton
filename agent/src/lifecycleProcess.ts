@@ -10,6 +10,8 @@ export type ProcessFailureCode =
   | "timeout"
   | "output-limit"
   | "auth-failed"
+  | "insufficient-privileges"
+  | "invalid-configuration"
   | "unavailable"
   | "tls-verification-failed"
   | "client-incompatible"
@@ -170,19 +172,27 @@ export async function runLifecycleProcess(input: {
             stderr,
           )
             ? "client-incompatible"
-            : /(?:certificate verify failed|certificate verification failed|server certificate.*(?:does not match|doesn't match)|root certificate file.*(?:does not exist|could not)|server does not support SSL)/i.test(
+            : /(?:\b2026\b|SSL connection error|TLS handshake|certificate verify failed|certificate verification failed|SSL error.*(?:certificate|handshake|verify)|server certificate.*(?:does not match|doesn't match)|root certificate file.*(?:does not exist|could not)|server does not support SSL)/i.test(
                   stderr,
                 )
               ? "tls-verification-failed"
-              : /(?:\b1045\b|Access denied|password authentication failed|no password supplied|no pg_hba.conf entry)/i.test(
+              : /(?:\b(?:1044|1142|1227)\b|command denied to user|insufficient privilege|permission denied for (?:database|schema|table|relation|sequence)|must be (?:owner|superuser)|need \(at least one of\)|access denied.*to database)/i.test(
                     stderr,
                   )
-                ? "auth-failed"
-                : /(?:\b200[2356]\b|Can't connect|Unknown MySQL server host|connection refused|could not translate host name|connection timed out|network is unreachable)/i.test(
+                ? "insufficient-privileges"
+                : /(?:\b1045\b|Access denied for user.*using password|password authentication failed|no password supplied|no pg_hba.conf entry)/i.test(
                       stderr,
                     )
-                  ? "unavailable"
-                  : "failed";
+                  ? "auth-failed"
+                  : /(?:\b200[2356]\b|Can't connect|Unknown MySQL server host|connection refused|could not translate host name|connection timed out|network is unreachable)/i.test(
+                        stderr,
+                      )
+                    ? "unavailable"
+                    : /(?:\b1049\b|unknown database|database .* does not exist|invalid (?:connection option|port|argument)|unrecognized option|unknown variable)/i.test(
+                          stderr,
+                        )
+                      ? "invalid-configuration"
+                      : "failed";
         throw new LifecycleProcessError(category);
       }
     } finally {

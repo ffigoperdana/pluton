@@ -453,7 +453,7 @@ export class RemoteRepositoryRecoveryService {
 			storageId: repository.storageId,
 			repositoryId: repository.id,
 			snapshotId: snapshotId!,
-			sourcePaths: backup.sourceConfig?.includes || [],
+			sourcePaths: backup.completionStats?.sourcePaths || backup.sourceConfig?.includes || [],
 			access: { options, password, repositoryPath: repository.storagePath },
 		};
 	}
@@ -538,27 +538,50 @@ export class RemoteRepositoryRecoveryService {
 				(!includes.length || includes.some(include => contains(include, file.path))) &&
 				!excludes.some(exclude => contains(exclude, file.path))
 		);
+		// Restore materializes ancestors of a selected leaf; count them as directories,
+		// never as regular files and never include a partial parent as a recursive filter.
+		for (const directory of files.filter(file => file.type === 'dir')) {
+			if (
+				!selected.includes(directory) &&
+				selected.some(file => contains(directory.path, file.path))
+			)
+				selected.push(directory);
+		}
 		// Do not create device nodes or symlink-mediated writes in server staging.
 		if (selected.some(file => !['file', 'dir'].includes(file.type) || file.path.includes(':'))) {
 			throw new AppError(400, 'Staged recovery supports regular files and directories only.');
 		}
 		const full = !includes.length && !excludes.length;
 		const regularFiles = selected.filter(file => file.type === 'file');
-		if (!selected.length || (!full && !regularFiles.length))
-			throw new AppError(400, 'No regular files were selected for staged recovery.');
-		if (
-			!full &&
-			(regularFiles.length > 1024 || regularFiles.some(file => /[*?[\]]/.test(file.path)))
-		) {
+		if (!selected.length) throw new AppError(400, 'No entries were selected for staged recovery.');
+		if (!full && (regularFiles.length > 1024 || selected.some(file => /[*?[\]]/.test(file.path)))) {
 			throw new AppError(
 				400,
 				'The granular selection is too large or contains wildcard filenames.'
 			);
 		}
 		const bytes = regularFiles.reduce((sum, file) => sum + file.size, 0);
+		const completeSubtrees = selected.filter(
+			file =>
+				file.type === 'dir' &&
+				files.every(child => !contains(file.path, child.path) || selected.includes(child))
+		);
+		const selectedIncludes = [...completeSubtrees, ...regularFiles]
+			.filter(
+				file =>
+					!completeSubtrees.some(parent => parent !== file && contains(parent.path, file.path))
+			)
+			.map(file => file.path);
+		if (!full && !selectedIncludes.length)
+			throw new AppError(
+				400,
+				'No safely restorable entries were selected. A non-empty directory cannot be restored as metadata only.'
+			);
+		if (!full && selectedIncludes.length > 1024)
+			throw new AppError(400, 'The granular selection is too large.');
 		return {
 			files: selected,
-			includes: full ? [] : regularFiles.map(file => file.path),
+			includes: full ? [] : selectedIncludes,
 			full,
 			stats: {
 				total_files: regularFiles.length,

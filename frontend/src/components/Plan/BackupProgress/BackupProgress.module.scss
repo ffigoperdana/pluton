@@ -243,3 +243,23 @@
       opacity: 0.6;
    }
 }
+.backup .backupRight .progressBar .progressBarFill.progressIndeterminate {
+   width: 100%;
+   background: repeating-linear-gradient(110deg, var(--primary-color) 0 12px, var(--field-bg) 12px 24px);
+   animation: remote-progress 2s linear infinite;
+   span {
+      color: var(--content-text-color);
+      background: var(--field-bg);
+      padding: 0 0.5em;
+   }
+}
+@keyframes remote-progress {
+   to {
+      background-position: 52px 0;
+   }
+}
+@media (prefers-reduced-motion: reduce) {
+   .backup .backupRight .progressBar .progressBarFill.progressIndeterminate {
+      animation: none;
+   }
+}

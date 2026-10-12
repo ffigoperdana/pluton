@@ -13,6 +13,7 @@ interface RestoreConfirmStepProps {
    method: string;
    stagingOnly?: boolean;
    snapshotsStats: { total_files: number; total_bytes: number };
+   selectionCounts?: { files: number; directories: number; entries: number; totalEntries: number; otherEntries?: number };
    goBack: () => void;
    close: () => void;
 }
@@ -23,6 +24,7 @@ const RestoreConfirmStep = ({
    settings,
    stats,
    snapshotsStats,
+   selectionCounts,
    method,
    stagingOnly = false,
    goBack,
@@ -69,7 +71,16 @@ const RestoreConfirmStep = ({
             {!restoreMutation.isSuccess && (
                <div className={classes.restoreConfirm}>
                   <p>
-                     {restoreStats ? (
+                     {selectionCounts ? (
+                        <strong>
+                           {selectionCounts.files.toLocaleString('en-US')} files + {selectionCounts.directories.toLocaleString('en-US')} directories
+                           selected ({selectionCounts.entries.toLocaleString('en-US')} entries; snapshot total:{' '}
+                           {selectionCounts.totalEntries.toLocaleString('en-US')} entries)
+                           {selectionCounts.otherEntries
+                              ? ` · ${selectionCounts.otherEntries} other entries (unsupported by remote staged restore)`
+                              : ''}
+                        </strong>
+                     ) : restoreStats ? (
                         <strong>
                            {restoreStats?.files_restored}
                            {!isSync ? `/${snapshotsStats.total_files} files` : ''}

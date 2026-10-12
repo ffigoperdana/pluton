@@ -49,9 +49,15 @@ export function createAgentConfig(input: {
       "HTTP is disabled. Set ALLOW_INSECURE_HTTP=true only for a trusted LAN.",
     );
   }
-  if (serverUrl.username || serverUrl.password || serverUrl.hash) {
+  if (
+    serverUrl.username ||
+    serverUrl.password ||
+    serverUrl.hash ||
+    serverUrl.search ||
+    serverUrl.pathname !== "/"
+  ) {
     throw new Error(
-      "PLUTON_SERVER_URL must not include credentials or a fragment.",
+      "PLUTON_SERVER_URL must be an origin without credentials, a path, query, or fragment.",
     );
   }
 

@@ -227,6 +227,7 @@ for (const engine of ["mysql", "mariadb"] as const)
 
 for (const [name, code] of [
   ["auth_failure", "database-auth-failed"],
+  ["events_denied", "database-insufficient-privileges"],
   ["unavailable", "database-unavailable"],
   ["slow_dump", "database-dump-timeout"],
   ["empty_dump", "database-dump-failed"],
@@ -239,6 +240,7 @@ for (const [name, code] of [
         database: {
           ...database,
           database: name,
+          includeEvents: name === "events_denied",
           timeoutSeconds: 1,
           maxDumpBytes: 1024,
         },
@@ -256,6 +258,11 @@ for (const [name, code] of [
           ),
           false,
         );
+        if (name === "events_denied") {
+          const dump = (await calls(path.join(f.dataDir, "dump-calls")))[0];
+          assert.ok(dump.args.includes("--events")); // Never silently remove user options.
+          assert.equal(dump.mode, 0o600);
+        }
         assert.equal(
           (await calls(path.join(f.dataDir, "hook-calls"))).at(-1).name,
           "cleanup",

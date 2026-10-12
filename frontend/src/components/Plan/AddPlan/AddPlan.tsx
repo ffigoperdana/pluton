@@ -20,16 +20,13 @@ const AddPlan = ({ close }: AddPlanProps) => {
    const navigate = useNavigate();
 
    const createBackup = () => {
-
       createPlanMutation.mutate(
          { newPlan, runSettings },
          {
             onError: (error: any) => {
-               console.log('error :', error);
                toast.error(error.message || `Error Creating New Backup Plan.`);
             },
             onSuccess: (data: any) => {
-               console.log('Success :', data);
                toast.success(`New Backup Plan Created!`, { autoClose: 5000 });
                close();
                if (data?.result) {

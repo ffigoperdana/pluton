@@ -130,7 +130,12 @@ describe('Phase 4 remote managed repository recovery', () => {
 			files: jest.fn(async () => nodes as any),
 			restore: jest.fn(async (_, includes, target) => {
 				const files = nodes.filter(
-					file => file.type === 'file' && (!includes.length || includes.includes(file.path))
+					file =>
+						file.type === 'file' &&
+						(!includes.length ||
+							includes.some(
+								include => file.path === include || file.path.startsWith(`${include}/`)
+							))
 				);
 				for (const file of files) {
 					const restored = path.join(target, file.path.slice(1));
@@ -175,6 +180,34 @@ describe('Phase 4 remote managed repository recovery', () => {
 		}
 		await fs.rm(scratch, { recursive: true, force: true });
 	});
+	it('counts regular files separately and preserves empty directories without including a partial parent subtree', () => {
+		const entries = [...nodes, { path: '/srv/example-app/empty', type: 'dir', size: 0 }];
+		const all = (service as any).select(entries, config);
+		expect(all.files).toHaveLength(6);
+		expect(all.stats.files_restored).toBe(2);
+		const selected = (service as any).select(entries, {
+			...config,
+			includes: ['/srv/example-app/empty', '/srv/example-app/nested/data.txt'],
+		});
+		expect(selected.stats.files_restored).toBe(1);
+		expect(selected.includes).toEqual(
+			expect.arrayContaining(['/srv/example-app/empty', '/srv/example-app/nested'])
+		);
+		expect(selected.includes).not.toContain('/srv/example-app');
+		const empty = (service as any).select(entries, {
+			...config,
+			includes: ['/srv/example-app/empty'],
+		});
+		expect(empty.stats.files_restored).toBe(0);
+		expect(empty.includes).toEqual(['/srv/example-app/empty']);
+		expect(() =>
+			(service as any).select(nodes, {
+				...config,
+				includes: ['/srv/example-app'],
+				excludes: ['/srv/example-app/index.txt', '/srv/example-app/nested'],
+			})
+		).toThrow('No safely restorable entries');
+	});
 
 	describe('Phase 6 reuse of exact staged restore', () => {
 		const binding = () => ({
@@ -211,6 +244,28 @@ describe('Phase 4 remote managed repository recovery', () => {
 					temporaryRoot: path.dirname(target),
 				})
 			);
+		});
+		it('canonical completion metadata binds a source alias to the exact archived tree; no historical alias guessing', async () => {
+			backup.sourceConfig = { includes: ['/var/www/example-link'] };
+			await expect(
+				service.testRestore(
+					binding(),
+					await workspace(),
+					new AbortController().signal,
+					jest.fn(),
+					jest.fn()
+				)
+			).rejects.toMatchObject({ code: 'source-tree-missing' });
+			backup.completionStats.sourcePaths = ['/srv/example-app'];
+			await expect(
+				service.testRestore(
+					binding(),
+					await workspace(),
+					new AbortController().signal,
+					jest.fn(),
+					jest.fn()
+				)
+			).resolves.toMatchObject({ sourceTrees: 1, files: 2 });
 		});
 		it('historical snapshot paths containing private absolute SQL locations are not mistaken for application directories', async () => {
 			session.snapshot.mockResolvedValue({
@@ -636,7 +691,7 @@ describe('Phase 4 remote managed repository recovery', () => {
 		await finish(id);
 		expect(session.restore).toHaveBeenCalledWith(
 			snapshotId,
-			['/srv/example-app/nested/data.txt'],
+			['/srv/example-app/nested'],
 			path.join(staging, `restore-${id}`, 'files', 'recovery', 'check')
 		);
 		expect(rows.get(id).taskStats).toMatchObject({ files_restored: 1, bytes_restored: 5 });

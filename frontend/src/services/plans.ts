@@ -162,9 +162,8 @@ export function useCreatePlan() {
    const queryClient = useQueryClient();
    return useMutation({
       mutationFn: createPlan,
-      onSuccess: (res) => {
+      onSuccess: () => {
          // TODO: Should Display a Notification Bubble.
-         console.log('# Plan Created! :', res);
          queryClient.invalidateQueries({ queryKey: ['plans'] });
       },
    });
@@ -180,7 +179,6 @@ export async function updatePlan(updatePayload: { id: string; data: Partial<Plan
       body: JSON.stringify({ plan: updatePayload.data }),
    });
    const data = await res.json();
-   console.log('data :', data);
    if (!data.success) {
       throw new Error(data.error);
    }
@@ -193,7 +191,6 @@ export function useUpdatePlan() {
       mutationFn: updatePlan,
       onSuccess: (res) => {
          // TODO: Should Display a Notification Bubble.
-         console.log('# Plan Updated! :', res);
          const planID = res?.result?.id;
          if (planID) {
             queryClient.invalidateQueries({ queryKey: ['plan', planID] });
@@ -519,7 +516,6 @@ export async function sendTestNotificationRequest(payload: {
    notificationChannel: 'webhook' | 'slack' | 'discord';
    channelSettings: PlanNotification['webhook'] | PlanNotification['slack'] | PlanNotification['discord'];
 }) {
-   console.log('payload :', payload);
    const headers = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
    const res = await fetch(`${API_URL}/plans/${payload.planId}/action/test-notification`, {
       method: 'POST',

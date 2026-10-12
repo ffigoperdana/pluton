@@ -125,8 +125,8 @@ test('result renders every DB, exact snapshot, explicit partial validation, safe
       snapshot,
       'Passed with warning',
       'db_app',
-      'Artifact: passed',
-      'Import: disabled',
+      'Artifact integrity: PASSED',
+      'SQL import NOT TESTED (Disabled)',
       'Workspace: Complete',
       'not application semantic checks',
    ])
