@@ -205,6 +205,50 @@ status fields, progress outages/retry/terminal guards, transaction persistence,
 immutable selection/empty directories/last-leaf safety, exact snapshot alias binding,
 recovery artifact/import/cleanup semantics, verified reuse and rollback.
 
+### Follow-up: Linux CI middleware test isolation
+
+The reported `TypeError: isBinaryMode is not a function` was reproduced with the
+unchanged `versionMiddleware.test.ts` on Linux. Its `installHelpers` mock exports
+only `getInstallType`, while importing the real `ConfigService` initializes
+credential validation and calls `envFileHelpers.isLinuxInstalledRuntime`. On Linux
+that calls the missing mock export; on Windows the platform condition short-circuits.
+The real helper exports are present. This is a unit-test isolation regression, not
+a missing production export or a workflow configuration error.
+
+The middleware test now mocks the configuration service's `isSetupPending` method
+instead of initializing persisted credentials with a middleware-only helper mock.
+Both setup-header states are covered, with the mock reset between cases; the
+existing version, platform, install-type and `next()` checks remain unchanged.
+Config/credential tests separately exercise real fail-closed key validation.
+Only this test and this report changed in the follow-up: no runtime, workflow,
+schema, protocol, dependency, credential or repository behavior changed.
+
+The original full-backend result above was on Windows; the earlier Linux recovery
+subset and agent tests did not cover this middleware. Full Linux backend validation
+is therefore required for this correction, not just the focused suites.
+
+Correction verification:
+
+- Focused middleware, ConfigService, CredentialManager, installHelpers and
+  envFileHelpers suites: 5 suites / 119 tests passed on both Linux and Windows.
+- Full Linux `jest --config jest.config.ts --runInBand --silent --verbose=false`:
+  143 suites passed; 2,851 passed, 6 skipped, 0 failed.
+- Full Linux `jest --config jest.config.ts --maxWorkers=2 --silent --verbose=false`:
+  the same 143 suites passed; 2,851 passed, 6 skipped, 0 failed. Both CI execution
+  modes are covered. The disposable native-fixture flag is enabled in these runs;
+  the existing skipped tests were not changed.
+- Backend `pnpm --filter @plutonhq/core-backend exec tsc --noEmit -p tsconfig.json`,
+  `pnpm --filter @plutonhq/core-backend lint` and
+  `pnpm --filter @plutonhq/core-backend build`: passed. Prettier checks for the
+  two changed files and `git diff --check` also passed.
+
+Linux validation used Node.js 24.16.0 in the existing local fixture image, non-root
+with no network, a read-only filesystem/code bind and disposable private tmpfs state.
+An initial full-suite fixture attempt could not import agent source in two suites
+because that read-only mount was missing. Completing the mount fixed the fixture;
+both full reruns above include those integration tests and pass. No test assertion
+or production check was weakened. The existing listener-limit warning remains.
+
 ## Operator pilot validation and rollback checklist
 
 After a separately authorized deployment, keep the older job active and use the
