@@ -142,7 +142,8 @@
    "module": "./dist-lib/index.js",
    "types": "./dist-lib/index.d.ts",
    "scripts": {
-      "build": "tsc -b && vite build",
+      "build": "pnpm run test:docs && tsc -b && vite build",
+      "test:docs": "node --experimental-strip-types --test __tests__/docs.test.ts __tests__/productIdentity.test.ts",
       "build:lib": "vite build --config vite.config.lib.ts && tsc -p tsconfig.lib.json",
       "build:lib:fast": "tsc -p tsconfig.lib.json",
       "build:lib:watch": "tsc -p tsconfig.lib.json --watch --preserveWatchOutput",

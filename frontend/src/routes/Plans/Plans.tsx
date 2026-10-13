@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { planReportedSize } from '../../utils/backupStatistics';
 import classes from './Plans.module.scss';
 import PageHeader from '../../components/common/PageHeader/PageHeader';
 import PlanItem from '../../components/Plan/PlanItems/PlanItem';
@@ -64,10 +65,10 @@ const Plans = () => {
             setPlans([...thePlans].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)));
             break;
          case 'size_asc':
-            setPlans([...thePlans].sort((a, b) => a.stats.size - b.stats.size));
+            setPlans([...thePlans].sort((a, b) => (planReportedSize(a) ?? 0) - (planReportedSize(b) ?? 0)));
             break;
          case 'size_desc':
-            setPlans([...thePlans].sort((a, b) => b.stats.size - a.stats.size));
+            setPlans([...thePlans].sort((a, b) => (planReportedSize(b) ?? 0) - (planReportedSize(a) ?? 0)));
             break;
          case 'run_frequency_asc':
             setPlans([...thePlans].sort((a, b) => getIntervalMinutes(a.settings.interval) - getIntervalMinutes(b.settings.interval)));
@@ -98,9 +99,7 @@ const Plans = () => {
             filteredPlans = filteredPlans.filter((plan) => !!plan.device && filter.devices.includes(plan.device.id));
          }
          if (filter.methods.length > 0) {
-            filteredPlans = filteredPlans.filter((plan) =>
-               filter.methods.includes(plan.sourceType === 'storage' ? 'storage-sync' : plan.method)
-            );
+            filteredPlans = filteredPlans.filter((plan) => filter.methods.includes(plan.sourceType === 'storage' ? 'storage-sync' : plan.method));
          }
          if (filter.storages.length > 0) {
             filteredPlans = filteredPlans.filter((plan) => filter.storages.includes(plan.storage.id));

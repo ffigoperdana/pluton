@@ -184,6 +184,24 @@ Additional isolated checks are `scripts/validate-phase7.ps1` and
 
 ## Build validation
 
+`frontend/src/docs` supplies 77 original Bahasa Indonesia Markdown articles in
+15 manifest-ordered categories. `/docs/*` is a public static SPA route with no
+authenticated configuration/inventory reads. Existing SPA fallback handles direct
+nested refresh; registered authenticated API handlers remain ahead of it. Marked
+is reused only as a lexer; React elements escape HTML, reject unsafe URLs/remote
+images and supply heading/search indices without hosted services.
+
+`pnpm test:docs` checks articles/routes/anchors/evidence/security/rendering. The
+frontend production build runs it automatically before bundling the articles.
+Run `node --experimental-strip-types --test frontend/__tests__/*.test.ts` for the
+complete frontend utility/component suite.
+
+Remote parent optimization uses successful local receipts and verified metadata,
+preserving source and SQL tree paths. No schema/wire protocol change is introduced.
+Footer uses local APP_VERSION/VCS_REF, without upstream commercial update checks or
+downloaded-script updaters. See
+[SELFHOSTED_PRODUCT_HARDENING_REPORT.md](SELFHOSTED_PRODUCT_HARDENING_REPORT.md).
+
 Backend CI runs installation, backend lint, tests, and backend build; the pre-push
 hook for `main` also builds the frontend. The root build orders the frontend build
 (`tsc -b` and Vite) before the backend build (TypeScript, template copying/minification,

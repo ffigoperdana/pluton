@@ -27,6 +27,7 @@ import { useRecoveryAction, useRecoveryTests } from '../../../services/recoveryT
 import { canTestRecovery, recoveryActive, recoveryForBackup, recoveryStatusLabel } from '../../../utils/recoveryTests';
 import RecoveryResult from '../RecoveryTesting/RecoveryResult';
 import recoveryClasses from '../RecoveryTesting/RecoveryTesting.module.scss';
+import { backupStatistics, statisticHelp } from '../../../utils/backupStatistics';
 
 const DownloadLabel = ({ download, downloadBackup }: { download: Backup['download']; downloadBackup: () => void }) => {
    if (download?.status === 'started') {
@@ -216,7 +217,7 @@ const Backups = ({
             <div>Status</div>
             <div>Duration</div>
             <div>Changes</div>
-            <div>Size</div>
+            <div title={statisticHelp.snapshotSize}>{isSync ? 'Size' : 'Snapshot Size'}</div>
             <div>Date</div>
             <div></div>
          </div>
@@ -229,6 +230,11 @@ const Backups = ({
                   const isDownloading = !isRemoteManaged && download && download.status === 'started';
                   const actions = backupRowActions(snapshot, isSync, isRemoteManaged);
                   const lifecycleWarning = status === 'completed' && !!snapshot.completionStats?.lifecycle?.warnings.length;
+                  const counters = backupStatistics(snapshot.completionStats as unknown as Record<string, unknown>);
+                  const newFiles = isRemoteManaged ? counters.newFiles : changes.new;
+                  const modifiedFiles = isRemoteManaged ? counters.modifiedFiles : changes.modified;
+                  const measuredFiles = isRemoteManaged ? counters.totalFiles : totalFiles;
+                  const measuredSize = isRemoteManaged ? counters.logicalBytes : totalSize;
                   const recovery = recoveryForBackup(recoveryTests.data || [], id, snapshot.completionStats?.snapshot_id);
 
                   return (
@@ -288,23 +294,30 @@ const Backups = ({
                            className={classes.changes}
                            data-tooltip-id="htmlToolTip"
                            data-tooltip-html={`
-                                          <div><b>New Files</b>: ${changes.new}</div>
-                                          <div><b>Modified Files</b>: ${changes.modified}</div>
-                                          <div><b>Deleted Files</b>: ${changes.removed || 0}</div>
+                                          <div><b>New Files</b>: ${newFiles ?? 'Not measured'}</div>
+                                          <div><b>Modified Files</b>: ${modifiedFiles ?? 'Not measured'}</div>
+                                          <div><b>Unmodified Files</b>: ${counters.unmodifiedFiles ?? 'Not measured'}</div>
+                                          <div><b>Deleted Files</b>: ${isSync ? changes.removed || 0 : 'Not measured'}</div>
                                        `}
                         >
                            <span className={classes.changesNew}>
-                              <Icon type="file-new" size={12} /> {changes.new}
+                              <Icon type="file-new" size={12} /> {newFiles ?? '—'}
                            </span>{' '}
                            <span className={classes.changesModified}>
-                              <Icon type="file-modified" size={12} /> {changes.modified}
+                              <Icon type="file-modified" size={12} /> {modifiedFiles ?? '—'}
                            </span>{' '}
-                           <span className={classes.changesRemoved}>
-                              <Icon type="file-removed" size={12} /> {changes.removed || 0}
-                           </span>
+                           {isSync && (
+                              <span className={classes.changesRemoved}>
+                                 <Icon type="file-removed" size={12} /> {changes.removed || 0}
+                              </span>
+                           )}
                         </div>
-                        <div data-tooltip-id="htmlToolTip" data-tooltip-html={`${formatNumberToK(totalFiles)} Files `}>
-                           {formatBytes(totalSize)}
+                        <div
+                           title={statisticHelp.snapshotSize}
+                           data-tooltip-id="htmlToolTip"
+                           data-tooltip-html={`${measuredFiles === undefined ? 'Not measured' : formatNumberToK(measuredFiles) + ' Files'} · ${isSync ? 'Sync size' : 'Logical snapshot data'}`}
+                        >
+                           {measuredSize === undefined ? 'Not measured' : formatBytes(measuredSize)}
                         </div>
                         <div
                            data-tooltip-id="htmlToolTip"
@@ -459,6 +472,7 @@ const Backups = ({
          {showBackupEvents && (
             <BackupEvents
                id={showBackupEvents}
+               completionStats={backups.find((backup) => backup.id === showBackupEvents)?.completionStats}
                planId={planId}
                sourceId={sourceId}
                sourceType={sourceType}

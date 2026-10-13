@@ -262,3 +262,25 @@
    max-height: 400px;
    overflow: auto;
 }
+.statistics {
+   color: var(--content-text-color);
+   background: var(--field-bg);
+   padding: 16px;
+   margin-bottom: 20px;
+   border-radius: 8px;
+   h3 {
+      margin: 0 0 12px;
+   }
+   dl {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+   }
+   dd {
+      margin: 4px 0 0;
+      font-weight: 600;
+   }
+   p {
+      line-height: 1.6;
+   }
+}

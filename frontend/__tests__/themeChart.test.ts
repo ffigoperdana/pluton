@@ -29,6 +29,69 @@ const compiled = await build({
       },
    ],
 });
+test('remote snapshot chart excludes failed/unknown attempts and uses actual completion counts instead of stale task estimates', () => {
+   const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+   const previousComputed = Object.getOwnPropertyDescriptor(globalThis, 'getComputedStyle');
+   Object.defineProperty(globalThis, 'document', { configurable: true, value: { documentElement: {} } });
+   Object.defineProperty(globalThis, 'getComputedStyle', { configurable: true, value: () => ({ getPropertyValue: () => '#525252' }) });
+   let captured: any;
+   const chartModule = { exports: {} as any };
+   const mockRequire = (id: string) => {
+      if (id === 'chart.js') return { Chart: { register() {} } };
+      if (id === 'react-chartjs-2')
+         return {
+            Line: (props: any) => {
+               captured = props.data;
+               return null;
+            },
+         };
+      if (id.endsWith('/context/ThemeContext')) return { useTheme: () => ({ theme: 'light' }) };
+      if (id.endsWith('/utils/helpers')) return { formatBytes: String, formatNumberToK: String };
+      if (id.endsWith('/Icon/Icon')) return { default: () => null };
+      return frontendRequire(id);
+   };
+   try {
+      new Function('require', 'module', 'exports', compiled.outputFiles[0].text)(mockRequire, chartModule, chartModule.exports);
+      renderToStaticMarkup(
+         React.createElement(chartModule.exports.default, {
+            remoteManaged: true,
+            backups: [
+               {
+                  status: 'completed',
+                  started: Date.now() - 2000,
+                  totalSize: 999999,
+                  totalFiles: 500,
+                  completionStats: { total_bytes_processed: 2048, total_files_processed: 12 },
+               },
+               { status: 'failed', started: Date.now() - 1000, totalSize: 999999, totalFiles: 500 },
+               { status: 'started', started: Date.now(), totalSize: 999999, totalFiles: 500 },
+            ],
+         }),
+      );
+      assert.deepEqual(captured.datasets[0].data, [2048]);
+      assert.deepEqual(captured.datasets[1].data, [12]);
+      assert.equal(captured.datasets[0].label, 'Snapshot Size');
+      renderToStaticMarkup(
+         React.createElement(chartModule.exports.default, {
+            remoteManaged: true,
+            backups: [{ status: 'completed', started: Date.now(), completionStats: { total_bytes_processed: 2048, total_files_processed: 12 } }],
+         }),
+      );
+      assert.deepEqual(captured.datasets[0].data, [2048], 'one real snapshot must not create a fabricated second point');
+      renderToStaticMarkup(
+         React.createElement(chartModule.exports.default, {
+            isSync: true,
+            backups: [{ started: Date.now(), totalSize: 2048, totalFiles: 12 }],
+         }),
+      );
+      assert.equal(captured.datasets[0].label, 'Size', 'sync data is not a Restic snapshot');
+   } finally {
+      if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument);
+      else Reflect.deleteProperty(globalThis, 'document');
+      if (previousComputed) Object.defineProperty(globalThis, 'getComputedStyle', previousComputed);
+      else Reflect.deleteProperty(globalThis, 'getComputedStyle');
+   }
+});
 
 test('actual chart uses the applied app palette, not the OS preference, after Light/Dark changes', () => {
    let theme = 'light';

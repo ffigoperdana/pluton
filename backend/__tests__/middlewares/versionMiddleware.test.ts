@@ -53,4 +53,19 @@ describe('versionMiddleware', () => {
 		versionMiddleware(req, res, next);
 		expect(next).toHaveBeenCalled();
 	});
+	it('only exposes a valid local build revision, never arbitrary metadata', () => {
+		const previous = process.env.VCS_REF;
+		try {
+			process.env.VCS_REF = 'a'.repeat(40);
+			versionMiddleware(req, res, next);
+			expect(res.setHeader).toHaveBeenCalledWith('X-App-Revision', 'a'.repeat(40));
+			res.setHeader.mockClear();
+			process.env.VCS_REF = 'not-a-revision';
+			versionMiddleware(req, res, next);
+			expect(res.setHeader).not.toHaveBeenCalledWith('X-App-Revision', expect.anything());
+		} finally {
+			if (previous === undefined) delete process.env.VCS_REF;
+			else process.env.VCS_REF = previous;
+		}
+	});
 });

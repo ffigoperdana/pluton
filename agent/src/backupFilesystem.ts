@@ -10,6 +10,8 @@ import {
 } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
+import os from "node:os";
+import { compatibleResticParent, resticParentArgs } from "./resticParent.js";
 import {
   preflightSource,
   SourceAccessError,
@@ -268,6 +270,7 @@ type RepositoryTargetFailureCode =
   | "target-check-transport-failed";
 
 type ProcessOptions = {
+  maxOutputBytes?: number;
   cwd?: string;
   timeoutMs?: number;
   env: NodeJS.ProcessEnv;
@@ -421,9 +424,13 @@ async function assertSourceDoesNotOverlapState(
   }
 }
 
-function appendBounded(existing: string, chunk: string): string {
-  if (existing.length >= MAX_OUTPUT_BYTES) return existing;
-  return (existing + chunk).slice(0, MAX_OUTPUT_BYTES);
+function appendBounded(
+  existing: string,
+  chunk: string,
+  limit = MAX_OUTPUT_BYTES,
+): string {
+  if (existing.length >= limit) return existing;
+  return (existing + chunk).slice(0, limit);
 }
 
 /** Provider text is used only to categorize failures, never to permit init or log it. */
@@ -566,7 +573,7 @@ async function runProgram(
 
     child.stdout.on("data", (chunk) => {
       const text = String(chunk);
-      stdout = appendBounded(stdout, text);
+      stdout = appendBounded(stdout, text, options.maxOutputBytes);
       stdoutBuffer = appendBounded(stdoutBuffer, text);
       for (;;) {
         const newline = stdoutBuffer.indexOf("\n");
@@ -845,24 +852,52 @@ async function ensureManagedRepository(
   }
 }
 
-function summaryForExistingSnapshot(snapshotId: string): ResticSummary {
-  return {
+export function summaryForExistingSnapshot(
+  snapshotId: string,
+  value: unknown,
+): ResticSummary {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new BackupFilesystemError(
+      "repository-check",
+      "restic-summary-missing",
+    );
+  const stats = value as Record<string, unknown>;
+  for (const key of [
+    "files_new",
+    "files_changed",
+    "files_unmodified",
+    "dirs_new",
+    "dirs_changed",
+    "dirs_unmodified",
+    "data_blobs",
+    "tree_blobs",
+    "data_added",
+    "data_added_packed",
+    "total_files_processed",
+    "total_bytes_processed",
+  ]) {
+    if (
+      typeof stats[key] !== "number" ||
+      !Number.isFinite(stats[key]) ||
+      (stats[key] as number) < 0
+    )
+      throw new BackupFilesystemError(
+        "repository-check",
+        "restic-summary-missing",
+      );
+  }
+  const start = Date.parse(String(stats.backup_start));
+  const end = Date.parse(String(stats.backup_end));
+  const duration =
+    Number.isFinite(start) && Number.isFinite(end) && end >= start
+      ? (end - start) / 1000
+      : 0;
+  return summaryFromRestic({
+    ...stats,
     message_type: "summary",
-    files_new: 0,
-    files_changed: 0,
-    files_unmodified: 0,
-    dirs_new: 0,
-    dirs_changed: 0,
-    dirs_unmodified: 0,
-    data_blobs: 0,
-    tree_blobs: 0,
-    data_added: 0,
-    data_added_packed: 0,
-    total_files_processed: 0,
-    total_bytes_processed: 0,
-    total_duration: 0,
     snapshot_id: snapshotId,
-  };
+    total_duration: duration,
+  })!;
 }
 
 /**
@@ -909,8 +944,20 @@ async function findExistingBackupSnapshot(
     if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot))
       return null;
     const snapshotId = (snapshot as Record<string, unknown>).id as string;
-    return { snapshotId, summary: summaryForExistingSnapshot(snapshotId) };
-  } catch {
+    if (!(snapshot as Record<string, unknown>).summary)
+      throw new BackupFilesystemError(
+        "repository-check",
+        "restic-summary-missing",
+      );
+    return {
+      snapshotId,
+      summary: summaryForExistingSnapshot(
+        snapshotId,
+        (snapshot as Record<string, unknown>).summary,
+      ),
+    };
+  } catch (error) {
+    if (error instanceof BackupFilesystemError) throw error;
     // Treat malformed tool output as a non-match. Repository initialization
     // below remains fail-closed if the target is not a valid managed repo.
     return null;
@@ -1070,6 +1117,8 @@ export async function executeFilesystemBackup(input: {
   shouldCancel: () => Promise<boolean>;
   onEvent: (event: Record<string, unknown>) => Promise<void>;
   onStage?: (event: BackupFilesystemStageEvent) => void;
+  /** Internal local receipts; never accepted from the remote command payload. */
+  successfulSnapshotIds?: string[];
 }): Promise<BackupFilesystemResult> {
   let stage: BackupFilesystemStage = "payload-validation";
   let temporary: { directory: string; configPath: string } | undefined;
@@ -1232,6 +1281,48 @@ export async function executeFilesystemBackup(input: {
       (result) => setStage("repository-target-check", result),
     );
 
+    // Restic records absolute input paths even for relative DB artifacts. Keep the
+    // existing snapshot tree layout/private per-job workspace, but select only a
+    // verified successful parent rather than changing/weakening source paths.
+    let parent: string | undefined;
+    const successfulIds = (input.successfulSnapshotIds || [])
+      .filter((id) => /^[a-f0-9]{64}$/.test(id))
+      .slice(-16);
+    if (successfulIds.length) {
+      setStage("repository-check");
+      const metadata = await runProgram(
+        restic,
+        [
+          "-r",
+          repository,
+          "--no-lock",
+          "snapshots",
+          "--json",
+          ...successfulIds,
+        ],
+        {
+          env,
+          shouldCancel: input.shouldCancel,
+          timeoutMs: 60_000,
+          allowFailure: true,
+          maxOutputBytes: 1024 * 1024,
+        },
+      );
+      if (metadata.code === 0) {
+        try {
+          parent = compatibleResticParent(JSON.parse(metadata.stdout), {
+            successfulIds,
+            planId: payload.planId,
+            source,
+            hostname: os.hostname(),
+            jobsRoot: path.join(await realpath(input.config.dataDir), "jobs"),
+            artifacts,
+          });
+        } catch {
+          /* Bounded/malformed metadata cannot authorize a parent. */
+        }
+      }
+    }
     setStage("restic-backup");
     // Re-check the selected root after preparation; do not follow a changed symlink.
     if (
@@ -1252,6 +1343,9 @@ export async function executeFilesystemBackup(input: {
       "backup",
       source,
       ...artifacts,
+      "--host",
+      os.hostname(),
+      ...resticParentArgs(parent),
       "--json",
       "--tag",
       `pluton-plan-${payload.planId}`,
