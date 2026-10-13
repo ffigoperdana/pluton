@@ -185,14 +185,21 @@ Additional isolated checks are `scripts/validate-phase7.ps1` and
 ## Build validation
 
 `frontend/src/docs` supplies 77 original Bahasa Indonesia Markdown articles in
-15 manifest-ordered categories. `/docs/*` is a public static SPA route with no
-authenticated configuration/inventory reads. Existing SPA fallback handles direct
-nested refresh; registered authenticated API handlers remain ahead of it. Marked
-is reused only as a lexer; React elements escape HTML, reject unsafe URLs/remote
-images and supply heading/search indices without hosted services.
+15 manifest-ordered categories. `documentation/` compiles these unchanged sources
+into an isolated official Fumadocs React Router document at `/docs/*`. The main
+React 18/Vite 6 application remains separate from the React 19/Vite 7 docs build.
+Both bundles are served by the same backend, without another production service.
+Authenticated APIs remain ahead of the static fallbacks. Plain Markdown is
+compiled at build time with escaped HTML and restricted URLs. Search uses a
+local static Fumadocs index, without a hosted service.
 
 `pnpm test:docs` checks articles/routes/anchors/evidence/security/rendering. The
 frontend production build runs it automatically before bundling the articles.
+`pnpm test:fumadocs` checks the real compiler, all 77 TOCs, React isolation,
+official layout rendering, static search and Markdown/clipboard security paths.
+The docs build runs these tests automatically. See
+[FUMADOCS_MIGRATION_REPORT.md](FUMADOCS_MIGRATION_REPORT.md) for dependency choices,
+browser evidence, deployment instructions and known limitations.
 Run `node --experimental-strip-types --test frontend/__tests__/*.test.ts` for the
 complete frontend utility/component suite.
 

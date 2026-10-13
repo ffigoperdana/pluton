@@ -99,11 +99,11 @@ const SideNav = () => {
                   <Icon type="logout" size={30} />
                </span>
             </a>
-            <NavLink to="/docs" aria-label="Documentation">
+            <a href="/docs" aria-label="Documentation">
                <span className={classes.navMenuLabel} title="Documentation">
                   <Icon type="note" size={26} />
                </span>
-            </NavLink>
+            </a>
          </nav>
          {showLogoutModal && (
             <Modal title="Logout" closeModal={() => setShowLogoutModal(false)} width="300px">

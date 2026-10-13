@@ -1,4 +1,3 @@
-import { Link } from 'react-router';
 import { buildIdentity } from '../../../utils/buildIdentity';
 import classes from './Footer.module.scss';
 
@@ -14,12 +13,12 @@ interface FooterProps {
 }
 const Footer = ({ version, revision }: FooterProps) => (
    <footer className={classes.footer}>
-      <span>Pluton</span> <i className="pipe">|</i> <Link to="/docs">Documentation</Link> <i className="pipe">|</i>{' '}
-      <Link to="/docs/changelog">Changelog</Link> <i className="pipe">|</i>{' '}
-      <Link to="/docs/reference/version" title="Installed local build metadata">
+      <span>Pluton</span> <i className="pipe">|</i> <a href="/docs">Documentation</a> <i className="pipe">|</i>{' '}
+      <a href="/docs/changelog">Changelog</a> <i className="pipe">|</i>{' '}
+      <a href="/docs/reference/version" title="Installed local build metadata">
          {buildIdentity(version, revision)}
-      </Link>{' '}
-      <i className="pipe">|</i> <Link to="/docs/reference/acknowledgements">About</Link>
+      </a>{' '}
+      <i className="pipe">|</i> <a href="/docs/reference/acknowledgements">About</a>
    </footer>
 );
 export default Footer;

@@ -24,6 +24,7 @@ COPY scripts ./scripts
 COPY backend ./backend
 COPY frontend ./frontend
 COPY agent ./agent
+COPY documentation ./documentation
 # Public evidence required by the build-time docs validator, not runtime config.
 COPY docs/ROADMAP.md ./docs/ROADMAP.md
 COPY deploy/compose.yml ./deploy/compose.yml

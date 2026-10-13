@@ -71,6 +71,10 @@ deploy/
 frontend/__tests__/*
 !frontend/__tests__/docs.test.ts
 !frontend/__tests__/productIdentity.test.ts
+# Fumadocs builder source and its Markdown compiler configuration.
+documentation/.source/
+!documentation/tests/
+!documentation/tests/documentation.test.ts
 # Minimal public source evidence checked by docs.test.ts; no deployment overrides.
 !docs/ROADMAP.md
 !deploy/

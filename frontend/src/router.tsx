@@ -14,8 +14,7 @@ import DeviceSingle from './routes/DeviceSingle/DeviceSingle';
 import Footer from './components/App/Footer/Footer';
 import NotFoundRoute from './routes/NotFoundRoute/NotFoundRoute';
 import Icon from './components/common/Icon/Icon';
-import { lazy, Suspense } from 'react';
-const Docs = lazy(() => import('./docs/Docs'));
+import DocumentationRedirect from './docs/DocumentationRedirect';
 
 function PublicRoute({ children }: { children: React.ReactNode }) {
    const { data: authData, isLoading: authLoading } = useAuth();
@@ -69,14 +68,7 @@ function ProtectedLayout() {
 export function AppRoutes() {
    return (
       <Routes>
-         <Route
-            path="/docs/*"
-            element={
-               <Suspense fallback={<p>Loading documentation…</p>}>
-                  <Docs />
-               </Suspense>
-            }
-         />
+         <Route path="/docs/*" element={<DocumentationRedirect />} />
          <Route path="/" element={<ProtectedLayout />}>
             <Route index element={<Plans />} />
             <Route path="settings" element={<Settings />} />

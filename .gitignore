@@ -13,6 +13,7 @@ dist-ssr
 dist-lib
 *.local
 /.turbo
+/documentation/.source/
 
 # Installer build artifacts
 *.AppImage
