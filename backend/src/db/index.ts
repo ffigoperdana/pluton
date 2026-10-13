@@ -23,6 +23,14 @@ import {
 } from './schema/remoteManagedRepositories';
 import { appPaths } from '../utils/AppPaths';
 import {
+	notificationChannels,
+	notificationSubscriptions,
+	notificationSources,
+	notificationObserved,
+	notificationEventRecords,
+	notificationDeliveries,
+} from './schema/notificationDelivery';
+import {
 	recoveryTests,
 	recoveryTargets,
 	recoveryTestPolicies,
@@ -68,6 +76,12 @@ export const db = drizzle(sqlite, {
 		recoveryTargets,
 		recoveryTestPolicies,
 		recoveryImportLeases,
+		notificationChannels,
+		notificationSubscriptions,
+		notificationSources,
+		notificationObserved,
+		notificationEventRecords,
+		notificationDeliveries,
 	},
 });
 export type DatabaseType = typeof db;

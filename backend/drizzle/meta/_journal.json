@@ -71,6 +71,13 @@
       "when": 1791276752097,
       "tag": "0009_phase6_recovery_tests",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1791835558256,
+      "tag": "0010_phase7_notification_outbox",
+      "breakpoints": true
     }
   ]
 }

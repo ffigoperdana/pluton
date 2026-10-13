@@ -78,6 +78,9 @@ import { RecoveryTestController } from './controllers/RecoveryTestController';
 import { createRecoveryTestRouter } from './routes/recoveryTests';
 import { RecoveryTestTask } from './jobs/tasks/RecoveryTestTask';
 import { jobQueue } from './jobs/JobQueue';
+import { NotificationDeliveryStore } from './stores/NotificationDeliveryStore';
+import { NotificationDeliveryManager } from './notifications/NotificationDeliveryManager';
+import { createNotificationRouter, notificationInputError } from './routes/notifications';
 
 const MemoryStore = createMemoryStore(session);
 
@@ -92,6 +95,8 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	const deviceStore = new DeviceStore(db);
 	const restoreStore = new RestoreStore(db);
 	const settingsStore = new SettingsStore(db);
+	const notificationStore = new NotificationDeliveryStore(sqlite, configService.config.SECRET);
+	const notificationManager = new NotificationDeliveryManager(notificationStore);
 	const legacyRepositoryStore = new LegacyRepositoryStore(db);
 	const legacyRestoreJobStore = new LegacyRestoreJobStore(db);
 	const agentStore = new AgentStore(db);
@@ -248,6 +253,8 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		})
 	);
 
+	app.use(notificationInputError);
+
 	// helmet security middleware
 	const appUrl = configService.config.APP_URL || 'http://localhost';
 	const serverPort = configService.config.SERVER_PORT;
@@ -327,6 +334,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	app.use('/api/storages', createStorageRouter(storageController));
 	app.use('/api/restores', createRestoreRouter(restoreController));
 	app.use('/api/settings', createSettingsRouter(settingsController));
+	app.use('/api/notifications', createNotificationRouter(notificationStore));
 	app.use('/api/legacy-repositories', createLegacyRepositoryRouter(legacyRepositoryController));
 	app.use('/api/agent', createAgentRouter(agentController, agentService));
 	app.use('/api/agent-admin', createAgentAdminRouter(agentAdminController));
@@ -374,10 +382,12 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	jobQueue.add('RecoveryTest', undefined, 1);
 
 	jobProcessor.start();
+	notificationManager.start();
 
 	return {
 		app,
 		shutdown: async () => {
+			await notificationManager.shutdown();
 			clearInterval(recoveryTick);
 			await recoveryTestService.shutdown();
 		},

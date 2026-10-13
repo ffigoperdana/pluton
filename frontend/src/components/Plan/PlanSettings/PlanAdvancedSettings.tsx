@@ -12,6 +12,7 @@ import PlanScriptsSettings from './PlanScriptsSettings';
 import { Device } from '../../../@types/devices';
 import PlanRemoteLifecycleSettings from './PlanRemoteLifecycleSettings';
 import RecoverySettings from '../RecoveryTesting/RecoverySettings';
+import ManagedPlanNotifications from './ManagedPlanNotifications';
 
 interface PlanAdvancedSettingsProps {
    plan: NewPlanSettings;
@@ -135,14 +136,20 @@ const PlanAdvancedSettings = ({
                />
             )}
             {advancedTab === 'Notification' && (
-               <PlanNotificationSettings
-                  types={integrationTypes}
-                  planID={plan.id}
-                  isSync={plan.method === 'sync'}
-                  admin_email={appSettings?.admin_email}
-                  notificationSettings={plan.settings?.notification || {}}
-                  onUpdate={(notification) => onUpdate({ ...plan, settings: { ...settings, notification } })}
-               />
+               <>
+                  <ManagedPlanNotifications planId={isEditing ? plan.id : undefined} />
+                  <details>
+                     <summary>Existing community notification settings (separate delivery path)</summary>
+                     <PlanNotificationSettings
+                        types={integrationTypes}
+                        planID={plan.id}
+                        isSync={plan.method === 'sync'}
+                        admin_email={appSettings?.admin_email}
+                        notificationSettings={plan.settings?.notification || {}}
+                        onUpdate={(notification) => onUpdate({ ...plan, settings: { ...settings, notification } })}
+                     />
+                  </details>
+               </>
             )}
             {/* {advancedTab === 'Prune' && (
                <PlanPruneSettings plan={plan} onUpdate={(prune) => onUpdate({ ...plan, settings: { ...settings, prune } })} />

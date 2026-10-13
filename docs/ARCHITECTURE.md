@@ -162,6 +162,26 @@ requirements, validation evidence and the future one-dataset shadow pilot gates.
 Its Linux runner is `scripts/validate-phase6.ps1`; automation defaults to off and
 requires an explicitly provisioned recovery-only DB target for Required imports.
 
+## Phase 7 durable outgoing notifications
+
+Managed backup/recovery terminal state is journaled by additive migration 0010
+into indexed notification-source readiness. An independent bounded worker in the
+existing notification package creates safe versioned events and leased delivery
+outbox entries. Central webhook/SMTP channels and separate per-plan subscriptions
+are opt-in, with activation floors excluding historical/already-running jobs.
+Delivery does not invoke agents, Restic, Legacy operations or production imports.
+
+New authenticated `/api/notifications` routes provide write-only channel credentials,
+test events, subscriptions, paged sanitized history and eligible explicit retries.
+Webhook addresses are DNS-validated/pinned; private LAN targets require restricted
+CIDR approval. SMTP reuses Nodemailer and shared verified TLS options. The old
+community channel UI remains a separate compatibility path, not a silent migration.
+
+See [PHASE7_WEBHOOK_NOTIFICATIONS.md](PHASE7_WEBHOOK_NOTIFICATIONS.md) for payloads,
+signatures, queue/retry bounds, security/compatibility details and operator acceptance.
+Additional isolated checks are `scripts/validate-phase7.ps1` and
+`node --experimental-strip-types --test frontend/__tests__/notificationDelivery.test.ts`.
+
 ## Build validation
 
 Backend CI runs installation, backend lint, tests, and backend build; the pre-push
