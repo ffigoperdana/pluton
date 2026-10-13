@@ -19,6 +19,9 @@ import {
   writeTemporaryRcloneConfig,
 } from "./backupFilesystem.js";
 
+/** The real agent runs on Linux; executable shebang fixtures are not portable on Windows. */
+const linuxExecutionTest = process.platform === "win32" ? test.skip : test;
+
 const validPayload = {
   version: 1,
   backupId: "backup-01",
@@ -90,7 +93,230 @@ test("refuses traversal, control characters, and unexpected command fields", () 
       }),
     /unsupported fields/,
   );
+  assert.throws(
+    () =>
+      parseBackupFilesystemPayload({
+        ...validPayload,
+        parentLookupTimeoutMs: 0,
+      }),
+    /unsupported fields/,
+  );
 });
+
+for (const mode of [
+  "valid",
+  "missing-receipt",
+  "incompatible",
+  "foreign-repository",
+  "malformed",
+  "process-failed",
+  "output-limit",
+  "timeout",
+  "timeout-control-plane-outage",
+  "timeout-parent-exit",
+  "timeout-unavailable",
+  "auth",
+  "access",
+  "transport",
+  "invalid-config",
+  "parent-auth",
+  "parent-access",
+  "parent-transport",
+  "parent-corrupt",
+  "parent-timeout-auth",
+  "parent-timeout-corrupt",
+  "cancelled",
+]) {
+  linuxExecutionTest(
+    `parent discovery ${mode}: verified selection/fallback remains isolated and sanitized`,
+    async () => {
+      const fixture = await createExecutionFixture("");
+      const stages: import("./backupFilesystem.js").BackupFilesystemStageEvent[] =
+        [];
+      const id = "a".repeat(64);
+      try {
+        await writeFile(
+          path.join(fixture.binDir, "restic"),
+          `#!/usr/bin/env node
+import { appendFileSync, writeFileSync, existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
+const args = process.argv.slice(2), mode = ${JSON.stringify(mode)};
+const state = path.dirname(path.dirname(process.env.RCLONE_CONFIG));
+appendFileSync(path.join(state, 'restic-calls'), JSON.stringify(args)+'\\n');
+if (args.includes('cat')) {
+  if (mode === 'auth') { process.stderr.write('wrong password'); process.exit(12); }
+  if (mode === 'access') { process.stderr.write('permission denied'); process.exit(1); }
+  if (mode === 'transport') { process.stderr.write('connection refused'); process.exit(1); }
+  if (mode === 'timeout-unavailable' && existsSync(path.join(state,'discovery'))) process.exit(10);
+  console.log(JSON.stringify({ version: mode === 'invalid-config' ? 999 : 2, id: 'c'.repeat(64) }));
+} else if (args.includes('--latest')) {
+  writeFileSync(path.join(state,'discovery'), 'started');
+  if (mode === 'parent-auth') { process.stderr.write('wrong password'); process.exit(12); }
+  if (mode === 'parent-access') { process.stderr.write('permission denied'); process.exit(1); }
+  if (mode === 'parent-transport') { process.stderr.write('connection refused'); process.exit(1); }
+  if (mode === 'parent-corrupt') { process.stderr.write('ciphertext verification failed'); process.exit(1); }
+  if (['timeout','timeout-control-plane-outage','timeout-parent-exit','timeout-unavailable','parent-timeout-auth','parent-timeout-corrupt','cancelled'].includes(mode)) {
+    if (mode === 'parent-timeout-auth') process.stderr.write('wrong password');
+    if (mode === 'parent-timeout-corrupt') process.stderr.write('ciphertext verification failed');
+    const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'inherit'});
+    writeFileSync(path.join(state,'child-pid'),String(child.pid));
+    if (mode === 'timeout-parent-exit') process.exit(0);
+    setInterval(()=>{},1000);
+  } else if (mode === 'malformed') console.log('not JSON');
+  else if (mode === 'process-failed') { process.stderr.write(process.env.RESTIC_PASSWORD); process.exit(1); }
+  else if (mode === 'output-limit') console.log('['+' '.repeat(2*1024*1024)+']');
+  else console.log(JSON.stringify(mode === 'foreign-repository' ? [] : [{id:'a'.repeat(64),tree:'b'.repeat(64),hostname:os.hostname(),time:new Date(Date.now()-1000).toISOString(),tags:[mode==='incompatible'?'pluton-plan-plan-other':'pluton-plan-plan-01','pluton-backup-backup-old'],paths:[${JSON.stringify(fixture.source)}]}]));
+} else if (args.includes('snapshots')) console.log('[]');
+else if (args.includes('backup')) console.log(JSON.stringify({message_type:'summary',snapshot_id:'d'.repeat(64),files_new:0,files_changed:0,files_unmodified:0,dirs_new:0,dirs_changed:0,dirs_unmodified:0,data_blobs:0,tree_blobs:0,data_added:0,data_added_packed:0,total_files_processed:0,total_bytes_processed:0,total_duration:0}));
+`,
+        );
+        let cancelled = false;
+        let parentStarted = false;
+        const input = {
+          ...executionInput(fixture),
+          successfulSnapshotIds: mode === "missing-receipt" ? [] : [id],
+          parentLookupTimeoutMs: 300,
+          shouldCancel: async () => {
+            if (mode === "timeout-control-plane-outage" && parentStarted)
+              throw new Error("Synthetic control-plane outage.");
+            return cancelled;
+          },
+          onStage: (
+            event: import("./backupFilesystem.js").BackupFilesystemStageEvent,
+          ) => {
+            stages.push(event);
+            if (event.stage === "parent-discovery") parentStarted = true;
+            if (mode === "cancelled" && event.stage === "parent-discovery")
+              cancelled = true;
+          },
+        };
+        const fatal = [
+          "timeout-unavailable",
+          "auth",
+          "access",
+          "transport",
+          "invalid-config",
+          "parent-auth",
+          "parent-access",
+          "parent-transport",
+          "parent-corrupt",
+          "parent-timeout-auth",
+          "parent-timeout-corrupt",
+          "cancelled",
+        ].includes(mode);
+        if (fatal) {
+          await assert.rejects(
+            executeFilesystemBackup(input),
+            (error: unknown) => {
+              assert(error instanceof BackupFilesystemError);
+              assert.equal(error.stage, "repository-check");
+              assert.equal(
+                error.code,
+                mode === "cancelled"
+                  ? "cancelled"
+                  : mode === "auth" || mode.endsWith("auth")
+                    ? "target-check-auth-failed"
+                    : mode === "access" || mode.endsWith("access")
+                      ? "target-check-access-failed"
+                      : mode === "transport" || mode.endsWith("transport")
+                        ? "target-check-transport-failed"
+                        : "repository-check-failed",
+              );
+              return true;
+            },
+          );
+        } else await executeFilesystemBackup(input);
+        const calls = await readCalls(
+          path.join(fixture.dataDir, "restic-calls"),
+        );
+        const backup = calls.find((args) => args.includes("backup"));
+        assert.equal(!!backup, !fatal);
+        if (backup) {
+          if (mode === "valid")
+            assert.equal(backup[backup.indexOf("--parent") + 1], id);
+          else {
+            assert(!backup.includes("--parent"));
+            assert.equal(
+              backup[backup.indexOf("--group-by") + 1],
+              "host,paths,tags",
+            );
+            assert(
+              backup.includes("pluton-plan-plan-01") &&
+                backup.includes("pluton-backup-backup-01"),
+            );
+          }
+        }
+        const lookup = calls.find((args) => args.includes("--latest"));
+        if (lookup) {
+          assert(!lookup.includes(id));
+          assert(lookup.includes("pluton-plan-plan-01"));
+          assert(lookup.includes("--no-lock"));
+        }
+        if (mode.startsWith("parent-") && mode !== "timeout-parent-exit") {
+          assert(
+            !stages.some(
+              (event) =>
+                event.message ===
+                "parent lookup fallback; continuing without explicit parent",
+            ),
+          );
+          assert(
+            stages.some((event) => event.message === "real repository failure"),
+          );
+        }
+        if (
+          [
+            "timeout",
+            "timeout-control-plane-outage",
+            "timeout-parent-exit",
+            "malformed",
+            "process-failed",
+            "output-limit",
+          ].includes(mode)
+        ) {
+          assert.equal(calls.filter((args) => args.includes("cat")).length, 2);
+          assert(
+            stages.some(
+              (event) =>
+                event.message ===
+                "parent lookup fallback; continuing without explicit parent",
+            ),
+          );
+        }
+        if (mode.includes("timeout") || mode === "cancelled") {
+          const pid = Number(
+            await readFile(path.join(fixture.dataDir, "child-pid"), "utf8"),
+          );
+          for (let i = 0; i < 30; i++) {
+            try {
+              process.kill(pid, 0);
+            } catch {
+              break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+          assert.throws(() => process.kill(pid, 0), /ESRCH/);
+        }
+        assert(
+          !JSON.stringify(stages).includes(validPayload.repositoryPassword),
+        );
+        assert(
+          !JSON.stringify(stages).includes(validPayload.rclone.options.pass),
+        );
+        assert.deepEqual(
+          (await readdir(fixture.dataDir)).filter((name) =>
+            name.startsWith("rclone-"),
+          ),
+          [],
+        );
+      } finally {
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+}
 
 const permissionTest = process.platform === "win32" ? test.skip : test;
 
@@ -115,9 +341,6 @@ permissionTest("creates a private temporary Rclone config", async () => {
     await rm(dataDir, { recursive: true, force: true });
   }
 });
-
-/** The real agent runs on Linux; executable shebang fixtures are not portable on Windows. */
-const linuxExecutionTest = process.platform === "win32" ? test.skip : test;
 
 async function createExecutionFixture(
   listing: string,
@@ -162,6 +385,7 @@ const config = process.env.RCLONE_CONFIG || "";
 const state = config ? path.dirname(path.dirname(config)) : "";
 const log = state ? path.join(state, "restic-calls") : "";
 if (log) appendFileSync(log, JSON.stringify(args) + "\\n");
+if (args.includes("cat") && args.includes("config")) { console.log(JSON.stringify({version:2,id:"c".repeat(64)})); process.exit(0); }
 if (args.includes("snapshots")) process.exit(1);
 if (args.includes("init")) process.exit(0);
 if (args.includes("backup")) process.stdout.write(JSON.stringify({message_type:"summary",snapshot_id:"abcdef0123456789",files_new:0,files_changed:0,files_unmodified:0,dirs_new:0,dirs_changed:0,dirs_unmodified:0,data_blobs:0,tree_blobs:0,data_added:0,data_added_packed:0,total_files_processed:0,total_bytes_processed:0,total_duration:0}) + "\\n");

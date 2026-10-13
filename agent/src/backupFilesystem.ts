@@ -11,7 +11,12 @@ import {
 import { constants } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { compatibleResticParent, resticParentArgs } from "./resticParent.js";
+import {
+  compatibleResticParent,
+  resticParentArgs,
+  resticParentDiscoveryArgs,
+  PARENT_LOOKUP_TIMEOUT_MS,
+} from "./resticParent.js";
 import {
   preflightSource,
   SourceAccessError,
@@ -108,6 +113,8 @@ export type BackupFilesystemStage =
   | "sftp-password-obscure"
   | "temporary-storage-config"
   | "repository-check"
+  | "parent-discovery"
+  | "parent-verification"
   | "repository-target-check"
   | "repository-initialization"
   | "restic-backup"
@@ -139,6 +146,7 @@ export type BackupFilesystemFailureCode =
 
 export type BackupFilesystemStageEvent = {
   database?: DatabaseCheckpoint;
+  diagnostic?: RepositoryDiagnostic;
   stage: BackupFilesystemStage;
   message:
     | "command accepted"
@@ -146,6 +154,19 @@ export type BackupFilesystemStageEvent = {
     | "source validated"
     | "temporary storage config created"
     | "repository check started"
+    | "existing backup snapshot lookup started"
+    | "initial repository verification started"
+    | "repository verified"
+    | "repository reverification started"
+    | "real repository failure"
+    | "parent candidate discovery started"
+    | "parent metadata verification started"
+    | "parent selected"
+    | "no compatible parent"
+    | "parent lookup timeout; checking repository before fallback"
+    | "parent metadata invalid; checking repository before fallback"
+    | "parent lookup failed; checking repository before fallback"
+    | "parent lookup fallback; continuing without explicit parent"
     | "target-not-found"
     | "target-empty"
     | "repository initialization started"
@@ -214,6 +235,10 @@ export function toBackupFilesystemError(
   error: unknown,
   stage: BackupFilesystemStage,
 ): BackupFilesystemError {
+  // Parent checkpoints are journal-only extensions; existing servers still
+  // receive the established repository-check failure/cancellation vocabulary.
+  if (stage === "parent-discovery" || stage === "parent-verification")
+    stage = "repository-check";
   if (error instanceof BackupFilesystemError) return error;
   if (error instanceof SourceAccessError)
     return new BackupFilesystemError(stage, error.code);
@@ -226,6 +251,22 @@ export function toBackupFilesystemError(
     );
   if (error instanceof BackupCancelledError) {
     return new BackupFilesystemError(stage, "cancelled");
+  }
+  if (
+    stage === "repository-check" &&
+    error instanceof ProgramTimeoutError &&
+    error.diagnostic
+  ) {
+    return new BackupFilesystemError(
+      stage,
+      error.diagnostic === "authentication-failed"
+        ? "target-check-auth-failed"
+        : error.diagnostic === "access-failed"
+          ? "target-check-access-failed"
+          : error.diagnostic === "transport-failed"
+            ? "target-check-transport-failed"
+            : "repository-check-failed",
+    );
   }
   const code: BackupFilesystemFailureCode =
     stage === "payload-validation"
@@ -262,7 +303,23 @@ type ProcessResult = {
   code: number | null;
   stdout: string;
   targetFailureCode?: RepositoryTargetFailureCode;
+  repositoryFailure?: RepositoryDiagnostic;
+  outputTruncated?: boolean;
 };
+
+type RepositoryDiagnostic =
+  | "authentication-failed"
+  | "access-failed"
+  | "transport-failed"
+  | "repository-unavailable"
+  | "invalid-repository"
+  | "timeout"
+  | "process-failed";
+class ProgramTimeoutError extends Error {
+  constructor(readonly diagnostic?: RepositoryDiagnostic) {
+    super("Backup process timed out.");
+  }
+}
 
 type RepositoryTargetFailureCode =
   | "target-check-access-failed"
@@ -276,11 +333,40 @@ type ProcessOptions = {
   env: NodeJS.ProcessEnv;
   allowFailure?: boolean;
   classifyTargetFailure?: boolean;
+  classifyRepositoryFailure?: boolean;
   stdin?: string;
   shouldCancel: () => Promise<boolean>;
   onJsonLine?: (value: Record<string, unknown>) => Promise<void>;
   source?: string;
 };
+
+function repositoryDiagnostic(
+  code: number | null,
+  diagnostics: string,
+): RepositoryDiagnostic | undefined {
+  if (
+    code === 12 ||
+    /wrong password|no key found|unable to authenticate|authentication failed|failed to authenticate|ssh: handshake failed.*authenticate/i.test(
+      diagnostics,
+    )
+  )
+    return "authentication-failed";
+  if (
+    /permission denied|access denied|operation not permitted/i.test(diagnostics)
+  )
+    return "access-failed";
+  if (classifyTargetFailure(diagnostics) === "target-check-transport-failed")
+    return "transport-failed";
+  if (code === 10) return "repository-unavailable";
+  if (
+    /ciphertext verification failed|invalid data returned|invalid repository|unsupported repository version|config.*(?:invalid|corrupt)|load.*snapshot.*(?:corrupt|invalid)/i.test(
+      diagnostics,
+    )
+  )
+    return "invalid-repository";
+  if (code !== 0) return "process-failed";
+  return undefined;
+}
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -461,8 +547,12 @@ function classifyTargetFailure(
   return undefined;
 }
 
-function terminateProcessTree(child: ChildProcessWithoutNullStreams): void {
-  if (child.exitCode !== null || child.killed) return;
+function terminateProcessTree(
+  child: ChildProcessWithoutNullStreams,
+): ReturnType<typeof setTimeout> | undefined {
+  // On Linux, descendants can still hold stdio open after the leader exits.
+  if (process.platform === "win32" && (child.exitCode !== null || child.killed))
+    return;
   try {
     if (process.platform === "win32" && child.pid) {
       const killer = spawn("taskkill", ["/PID", String(child.pid), "/T"], {
@@ -510,6 +600,7 @@ function terminateProcessTree(child: ChildProcessWithoutNullStreams): void {
     }
   }, 5_000);
   forceKill.unref();
+  return forceKill;
 }
 
 async function runProgram(
@@ -536,10 +627,12 @@ async function runProgram(
     let eventChain = Promise.resolve();
     let settled = false;
     let timedOut = false;
+    let outputBytes = 0;
+    let forceKill: ReturnType<typeof setTimeout> | undefined;
     const deadline = options.timeoutMs
       ? setTimeout(() => {
           timedOut = true;
-          terminateProcessTree(child);
+          forceKill ||= terminateProcessTree(child);
         }, options.timeoutMs)
       : undefined;
 
@@ -549,7 +642,7 @@ async function runProgram(
         .then((shouldCancel) => {
           if (!shouldCancel || cancelled || settled) return;
           cancelled = true;
-          terminateProcessTree(child);
+          forceKill ||= terminateProcessTree(child);
         })
         .catch(() => {
           // A transient control-plane outage must not terminate a data-plane backup.
@@ -573,6 +666,7 @@ async function runProgram(
 
     child.stdout.on("data", (chunk) => {
       const text = String(chunk);
+      outputBytes += Buffer.byteLength(text);
       stdout = appendBounded(stdout, text, options.maxOutputBytes);
       stdoutBuffer = appendBounded(stdoutBuffer, text);
       for (;;) {
@@ -584,9 +678,9 @@ async function runProgram(
       }
     });
     child.stderr.on("data", (chunk) => {
-      // Only the target probe needs a bounded in-memory diagnostic classifier.
+      // Target/repository probes use only a bounded in-memory classifier.
       // Raw provider text is never returned, logged, or forwarded to the server.
-      if (options.classifyTargetFailure) {
+      if (options.classifyTargetFailure || options.classifyRepositoryFailure) {
         diagnostics = appendBounded(diagnostics, String(chunk));
       }
       if (options.source) {
@@ -602,17 +696,28 @@ async function runProgram(
       settled = true;
       clearInterval(cancellationTimer);
       if (deadline) clearTimeout(deadline);
+      if (forceKill) clearTimeout(forceKill);
       reject(error);
     });
     child.once("close", (code: number | null) => {
       settled = true;
       clearInterval(cancellationTimer);
       if (deadline) clearTimeout(deadline);
+      if (forceKill) clearTimeout(forceKill);
       consumeLine(stdoutBuffer);
       void eventChain.then(
         () => {
           if (cancelled) return reject(new BackupCancelledError());
-          if (timedOut) return reject(new Error("Backup process timed out."));
+          if (timedOut) {
+            const reason = options.classifyRepositoryFailure
+              ? repositoryDiagnostic(code, diagnostics)
+              : undefined;
+            return reject(
+              new ProgramTimeoutError(
+                reason === "process-failed" ? undefined : reason,
+              ),
+            );
+          }
           if (code !== 0 && !options.allowFailure) {
             if (options.source)
               sourceFailure ||= sourceFailureFromRestic(
@@ -630,6 +735,11 @@ async function runProgram(
           resolve({
             code,
             stdout,
+            outputTruncated:
+              outputBytes > (options.maxOutputBytes ?? MAX_OUTPUT_BYTES),
+            ...(options.classifyRepositoryFailure
+              ? { repositoryFailure: repositoryDiagnostic(code, diagnostics) }
+              : {}),
             ...(options.classifyTargetFailure
               ? { targetFailureCode: classifyTargetFailure(diagnostics) }
               : {}),
@@ -639,6 +749,64 @@ async function runProgram(
       );
     });
   });
+}
+
+/** Authenticate/decrypt the exact repository config, without snapshot enumeration or locks. */
+async function verifyRepository(
+  restic: string,
+  repository: string,
+  env: NodeJS.ProcessEnv,
+  shouldCancel: () => Promise<boolean>,
+  diagnostic: (reason: RepositoryDiagnostic) => void,
+): Promise<void> {
+  let reason: RepositoryDiagnostic | undefined;
+  try {
+    const result = await runProgram(
+      restic,
+      ["-r", repository, "--no-lock", "cat", "config"],
+      {
+        env,
+        shouldCancel,
+        timeoutMs: 30_000,
+        allowFailure: true,
+        classifyRepositoryFailure: true,
+      },
+    );
+    reason = result.repositoryFailure;
+    if (!reason) {
+      try {
+        const config = JSON.parse(result.stdout);
+        if (
+          result.outputTruncated ||
+          !config ||
+          ![1, 2].includes(config.version) ||
+          !/^[a-f0-9]{64}$/.test(config.id)
+        )
+          reason = "invalid-repository";
+      } catch {
+        reason = "invalid-repository";
+      }
+    }
+  } catch (error) {
+    if (error instanceof BackupCancelledError) throw error;
+    reason =
+      error instanceof ProgramTimeoutError
+        ? error.diagnostic || "timeout"
+        : "process-failed";
+  }
+  if (reason) {
+    diagnostic(reason);
+    throw new BackupFilesystemError(
+      "repository-check",
+      reason === "authentication-failed"
+        ? "target-check-auth-failed"
+        : reason === "access-failed"
+          ? "target-check-access-failed"
+          : reason === "transport-failed"
+            ? "target-check-transport-failed"
+            : "repository-check-failed",
+    );
+  }
 }
 
 function rcloneConfigValue(value: string): string {
@@ -926,8 +1094,27 @@ async function findExistingBackupSnapshot(
       env,
       allowFailure: true,
       shouldCancel,
+      timeoutMs: 30_000,
+      classifyRepositoryFailure: true,
     },
   );
+  if (
+    result.repositoryFailure &&
+    !["repository-unavailable", "process-failed"].includes(
+      result.repositoryFailure,
+    )
+  ) {
+    throw new BackupFilesystemError(
+      "repository-check",
+      result.repositoryFailure === "authentication-failed"
+        ? "target-check-auth-failed"
+        : result.repositoryFailure === "access-failed"
+          ? "target-check-access-failed"
+          : result.repositoryFailure === "transport-failed"
+            ? "target-check-transport-failed"
+            : "repository-check-failed",
+    );
+  }
   if (result.code !== 0 || !result.stdout.trim()) return null;
   try {
     const snapshots = JSON.parse(result.stdout) as unknown;
@@ -1119,6 +1306,8 @@ export async function executeFilesystemBackup(input: {
   onStage?: (event: BackupFilesystemStageEvent) => void;
   /** Internal local receipts; never accepted from the remote command payload. */
   successfulSnapshotIds?: string[];
+  /** Trusted in-process test budget only; cannot be supplied in a command envelope or increase the deadline. */
+  parentLookupTimeoutMs?: number;
 }): Promise<BackupFilesystemResult> {
   let stage: BackupFilesystemStage = "payload-validation";
   let temporary: { directory: string; configPath: string } | undefined;
@@ -1214,6 +1403,10 @@ export async function executeFilesystemBackup(input: {
       stage: "repository-check",
       message: "repository check started",
     });
+    input.onStage?.({
+      stage: "repository-check",
+      message: "existing backup snapshot lookup started",
+    });
     const existing = await findExistingBackupSnapshot(
       restic,
       repository,
@@ -1285,44 +1478,133 @@ export async function executeFilesystemBackup(input: {
     // existing snapshot tree layout/private per-job workspace, but select only a
     // verified successful parent rather than changing/weakening source paths.
     let parent: string | undefined;
+    setStage("repository-check", "initial repository verification started");
+    const verify = async () => {
+      await verifyRepository(
+        restic,
+        repository,
+        env,
+        input.shouldCancel,
+        (diagnostic) =>
+          input.onStage?.({
+            stage: "repository-check",
+            message: "real repository failure",
+            diagnostic,
+          }),
+      );
+      input.onStage?.({
+        stage: "repository-check",
+        message: "repository verified",
+      });
+    };
+    await verify();
     const successfulIds = (input.successfulSnapshotIds || [])
       .filter((id) => /^[a-f0-9]{64}$/.test(id))
       .slice(-16);
     if (successfulIds.length) {
-      setStage("repository-check");
-      const metadata = await runProgram(
-        restic,
-        [
-          "-r",
-          repository,
-          "--no-lock",
-          "snapshots",
-          "--json",
-          ...successfulIds,
-        ],
-        {
-          env,
-          shouldCancel: input.shouldCancel,
-          timeoutMs: 60_000,
-          allowFailure: true,
-          maxOutputBytes: 1024 * 1024,
-        },
-      );
-      if (metadata.code === 0) {
-        try {
-          parent = compatibleResticParent(JSON.parse(metadata.stdout), {
-            successfulIds,
-            planId: payload.planId,
-            source,
-            hostname: os.hostname(),
-            jobsRoot: path.join(await realpath(input.config.dataDir), "jobs"),
-            artifacts,
+      setStage("parent-discovery", "parent candidate discovery started");
+      try {
+        const metadata = await runProgram(
+          restic,
+          ["-r", repository, ...resticParentDiscoveryArgs(payload.planId)],
+          {
+            env,
+            shouldCancel: input.shouldCancel,
+            timeoutMs:
+              Number.isSafeInteger(input.parentLookupTimeoutMs) &&
+              input.parentLookupTimeoutMs! > 0
+                ? Math.min(
+                    input.parentLookupTimeoutMs!,
+                    PARENT_LOOKUP_TIMEOUT_MS,
+                  )
+                : PARENT_LOOKUP_TIMEOUT_MS,
+            allowFailure: true,
+            classifyRepositoryFailure: true,
+            maxOutputBytes: 1024 * 1024,
+          },
+        );
+        if (
+          metadata.repositoryFailure &&
+          metadata.repositoryFailure !== "process-failed"
+        ) {
+          input.onStage?.({
+            stage: "repository-check",
+            message: "real repository failure",
+            diagnostic: metadata.repositoryFailure,
           });
-        } catch {
-          /* Bounded/malformed metadata cannot authorize a parent. */
+          throw new BackupFilesystemError(
+            "repository-check",
+            metadata.repositoryFailure === "authentication-failed"
+              ? "target-check-auth-failed"
+              : metadata.repositoryFailure === "access-failed"
+                ? "target-check-access-failed"
+                : metadata.repositoryFailure === "transport-failed"
+                  ? "target-check-transport-failed"
+                  : "repository-check-failed",
+          );
         }
+        if (metadata.code !== 0)
+          throw new Error("Parent lookup execution failed.");
+        if (metadata.outputTruncated)
+          throw new SyntaxError("Parent metadata exceeded the bounded output.");
+        setStage("parent-verification", "parent metadata verification started");
+        const snapshots: unknown = JSON.parse(metadata.stdout);
+        if (!Array.isArray(snapshots))
+          throw new SyntaxError("Invalid parent metadata collection.");
+        parent = compatibleResticParent(snapshots, {
+          successfulIds,
+          planId: payload.planId,
+          source,
+          hostname: os.hostname(),
+          jobsRoot: path.join(await realpath(input.config.dataDir), "jobs"),
+          artifacts,
+        });
+        input.onStage?.({
+          stage: "parent-verification",
+          message: parent ? "parent selected" : "no compatible parent",
+        });
+      } catch (error) {
+        if (
+          error instanceof BackupCancelledError ||
+          error instanceof BackupFilesystemError
+        )
+          throw error;
+        try {
+          if (await input.shouldCancel()) throw new BackupCancelledError();
+        } catch (cancelError) {
+          if (cancelError instanceof BackupCancelledError) throw cancelError;
+          // Match the runner's existing outage policy; hard repository/process
+          // deadlines still apply, and a confirmed cancellation is never ignored.
+        }
+        if (error instanceof ProgramTimeoutError && error.diagnostic) {
+          input.onStage?.({
+            stage: "repository-check",
+            message: "real repository failure",
+            diagnostic: error.diagnostic,
+          });
+          throw toBackupFilesystemError(error, "repository-check");
+        }
+        input.onStage?.({
+          stage: "parent-discovery",
+          message:
+            error instanceof ProgramTimeoutError
+              ? "parent lookup timeout; checking repository before fallback"
+              : error instanceof SyntaxError
+                ? "parent metadata invalid; checking repository before fallback"
+                : "parent lookup failed; checking repository before fallback",
+        });
+        setStage("repository-check", "repository reverification started");
+        await verify();
+        input.onStage?.({
+          stage: "parent-discovery",
+          message: "parent lookup fallback; continuing without explicit parent",
+        });
       }
-    }
+    } else
+      input.onStage?.({
+        stage: "parent-discovery",
+        message: "no compatible parent",
+      });
     setStage("restic-backup");
     // Re-check the selected root after preparation; do not follow a changed symlink.
     if (

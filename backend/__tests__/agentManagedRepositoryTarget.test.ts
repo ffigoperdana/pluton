@@ -29,6 +29,7 @@ describe('agent managed repository target check', () => {
 	let binDir: string;
 	let listing: { code: number | null; stdout: string; stderr: string };
 	let stages: BackupFilesystemStageEvent[];
+	let configProbe: { code: number; stdout: string; stderr: string };
 
 	beforeEach(async () => {
 		root = await mkdtemp(path.join(tmpdir(), 'pluton-target-test-'));
@@ -41,6 +42,11 @@ describe('agent managed repository target check', () => {
 		);
 		listing = { code: 0, stdout: '', stderr: '' };
 		stages = [];
+		configProbe = {
+			code: 0,
+			stdout: JSON.stringify({ version: 2, id: 'c'.repeat(64) }),
+			stderr: '',
+		};
 		spawnMock.mockReset();
 		spawnMock.mockImplementation((binary: any, args: any) => {
 			const child = Object.assign(new EventEmitter(), {
@@ -58,6 +64,9 @@ describe('agent managed repository target check', () => {
 				result = listing;
 			} else if (args.includes('snapshots')) {
 				result.code = 1;
+			} else if (args.includes('cat')) {
+				expect(args).toEqual(['-r', resticRepository, '--no-lock', 'cat', 'config']);
+				result = configProbe;
 			} else if (args.includes('backup')) {
 				result.stdout = `${JSON.stringify({ message_type: 'summary', snapshot_id: 'abcdef0123456789' })}\n`;
 			}
@@ -138,6 +147,7 @@ describe('agent managed repository target check', () => {
 		expect(stages).toContainEqual({ stage: 'repository-target-check', message: scenario.outcome });
 		expect(resticCalls()).toContainEqual(['-r', resticRepository, 'init']);
 		expect(resticCalls().some(args => args.includes('backup'))).toBe(true);
+		expect(resticCalls()).toContainEqual(['-r', resticRepository, '--no-lock', 'cat', 'config']);
 		await expectCleanup();
 	});
 

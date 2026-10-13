@@ -48,6 +48,8 @@ export function backupProgressStage(stage: string): string {
     "database-dump-validation": "dumping-database",
     "repository-target-check": "preparing-repository",
     "repository-initialization": "preparing-repository",
+    "parent-discovery": "preparing-repository",
+    "parent-verification": "preparing-repository",
     "restic-backup": "backing-up",
     "snapshot-confirmation": "verifying-snapshot",
     "post-backup": "post-backup",

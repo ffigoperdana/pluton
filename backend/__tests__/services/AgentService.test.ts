@@ -441,6 +441,7 @@ describe('AgentService', () => {
 	});
 
 	it.each([
+		'repository-check-failed',
 		'repository-target-not-empty',
 		'database-insufficient-privileges',
 		'source-parent-not-traversable',
@@ -448,6 +449,8 @@ describe('AgentService', () => {
 		'target-check-auth-failed',
 		'target-check-transport-failed',
 	])('logs only closed, sanitized BACKUP_FILESYSTEM failure metadata: %s', async failureCode => {
+		const failureStage =
+			failureCode === 'repository-check-failed' ? 'repository-check' : 'repository-target-check';
 		const command = {
 			id: 'command-backup-failure',
 			agentId: agent.agentId,
@@ -465,7 +468,7 @@ describe('AgentService', () => {
 					leaseToken: 'a'.repeat(32),
 					success: false,
 					error: 'Remote filesystem backup failed.',
-					failureStage: 'repository-target-check',
+					failureStage,
 					failureCode,
 					providerError: fixtureSecret,
 				})
@@ -478,7 +481,7 @@ describe('AgentService', () => {
 				leaseToken: 'a'.repeat(32),
 				success: false,
 				error: 'Remote filesystem backup failed.',
-				failureStage: 'repository-target-check',
+				failureStage,
 				failureCode,
 			});
 			expect(warn).toHaveBeenCalledWith(
@@ -488,7 +491,7 @@ describe('AgentService', () => {
 					commandId: command.id,
 					planId: 'plan-01',
 					backupId: 'backup-01',
-					failureStage: 'repository-target-check',
+					failureStage,
 					failureCode,
 				}),
 				'BACKUP_FILESYSTEM command failed'

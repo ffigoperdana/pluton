@@ -4,8 +4,39 @@ import {
   compatibleResticParent,
   resticParentArgs,
   successfulSnapshotIds,
+  resticParentDiscoveryArgs,
+  PARENT_LOOKUP_TIMEOUT_MS,
 } from "./resticParent.js";
-import { summaryForExistingSnapshot } from "./backupFilesystem.js";
+
+test("parent discovery lists current plan metadata without loading receipt IDs and keeps the original bounded deadline", () => {
+  assert.deepEqual(resticParentDiscoveryArgs("plan-01"), [
+    "--no-lock",
+    "snapshots",
+    "--json",
+    "--tag",
+    "pluton-plan-plan-01",
+    "--latest",
+    "16",
+  ]);
+  assert.equal(PARENT_LOOKUP_TIMEOUT_MS, 60_000);
+  assert.throws(() => resticParentDiscoveryArgs("plan-01,other-plan"));
+  assert.throws(() => resticParentDiscoveryArgs("../other"));
+});
+import {
+  summaryForExistingSnapshot,
+  BackupCancelledError,
+  toBackupFilesystemError,
+} from "./backupFilesystem.js";
+import { backupProgressStage } from "./progressDelivery.js";
+
+test("parent journal stages retain existing progress and cancellation protocol vocabulary", () => {
+  for (const stage of ["parent-discovery", "parent-verification"] as const) {
+    assert.equal(backupProgressStage(stage), "preparing-repository");
+    const error = toBackupFilesystemError(new BackupCancelledError(), stage);
+    assert.equal(error.stage, "repository-check");
+    assert.equal(error.code, "cancelled");
+  }
+});
 
 const id = "a".repeat(64);
 const snapshot = {

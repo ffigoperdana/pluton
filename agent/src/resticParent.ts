@@ -1,5 +1,22 @@
 import path from "node:path";
 
+export const PARENT_LOOKUP_TIMEOUT_MS = 60_000;
+
+/** Enumerate existing metadata, never directly load possibly foreign/stale receipt IDs. */
+export function resticParentDiscoveryArgs(planId: string): string[] {
+  if (!/^[A-Za-z0-9_-]{1,160}$/.test(planId))
+    throw new Error("Invalid parent plan binding.");
+  return [
+    "--no-lock",
+    "snapshots",
+    "--json",
+    "--tag",
+    `pluton-plan-${planId}`,
+    "--latest",
+    "16",
+  ];
+}
+
 /** Local successful completion receipts, not untrusted command-supplied parents. */
 export function successfulSnapshotIds(
   receipts: { success: boolean; result?: Record<string, unknown> }[],

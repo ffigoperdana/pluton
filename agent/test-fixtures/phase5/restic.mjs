@@ -12,7 +12,9 @@ const args = process.argv.slice(2);
 const state = dirname(dirname(process.env.RCLONE_CONFIG));
 appendFileSync(join(state, "restic-calls"), JSON.stringify(args) + "\n");
 const snapshot = join(state, "synthetic-snapshot.json");
-if (args.includes("snapshots")) {
+if (args.includes("cat") && args.includes("config")) {
+  console.log(JSON.stringify({ version: 2, id: "c".repeat(64) }));
+} else if (args.includes("snapshots")) {
   console.log(existsSync(snapshot) ? readFileSync(snapshot, "utf8") : "[]");
 } else if (args.includes("init")) {
   /* Success. */

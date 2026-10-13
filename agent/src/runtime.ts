@@ -125,7 +125,7 @@ export async function runOnce(
           (await client.commandStatus(command.id, command.leaseToken))
             .cancelled,
         onEvent: async (event) => progress.enqueue(event),
-        onStage: ({ stage, message, database }) => {
+        onStage: ({ stage, message, database, diagnostic }) => {
           progress.enqueue({
             phase: "running",
             backupStage: backupProgressStage(stage),
@@ -133,6 +133,7 @@ export async function runOnce(
           });
           console.info(
             `[pluton-agent] BACKUP_FILESYSTEM ${message} stage=${stage}` +
+              (diagnostic ? ` reason=${diagnostic}` : "") +
               (database
                 ? ` databaseId=${database.databaseId || "legacy"} engine=${database.engine} ordinal=${database.ordinal}/${database.count}`
                 : ""),

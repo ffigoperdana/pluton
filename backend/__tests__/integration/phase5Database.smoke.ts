@@ -14,6 +14,7 @@ import Cryptr from 'cryptr';
 import {
 	executeFilesystemBackup,
 	BackupFilesystemError,
+	type BackupFilesystemStageEvent,
 } from '../../../agent/dist/backupFilesystem.js';
 import { RemoteBackupService } from '../../src/services/RemoteBackupService';
 import { RemoteRepositoryRecoveryService } from '../../src/services/RemoteRepositoryRecoveryService';
@@ -307,6 +308,55 @@ CREATE USER 'backup_logs'@'127.0.0.1' IDENTIFIED BY '${logsPassword}'; GRANT SEL
 		1,
 		'unchanged application file must not be reported as new'
 	);
+	if (process.argv[3] === 'parent-fallback') {
+		// Root-owned injector stalls only optional discovery; dump, backup and
+		// snapshot/artifact confirmation continue to use real native tools.
+		await fs.writeFile(path.join(state, 'parent-fixture-mode'), 'timeout');
+		const stages: BackupFilesystemStageEvent[] = [];
+		const fallback = await executeFilesystemBackup({
+			...input,
+			config: { ...input.config, binDir: '/opt/pluton-parent-tools/bin' },
+			payload: { ...input.payload, backupId: 'backup-fallback' },
+			successfulSnapshotIds: [result.snapshotId],
+			parentLookupTimeoutMs: 500,
+			onStage: event => stages.push(event),
+		});
+		await fs.rm(path.join(state, 'parent-fixture-mode'));
+		assert.match(fallback.snapshotId, /^[a-f0-9]{64}$/);
+		assert(stages.some(event => event.message === 'database-dump-completed'));
+		assert(
+			stages.some(
+				event => event.message === 'parent lookup fallback; continuing without explicit parent'
+			)
+		);
+		const dumps =
+			fallback.lifecycle?.databases ||
+			(fallback.lifecycle?.database ? [fallback.lifecycle.database] : []);
+		assert.equal(dumps.length, databases.length);
+		for (const dump of dumps) {
+			assert(dump.bytes > 0);
+			assert.match(dump.sha256, /^[a-f0-9]{64}$/);
+		}
+		const calls = (await fs.readFile(path.join(state, 'parent-restic-calls'), 'utf8'))
+			.trim()
+			.split('\n')
+			.map(line => JSON.parse(line) as string[]);
+		const backupArgs = calls.find(args => args.includes('backup'))!;
+		assert(backupArgs && !backupArgs.includes('--parent'));
+		assert.equal(backupArgs[backupArgs.indexOf('--group-by') + 1], 'host,paths,tags');
+		assert.equal(calls.filter(args => args.includes('cat') && args.includes('config')).length, 2);
+		for (const secret of [repositoryPassword, sftpPassword, dbPassword, pgPassword, logsPassword])
+			assert(!JSON.stringify(stages).includes(secret));
+		assert.deepEqual(
+			(await fs.readdir(state)).filter(name => name.startsWith('rclone-')),
+			[]
+		);
+		assert.deepEqual(await fs.readdir(path.join(state, 'jobs')), []);
+		assert.equal(sourceBefore, hash(await fs.readFile(path.join(source, 'app.txt'))));
+		console.log(
+			'PASS real MariaDB dump + optional parent timeout + isolated no-parent backup + artifact confirmation/cleanup.'
+		);
+	}
 	const replay = await executeFilesystemBackup(input);
 	assert.equal(replay.snapshotId, result.snapshotId);
 	for (const key of [
