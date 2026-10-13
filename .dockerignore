@@ -64,4 +64,16 @@ deploy/
 *.md
 !README.md
 !License.md
+# Built-in documentation is a source input, not generated runtime data.
+!frontend/src/docs/articles/**
+# Only the build-time documentation/identity checks belong in the builder.
+!frontend/__tests__/
+frontend/__tests__/*
+!frontend/__tests__/docs.test.ts
+!frontend/__tests__/productIdentity.test.ts
+# Minimal public source evidence checked by docs.test.ts; no deployment overrides.
+!docs/ROADMAP.md
+!deploy/
+deploy/*
+!deploy/compose.yml
 .turbo/

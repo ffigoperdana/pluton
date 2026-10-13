@@ -36,15 +36,39 @@ if (args.includes("snapshots")) {
   const id = "a".repeat(64);
   const size =
     Object.values(files).reduce((total, value) => total + value, 0) || 1;
+  const summary = {
+    files_new: 1 + artifacts.length,
+    files_changed: 0,
+    files_unmodified: 0,
+    dirs_new: 0,
+    dirs_changed: 0,
+    dirs_unmodified: 0,
+    data_blobs: 0,
+    tree_blobs: 0,
+    data_added: 0,
+    data_added_packed: 0,
+    total_files_processed: 1 + artifacts.length,
+    total_bytes_processed: size,
+    backup_start: new Date().toISOString(),
+    backup_end: new Date().toISOString(),
+  };
   writeFileSync(
     snapshot,
     JSON.stringify([
-      { id, tags, size, files, paths: [source, ...Object.keys(files)] },
+      {
+        id,
+        tags,
+        size,
+        files,
+        summary,
+        paths: [source, ...Object.keys(files)],
+      },
     ]),
   );
   console.log(
     JSON.stringify({
       message_type: "summary",
+      ...summary,
       snapshot_id: id,
       total_files_processed: 1 + artifacts.length,
       total_bytes_processed: size,

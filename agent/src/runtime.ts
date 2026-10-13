@@ -14,6 +14,7 @@ import { loadIdentity, saveIdentity } from "./identity.js";
 import { collectInventory } from "./inventory.js";
 import type { AgentConfig, StoredAgentIdentity } from "./types.js";
 import { ProgressDelivery, backupProgressStage } from "./progressDelivery.js";
+import { successfulSnapshotIds } from "./resticParent.js";
 
 /** Installer validation must not lease or execute queued work. Identity is only read. */
 export async function checkConnection(config: AgentConfig): Promise<void> {
@@ -116,6 +117,9 @@ export async function runOnce(
         payload: command.payload,
         config,
         allowedRoots: roots,
+        successfulSnapshotIds: successfulSnapshotIds(
+          identity.completedCommands,
+        ),
         shouldCancel: async () =>
           signal?.aborted ||
           (await client.commandStatus(command.id, command.leaseToken))

@@ -72,6 +72,15 @@ describe('SettingsService', () => {
 	// getMainSettings
 	// ----------------------------------------
 	describe('getMainSettings', () => {
+		it('does not contact an upstream release service without a trusted fork feed', async () => {
+			const fetchSpy = jest.spyOn(global, 'fetch');
+			try {
+				expect(await settingsService.checkLatestVersion()).toBeNull();
+				expect(fetchSpy).not.toHaveBeenCalled();
+			} finally {
+				fetchSpy.mockRestore();
+			}
+		});
 		it('should return the main settings from the store', async () => {
 			const mockSettings = { id: 1, settings: { title: 'Main Settings' } } as Settings;
 			mockSettingsStore.getFirst.mockResolvedValue(mockSettings);

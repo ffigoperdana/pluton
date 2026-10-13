@@ -1,54 +1,25 @@
-import { useState } from 'react';
-import { getUpdateDocLink } from '../../../utils';
-import Icon from '../../common/Icon/Icon';
-import Upgrade from '../../Upgrade/Upgrade';
+import { Link } from 'react-router';
+import { buildIdentity } from '../../../utils/buildIdentity';
 import classes from './Footer.module.scss';
 
 interface FooterProps {
-   version: string;
+   version?: string;
+   revision?: string;
+   /** Deprecated compatibility props: never drive upstream calls or upsells. */
    edition?: string;
    latestVersion?: string;
    hideUpgradeLink?: boolean;
    changeLogUrl?: string;
    installType?: string;
 }
-
-const Footer = ({ version = '1.0.0', latestVersion, hideUpgradeLink = false, changeLogUrl, edition = '', installType }: FooterProps) => {
-   const [showUpgrade, setShowUpgrade] = useState(false);
-   const downloadPageLink = hideUpgradeLink ? 'https://account.usepluton.com/' : 'https://usepluton.com/download';
-   const updateDocLink = installType === 'binary' ? downloadPageLink : getUpdateDocLink(hideUpgradeLink);
-
-   return (
-      <>
-         <div className={classes.footer}>
-            <span>
-               Pluton {edition} v{version}{' '}
-               {latestVersion && (
-                  <span className={classes.newVersion} title={`Latest version: ${latestVersion}`}>
-                     <Icon type="arrow-up" size={12} />{' '}
-                     <a href={updateDocLink} target="_blank">
-                        (Update Available)
-                     </a>
-                  </span>
-               )}
-            </span>{' '}
-            <i className="pipe">|</i>
-            {!hideUpgradeLink && (
-               <>
-                  <a onClick={() => setShowUpgrade(true)}>Upgrade</a> <i className="pipe">|</i>
-               </>
-            )}
-            <a href="https://docs.usepluton.com" target="_blank">
-               Documentation
-            </a>{' '}
-            <i className="pipe">|</i>
-            <a href={changeLogUrl || 'https://github.com/plutonhq/pluton/blob/main/CHANGELOG.md'} target="_blank">
-               Changelog
-            </a>
-         </div>
-         {showUpgrade && <Upgrade onClose={() => setShowUpgrade(false)} />}
-      </>
-   );
-};
-
+const Footer = ({ version, revision }: FooterProps) => (
+   <footer className={classes.footer}>
+      <span>Pluton</span> <i className="pipe">|</i> <Link to="/docs">Documentation</Link> <i className="pipe">|</i>{' '}
+      <Link to="/docs/changelog">Changelog</Link> <i className="pipe">|</i>{' '}
+      <Link to="/docs/reference/version" title="Installed local build metadata">
+         {buildIdentity(version, revision)}
+      </Link>{' '}
+      <i className="pipe">|</i> <Link to="/docs/reference/acknowledgements">About</Link>
+   </footer>
+);
 export default Footer;

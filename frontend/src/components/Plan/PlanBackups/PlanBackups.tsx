@@ -6,6 +6,7 @@ import Restores from '../Restores/Restores';
 import Backups from '../Backups/Backups';
 import { useComponentOverride } from '../../../context/ComponentOverrideContext';
 import RecoverySummary from '../RecoveryTesting/RecoverySummary';
+import { latestLogicalSnapshotBytes, statisticHelp } from '../../../utils/backupStatistics';
 
 interface PlanBackupsProps {
    plan: Plan;
@@ -23,6 +24,8 @@ const PlanBackups = ({ plan }: PlanBackupsProps) => {
    const sortedHistory = [...(backups || [])].sort((a, b) => new Date(b.started).getTime() - new Date(a.started).getTime());
    const isSync = method === 'sync';
    const snapshotsCount = stats.snapshots?.length || 0;
+   const remoteManaged = sourceType === 'device' && sourceId !== 'main' && method === 'backup';
+   const logicalSize = latestLogicalSnapshotBytes(backups);
 
    return (
       <div className={classes.backups}>
@@ -37,8 +40,11 @@ const PlanBackups = ({ plan }: PlanBackupsProps) => {
                </button>
             </div>
             {!isSync && historyTab === 'backups' && (
-               <div className={classes.backupsInfo}>
-                  {snapshotsCount} Active Snapshots <i className="pipe">|</i> {formatBytes(stats.size)}
+               <div className={classes.backupsInfo} title={remoteManaged ? statisticHelp.snapshotSize : undefined}>
+                  {snapshotsCount} Active Snapshots <i className="pipe">|</i>{' '}
+                  {remoteManaged
+                     ? `Latest Snapshot: ${logicalSize === undefined ? 'Not measured' : formatBytes(logicalSize)}`
+                     : formatBytes(stats.size)}
                </div>
             )}
          </div>

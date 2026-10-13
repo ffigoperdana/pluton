@@ -9,6 +9,7 @@ import PlanSizeChart from '../PlanSizeChart/PlanSizeChart';
 import classes from './PlanStats.module.scss';
 import PlanStorageInfo from '../PlanStorageInfo/PlanStorageInfo';
 import { formatBytes, formatNumberToK } from '../../../utils/helpers';
+import { statisticHelp, backupStatistics } from '../../../utils/backupStatistics';
 
 interface PlanStatsProps {
    plan: Plan;
@@ -28,8 +29,14 @@ const PlanStats = ({ plan, isSync, lastBackupItem, storageAction }: PlanStatsPro
       : undefined;
    const sourceName = isStorageSource ? sourceStorage?.name || '' : plan.device?.name || '';
 
-   const totalFiles = lastBackupItem?.totalFiles || 0;
-   const totalSize = lastBackupItem?.totalSize || 0;
+   const remoteManaged = plan.method === 'backup' && plan.sourceType === 'device' && plan.sourceId !== 'main';
+   const completed = (plan.backups || [])
+      .filter((backup) => backup.status === 'completed')
+      .slice()
+      .sort((a, b) => new Date(b.started).getTime() - new Date(a.started).getTime())[0];
+   const measured = backupStatistics(completed?.completionStats as unknown as Record<string, unknown>);
+   const totalFiles = remoteManaged ? measured.totalFiles : lastBackupItem?.totalFiles || 0;
+   const totalSize = remoteManaged ? measured.logicalBytes : lastBackupItem?.totalSize || 0;
 
    const sourceTooltipHTML = (sources: Plan['sourceConfig']) => {
       let html = '';
@@ -77,13 +84,14 @@ const PlanStats = ({ plan, isSync, lastBackupItem, storageAction }: PlanStatsPro
          </div>
          <div className={classes.snapshots}>
             <div className={classes.widgetTitle}>
-               <Icon type="folders" size={12} /> Stats{' '}
-               <span className={classes.widgetSubTitle}>
-                  {formatNumberToK(totalFiles)} files <i>|</i> {formatBytes(totalSize)}
+               <Icon type="folders" size={12} /> {isSync ? 'Stats' : 'Snapshot Stats'}{' '}
+               <span className={classes.widgetSubTitle} title={statisticHelp.snapshotSize}>
+                  {totalFiles === undefined ? 'Not measured' : formatNumberToK(totalFiles) + ' files'} <i>|</i>{' '}
+                  {totalSize === undefined ? 'Not measured' : formatBytes(totalSize)}
                </span>
             </div>
             <div className={classes.snapshotsContent}>
-               <PlanSizeChart backups={plan.backups} />
+               <PlanSizeChart backups={plan.backups} remoteManaged={remoteManaged} isSync={isSync} />
             </div>
          </div>
          <div className={classes.health}>

@@ -5,6 +5,7 @@
   "license": "Apache-2.0",
   "scripts": {
     "test:release": "node --test scripts/__tests__/releasePlease.test.cjs",
+    "test:docs": "pnpm --filter @plutonhq/core-frontend test:docs",
     "prepare": "pnpm run setup:hooks",
     "setup:hooks": "node ./scripts/setup-git-hooks.js",
     "build": "turbo run build",

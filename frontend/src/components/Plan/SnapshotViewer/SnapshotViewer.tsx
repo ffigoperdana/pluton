@@ -19,7 +19,6 @@ import { useSnapshotDatabase } from '../../common/SnapshotBrowser/hooks/useSnaps
 import { useSnapshotNavigation } from '../../common/SnapshotBrowser/hooks/useSnapshotNavigation';
 import { useSnapshotSort } from '../../common/SnapshotBrowser/hooks/useSnapshotSort';
 import classes from '../../common/SnapshotBrowser/SnapshotBrowser.module.scss';
-import Upgrade from '../../Upgrade/Upgrade';
 
 interface SnapshotViewerProps {
    files: FileItem[];
@@ -67,7 +66,6 @@ const SnapshotViewer = ({
    const [showRestoreModal, setShowRestoreModal] = useState<FileItem | false>(false);
    const [selectedReplicationId, setSelectedReplicationId] = useState<string | undefined>(replicationId);
    const [currentFiles, setCurrentFiles] = useState<FileItem[]>(files);
-   const [showUpgrade, setShowUpgrade] = useState<boolean>(false);
    const fileListRef = useRef<HTMLDivElement | null>(null);
    const navigate = useNavigate();
 
@@ -214,7 +212,6 @@ const SnapshotViewer = ({
                onDirectoryClick={handleDirectoryClick}
                onRestore={(file) => setShowRestoreModal(file)}
                renderFileActions={stagingOnly ? () => null : renderFileActions}
-               showUpgradeModal={() => setShowUpgrade(true)}
             />
          );
       },
@@ -346,7 +343,6 @@ const SnapshotViewer = ({
          )}
 
          {children}
-         {showUpgrade && <Upgrade focus="snapshot" onClose={() => setShowUpgrade(false)} />}
       </div>
    );
 };

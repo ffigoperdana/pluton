@@ -14,8 +14,8 @@ import DeviceSingle from './routes/DeviceSingle/DeviceSingle';
 import Footer from './components/App/Footer/Footer';
 import NotFoundRoute from './routes/NotFoundRoute/NotFoundRoute';
 import Icon from './components/common/Icon/Icon';
-import { useCheckLatestVersion } from './services';
-import { compareVersions } from './utils';
+import { lazy, Suspense } from 'react';
+const Docs = lazy(() => import('./docs/Docs'));
 
 function PublicRoute({ children }: { children: React.ReactNode }) {
    const { data: authData, isLoading: authLoading } = useAuth();
@@ -37,9 +37,6 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
 
 function ProtectedLayout() {
    const { data: authData, isError: authError, isLoading: authLoading } = useAuth();
-   const { data } = useCheckLatestVersion();
-   const version = (window as any).plutonVersion || 'unknown';
-   const hasNewVersion = data?.result?.latestVersion && version !== 'dev' && compareVersions(version, data.result.latestVersion);
 
    if (authLoading) {
       return (
@@ -61,12 +58,10 @@ function ProtectedLayout() {
       return <Navigate to="/login" replace />;
    }
 
-   console.log('User data :', authData);
-
    return (
       <>
          <App />
-         <Footer version={authData?.appVersion || ''} latestVersion={hasNewVersion ? data?.result?.latestVersion : undefined} />
+         <Footer version={authData?.appVersion || ''} revision={(window as any).plutonRevision} />
       </>
    );
 }
@@ -74,6 +69,14 @@ function ProtectedLayout() {
 export function AppRoutes() {
    return (
       <Routes>
+         <Route
+            path="/docs/*"
+            element={
+               <Suspense fallback={<p>Loading documentation…</p>}>
+                  <Docs />
+               </Suspense>
+            }
+         />
          <Route path="/" element={<ProtectedLayout />}>
             <Route index element={<Plans />} />
             <Route path="settings" element={<Settings />} />

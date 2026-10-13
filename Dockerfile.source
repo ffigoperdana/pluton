@@ -23,8 +23,17 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
 COPY scripts ./scripts
 COPY backend ./backend
 COPY frontend ./frontend
+COPY agent ./agent
+# Public evidence required by the build-time docs validator, not runtime config.
+COPY docs/ROADMAP.md ./docs/ROADMAP.md
+COPY deploy/compose.yml ./deploy/compose.yml
+COPY installers/install-agent.sh ./installers/install-agent.sh
+COPY LICENSE ./LICENSE
 
 RUN pnpm install --frozen-lockfile
+
+# The documentation's deployment evidence includes this public build definition.
+COPY Dockerfile.source ./Dockerfile.source
 
 # The backend build copies the built frontend into backend/public.
 RUN pnpm --filter @plutonhq/core-frontend build && pnpm --filter @plutonhq/core-backend build
@@ -58,6 +67,7 @@ RUN mkdir -p /app/backend /app/drizzle /data/config /data/db /data/logs /data/pr
 
 WORKDIR /app
 
+COPY LICENSE ./LICENSE
 COPY --from=production-dependencies /workspace/node_modules ./node_modules
 COPY --from=production-dependencies /workspace/backend/node_modules ./backend/node_modules
 COPY --from=production-dependencies /workspace/backend/package.json ./backend/package.json
@@ -72,7 +82,7 @@ RUN printf '%s\n' '#!/bin/sh' 'exec /usr/local/bin/rclone --config /data/config/
 RUN printf '%s\n' '#!/bin/sh' 'export RCLONE_CONFIG=/data/config/rclone.conf' 'exec /usr/local/bin/restic -o rclone.program=/usr/local/bin/rclone "$$@"' > /usr/local/bin/prestic
 RUN chmod 0755 /usr/local/bin/restic /usr/local/bin/rclone /usr/local/bin/prclone /usr/local/bin/prestic && chown -R pluton:pluton /app /data
 
-ENV NODE_ENV=production IS_DOCKER=true SERVER_PORT=5173 APP_VERSION=${APP_VERSION} PLUTON_DATA_DIR=/data PATH="/usr/local/bin:${PATH}"
+ENV NODE_ENV=production IS_DOCKER=true SERVER_PORT=5173 APP_VERSION=${APP_VERSION} VCS_REF=${VCS_REF} PLUTON_DATA_DIR=/data PATH="/usr/local/bin:${PATH}"
 
 EXPOSE 5173
 VOLUME ["/data"]

@@ -292,6 +292,37 @@ CREATE USER 'backup_logs'@'127.0.0.1' IDENTIFIED BY '${logsPassword}'; GRANT SEL
 	};
 	const result = await executeFilesystemBackup(input);
 	assert.match(result.snapshotId, /^[a-f0-9]{64}$/);
+	const incremental = await executeFilesystemBackup({
+		...input,
+		payload: { ...input.payload, backupId: 'backup-02' },
+		successfulSnapshotIds: [result.snapshotId],
+	});
+	assert.equal(
+		incremental.summary.files_new,
+		0,
+		'second real filesystem/DB backup must reuse the compatible successful parent'
+	);
+	assert.equal(
+		incremental.summary.files_unmodified,
+		1,
+		'unchanged application file must not be reported as new'
+	);
+	const replay = await executeFilesystemBackup(input);
+	assert.equal(replay.snapshotId, result.snapshotId);
+	for (const key of [
+		'files_new',
+		'files_changed',
+		'files_unmodified',
+		'total_files_processed',
+		'total_bytes_processed',
+		'data_added',
+		'data_added_packed',
+	] as const)
+		assert.equal(
+			replay.summary[key],
+			result.summary[key],
+			'lost-receipt replay must use actual snapshot statistics'
+		);
 	assert.deepEqual(result.lifecycle?.warnings || [], []);
 	assert.deepEqual(
 		await fs.readdir(path.join(state, 'jobs')).catch((error: NodeJS.ErrnoException) => {

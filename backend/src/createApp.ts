@@ -1,6 +1,7 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import express, { type Express } from 'express';
+import { registerSpaFallback } from './utils/spaFallback';
 import { IncomingMessage, ServerResponse } from 'http';
 import cors from 'cors';
 import session from 'express-session';
@@ -286,7 +287,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 					defaultSrc: ["'self'"],
 					scriptSrc: ["'self'", "'unsafe-inline'"],
 					styleSrc: ["'self'", "'unsafe-inline'"],
-					imgSrc: ["'self'", 'data:', 'blob:', 'https://pluton.b-cdn.net'],
+					imgSrc: ["'self'", 'data:', 'blob:'],
 					fontSrc: ["'self'", 'data:'],
 					connectSrc,
 					frameAncestors: ["'none'"],
@@ -346,9 +347,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 
 	// For any other request that doesn't match an API route or a static file,
 	// serve the index.html file. This is the key for Single Page Applications.
-	app.get('{*path}', (req, res) => {
-		res.sendFile(path.join(publicPath, 'index.html'));
-	});
+	registerSpaFallback(app, publicPath);
 
 	// Clean up backups/restores left "in progress" by a previous shutdown, before any schedule job starts.
 	await new StartupRecovery(planService).run();
