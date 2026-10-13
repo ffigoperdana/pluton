@@ -213,8 +213,9 @@ describe('SettingsService', () => {
 
 			await expect(promise).rejects.toThrow(AppError);
 			await expect(promise).rejects.toThrow(
-				'Failed to send test notification using smtp. Reason: Auth failed'
+				'Failed to send test notification. Check the saved channel and delivery configuration.'
 			);
+			await expect(promise).rejects.not.toThrow('Auth failed');
 
 			// Ensure the second update to set `connected: true` was NOT called
 			expect(mockSettingsStore.update).toHaveBeenCalledTimes(1);
@@ -369,8 +370,9 @@ describe('SettingsService', () => {
 
 				await expect(promise).rejects.toThrow(AppError);
 				await expect(promise).rejects.toThrow(
-					'Failed to send test notification using ntfy. Reason: Ntfy returned 401: unauthorized'
+					'Failed to send test notification. Check the saved channel and delivery configuration.'
 				);
+				await expect(promise).rejects.not.toThrow('Ntfy returned 401: unauthorized');
 
 				expect(mockSettingsStore.update).toHaveBeenCalledTimes(1);
 			});
