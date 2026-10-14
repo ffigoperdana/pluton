@@ -22,6 +22,7 @@ import {
 	remoteManagedRepositoryRelations,
 } from './schema/remoteManagedRepositories';
 import { appPaths } from '../utils/AppPaths';
+import { internalRecoverySessions, internalRecoveryImportLeases } from './schema/internalRecovery';
 import {
 	notificationChannels,
 	notificationSubscriptions,
@@ -76,6 +77,8 @@ export const db = drizzle(sqlite, {
 		recoveryTargets,
 		recoveryTestPolicies,
 		recoveryImportLeases,
+		internalRecoverySessions,
+		internalRecoveryImportLeases,
 		notificationChannels,
 		notificationSubscriptions,
 		notificationSources,

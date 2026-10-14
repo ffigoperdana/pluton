@@ -7,6 +7,13 @@ export const recoveryPolicySchema = z
 	.object({
 		enabled: z.boolean(),
 		databaseImport: z.enum(['disabled', 'required']),
+		targetModes: z
+			.object({
+				mariadb: z.enum(['internal', 'custom']).optional(),
+				postgresql: z.enum(['internal', 'custom']).optional(),
+			})
+			.strict()
+			.optional(),
 	})
 	.strict();
 export const recoveryTargetSchema = z

@@ -251,6 +251,7 @@ export class NotificationDeliveryStore {
 			 UNION ALL
 			 SELECT s.id AS source_id,s.kind,s.job_id FROM notification_sources s JOIN recovery_tests r ON s.kind='recovery' AND s.job_id=r.id JOIN plans p ON p.id=r.plan_id
 			 WHERE s.ready=1 AND r.status IN ('passed','passed_with_warning','failed','cancelled')
+			 AND COALESCE(CASE WHEN json_valid(r.result) THEN json_extract(r.result,'$.cleanup.infrastructure') END,1) <> 0
 			 ORDER BY source_id LIMIT ?`
 				)
 				.all(limit) as Row[];

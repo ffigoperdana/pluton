@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'react-toastify';
 import type { RecoveryEngine, RecoveryPolicy, RecoveryTarget } from '../../../@types/recoveryTests';
-import { useRecoveryConfiguration, useSaveRecoveryPolicy, useSaveRecoveryTarget } from '../../../services/recoveryTests';
+import { useRecoveryConfiguration, useRecoveryTests, useSaveRecoveryPolicy, useSaveRecoveryTarget } from '../../../services/recoveryTests';
+import { recoveryTargetChoices, recoveryTargetMode, internalStatus } from '../../../utils/recoveryTargetModes';
 import classes from './RecoveryTesting.module.scss';
 
 function TargetEditor({ engine, saved, planId }: { engine: RecoveryEngine; saved?: RecoveryTarget; planId: string }) {
@@ -88,7 +89,8 @@ function TargetEditor({ engine, saved, planId }: { engine: RecoveryEngine; saved
 export default function RecoverySettings({ planId }: { planId?: string }) {
    const configuration = useRecoveryConfiguration(planId);
    const save = useSaveRecoveryPolicy(planId || '');
-   const [policy, setPolicy] = useState<RecoveryPolicy>({ enabled: false, databaseImport: 'disabled' });
+   const history = useRecoveryTests(planId || '', !!planId);
+   const [policy, setPolicy] = useState<RecoveryPolicy>(() => configuration.data?.policy || { enabled: false, databaseImport: 'disabled' });
    useEffect(() => {
       if (configuration.data) setPolicy(configuration.data.policy);
    }, [configuration.data]);
@@ -126,7 +128,7 @@ export default function RecoverySettings({ planId }: { planId?: string }) {
                   disabled={save.isPending}
                   onClick={() =>
                      save.mutate(
-                        { enabled: policy.enabled, databaseImport: policy.databaseImport },
+                        { enabled: policy.enabled, databaseImport: policy.databaseImport, targetModes: policy.targetModes },
                         { onSuccess: () => toast.success('Recovery policy saved.'), onError: (error) => toast.error(error.message) },
                      )
                   }
@@ -138,13 +140,74 @@ export default function RecoverySettings({ planId }: { planId?: string }) {
                   <code>pluton_recovery_guard</code> marker are required. MariaDB/MySQL keep the original logical name and refuse an existing
                   database; PostgreSQL uses a fresh database. See <code>docs/PHASE6_RECOVERY_TESTING.md</code> before provisioning.
                </p>
+               {Object.values(policy.targetModes || {}).includes('internal') && (
+                  <p role="status">
+                     Internal targets require manual operator activation/deactivation. Turn off after-backup automation and save the policy. Only one
+                     internal engine/test can run. A mixed MariaDB + PostgreSQL snapshot must keep one engine Custom.
+                  </p>
+               )}
                {(['mariadb', 'mysql', 'postgresql'] as const).map((engine) => (
-                  <TargetEditor
-                     key={engine}
-                     engine={engine}
-                     planId={planId}
-                     saved={configuration.data?.targets.find((target) => target.engine === engine)}
-                  />
+                  <div key={engine} className={classes.card}>
+                     <h4>{engine} Recovery Target</h4>
+                     {engine === 'mysql' ? (
+                        <p>
+                           Custom only · Oracle MySQL worker:{' '}
+                           {configuration.data?.mysqlWorker === 'ready' ? 'Ready (target preflight required)' : 'Unavailable'}
+                        </p>
+                     ) : (
+                        <label>
+                           Recovery Target
+                           <select
+                              value={recoveryTargetMode(policy, engine)}
+                              onChange={(e) =>
+                                 setPolicy({ ...policy, targetModes: { ...policy.targetModes, [engine]: e.target.value as 'internal' | 'custom' } })
+                              }
+                           >
+                              {recoveryTargetChoices(engine).map((mode) => (
+                                 <option key={mode} value={mode}>
+                                    {mode === 'internal' ? 'Internal' : 'Custom'}
+                                 </option>
+                              ))}
+                           </select>
+                        </label>
+                     )}
+                     {recoveryTargetMode(policy, engine) === 'custom' ? (
+                        <TargetEditor
+                           engine={engine}
+                           planId={planId}
+                           saved={configuration.data?.targets.find((target) => target.engine === engine)}
+                        />
+                     ) : (
+                        <>
+                           <p role="status">
+                              {internalStatus(
+                                 configuration.data?.internalTargets?.find((target) => target.engine === engine),
+                                 history.data?.find((test) => test.result?.internalEngine === engine),
+                              )}
+                           </p>
+                           {history.data?.find((test) => test.result?.internalEngine === engine)?.failureCode ===
+                              'internal-resources-insufficient' && (
+                              <p>
+                                 Last admission: Insufficient Resources. No SQL was imported. Any pending container cleanup still requires operator
+                                 action.
+                              </p>
+                           )}
+                           <p>
+                              Operator-managed Compose, not automatic container startup/shutdown. Activate the approved {engine} target before Run
+                              Recovery Test. SQL integrity, verified TLS, dedicated marker, restricted permissions and resource preflight are
+                              mandatory. After the test, the operator must deactivate the owned container. The result cannot be Passed until cleanup
+                              is confirmed.
+                           </p>
+                           <p>
+                              Provisioning: <code>docs/MANAGED_INTERNAL_RECOVERY_TESTING_REPORT.md</code>. No administrator credentials are stored in
+                              this form.
+                           </p>
+                           <button type="button" onClick={() => void configuration.refetch()}>
+                              Refresh target readiness
+                           </button>
+                        </>
+                     )}
+                  </div>
                ))}
             </>
          )}

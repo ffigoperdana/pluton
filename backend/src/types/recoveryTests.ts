@@ -17,8 +17,13 @@ export type RecoveryStage =
 	| 'database-import-validation'
 	| 'database-cleanup'
 	| 'workspace-cleanup'
+	| 'infrastructure-cleanup'
 	| 'job';
 export type RecoveryCode =
+	| 'internal-target-not-provisioned'
+	| 'internal-target-unsafe'
+	| 'internal-resources-insufficient'
+	| 'internal-cleanup-required'
 	| 'mysql-worker-not-configured'
 	| 'mysql-worker-unavailable'
 	| 'mysql-worker-busy'
@@ -76,6 +81,7 @@ export type RecoveryDatabaseResult = {
 	views?: number;
 };
 export type RecoveryResult = {
+	internalEngine?: InternalRecoveryEngine;
 	filesystem?: {
 		files: number;
 		bytes: number;
@@ -83,12 +89,16 @@ export type RecoveryResult = {
 		integrity: 'restic-restore-and-structure';
 	};
 	databases: RecoveryDatabaseResult[];
-	cleanup: { workspace: boolean; databases: boolean };
+	cleanup: { workspace: boolean; databases: boolean; infrastructure?: boolean };
 };
+export type InternalRecoveryEngine = 'mariadb' | 'postgresql';
+export type RecoveryTargetMode = 'internal' | 'custom';
 export type RecoveryPolicy = {
 	enabled: boolean;
 	databaseImport: 'disabled' | 'required';
 	enabledAt?: number;
+	/** Missing entries preserve the original Custom behavior. MySQL is always Custom. */
+	targetModes?: Partial<Record<InternalRecoveryEngine, RecoveryTargetMode>>;
 };
 export type RecoveryTargetConfig = {
 	engine: RecoveryEngine;

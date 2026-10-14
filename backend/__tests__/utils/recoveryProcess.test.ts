@@ -52,6 +52,7 @@ describe('Recovery native process bounds and sanitized errors', () => {
 		['Access denied synthetic-password', 'database-authentication-failed'],
 		['connection refused private-host', 'database-target-unavailable'],
 		['certificate verification failed private-data', 'database-tls-failed'],
+		['ERROR 2026 (HY000): TLS/SSL error: Failed to verify peer certificate', 'database-tls-failed'],
 		['role "synthetic_role" does not exist', 'database-role-missing'],
 		['corrupt SQL secret', 'database-import-failed'],
 	])('classifies provider output without exposing it', async (stderr, code) => {

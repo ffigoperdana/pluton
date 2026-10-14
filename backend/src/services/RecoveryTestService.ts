@@ -14,7 +14,8 @@ import type { RemoteRepositoryRecoveryService } from './RemoteRepositoryRecovery
 import { RemoteBackupService } from './RemoteBackupService';
 import { ManagedRepositoryAccessError } from '../utils/restic/ManagedSftpRepositorySession';
 import { RecoveryDatabaseImporter } from '../utils/recoveryDatabaseImport';
-import { WorkerRecoveryDatabaseImporter } from '../utils/mysqlRecoveryWorkerClient';
+import { InternalRecoveryImporter } from '../utils/internalRecoveryImporter';
+import { InternalRecoveryTargets, mysqlWorkerReadiness } from '../utils/internalRecoveryTargets';
 import {
 	checkRecoveryCancellation,
 	recoveryArtifacts,
@@ -39,10 +40,11 @@ export class RecoveryTestService {
 		private readonly backups: BackupStore,
 		private readonly recovery: Pick<RemoteRepositoryRecoveryService, 'testBinding' | 'testRestore'>,
 		root = path.join(appPaths.getDataDir(), 'recovery-tests'),
-		importer?: RecoveryDatabaseImporter
+		importer?: RecoveryDatabaseImporter,
+		private readonly internal = new InternalRecoveryTargets()
 	) {
 		this.workspace = new RecoveryWorkspace(root);
-		this.importer = importer || new WorkerRecoveryDatabaseImporter(store);
+		this.importer = importer || new InternalRecoveryImporter(store, internal);
 	}
 	private async ownedPlan(planId: string) {
 		const plan = await this.plans.getById(planId, false);
@@ -53,7 +55,19 @@ export class RecoveryTestService {
 	}
 	async configuration(planId: string) {
 		await this.ownedPlan(planId);
-		return { policy: await this.store.policy(planId), targets: await this.store.targets(planId) };
+		const pending = await this.store.pendingInternalSessions();
+		const internalTargets = await this.internal.readiness(pending);
+		for (const view of internalTargets) {
+			const session = pending.find(value => value.engine === view.engine);
+			if (session && (await this.store.get(session.testId))?.status !== 'running')
+				view.status = 'cleanup_required';
+		}
+		return {
+			policy: await this.store.policy(planId),
+			targets: await this.store.targets(planId),
+			internalTargets,
+			mysqlWorker: await mysqlWorkerReadiness(),
+		};
 	}
 	async savePolicy(planId: string, input: unknown) {
 		await this.ownedPlan(planId);
@@ -102,6 +116,7 @@ export class RecoveryTestService {
 		}));
 	}
 	private async dispatch(): Promise<void> {
+		await this.reconcileInfrastructure();
 		for (const backupId of await this.store.automaticCandidates()) {
 			const backup = await this.backups.getById(backupId);
 			if (backup?.planId) {
@@ -182,6 +197,7 @@ export class RecoveryTestService {
 			this.log(row.planId, row.backupId, 'stage', value, undefined, row.id);
 		};
 		let directory: string | undefined;
+		let internalTarget: Awaited<ReturnType<RecoveryTestStore['beginInternalSession']>> | undefined;
 		try {
 			checkRecoveryCancellation(signal);
 			const backup = await this.backups.getById(row.backupId);
@@ -203,7 +219,9 @@ export class RecoveryTestService {
 				async () => {
 					await this.workspace.assert(row.id);
 				},
-				1024 ** 4,
+				Object.values(row.policy.targetModes || {}).includes('internal')
+					? 4 * 1024 ** 3
+					: 1024 ** 4,
 				() => {
 					warnings.push({ stage: 'workspace-cleanup', code: 'workspace-cleanup-failed' });
 				}
@@ -220,6 +238,35 @@ export class RecoveryTestService {
 			const artifacts = new Map<string, string>();
 			for (const entry of result.databases)
 				artifacts.set(entry.path, await validateRecoveryArtifact(entry, files, signal));
+			const internalEngines = [
+				...new Set(
+					result.databases
+						.filter(
+							entry =>
+								row.policy.databaseImport === 'required' &&
+								entry.engine !== 'mysql' &&
+								entry.engine &&
+								row.policy.targetModes?.[entry.engine] === 'internal'
+						)
+						.map(entry => entry.engine!)
+				),
+			];
+			if (internalEngines.length > 1)
+				throw new RecoveryTestError('database-target-preflight', 'internal-target-unsafe');
+			if (internalEngines.length) {
+				setStage('database-target-preflight');
+				const engine = internalEngines[0] as 'mariadb' | 'postgresql';
+				result.internalEngine = engine;
+				const entries = result.databases.filter(entry => entry.engine === engine);
+				const activation = await this.internal.prepare(engine, entries);
+				checkRecoveryCancellation(signal);
+				internalTarget = await this.store.beginInternalSession({ testId: row.id, ...activation });
+				result.internalEngine = engine;
+				result.cleanup.infrastructure = false;
+				await this.store.update(row.id, { result });
+				// Bind the manually activated infrastructure durably before admission, but never import before admission.
+				await this.internal.preflight(engine, entries, directory);
+			}
 			for (const entry of result.databases) {
 				checkRecoveryCancellation(signal);
 				if (row.policy.databaseImport === 'disabled') {
@@ -235,7 +282,10 @@ export class RecoveryTestService {
 				}
 				let saved;
 				try {
-					saved = await this.store.target(row.planId, entry.engine);
+					saved =
+						internalTarget?.engine === entry.engine
+							? internalTarget
+							: await this.store.target(row.planId, entry.engine);
 				} catch {
 					entry.importValidation = 'not_configured';
 					entry.failureCode = 'recovery-target-not-configured';
@@ -316,6 +366,13 @@ export class RecoveryTestService {
 				databasesClean = false;
 				warnings.push({ stage: 'database-cleanup', code: 'database-cleanup-failed' });
 			}
+			if (internalTarget && databasesClean && directory)
+				try {
+					await this.importer.verifyEmptyTarget(internalTarget, directory);
+				} catch {
+					databasesClean = false;
+					warnings.push({ stage: 'database-cleanup', code: 'database-cleanup-failed' });
+				}
 			result.cleanup.databases = databasesClean;
 			setStage('workspace-cleanup');
 			try {
@@ -332,6 +389,23 @@ export class RecoveryTestService {
 					'Inspect this exact inactive recovery workspace.'
 				);
 			}
+		}
+		if (internalTarget) {
+			setStage('infrastructure-cleanup');
+			const clean =
+				result.cleanup.databases &&
+				result.cleanup.workspace &&
+				(await this.store.leases(row.id)).length === 0;
+			if (clean) await this.store.markInternalCleanupReady(internalTarget.id);
+			const session = await this.store.internalSession(internalTarget.id);
+			if (session)
+				try {
+					await this.internal.requestCleanup(session, row.snapshotId);
+				} catch {
+					/* Required pending receipt below. */
+				}
+			warnings.push({ stage: 'infrastructure-cleanup', code: 'internal-cleanup-required' });
+			failure ||= new RecoveryTestError('infrastructure-cleanup', 'internal-cleanup-required');
 		}
 		const cancelled = signal.aborted || (await this.store.get(row.id))?.cancelRequested;
 		await this.store.update(row.id, {
@@ -357,6 +431,7 @@ export class RecoveryTestService {
 			...interrupted.map(row => row.id),
 			...leases.map(lease => lease.testId),
 			...(await this.store.cleanupCandidates()).map(row => row.id),
+			...(await this.store.pendingInternalSessions()).map(row => row.testId),
 		]);
 		for (const id of ids) {
 			const row = await this.store.get(id);
@@ -381,6 +456,18 @@ export class RecoveryTestService {
 						warnings.push({ stage: 'database-cleanup', code: 'database-cleanup-failed' });
 					}
 				}
+				const internalSession = (await this.store.pendingInternalSessions()).find(
+					value => value.testId === id
+				);
+				if (internalSession && databasesClean && !internalSession.cleanupReady)
+					try {
+						const target = await this.store.leaseTarget(internalSession.id);
+						if (!target) throw new Error();
+						await this.importer.verifyEmptyTarget({ ...target, id: internalSession.id }, directory);
+					} catch {
+						databasesClean = false;
+						warnings.push({ stage: 'database-cleanup', code: 'database-cleanup-failed' });
+					}
 			} catch {
 				databasesClean = !leases.some(lease => lease.testId === id);
 				workspaceClean = false;
@@ -398,8 +485,65 @@ export class RecoveryTestService {
 					? {
 							result: {
 								...row.result,
-								cleanup: { databases: databasesClean, workspace: workspaceClean },
+								cleanup: {
+									...row.result.cleanup,
+									databases: databasesClean,
+									workspace: workspaceClean,
+								},
 							},
+						}
+					: {}),
+			});
+			const session = (await this.store.pendingInternalSessions()).find(
+				value => value.testId === id
+			);
+			if (session) {
+				if (databasesClean && workspaceClean && !(await this.store.leases(id)).length)
+					await this.store.markInternalCleanupReady(session.id);
+				const latest = await this.store.internalSession(session.id);
+				if (latest)
+					try {
+						await this.internal.requestCleanup(latest, row.snapshotId);
+					} catch {
+						/* Retain pending cleanup. */
+					}
+			}
+		}
+		await this.reconcileInfrastructure();
+	}
+	/** A root-authenticated removal receipt is required; SQL success alone cannot mean Passed. */
+	private async reconcileInfrastructure() {
+		for (const session of await this.store.pendingInternalSessions()) {
+			const row = await this.store.get(session.testId);
+			if (
+				!row ||
+				['queued', 'running'].includes(row.status) ||
+				!session.cleanupReady ||
+				(await this.store.leases(row.id)).length ||
+				!this.internal.removed(session, row.snapshotId)
+			)
+				continue;
+			const warnings = row.warnings.filter(warning => warning.code !== 'internal-cleanup-required');
+			const complete =
+				!!row.result?.filesystem &&
+				row.result.databases.every(
+					entry => entry.artifactValidation === 'passed' && entry.importValidation === 'passed'
+				) &&
+				row.result.cleanup.workspace &&
+				row.result.cleanup.databases;
+			const pendingSuccess =
+				!row.cancelRequested && row.failureCode === 'internal-cleanup-required' && complete;
+			await this.store.completeInternalCleanup(session.id, {
+				completedAt: new Date(),
+				warnings,
+				...(row.result
+					? { result: { ...row.result, cleanup: { ...row.result.cleanup, infrastructure: true } } }
+					: {}),
+				...(pendingSuccess
+					? {
+							status: warnings.length ? 'passed_with_warning' : 'passed',
+							failureCode: null,
+							failureStage: null,
 						}
 					: {}),
 			});

@@ -1,5 +1,14 @@
 export type RecoveryEngine = 'mariadb' | 'mysql' | 'postgresql';
-export type RecoveryPolicy = { enabled: boolean; databaseImport: 'disabled' | 'required' };
+export type RecoveryPolicy = {
+   enabled: boolean;
+   databaseImport: 'disabled' | 'required';
+   targetModes?: Partial<Record<'mariadb' | 'postgresql', 'internal' | 'custom'>>;
+};
+export type InternalTargetView = {
+   engine: 'mariadb' | 'postgresql';
+   status: 'not_provisioned' | 'ready' | 'running' | 'cleanup_required';
+   mode: 'operator-managed';
+};
 export type RecoveryTarget = {
    engine: RecoveryEngine;
    host: string;
@@ -24,6 +33,7 @@ export type RecoveryTest = {
    failureCode?: string;
    warnings: { stage: string; code: string }[];
    result?: {
+      internalEngine?: 'mariadb' | 'postgresql';
       filesystem?: { files: number; bytes: number; sourceTrees: number; integrity: string };
       databases: {
          databaseId?: string;
@@ -38,6 +48,6 @@ export type RecoveryTest = {
          tables?: number;
          views?: number;
       }[];
-      cleanup: { workspace: boolean; databases: boolean };
+      cleanup: { workspace: boolean; databases: boolean; infrastructure?: boolean };
    };
 };

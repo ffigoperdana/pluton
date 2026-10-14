@@ -395,7 +395,7 @@ export class RecoveryDatabaseImporter {
 			await connection?.close();
 		}
 	}
-	async cleanup(lease: RecoveryImportLease, directory: string) {
+	async cleanup(lease: RecoveryImportLease, directory: string, internalConnections = false) {
 		const target = await this.store.leaseTarget(lease.targetId);
 		if (!target) throw new RecoveryTestError('database-cleanup', 'database-cleanup-failed');
 		const controller = new AbortController(); // cancellation does not skip bounded cleanup
@@ -418,6 +418,29 @@ export class RecoveryDatabaseImporter {
 					lease.ownerToken
 				)
 					throw new RecoveryTestError('database-cleanup', 'database-cleanup-failed');
+				if (internalConnections) {
+					if (
+						!lease.targetId.startsWith('irt_') ||
+						!postgres ||
+						!/^pluton_rt_[a-f0-9]{24}$/.test(lease.database)
+					)
+						throw new RecoveryTestError('database-cleanup', 'database-cleanup-failed');
+					// A killed psql can leave pg_sleep/import's backend alive. Only this role's
+					// client sessions in the freshly created, twice ownership-checked DB qualify.
+					const stopped = (
+						await connection.query(
+							'postgres',
+							`SELECT pg_terminate_backend(pid,5000) FROM pg_stat_activity WHERE datname='${lease.database}' AND usename=current_user AND backend_type='client backend' AND pid<>pg_backend_pid();`,
+							'database-cleanup'
+						)
+					).trim();
+					if (
+						(stopped && stopped.split(/\r?\n/).some(value => value !== 't')) ||
+						(await this.owner(connection.query, lease.database, 'database-cleanup')) !==
+							lease.ownerToken
+					)
+						throw new RecoveryTestError('database-cleanup', 'database-cleanup-failed');
+				}
 				await connection.query(
 					postgres ? 'postgres' : '',
 					`DROP DATABASE ${postgres ? `"${lease.database}"` : `\`${lease.database}\``};`,
@@ -425,6 +448,41 @@ export class RecoveryDatabaseImporter {
 				);
 			}
 			await this.store.removeLease(lease.id);
+		} finally {
+			await connection.close();
+		}
+	}
+	/** Internal infrastructure removal additionally requires an empty recovery catalog. */
+	async verifyEmptyTarget(target: RecoveryTarget & { id: string }, directory: string) {
+		const { id: _id, ...config } = target;
+		const connection = await this.connection(config, directory, new AbortController().signal);
+		try {
+			if (
+				(
+					await connection.query(
+						GUARD,
+						'SELECT purpose FROM pluton_recovery_guard;',
+						'database-cleanup'
+					)
+				).trim() !== PURPOSE
+			)
+				throw new RecoveryTestError('database-cleanup', 'database-cleanup-failed');
+			const postgres = target.engine === 'postgresql';
+			const catalog = (
+				await connection.query(
+					postgres ? 'postgres' : '',
+					postgres ? 'SELECT datname FROM pg_database;' : 'SHOW DATABASES;',
+					'database-cleanup'
+				)
+			)
+				.trim()
+				.split(/\r?\n/)
+				.filter(Boolean);
+			const system = postgres
+				? ['postgres', 'template0', 'template1', GUARD]
+				: ['mysql', 'information_schema', 'performance_schema', 'sys', GUARD];
+			if (catalog.some(name => !system.includes(name)))
+				throw new RecoveryTestError('database-cleanup', 'database-cleanup-failed');
 		} finally {
 			await connection.close();
 		}

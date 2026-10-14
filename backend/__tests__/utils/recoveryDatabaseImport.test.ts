@@ -112,6 +112,45 @@ describe('Phase 6 safe native database import', () => {
 		allowedDatabases: ['example_db'],
 		stage: jest.fn(),
 	});
+	it('internal PostgreSQL cancellation cleanup only terminates this role in the exact ownership-checked temporary DB', async () => {
+		target.engine = entry.engine = 'postgresql';
+		await importer.importDatabase({ ...importInput(), targetId: `irt_${'b'.repeat(24)}` });
+		await importer.cleanup(leases[0], scratch, true);
+		const terminated = sql.find(value => value.includes('pg_terminate_backend'))!;
+		expect(terminated).toContain('usename=current_user');
+		expect(terminated).toContain("backend_type='client backend'");
+		expect(terminated).toContain('pid<>pg_backend_pid()');
+		const index = sql.indexOf(terminated);
+		expect(sql[index - 1]).toContain('SELECT owner_token');
+		expect(sql[index + 1]).toContain('SELECT owner_token');
+		expect(leases).toHaveLength(0);
+	});
+	it('internal termination never runs for an unowned database or a Custom target', async () => {
+		target.engine = entry.engine = 'postgresql';
+		await importer.importDatabase(importInput());
+		await expect(importer.cleanup(leases[0], scratch, true)).rejects.toMatchObject({
+			code: 'database-cleanup-failed',
+		});
+		expect(sql.some(value => value.includes('pg_terminate_backend'))).toBe(false);
+	});
+	it('mandatory empty-catalog confirmation rejects unknown databases and changed recovery markers', async () => {
+		await expect(
+			importer.verifyEmptyTarget({ ...target, id: 'irt_example' }, scratch)
+		).resolves.toBeUndefined();
+		const original = run.getMockImplementation()!;
+		run.mockImplementation(async input =>
+			input.input === 'SHOW DATABASES;' ? 'pluton_recovery_guard\nunknown_db\n' : original(input)
+		);
+		await expect(
+			importer.verifyEmptyTarget({ ...target, id: 'irt_example' }, scratch)
+		).rejects.toMatchObject({ code: 'database-cleanup-failed' });
+		run.mockImplementation(async input =>
+			input.input.startsWith('SELECT purpose') ? 'wrong-purpose' : original(input)
+		);
+		await expect(
+			importer.verifyEmptyTarget({ ...target, id: 'irt_example' }, scratch)
+		).rejects.toMatchObject({ code: 'database-cleanup-failed' });
+	});
 	it.each(['mariadb', 'mysql', 'postgresql'])(
 		'%s imports with a separate private credential file, bounded native client and fixed catalog verification',
 		async engine => {

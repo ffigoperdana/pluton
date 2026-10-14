@@ -15,6 +15,24 @@ describe('durable notification outbox', () => {
 		});
 		return c;
 	}
+	it('defers provisional internal recovery results until mandatory infrastructure cleanup is confirmed', () => {
+		subscribed();
+		fixture.recovery('internal-test', 'failed', {
+			internalEngine: 'mariadb',
+			cleanup: { workspace: true, databases: true, infrastructure: false },
+		});
+		expect(fixture.store.reconcile()).toBe(0);
+		expect(fixture.store.deliveries()).toHaveLength(0);
+		fixture.sqlite
+			.prepare(
+				"UPDATE recovery_tests SET status='passed',result=json_set(result,'$.cleanup.infrastructure',json('true')) WHERE id='internal-test'"
+			)
+			.run();
+		fixture.store.reconcile();
+		fixture.store.reconcile();
+		expect(fixture.store.deliveries()).toHaveLength(1);
+		expect(fixture.store.deliveries()[0].eventType).toBe('recovery.passed');
+	});
 	it.each(['running', 'retrying', 'started', 'initializing'])(
 		'does not notify nonterminal backup %s',
 		status => {

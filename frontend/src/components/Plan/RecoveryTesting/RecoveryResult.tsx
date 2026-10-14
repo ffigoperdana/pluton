@@ -75,6 +75,13 @@ export default function RecoveryResult({
             ))}
             {!test.result?.databases.length && <p>No database artifact checks recorded.</p>}
             <h4>Cleanup</h4>
+            {test.result?.internalEngine && (
+               <p>
+                  Internal {test.result.internalEngine} infrastructure:{' '}
+                  {test.result.cleanup.infrastructure ? 'Complete' : 'Cleanup Required — operator deactivation pending'}. SQL/catalog success alone is
+                  not a completed recovery test.
+               </p>
+            )}
             <p>
                Workspace: {test.result?.cleanup.workspace ? 'Complete' : 'Not confirmed'} · Temporary databases:{' '}
                {test.result?.cleanup.databases ? 'Complete' : 'Not confirmed'}

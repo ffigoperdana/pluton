@@ -14,6 +14,7 @@ describe('Phase 6 actual additive migration and transactional persistence', () =
 		'concurrency',
 		'cleanup-ownership',
 		'history',
+		'internal',
 	]) {
 		it(
 			scenario,
