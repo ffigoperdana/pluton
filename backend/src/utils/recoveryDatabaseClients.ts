@@ -75,15 +75,15 @@ export function detectRecoveryClient(engine: RecoveryEngine): string {
 			)
 				return binary;
 			if (engine === 'postgresql') {
-				const version = /psql \(PostgreSQL\) (\d+)\.(\d+)/.exec(probe.stdout);
-				// \restrict security fixes: 13.22 / 14.19 / 15.14 / 16.10 / 17.6 / 18+.
+				const version = /psql \(PostgreSQL\) (\d+)\.(\d+)(?:\.\d+)?(?:\s|$)/.exec(probe.stdout);
+				// CVE-2026-18408: \unrestrict input expansion bypassed the earlier
+				// \restrict fixes. Require patched supported release lines.
 				if (
 					version &&
-					(Number(version[1]) >= 18 ||
-						Number(version[2]) >=
-							({ 13: 22, 14: 19, 15: 14, 16: 10, 17: 6 } as Record<number, number>)[
-								Number(version[1])
-							])
+					Number(version[2]) >=
+						({ 14: 24, 15: 19, 16: 15, 17: 11, 18: 6 } as Record<number, number>)[
+							Number(version[1])
+						]
 				)
 					return binary;
 			}

@@ -63,7 +63,10 @@ ARG BUILD_DATE=unknown
 
 LABEL org.opencontainers.image.source="${IMAGE_SOURCE}" org.opencontainers.image.revision="${VCS_REF}" org.opencontainers.image.version="${APP_VERSION}" org.opencontainers.image.created="${BUILD_DATE}"
 
-RUN apk add --no-cache ca-certificates wget && addgroup -S -g 10001 pluton && adduser -S -u 10001 -G pluton pluton
+# Signed stable Alpine client packages only; never install database servers.
+# mysql-client is a MariaDB alias, not a genuine Oracle MySQL recovery client.
+RUN apk add --no-cache ca-certificates wget 'mariadb-client>=11.8.8-r0' 'postgresql18-client>=18.6-r0' \
+    && addgroup -S -g 10001 pluton && adduser -S -u 10001 -G pluton pluton
 RUN mkdir -p /app/backend /app/drizzle /data/config /data/db /data/logs /data/progress /data/stats /data/sync /data/rescue
 
 WORKDIR /app
@@ -78,6 +81,7 @@ COPY --from=build /workspace/backend/drizzle ./drizzle
 COPY --from=build /workspace/backend/loader.mjs ./backend/loader.mjs
 COPY --from=restic /usr/bin/restic /usr/local/bin/restic
 COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
+COPY scripts/verify-database-recovery-clients.mjs /usr/local/libexec/pluton/verify-database-recovery-clients.mjs
 
 RUN printf '%s\n' '#!/bin/sh' 'exec /usr/local/bin/rclone --config /data/config/rclone.conf "$$@"' > /usr/local/bin/prclone
 RUN printf '%s\n' '#!/bin/sh' 'export RCLONE_CONFIG=/data/config/rclone.conf' 'exec /usr/local/bin/restic -o rclone.program=/usr/local/bin/rclone "$$@"' > /usr/local/bin/prestic
@@ -91,5 +95,9 @@ VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 CMD wget --no-verbose --tries=1 --spider "http://127.0.0.1:${SERVER_PORT}/api/health" || exit 1
 
 USER pluton
+
+# Exercise the real Phase 6 detector and native security flags as the runtime UID.
+# This imports only validation utilities; it never starts Pluton or opens /data.
+RUN node --loader ./backend/loader.mjs /usr/local/libexec/pluton/verify-database-recovery-clients.mjs
 
 CMD ["node", "--loader", "./backend/loader.mjs", "./backend/dist/index.js"]

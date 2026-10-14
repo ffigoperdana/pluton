@@ -63,9 +63,8 @@ jobs:
         run: pnpm --filter @plutonhq/core-frontend lint
 
   build-pr:
-    name: Build container for pull request
+    name: Build and verify runtime recovery clients
     needs: validate
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -82,8 +81,10 @@ jobs:
           context: .
           file: Dockerfile.source
           push: false
+          load: true
+          tags: pluton-recovery-ci:local
           build-args: |
-            APP_VERSION=pr-${{ github.event.pull_request.number }}
+            APP_VERSION=${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'runtime-validation' }}
             IMAGE_SOURCE=https://github.com/${{ github.repository }}
             VCS_REF=${{ github.sha }}
           labels: |
@@ -92,9 +93,16 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build isolated database-only fixture
+        run: docker build -f backend/__tests__/fixtures/recovery-clients/Dockerfile -t pluton-recovery-db-only:local .
+
+      - name: Verify UID 10001 clients and real recovery imports
+        shell: pwsh
+        run: ./scripts/validate-database-recovery-clients.ps1 -RuntimeImage pluton-recovery-ci:local
+
   publish:
     name: Publish immutable GHCR image
-    needs: validate
+    needs: [validate, build-pr]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     permissions:
