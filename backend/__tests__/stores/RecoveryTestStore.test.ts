@@ -12,6 +12,7 @@ describe('Phase 6 actual additive migration and transactional persistence', () =
 		'restart',
 		'cancellation',
 		'concurrency',
+		'workload-admission',
 		'cleanup-ownership',
 		'history',
 		'internal',

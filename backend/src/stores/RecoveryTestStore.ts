@@ -5,6 +5,7 @@ import { alias } from 'drizzle-orm/sqlite-core';
 import type { DatabaseType } from '../db';
 import { backups } from '../db/schema/backups';
 import { plans } from '../db/schema/plans';
+import { restores } from '../db/schema/restores';
 import { remoteManagedRepositories } from '../db/schema/remoteManagedRepositories';
 import {
 	recoveryTests,
@@ -44,6 +45,25 @@ export class RecoveryTestStore {
 
 	async get(id: string): Promise<RecoveryTest | null> {
 		return this.db.select().from(recoveryTests).where(eq(recoveryTests.id, id)).get() || null;
+	}
+	async activity() {
+		return {
+			backup: !!this.db
+				.select({ id: backups.id })
+				.from(backups)
+				.where(eq(backups.inProgress, true))
+				.get(),
+			restore: !!this.db
+				.select({ id: restores.id })
+				.from(restores)
+				.where(eq(restores.inProgress, true))
+				.get(),
+			recovery: !!this.db
+				.select({ id: recoveryTests.id })
+				.from(recoveryTests)
+				.where(eq(recoveryTests.status, 'running'))
+				.get(),
+		};
 	}
 	async list(planId: string, backupIds: string[] = []): Promise<RecoveryTest[]> {
 		const recent = this.db
@@ -359,6 +379,11 @@ export class RecoveryTestStore {
 				)
 				.get();
 			if (current) {
+				if (row.policy.snapshotMetadataToken)
+					throw new AppError(
+						409,
+						'A recovery test is already queued or running. Review its result before submitting another confirmation.'
+					);
 				if (current.backupId === row.backupId && current.snapshotId === row.snapshotId)
 					return current;
 				throw new AppError(409, 'One recovery test is already queued or running for this plan.');
@@ -371,6 +396,13 @@ export class RecoveryTestStore {
 		return this.db.transaction(tx => {
 			if (tx.select().from(recoveryTests).where(eq(recoveryTests.status, 'running')).get())
 				return null;
+			// Recovery yields to existing backup/restore work. It never pauses backups
+			// or retries a refused import in a tight loop. Check again on the next tick.
+			if (
+				tx.select().from(backups).where(eq(backups.inProgress, true)).get() ||
+				tx.select().from(restores).where(eq(restores.inProgress, true)).get()
+			)
+				return null;
 			const pendingInternal = !!tx
 				.select()
 				.from(internalRecoverySessions)
@@ -382,10 +414,7 @@ export class RecoveryTestStore {
 				.where(eq(recoveryTests.status, 'queued'))
 				.orderBy(asc(recoveryTests.createdAt))
 				.all()
-				.find(
-					value =>
-						!pendingInternal || !Object.values(value.policy.targetModes || {}).includes('internal')
-				);
+				.find(value => !pendingInternal || value.policy.databaseImport === 'disabled');
 			if (!row) return null;
 			return (
 				tx

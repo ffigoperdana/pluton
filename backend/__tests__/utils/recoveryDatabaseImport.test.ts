@@ -74,6 +74,9 @@ describe('Phase 6 safe native database import', () => {
 			sql.push(text);
 			if (text.startsWith('SELECT purpose')) return 'pluton-phase6-recovery-only\n';
 			if (text.startsWith('SELECT count(*) FROM pg_roles')) return '0\n0\n';
+			if (text === 'SHOW server_version;') return '18.6\n';
+			if (text === 'SELECT VERSION();')
+				return target.engine === 'mariadb' ? '11.8.8-MariaDB\n' : '8.4.11\n';
 			if (text === 'SHOW GRANTS;')
 				return 'GRANT USAGE ON *.* TO `recovery_user`@`localhost`\nGRANT ALL PRIVILEGES ON `example\\_db`.* TO `recovery_user`@`localhost`\nGRANT SELECT ON `pluton_recovery_guard`.`pluton_recovery_guard` TO `recovery_user`@`localhost`\n';
 			if (/SHOW DATABASES|SELECT datname/.test(text))
@@ -111,6 +114,20 @@ describe('Phase 6 safe native database import', () => {
 		signal: new AbortController().signal,
 		allowedDatabases: ['example_db'],
 		stage: jest.fn(),
+	});
+	it('checks the actual target and refuses a newer or cross-engine SQL header before CREATE/lease', async () => {
+		for (const header of [
+			'-- Server version 12.0.1-MariaDB\n',
+			'-- Server version 8.4.11\n',
+			'-- Dumped from database version 18.6\n',
+		]) {
+			await fs.writeFile(file, header + 'SELECT 1;\n');
+			await expect(importer.importDatabase(importInput())).rejects.toMatchObject({
+				code: 'database-client-incompatible',
+			});
+		}
+		expect(store.addLease).not.toHaveBeenCalled();
+		expect(sql.some(text => text.startsWith('CREATE DATABASE'))).toBe(false);
 	});
 	it('internal PostgreSQL cancellation cleanup only terminates this role in the exact ownership-checked temporary DB', async () => {
 		target.engine = entry.engine = 'postgresql';

@@ -8,6 +8,7 @@ import { readMigrationFiles } from 'drizzle-orm/migrator';
 import Cryptr from 'cryptr';
 import { plans } from '../../src/db/schema/plans';
 import { backups } from '../../src/db/schema/backups';
+import { restores } from '../../src/db/schema/restores';
 import {
 	recoveryTests,
 	recoveryTargets,
@@ -323,6 +324,26 @@ try {
 		await store.update(second.id, { status: 'cancelled' });
 		assert.equal((await store.requestCancellation(second.id))?.status, 'cancelled');
 		assert.equal(db.select().from(backups).get()!.status, 'completed');
+	}
+	if (scenario === 'workload-admission') {
+		await store.enqueue(row);
+		await assert.rejects(
+			store.enqueue({
+				...row,
+				id: 'f'.repeat(24),
+				trigger: 'manual',
+				automationKey: null,
+				policy: { ...row.policy, enabled: false, snapshotMetadataToken: 'f'.repeat(64) },
+			}),
+			/already queued or running/
+		);
+		db.update(backups).set({ inProgress: true }).run();
+		assert.equal(await store.claim(), null);
+		db.update(backups).set({ inProgress: false }).run();
+		db.insert(restores).values({ id: 'restore-01', sourceId: 'main', inProgress: true }).run();
+		assert.equal(await store.claim(), null);
+		db.update(restores).set({ inProgress: false }).run();
+		assert.equal((await store.claim())?.id, id);
 	}
 	if (scenario === 'concurrency') {
 		db.insert(plans)

@@ -1,5 +1,6 @@
 import {
 	assertInternalResources,
+	internalResourceReason,
 	InternalRecoveryTargets,
 	mysqlWorkerReadiness,
 } from '../../src/utils/internalRecoveryTargets';
@@ -16,6 +17,38 @@ const healthy = {
 	diskAvailable: 10240 * MiB,
 };
 describe('internal recovery admission and safe public configuration', () => {
+	it('returns measured safe counters or Unknown; unknown cannot approve capacity', async () => {
+		expect(
+			(await new InternalRecoveryTargets(async () => healthy).resourceView('/fixture')).sample
+		).toEqual(healthy);
+		expect(
+			(
+				await new InternalRecoveryTargets(async () => {
+					throw new Error('synthetic-private-value');
+				}).resourceView('/fixture')
+			).status
+		).toBe('unknown');
+		expect(
+			(
+				await new InternalRecoveryTargets(async () => ({
+					...healthy,
+					available: NaN,
+				})).resourceView('/fixture')
+			).sample
+		).toBeNull();
+	});
+	it('explains resource refusal with closed categories, without raising the operator SQL budget', () => {
+		expect(internalResourceReason(healthy, 272 * MiB, 128 * MiB)).toBe('operator-sql-budget');
+		expect(internalResourceReason({ ...healthy, available: 2048 * MiB }, 10 * MiB, 128 * MiB)).toBe(
+			'host-memory-headroom'
+		);
+		expect(internalResourceReason({ ...healthy, pressure: 2 }, 10 * MiB, 128 * MiB)).toBe(
+			'memory-pressure'
+		);
+		expect(internalResourceReason({ ...healthy, diskAvailable: MiB }, 10 * MiB, 128 * MiB)).toBe(
+			'staging-capacity'
+		);
+	});
 	it('admits a bounded artifact only with measured host/server headroom', () => {
 		expect(() => assertInternalResources(healthy, 272 * MiB, 384 * MiB)).not.toThrow();
 	});

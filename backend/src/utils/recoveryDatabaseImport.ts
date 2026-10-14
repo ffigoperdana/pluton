@@ -10,6 +10,7 @@ import { recoveryTargetSchema, parseRecoveryInput } from './recoveryTestPolicy';
 import { detectRecoveryClient, recoveryTrustFile } from './recoveryDatabaseClients';
 import { runRecoveryProcess, type RecoveryProcessInput } from './recoveryProcess';
 import { checkRecoveryCancellation, RecoveryTestError } from './recoveryValidation';
+import { checkRecoveryDumpCompatibility } from './recoveryDumpCompatibility';
 
 const GUARD = 'pluton_recovery_guard';
 const OWNER = '__pluton_recovery_owner';
@@ -306,6 +307,15 @@ export class RecoveryDatabaseImporter {
 					await query('', 'SHOW GRANTS;', 'database-target-preflight'),
 					input.allowedDatabases
 				);
+			entry.versionValidation = await checkRecoveryDumpCompatibility(
+				target.engine,
+				input.file,
+				await query(
+					postgres ? 'postgres' : '',
+					postgres ? 'SHOW server_version;' : 'SELECT VERSION();',
+					'database-target-preflight'
+				)
+			);
 			const existing = (
 				await query(
 					postgres ? 'postgres' : '',

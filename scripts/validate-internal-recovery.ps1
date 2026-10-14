@@ -2,6 +2,16 @@ param([string]$RuntimeImage='pluton-internal-recovery:local', [string]$HelperIma
   [ValidateSet('mariadb','postgresql')][string[]]$Engines=@('mariadb','postgresql'), [switch]$WorkingTreeCode)
 # Disposable private network only; no configurable endpoint, host port, source/repository/data volume or Docker socket.
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+# Docker receives these paths verbatim. A Windows separator embedded in a string
+# is not normalized by PowerShell on Linux (including GitHub Actions runners).
+$preparePath=Join-Path $repo 'backend/__tests__/integration/internalRecovery.prepare.mjs'
+$operatorPath=Join-Path $repo 'deploy/internal-recovery/operator.cjs'
+$bootstrapPath=Join-Path $repo 'deploy/internal-recovery/bootstrap.sh'
+$smokePath=Join-Path $repo 'backend/__tests__/integration/internalRecovery.smoke.mjs'
+$distPath=Join-Path $repo 'backend/dist'
+foreach($fixturePath in @($preparePath,$operatorPath,$bootstrapPath,$smokePath)) {
+  if(-not (Test-Path -LiteralPath $fixturePath -PathType Leaf)){throw 'Required Internal recovery fixture file is missing.'}
+}
 $images=@{mariadb='mariadb:11.8.8@sha256:24e76fcec8c003a0362d0dd53f4806e7e79458d7fdeaf47437760e19496f5a9c';postgresql='postgres:18.6-bookworm@sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c'}
 foreach($engine in $Engines) { foreach($variant in @('normal','marker','existing','tls','restart')) {
   $scope='pluton-internal-fixture-'+[Guid]::NewGuid().ToString('N')
@@ -14,9 +24,9 @@ foreach($engine in $Engines) { foreach($variant in @('normal','marker','existing
       if($LASTEXITCODE -ne 0){throw 'Fixture volume failed.'};$created+=$volumes[$name]
     }
     $prep=@('run','--rm','--network','none','--read-only','--user','0:0','--tmpfs','/tmp:rw,noexec,nosuid,nodev,size=32m',
-      '--mount',"type=bind,source=$repo\backend\__tests__\integration\internalRecovery.prepare.mjs,target=/fixture-prepare.mjs,readonly",
-      '--mount',"type=bind,source=$repo\deploy\internal-recovery\operator.cjs,target=/fixture-operator.cjs,readonly",
-      '--mount',"type=bind,source=$repo\deploy\internal-recovery\bootstrap.sh,target=/fixture-bootstrap.sh,readonly")
+      '--mount',"type=bind,source=$preparePath,target=/fixture-prepare.mjs,readonly",
+      '--mount',"type=bind,source=$operatorPath,target=/fixture-operator.cjs,readonly",
+      '--mount',"type=bind,source=$bootstrapPath,target=/fixture-bootstrap.sh,readonly")
     foreach($name in @('public','requests','lock','private-mariadb','private-postgresql','boot')) { $prep+=@('--mount',"type=volume,source=$($volumes[$name]),target=/$name") }
     & docker @prep --entrypoint node $HelperImage /fixture-prepare.mjs $engine $variant
     if($LASTEXITCODE -ne 0){throw 'Private TLS fixture preparation failed.'}
@@ -55,8 +65,8 @@ foreach($engine in $Engines) { foreach($variant in @('normal','marker','existing
       '--tmpfs','/data:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=700,size=16m',
       '--mount',"type=volume,source=$($volumes['public']),target=/run/pluton-internal-recovery,readonly",
       '--mount',"type=volume,source=$($volumes['requests']),target=/run/pluton-internal-requests",
-      '--mount',"type=volume,source=$($volumes['state']),target=/fixture-state",'--mount',"type=bind,source=$repo\backend\__tests__\integration\internalRecovery.smoke.mjs,target=/fixture-smoke.mjs,readonly")
-    if($WorkingTreeCode){$client+=@('--mount',"type=bind,source=$repo\backend\dist,target=/app/backend/dist,readonly")}
+      '--mount',"type=volume,source=$($volumes['state']),target=/fixture-state",'--mount',"type=bind,source=$smokePath,target=/fixture-smoke.mjs,readonly")
+    if($WorkingTreeCode){$client+=@('--mount',"type=bind,source=$distPath,target=/app/backend/dist,readonly")}
     # Initialize only the disposable client lease directory; never the application's /data.
     & docker run --rm --network none --read-only --user '0:0' --mount "type=volume,source=$($volumes['state']),target=/state" --entrypoint sh $RuntimeImage -ec 'chown 10001:10001 /state && chmod 700 /state' | Out-Null
     & docker @client --entrypoint node $RuntimeImage --loader ./backend/loader.mjs /fixture-smoke.mjs $engine $variant
@@ -67,7 +77,10 @@ foreach($engine in $Engines) { foreach($variant in @('normal','marker','existing
       & docker @client --entrypoint node $RuntimeImage --loader ./backend/loader.mjs /fixture-smoke.mjs $engine $variant reconcile
       if($LASTEXITCODE -ne 0){throw 'Durable lease reconciliation failed.'}
     }
-    & docker stop --time 15 $container | Out-Null;& docker rm $container | Out-Null;$started=$false
+    & docker stop --time 15 $container | Out-Null
+    if($LASTEXITCODE -ne 0){throw 'Owned disposable target stop failed; no removal receipt may be published.'}
+    & docker rm $container | Out-Null
+    if($LASTEXITCODE -ne 0){throw 'Owned disposable target removal failed; no removal receipt may be published.'};$started=$false
     if($variant -in @('normal','restart')) {
       & docker @prep --entrypoint node $HelperImage /fixture-prepare.mjs $engine $variant receipt
       if($LASTEXITCODE -ne 0){throw 'Fixture removal receipt failed.'}

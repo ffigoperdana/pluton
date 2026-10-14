@@ -1,6 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { API_URL } from '../utils/constants';
-import type { InternalTargetView, RecoveryPolicy, RecoveryTarget, RecoveryTest } from '../@types/recoveryTests';
+import type {
+   InternalTargetView,
+   RecoveryPolicy,
+   RecoveryTarget,
+   RecoveryTest,
+   RecoveryPreparation,
+   RecoverySelection,
+} from '../@types/recoveryTests';
 async function request<T>(planId: string, route: string, method = 'GET', body?: unknown): Promise<T> {
    const res = await fetch(`${API_URL}/recovery-testing/${encodeURIComponent(planId)}/${route}`, {
       method,
@@ -40,11 +47,31 @@ export function useRecoveryConfiguration(planId?: string) {
 export function useRecoveryAction(planId: string) {
    const queries = useQueryClient();
    return useMutation({
-      mutationFn: ({ backupId, cancelId }: { backupId?: string; cancelId?: string }) =>
+      mutationFn: ({
+         backupId,
+         cancelId,
+         ...confirmation
+      }: {
+         backupId?: string;
+         cancelId?: string;
+         snapshotId?: string;
+         metadataToken?: string;
+         resourcesAcknowledged?: true;
+         selection?: RecoverySelection;
+      }) =>
          cancelId
             ? request<RecoveryTest>(planId, `tests/${encodeURIComponent(cancelId)}/cancel`, 'POST')
-            : request<RecoveryTest>(planId, 'tests', 'POST', { backupId }),
+            : request<RecoveryTest>(planId, 'tests', 'POST', { backupId, ...confirmation }),
       onSuccess: () => queries.invalidateQueries({ queryKey: ['recoveryTests', planId] }),
+   });
+}
+export function useRecoveryPreparation(planId: string, backupId: string, snapshotId: string) {
+   return useQuery({
+      queryKey: ['recoveryPreparation', planId, backupId, snapshotId],
+      queryFn: () => request<RecoveryPreparation>(planId, 'preparation', 'POST', { backupId, snapshotId }),
+      retry: false,
+      staleTime: 0,
+      refetchOnWindowFocus: false,
    });
 }
 export function useSaveRecoveryPolicy(planId: string) {

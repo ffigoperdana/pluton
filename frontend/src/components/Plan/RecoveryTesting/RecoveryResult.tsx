@@ -66,6 +66,12 @@ export default function RecoveryResult({
                   <div>
                      {databaseImportLabel(database.importValidation)} {database.failureCode && `· ${database.failureCode}`}
                   </div>
+                  <div>
+                     Version check:{' '}
+                     {database.versionValidation === 'header-and-target-checked'
+                        ? 'Recorded-engine SQL header and actual target checked; not an application compatibility guarantee'
+                        : 'Source/dump version not recorded or not reported by worker v1 — compatibility not certified'}
+                  </div>
                   {database.importValidation === 'passed' && database.tables !== undefined && (
                      <div>
                         Catalog verified: {database.tables} tables · {database.views || 0} views

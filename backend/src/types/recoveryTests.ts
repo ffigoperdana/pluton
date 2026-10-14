@@ -20,6 +20,7 @@ export type RecoveryStage =
 	| 'infrastructure-cleanup'
 	| 'job';
 export type RecoveryCode =
+	| 'recovery-workload-busy'
 	| 'internal-target-not-provisioned'
 	| 'internal-target-unsafe'
 	| 'internal-resources-insufficient'
@@ -79,6 +80,7 @@ export type RecoveryDatabaseResult = {
 	failureCode?: RecoveryCode;
 	tables?: number;
 	views?: number;
+	versionValidation?: 'header-and-target-checked' | 'not-recorded';
 };
 export type RecoveryResult = {
 	internalEngine?: InternalRecoveryEngine;
@@ -99,6 +101,8 @@ export type RecoveryPolicy = {
 	enabledAt?: number;
 	/** Missing entries preserve the original Custom behavior. MySQL is always Custom. */
 	targetModes?: Partial<Record<InternalRecoveryEngine, RecoveryTargetMode>>;
+	/** Internal per-job fingerprint, never accepted by the saved-policy API. */
+	snapshotMetadataToken?: string;
 };
 export type RecoveryTargetConfig = {
 	engine: RecoveryEngine;

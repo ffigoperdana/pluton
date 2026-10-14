@@ -26,6 +26,11 @@ import { RecoveryWorkspace } from '../utils/recoveryWorkspace';
 import { appPaths } from '../utils/AppPaths';
 import { AppError, NotFoundError } from '../utils/AppError';
 import { planLogger } from '../utils/logger';
+import {
+	recoveryMetadataToken,
+	manualRecoveryPolicy,
+	type RecoveryManualSelection,
+} from '../utils/recoveryPreparation';
 
 /** Durable jobs and a separate result. No backup writes or source-agent calls. */
 export class RecoveryTestService {
@@ -34,11 +39,15 @@ export class RecoveryTestService {
 	private running?: { id: string; controller: AbortController; done: Promise<void> };
 	private readonly workspace: RecoveryWorkspace;
 	private readonly importer: RecoveryDatabaseImporter;
+	private readonly preparing = new Set<string>();
 	constructor(
 		private readonly store: RecoveryTestStore,
 		private readonly plans: PlanStore,
 		private readonly backups: BackupStore,
-		private readonly recovery: Pick<RemoteRepositoryRecoveryService, 'testBinding' | 'testRestore'>,
+		private readonly recovery: Pick<
+			RemoteRepositoryRecoveryService,
+			'testBinding' | 'testRestore' | 'testMetadata'
+		>,
 		root = path.join(appPaths.getDataDir(), 'recovery-tests'),
 		importer?: RecoveryDatabaseImporter,
 		private readonly internal = new InternalRecoveryTargets()
@@ -68,6 +77,116 @@ export class RecoveryTestService {
 			internalTargets,
 			mysqlWorker: await mysqlWorkerReadiness(),
 		};
+	}
+	/** On-demand only; no heavyweight filesystem scan, source contact or heartbeat work. */
+	async preparation(planId: string, backupId: string, snapshotId: string) {
+		const plan = await this.ownedPlan(planId);
+		if (this.preparing.size >= 2 || this.preparing.has(planId))
+			throw new AppError(429, 'Snapshot preparation is already in progress. Try again shortly.');
+		this.preparing.add(planId);
+		try {
+			const metadata = await this.recovery.testMetadata(backupId, planId, snapshotId);
+			const configuration = await this.configuration(planId);
+			const internalTargets = await Promise.all(
+				configuration.internalTargets.map(async view => ({
+					...view,
+					...(view.status === 'ready' &&
+					metadata.databases.some(entry => entry.engine === view.engine)
+						? {
+								admission: await this.internal.admission(
+									view.engine,
+									metadata.databases.filter(entry => entry.engine === view.engine),
+									path.dirname(this.workspace.root)
+								),
+							}
+						: {}),
+				}))
+			);
+			return {
+				...metadata,
+				planTitle: plan.title,
+				metadataToken: recoveryMetadataToken(metadata),
+				metadataVerification: 'receipt-and-exact-snapshot-path-size' as const,
+				artifactHashVerification: 'mandatory-before-import' as const,
+				versionCompatibility: 'not-recorded-in-receipt' as const,
+				policy: configuration.policy,
+				customTargets: configuration.targets.map(target => ({
+					engine: target.engine,
+					status: target.enabled && target.passwordConfigured ? 'configured' : 'not_configured',
+				})),
+				internalTargets,
+				mysqlWorker: configuration.mysqlWorker,
+				resources: await this.internal.resourceView(path.dirname(this.workspace.root)),
+				workloads: await this.store.activity(),
+				lifecycle: 'operator-managed' as const,
+				persistentRestore: {
+					status: 'unavailable' as const,
+					reason: 'bounded-persistent-storage-and-ownership-controller-required' as const,
+				},
+			};
+		} finally {
+			this.preparing.delete(planId);
+		}
+	}
+	async enqueueManual(planId: string, input: RecoveryManualSelection) {
+		const preview = await this.preparation(planId, input.backupId, input.snapshotId);
+		if (preview.metadataToken !== input.metadataToken)
+			throw new AppError(409, 'Snapshot metadata changed. Review the confirmation again.');
+		const policy = manualRecoveryPolicy(preview.policy, input, preview.databases);
+		policy.snapshotMetadataToken = preview.metadataToken;
+		if (policy.databaseImport === 'required' && Object.values(preview.workloads).some(Boolean))
+			throw new RecoveryTestError('database-target-preflight', 'recovery-workload-busy');
+		if (policy.databaseImport === 'required')
+			for (const entry of preview.databases) {
+				const internal =
+					entry.engine &&
+					entry.engine !== 'mysql' &&
+					policy.targetModes?.[entry.engine] === 'internal';
+				if (internal) {
+					const target = preview.internalTargets.find(view => view.engine === entry.engine);
+					if (target?.status !== 'ready')
+						throw new RecoveryTestError(
+							'database-target-preflight',
+							'internal-target-not-provisioned'
+						);
+					if (target.admission?.status !== 'admitted')
+						throw new RecoveryTestError(
+							'database-target-preflight',
+							'internal-resources-insufficient'
+						);
+				} else {
+					if (
+						!preview.customTargets.some(
+							target => target.engine === entry.engine && target.status === 'configured'
+						)
+					)
+						throw new RecoveryTestError(
+							'database-target-preflight',
+							'recovery-target-not-configured'
+						);
+					if (entry.engine === 'mysql' && preview.mysqlWorker !== 'ready')
+						throw new RecoveryTestError('database-target-preflight', 'mysql-worker-unavailable');
+				}
+			}
+		return this.store.enqueue({
+			id: crypto.randomBytes(12).toString('hex'),
+			planId,
+			backupId: preview.backupId,
+			repositoryId: preview.repositoryId,
+			snapshotId: preview.snapshotId,
+			status: 'queued',
+			trigger: 'manual',
+			policy,
+			automationKey: null,
+		});
+	}
+	async databaseRestoreUnavailable(planId: string) {
+		await this.ownedPlan(planId);
+		// There is deliberately no executor, retained DB, Docker operation or cleanup bypass.
+		throw new AppError(
+			409,
+			'Persistent Database Restore is not available: bounded persistent storage, separate durable ownership/TTL and an approved lifecycle controller are required. Use Restore to Staging for the original SQL artifact.'
+		);
 	}
 	async savePolicy(planId: string, input: unknown) {
 		await this.ownedPlan(planId);
@@ -207,6 +326,20 @@ export class RecoveryTestService {
 				backup.completionStats?.snapshot_id !== row.snapshotId
 			)
 				throw new RecoveryTestError('snapshot-validation', 'snapshot-binding-mismatch');
+			const assertReceipt = (lifecycle: unknown) => {
+				if (
+					row.policy.snapshotMetadataToken &&
+					recoveryMetadataToken({
+						planId: row.planId,
+						backupId: row.backupId,
+						repositoryId: row.repositoryId,
+						snapshotId: row.snapshotId,
+						databases: recoveryArtifacts(lifecycle),
+					}) !== row.policy.snapshotMetadataToken
+				)
+					throw new RecoveryTestError('snapshot-validation', 'snapshot-binding-mismatch');
+			};
+			assertReceipt(backup.completionStats?.lifecycle);
 			if ((await this.store.get(row.id))?.cancelRequested)
 				throw new RecoveryTestError('job', 'cancelled');
 			directory = await this.workspace.create(row.id);
@@ -238,6 +371,7 @@ export class RecoveryTestService {
 			const artifacts = new Map<string, string>();
 			for (const entry of result.databases)
 				artifacts.set(entry.path, await validateRecoveryArtifact(entry, files, signal));
+			assertReceipt((await this.backups.getById(row.backupId))?.completionStats?.lifecycle);
 			const internalEngines = [
 				...new Set(
 					result.databases
@@ -275,6 +409,9 @@ export class RecoveryTestService {
 					continue;
 				}
 				setStage('database-target-preflight');
+				const activity = await this.store.activity();
+				if (activity.backup || activity.restore)
+					throw new RecoveryTestError('database-target-preflight', 'recovery-workload-busy');
 				if (!entry.engine || !entry.database) {
 					entry.importValidation = 'not_configured';
 					entry.failureCode = 'database-metadata-incomplete';
@@ -297,14 +434,13 @@ export class RecoveryTestService {
 					throw new RecoveryTestError(stage, 'recovery-target-not-configured');
 				}
 				const { id: targetId, ...target } = saved;
-				if (entry.engine === 'mysql') {
+				{
 					const plan = await this.ownedPlan(row.planId);
 					const lifecycle = plan.settings?.remoteLifecycle;
 					const sources = lifecycle?.databases || (lifecycle?.database ? [lifecycle.database] : []);
 					if (
 						sources.some(
 							source =>
-								source.engine === 'mysql' &&
 								source.host.toLowerCase() === target.host.toLowerCase() &&
 								source.port === target.port
 						)

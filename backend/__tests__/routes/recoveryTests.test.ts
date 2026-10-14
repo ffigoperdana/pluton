@@ -24,9 +24,18 @@ describe('Recovery API authentication, ownership and safe input', () => {
 	}
 	beforeEach(() => {
 		service = Object.fromEntries(
-			['configuration', 'savePolicy', 'saveTarget', 'list', 'get', 'enqueue', 'cancel'].map(
-				name => [name, jest.fn(async () => ({ id: 'test-01' }))]
-			)
+			[
+				'configuration',
+				'savePolicy',
+				'saveTarget',
+				'list',
+				'get',
+				'enqueue',
+				'cancel',
+				'preparation',
+				'enqueueManual',
+				'databaseRestoreUnavailable',
+			].map(name => [name, jest.fn(async () => ({ id: 'test-01' }))])
 		);
 		app = express();
 		app.use(express.json());
@@ -40,6 +49,8 @@ describe('Recovery API authentication, ownership and safe input', () => {
 		['get', 'tests'],
 		['post', 'tests'],
 		['post', 'tests/lookup'],
+		['post', 'preparation'],
+		['post', 'database-restores'],
 		['get', 'tests/test-01'],
 		['post', 'tests/test-01/cancel'],
 	])('protects %s %s with UI-session authentication', async (method, path) => {
@@ -49,6 +60,64 @@ describe('Recovery API authentication, ownership and safe input', () => {
 			.send({ backupId: 'backup-01' });
 		expect(response.status).toBe(401);
 		for (const call of Object.values(service)) expect(call).not.toHaveBeenCalled();
+	});
+	it('validates preview and operation-only confirmation strictly without frontend engine/endpoint authority', async () => {
+		const selection = { backupId: 'backup-01', snapshotId: 'a'.repeat(64) };
+		for (const extra of [
+			{ engine: 'mysql' },
+			{ host: 'source.example.internal' },
+			{ command: 'sh' },
+		]) {
+			expect(
+				(
+					await request(app)
+						.post('/api/recovery-testing/plan-01/preparation')
+						.send({ ...selection, ...extra })
+				).status
+			).toBe(400);
+		}
+		expect(
+			(await request(app).post('/api/recovery-testing/plan-01/preparation').send(selection)).status
+		).toBe(200);
+		expect(service.preparation).toHaveBeenCalledWith(
+			'plan-01',
+			selection.backupId,
+			selection.snapshotId
+		);
+		const body = {
+			...selection,
+			metadataToken: 'b'.repeat(64),
+			resourcesAcknowledged: true,
+			selection: { databaseImport: 'required', targetModes: { mariadb: 'internal' } },
+		};
+		expect((await request(app).post('/api/recovery-testing/plan-01/tests').send(body)).status).toBe(
+			202
+		);
+		expect(service.enqueueManual).toHaveBeenCalledWith('plan-01', body);
+		for (const changes of [
+			{ resourcesAcknowledged: false },
+			{ engine: 'mysql' },
+			{ selection: { databaseImport: 'required', targetModes: { mysql: 'internal' } } },
+		]) {
+			expect(
+				(
+					await request(app)
+						.post('/api/recovery-testing/plan-01/tests')
+						.send({ ...body, ...changes })
+				).status
+			).toBe(400);
+		}
+	});
+	it('persistent restore has no executable bypass and exposes only the closed unavailable message', async () => {
+		service.databaseRestoreUnavailable.mockRejectedValue(
+			new AppError(409, 'Persistent Database Restore is not available.')
+		);
+		const result = await request(app)
+			.post('/api/recovery-testing/plan-01/database-restores')
+			.send({ backupId: 'backup-01', snapshotId: 'a'.repeat(64) });
+		expect(result.status).toBe(409);
+		expect(service.enqueue).not.toHaveBeenCalled();
+		expect(service.enqueueManual).not.toHaveBeenCalled();
 	});
 	it('does not permit API key access to recovery/import configuration', async () => {
 		authenticate(false);

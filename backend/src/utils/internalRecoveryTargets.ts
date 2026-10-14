@@ -66,6 +66,31 @@ export type ResourceSample = {
 	cgroupSwap: number;
 	diskAvailable: number;
 };
+export function internalResourceReason(
+	sample: ResourceSample,
+	sqlBytes: number,
+	maxSqlBytes: number
+) {
+	if (Object.values(sample).some(n => !Number.isFinite(n) || n < 0)) return 'capacity-unknown';
+	if (
+		!Number.isSafeInteger(sqlBytes) ||
+		!Number.isSafeInteger(maxSqlBytes) ||
+		maxSqlBytes <= 0 ||
+		maxSqlBytes > 448 * MiB ||
+		sqlBytes <= 0 ||
+		sqlBytes > maxSqlBytes
+	)
+		return 'operator-sql-budget';
+	if (sqlBytes * 4 + 256 * MiB > 2 * 1024 * MiB) return 'expanded-data-budget';
+	if (sample.total < 3800 * MiB) return 'host-memory-total';
+	if (sample.available < 2560 * MiB) return 'host-memory-headroom';
+	if (sample.swapUsed > 128 * MiB || sample.cgroupSwap > 0) return 'swap-in-use';
+	if (sample.pressure > 1) return 'memory-pressure';
+	if (sample.limit < 768 * MiB || sample.used > sample.limit * 0.85)
+		return 'server-cgroup-headroom';
+	if (sample.diskAvailable < sqlBytes + 2 * 1024 * MiB) return 'staging-capacity';
+	return null;
+}
 
 /** Conservative admission policy, not a guarantee that a SQL workload fits in its hard limits. */
 export function assertInternalResources(
@@ -73,22 +98,7 @@ export function assertInternalResources(
 	sqlBytes: number,
 	maxSqlBytes: number
 ) {
-	const numbers = Object.values(sample);
-	if (
-		numbers.some(n => !Number.isFinite(n) || n < 0) ||
-		!Number.isSafeInteger(sqlBytes) ||
-		sqlBytes <= 0 ||
-		sqlBytes > maxSqlBytes ||
-		sqlBytes * 4 + 256 * MiB > 2 * 1024 * MiB ||
-		sample.total < 3800 * MiB ||
-		sample.available < 2560 * MiB ||
-		sample.swapUsed > 128 * MiB ||
-		sample.pressure > 1 ||
-		sample.cgroupSwap > 0 ||
-		sample.limit < 768 * MiB ||
-		sample.used > sample.limit * 0.85 ||
-		sample.diskAvailable < sqlBytes + 2 * 1024 * MiB
-	)
+	if (internalResourceReason(sample, sqlBytes, maxSqlBytes))
 		throw new RecoveryTestError('database-target-preflight', 'internal-resources-insufficient');
 }
 async function resources(directory: string): Promise<ResourceSample> {
@@ -146,6 +156,46 @@ export class InternalRecoveryTargets {
 		private readonly sample = resources,
 		private readonly probe = reachable
 	) {}
+	/** Read-only advisory sample. Unknown is never reported as safe; execution samples again. */
+	async resourceView(directory: string) {
+		try {
+			const sample = await this.sample(directory);
+			if (Object.values(sample).some(n => !Number.isFinite(n) || n < 0)) throw new Error();
+			return { status: 'measured' as const, sample, observedAt: Date.now() };
+		} catch {
+			return { status: 'unknown' as const, sample: null, observedAt: Date.now() };
+		}
+	}
+	async admission(
+		engine: InternalRecoveryEngine,
+		entries: RecoveryDatabaseResult[],
+		directory: string
+	) {
+		try {
+			const config = this.target(engine);
+			const reason = internalResourceReason(
+				await this.sample(directory),
+				entries.reduce((sum, entry) => sum + entry.bytes, 0),
+				config.maxSqlBytes
+			);
+			if (reason)
+				return {
+					status: 'refused' as const,
+					code: 'internal-resources-insufficient' as const,
+					reason,
+					maxSqlBytes: config.maxSqlBytes,
+				};
+			return { status: 'admitted' as const, maxSqlBytes: config.maxSqlBytes };
+		} catch (error) {
+			return {
+				status: 'refused' as const,
+				code:
+					error instanceof RecoveryTestError
+						? error.code
+						: ('internal-resources-insufficient' as const),
+			};
+		}
+	}
 	private read<T>(name: string, schema: z.ZodType<T>): T {
 		try {
 			if (process.platform !== 'linux' || process.getuid?.() !== 10001) throw new Error();

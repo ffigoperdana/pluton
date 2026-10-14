@@ -180,6 +180,60 @@ describe('Phase 4 remote managed repository recovery', () => {
 		}
 		await fs.rm(scratch, { recursive: true, force: true });
 	});
+	it.each(['mariadb', 'postgresql', 'mysql'])(
+		'resolves %s from the authenticated exact-snapshot receipt, not filename',
+		async engine => {
+			const entry = {
+				databaseId: 'db_example',
+				engine,
+				database: 'example_db',
+				path: '/pluton/database/same-name.sql',
+				bytes: 10,
+				sha256: 'b'.repeat(64),
+			};
+			backup.completionStats.lifecycle = { databases: [entry] };
+			session.files.mockResolvedValue([
+				...nodes,
+				{ ...nodes[2], path: entry.path, size: entry.bytes },
+			] as any);
+			const result = await service.testMetadata(backup.id, plan.id, snapshotId);
+			expect(result.databases[0]).toMatchObject(entry);
+			expect(session.restore).not.toHaveBeenCalled();
+			expect(JSON.stringify(result)).not.toContain(password);
+			expect(result.repositoryId).toBe(repository.id);
+		}
+	);
+	it('refuses missing, duplicate, unknown-engine or path/size-mismatched database metadata', async () => {
+		const entry: any = {
+			databaseId: 'db_example',
+			engine: 'mariadb',
+			database: 'example_db',
+			path: '/pluton/database/example.sql',
+			bytes: 10,
+			sha256: 'b'.repeat(64),
+		};
+		session.files.mockResolvedValue([...nodes, { ...nodes[2], path: entry.path, size: 10 }] as any);
+		for (const values of [
+			[],
+			[entry, entry],
+			[{ ...entry, engine: 'unknown' }],
+			[{ ...entry, bytes: 11 }],
+			[{ ...entry, path: '/pluton/database/other.sql' }],
+			[{ ...entry, sha256: 'invalid' }],
+		]) {
+			backup.completionStats.lifecycle = { databases: values };
+			await expect(service.testMetadata(backup.id, plan.id, snapshotId)).rejects.toThrow(
+				'database-metadata-incomplete'
+			);
+		}
+	});
+	it('refuses a foreign plan, repository snapshot or changed tags during metadata resolution', async () => {
+		await expect(service.testMetadata(backup.id, 'plan-other', snapshotId)).rejects.toThrow();
+		await expect(service.testMetadata(backup.id, plan.id, 'b'.repeat(64))).rejects.toThrow();
+		session.snapshot.mockResolvedValue({ id: snapshotId, paths: [], tags: ['pluton-plan-other'] });
+		await expect(service.testMetadata(backup.id, plan.id, snapshotId)).rejects.toThrow();
+		expect(session.restore).not.toHaveBeenCalled();
+	});
 	it('counts regular files separately and preserves empty directories without including a partial parent subtree', () => {
 		const entries = [...nodes, { path: '/srv/example-app/empty', type: 'dir', size: 0 }];
 		const all = (service as any).select(entries, config);

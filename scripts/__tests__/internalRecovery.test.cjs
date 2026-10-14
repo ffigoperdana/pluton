@@ -4,6 +4,20 @@ const fs=require('node:fs');
 const path=require('node:path');
 const operator=require('../../deploy/internal-recovery/operator.cjs');
 const root=path.join(__dirname,'../..');
+test('Docker fixture bind sources are platform-native joined paths, not Windows string interpolation', () => {
+  const source=fs.readFileSync(path.join(root,'scripts/validate-internal-recovery.ps1'),'utf8');
+  assert(!/\$repo\\/.test(source), 'A literal backslash survives unchanged in Linux Docker bind sources');
+  for (const relative of ['backend/__tests__/integration/internalRecovery.prepare.mjs',
+    'backend/__tests__/integration/internalRecovery.smoke.mjs','deploy/internal-recovery/operator.cjs',
+    'deploy/internal-recovery/bootstrap.sh','backend/dist']) {
+    assert(source.includes(`Join-Path $repo '${relative}'`));
+    for (const platform of [path.posix,path.win32]) {
+      const base=platform===path.posix?'/home/runner/work/example/example':'C:\\workspace\\example';
+      assert.equal(platform.normalize(platform.join(base,relative)),platform.resolve(base,relative));
+    }
+    if(!relative.endsWith('/dist')) assert(fs.statSync(path.join(root,relative)).isFile());
+  }
+});
 test('only native approved engines and bounded reviewed DB identifiers are provisioned', () => {
   assert.doesNotThrow(() => operator.validateSelection('mariadb',['example_db'],'recovery_user',384));
   for (const args of [['mysql',['example_db'],'recovery_user',128],['postgresql',['postgres'],'recovery_user',128],
