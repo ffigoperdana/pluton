@@ -132,6 +132,26 @@ describe('Phase 6 durable recovery orchestration', () => {
 		await service.idle();
 		return rows.get(row!.id);
 	}
+	it('MySQL source endpoint is refused before worker dispatch', async () => {
+		backup.completionStats.lifecycle = { databases: [artifact('mysql')] };
+		plan.settings = {
+			remoteLifecycle: {
+				databases: [{ engine: 'mysql', host: 'source.example.internal', port: 3306 }],
+			},
+		};
+		store.policy.mockResolvedValue({ enabled: true, databaseImport: 'required' });
+		store.target.mockResolvedValue({
+			id: 'b'.repeat(24),
+			engine: 'mysql',
+			host: 'SOURCE.example.internal',
+			port: 3306,
+			password: 'synthetic-worker-fixture',
+		});
+		const row = await run();
+		expect(row.status).toBe('failed');
+		expect(row.failureCode).toBe('recovery-target-unsafe');
+		expect(importer.importDatabase).not.toHaveBeenCalled();
+	});
 	it('manually restores the exact snapshot, cleans staging, and never writes Backup or contacts an agent', async () => {
 		const original = JSON.stringify(backup);
 		const row = await run();

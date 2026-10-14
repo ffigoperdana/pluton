@@ -100,6 +100,22 @@ jobs:
         shell: pwsh
         run: ./scripts/validate-database-recovery-clients.ps1 -RuntimeImage pluton-recovery-ci:local
 
+      - name: Build optional genuine Oracle MySQL client-only worker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.mysql-recovery-worker
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: pluton-mysql-worker:local
+          cache-from: type=gha,scope=mysql-worker
+          cache-to: type=gha,scope=mysql-worker,mode=max
+
+      - name: Verify private IPC and real disposable Oracle MySQL recovery
+        shell: pwsh
+        run: ./scripts/validate-mysql-recovery-worker.ps1 -RuntimeImage pluton-recovery-ci:local
+
   publish:
     name: Publish immutable GHCR image
     needs: [validate, build-pr]
@@ -153,3 +169,51 @@ jobs:
             VCS_REF=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  publish-mysql-worker:
+    name: Publish optional immutable MySQL recovery worker
+    needs: [validate, build-pr]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Generate worker image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}-mysql-recovery-worker
+          flavor: |
+            latest=false
+          tags: |
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=tag
+            type=sha,format=long
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish optional worker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.mysql-recovery-worker
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            IMAGE_SOURCE=https://github.com/${{ github.repository }}
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha,scope=mysql-worker
+          cache-to: type=gha,scope=mysql-worker,mode=max

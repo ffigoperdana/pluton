@@ -19,6 +19,10 @@ export type RecoveryStage =
 	| 'workspace-cleanup'
 	| 'job';
 export type RecoveryCode =
+	| 'mysql-worker-not-configured'
+	| 'mysql-worker-unavailable'
+	| 'mysql-worker-busy'
+	| 'mysql-worker-protocol-failed'
 	| 'snapshot-not-found'
 	| 'snapshot-binding-mismatch'
 	| 'snapshot-metadata-invalid'

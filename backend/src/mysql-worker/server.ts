@@ -1,0 +1,291 @@
+import net, { type Socket } from 'net';
+import crypto from 'crypto';
+import fs from 'fs/promises';
+import path from 'path';
+import { z } from 'zod';
+import { RecoveryDatabaseImporter } from '../utils/recoveryDatabaseImport';
+import { RecoveryTestError } from '../utils/recoveryValidation';
+import { detectRecoveryClient } from '../utils/recoveryDatabaseClients';
+import { runRecoveryProcess } from '../utils/recoveryProcess';
+import {
+	CHUNK_BYTES,
+	DEADLINE_MS,
+	SOCKET,
+	codes,
+	stages,
+	requestSchema,
+	frames,
+	send,
+	protocolError,
+	workerConfigSchema,
+	type WorkerConfig,
+} from './protocol';
+import type { RecoveryImportLease } from '../db/schema/recoveryTests';
+import type { RecoveryDatabaseResult, RecoveryStage } from '../types/recoveryTests';
+
+const chunkSchema = z
+	.object({
+		type: z.literal('chunk'),
+		data: z
+			.string()
+			.regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/)
+			.max(Math.ceil(CHUNK_BYTES / 3) * 4),
+	})
+	.strict();
+const ackSchema = z
+	.object({ type: z.literal('lease-ack'), id: z.string().regex(/^[a-f0-9]{24}$/) })
+	.strict();
+const endSchema = z.object({ type: z.literal('end') }).strict();
+
+/** UID-only socket volume is the IPC authorization boundary. No TCP listener. */
+export async function startMysqlWorker(config: WorkerConfig, trust: () => string) {
+	workerConfigSchema.parse(config);
+	if (process.platform !== 'linux' || process.getuid?.() !== 10001 || process.getgid?.() !== 10001)
+		throw protocolError();
+	const binary = detectRecoveryClient('mysql');
+	// Narrow worker support to the reviewed LTS client; MariaDB aliases were already refused.
+	const { spawnSync } = await import('child_process');
+	const probe = spawnSync(binary, ['--no-defaults', '--version'], {
+		encoding: 'utf8',
+		timeout: 2000,
+		env: { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' },
+	});
+	if (probe.status !== 0 || !/Ver 8\.4\.11\b.*MySQL Community/.test(probe.stdout))
+		throw new RecoveryTestError('database-target-preflight', 'database-client-incompatible');
+	const root = path.dirname(SOCKET);
+	const stat = await fs.lstat(root);
+	if (
+		!stat.isDirectory() ||
+		stat.isSymbolicLink() ||
+		stat.uid !== 10001 ||
+		(stat.mode & 0o777) !== 0o700
+	)
+		throw protocolError();
+	try {
+		const old = await fs.lstat(SOCKET);
+		if (!old.isSocket() || old.uid !== 10001 || (old.mode & 0o777) !== 0o600) throw protocolError();
+		// A live worker must never be replaced. Restart removes only its stale socket.
+		const active = await new Promise<boolean>(resolve => {
+			const client = net.connect(SOCKET);
+			client.setTimeout(2000, () => {
+				client.destroy();
+				resolve(true);
+			});
+			client.once('connect', () => {
+				client.destroy();
+				resolve(true);
+			});
+			client.once('error', (error: NodeJS.ErrnoException) =>
+				resolve(!['ECONNREFUSED', 'ENOENT'].includes(error.code || ''))
+			);
+		});
+		if (active) throw protocolError();
+		await fs.unlink(SOCKET);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+	}
+	process.umask(0o077);
+	let busy = false;
+	const connections = new Set<Socket>();
+	const server = net.createServer(socket => {
+		connections.add(socket);
+		socket.once('close', () => connections.delete(socket));
+		if (busy) {
+			void send(socket, {
+				type: 'error',
+				stage: 'database-target-preflight',
+				code: 'mysql-worker-busy',
+			})
+				.then(() => socket.end())
+				.catch(() => socket.destroy());
+			return;
+		}
+		busy = true;
+		void execute(socket)
+			.catch(() => {
+				process.stderr.write('MySQL recovery worker private staging cleanup failed.\n');
+			})
+			.finally(() => {
+				busy = false;
+				socket.destroy();
+			});
+	});
+	server.maxConnections = 2;
+	async function execute(socket: Socket) {
+		const controller = new AbortController();
+		const cancel = () => {
+			controller.abort();
+			socket.destroy();
+		};
+		socket.once('close', cancel);
+		socket.on('error', () => controller.abort());
+		socket.setTimeout(30_000, cancel);
+		const timer = setTimeout(cancel, DEADLINE_MS);
+		const heartbeat = setInterval(() => {
+			void send(socket, { type: 'heartbeat' }).catch(cancel);
+		}, 10_000);
+		let directory: string | undefined;
+		let stage: RecoveryStage = 'database-target-preflight';
+		try {
+			const reader = frames(socket);
+			const read = async (timeoutMs: number) => {
+				const deadline = setTimeout(cancel, timeoutMs);
+				try {
+					return await reader.next();
+				} finally {
+					clearTimeout(deadline);
+				}
+			};
+			const request = requestSchema.safeParse((await read(5000)).value);
+			if (!request.success) throw protocolError();
+			const input = request.data;
+			if (
+				input.target.host.toLowerCase() !== config.host.toLowerCase() ||
+				input.target.port !== config.port ||
+				input.target.username !== config.username ||
+				!input.target.password ||
+				!input.target.enabled ||
+				(input.operation === 'import'
+					? input.allowedDatabases.some(name => !config.databases.includes(name)) ||
+						!input.allowedDatabases.includes(input.entry.database) ||
+						input.leases.some(
+							lease =>
+								lease.testId !== input.testId ||
+								lease.targetId !== input.targetId ||
+								!config.databases.includes(lease.database)
+						)
+					: !config.databases.includes(input.lease.database))
+			)
+				throw new RecoveryTestError(stage, 'recovery-target-unsafe');
+			directory = await fs.mkdtemp('/tmp/pluton-mysql-');
+			await fs.chmod(directory, 0o700);
+			let leases: RecoveryImportLease[] =
+				input.operation === 'import' ? [...input.leases] : [input.lease];
+			const importer = new RecoveryDatabaseImporter(
+				{
+					leases: async () => leases,
+					leaseTarget: async () => input.target,
+					removeLease: async id => {
+						leases = leases.filter(value => value.id !== id);
+					},
+					addLease: async lease => {
+						await send(socket, { type: 'lease', lease });
+						const ack = ackSchema.safeParse((await read(15_000)).value);
+						if (!ack.success || ack.data.id !== lease.id) throw protocolError();
+						leases.push(lease); // server durable acknowledgement required before CREATE
+					},
+				},
+				input => runRecoveryProcess({ ...input, args: [...input.args, '--commands=OFF'] }),
+				() => binary,
+				trust
+			);
+			if (input.operation === 'cleanup') {
+				stage = 'database-cleanup';
+				await importer.cleanup(input.lease, directory);
+				await send(socket, { type: 'cleaned' });
+				return;
+			}
+			if (input.entry.bytes > config.maxArtifactBytes)
+				throw new RecoveryTestError(
+					'database-artifact-validation',
+					'database-artifact-size-mismatch'
+				);
+			await send(socket, { type: 'ready' });
+			const file = path.join(directory, 'artifact.sql');
+			const handle = await fs.open(file, 'wx', 0o600);
+			let size = 0,
+				ended = false;
+			const hash = crypto.createHash('sha256');
+			const uploadDeadline = setTimeout(cancel, 10 * 60_000);
+			try {
+				while (true) {
+					const next = await reader.next();
+					if (next.done) break;
+					const raw = next.value;
+					if (endSchema.safeParse(raw).success) {
+						ended = true;
+						break;
+					}
+					const chunk = chunkSchema.safeParse(raw);
+					if (!chunk.success) throw protocolError();
+					const bytes = Buffer.from(chunk.data.data, 'base64');
+					size += bytes.length;
+					if (!bytes.length || size > input.entry.bytes)
+						throw new RecoveryTestError(
+							'database-artifact-validation',
+							'database-artifact-size-mismatch'
+						);
+					hash.update(bytes);
+					await handle.writeFile(bytes);
+				}
+			} finally {
+				clearTimeout(uploadDeadline);
+				await handle.close();
+			}
+			if (!ended || size !== input.entry.bytes)
+				throw new RecoveryTestError(
+					'database-artifact-validation',
+					'database-artifact-size-mismatch'
+				);
+			if (hash.digest('hex') !== input.entry.sha256)
+				throw new RecoveryTestError(
+					'database-artifact-validation',
+					'database-artifact-hash-mismatch'
+				);
+			const entry: RecoveryDatabaseResult = {
+				...input.entry,
+				path: '/pluton/database/artifact.sql',
+				artifactValidation: 'passed',
+				importValidation: 'pending',
+			};
+			await importer.importDatabase({
+				testId: input.testId,
+				targetId: input.targetId,
+				target: input.target,
+				entry,
+				file,
+				directory,
+				signal: controller.signal,
+				allowedDatabases: input.allowedDatabases,
+				stage: value => {
+					stage = value;
+					void send(socket, { type: 'stage', stage: value }).catch(cancel);
+				},
+			});
+			await send(socket, { type: 'complete', tables: entry.tables, views: entry.views });
+		} catch (error) {
+			const safe =
+				error instanceof RecoveryTestError &&
+				(codes as readonly string[]).includes(error.code) &&
+				(stages as readonly string[]).includes(error.stage)
+					? error
+					: new RecoveryTestError(stage, 'mysql-worker-protocol-failed');
+			// No exception text, target, SQL, credential or provider stdout/stderr is logged.
+			process.stderr.write(
+				JSON.stringify({
+					event: 'mysql_recovery_worker_failed',
+					stage: safe.stage,
+					code: safe.code,
+				}) + '\n'
+			);
+			await send(socket, { type: 'error', stage: safe.stage, code: safe.code }).catch(() => {});
+		} finally {
+			clearTimeout(timer);
+			clearInterval(heartbeat);
+			controller.abort();
+			if (directory) await fs.rm(directory, { recursive: true, force: true });
+		}
+	}
+	await new Promise<void>((resolve, reject) => {
+		server.once('error', reject);
+		server.listen(SOCKET, resolve);
+	});
+	await fs.chmod(SOCKET, 0o600);
+	return {
+		server,
+		stop: async () => {
+			for (const connection of connections) connection.destroy();
+			await new Promise<void>(resolve => server.close(() => resolve()));
+		},
+	};
+}
