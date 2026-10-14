@@ -29,7 +29,7 @@ migrate(db,{migrationsFolder:'/app/drizzle'});sqlite.pragma('foreign_keys = ON')
 const store=new RecoveryTestStore(db,key);
 const snapshot='e'.repeat(64), testId='d'.repeat(24);
 let session,leases=[];
-if(action==='reconcile' || action==='receipt') {
+if(['reconcile','receipt','unavailable'].includes(action)) {
   [session]=await store.pendingInternalSessions();assert(session);leases=await store.leases(session.testId);
 } else {
   sqlite.exec("INSERT INTO storages(id,name,type) VALUES('storage-01','Synthetic SFTP','sftp'); INSERT INTO devices(id,name) VALUES('app-01','Fixture'); INSERT INTO agent_identities(agent_id,device_id,encrypted_secret,hostname,os,architecture,agent_version,capabilities) VALUES('agent-01','app-01','synthetic-cipher','app-01','Linux','x86_64','0.4.0','{}');");
@@ -75,7 +75,18 @@ const importer=new InternalRecoveryImporter(store,internal,checkedRun);
 const input=(item=entry(),password=target.password,signal=new AbortController().signal)=>({testId:session.testId,targetId:session.id,
   target:{...target,password},entry:item,file,directory:root,signal,allowedDatabases:['example_db'],stage:()=>{}});
 try {
-  if(action==='receipt') {
+  if(action==='unavailable') {
+    assert(leases.length>0);const before=JSON.stringify(leases),binding=JSON.stringify(session);
+    const staleActivation=(session.activationId[0]==='a'?'b':'a')+session.activationId.slice(1);
+    assert.throws(()=>internal.trust({...session,activationId:staleActivation},true),error=>error.code==='internal-target-unsafe');
+    await assert.rejects(importer.cleanup(leases[0],root),error=>error.code==='database-target-unavailable');
+    assert.equal(JSON.stringify(await store.leases(session.testId)),before);
+    assert.equal(JSON.stringify(await store.internalSession(session.id)),binding);
+    assert.equal((await store.get(session.testId)).snapshotId,snapshot);
+    assert.equal(session.cleanupReady,false);assert.equal(session.releasedAt,null);
+    await assert.rejects(fs.access('/run/pluton-internal-requests/request.json'),error=>error.code==='ENOENT');
+    console.log(`PASS ${engine} unavailable target retains exact durable lease/activation/snapshot; stale activation refused; no cleanup approval`);
+  } else if(action==='receipt') {
     assert(internal.removed(session,snapshot));assert(!internal.removed(session,'f'.repeat(64)));
     await store.completeInternalCleanup(session.id,{status:'failed'});assert.equal((await store.pendingInternalSessions()).length,0);
     console.log(`PASS ${engine} exact removal receipt and stale-snapshot refusal`);
@@ -112,7 +123,7 @@ try {
     await importer.verifyEmptyTarget({...target,id:session.id},root);assert.equal(leases.length,0);
     console.log(`PASS ${engine} TLS native import/content/auth/cancellation/private credentials/database cleanup`);
   }
-  if(!['marker','existing','tls'].includes(variant) && action!=='receipt') {
+  if(!['marker','existing','tls'].includes(variant) && !['receipt','unavailable'].includes(action)) {
     await fs.rm(root,{recursive:true});await store.markInternalCleanupReady(session.id);await persist();
     await internal.requestCleanup(session,snapshot);assert(!internal.removed(session,snapshot));await persist();
     console.log(`PASS ${engine} private workspace cleanup and operator removal pending`);

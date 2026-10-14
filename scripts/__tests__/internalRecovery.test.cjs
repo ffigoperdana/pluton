@@ -8,7 +8,7 @@ test('Docker fixture bind sources are platform-native joined paths, not Windows 
   const source=fs.readFileSync(path.join(root,'scripts/validate-internal-recovery.ps1'),'utf8');
   assert(!/\$repo\\/.test(source), 'A literal backslash survives unchanged in Linux Docker bind sources');
   for (const relative of ['backend/__tests__/integration/internalRecovery.prepare.mjs',
-    'backend/__tests__/integration/internalRecovery.smoke.mjs','deploy/internal-recovery/operator.cjs',
+    'backend/__tests__/integration/internalRecovery.smoke.mjs','backend/__tests__/integration/internalRecovery.readiness.mjs','deploy/internal-recovery/operator.cjs',
     'deploy/internal-recovery/bootstrap.sh','backend/dist']) {
     assert(source.includes(`Join-Path $repo '${relative}'`));
     for (const platform of [path.posix,path.win32]) {
@@ -56,6 +56,10 @@ test('only exact owned, nonprivileged pinned containers can be removed', () => {
   for(const change of [{Privileged:true},{Memory:0},{CapAdd:['SYS_ADMIN']},{PortBindings:{'3306/tcp':[{}]}},{NetworkMode:'host'}])
     assert.throws(()=>operator.ownership({...inspect,HostConfig:{...inspect.HostConfig,...change}},meta));
   assert.throws(()=>operator.ownership({...inspect,Id:'d'.repeat(64)},meta));
+  for(const [label,value] of [['org.pluton.internal.installation','e'.repeat(32)],
+    ['org.pluton.internal.activation','f'.repeat(32)],['org.pluton.internal.engine','postgresql']])
+    assert.throws(()=>operator.ownership({...inspect,Config:{...inspect.Config,
+      Labels:{...inspect.Config.Labels,[label]:value}}},meta));
   assert.throws(()=>operator.ownership({...inspect,Config:{...inspect.Config,Image:'mysql:latest'}},meta));
   assert.throws(()=>operator.ownership({...inspect,Mounts:[...inspect.Mounts,{Type:'bind',Source:'/data',Destination:'/data',RW:true}]},meta));
 });

@@ -6,6 +6,9 @@ Restore, its management/inspection/TTL executor, and automatic container lifecyc
 are **not implemented**. Their UI is explicitly unavailable; no retained import
 can be started. No production system was accessed or changed.
 
+The targeted follow-up CI restart investigation is in section 25. It does not
+extend the restore feature scope described above.
+
 ## 1. Baseline and branch
 
 - Working baseline: `c26cc2d6b8c56d460164c4fce91cb2818a0a4a5b` on
@@ -487,3 +490,167 @@ an application update. No infrastructure deployment or rollback was performed he
 This delivers independently testable recovery preparation/safety work while
 preserving existing operations. It does **not** complete the full persistent
 Database Restore request and must not be presented as doing so.
+
+## 25. CI durable restart regression investigation (2026-10-14)
+
+### Scope and proven cause
+
+Follow-up baseline: `2bb0c93`, still on `codex/managed-internal-recovery`.
+Existing feature work was preserved. This fix changes the **fixture/readiness
+synchronization**, not application reconciliation, operator provisioning or the
+recovery safety architecture. No application `.ts`, frontend, agent, schema,
+dependency, production Compose or runtime Dockerfile change is required.
+
+The previous harness called `docker restart`, slept three seconds, and attempted
+cleanup once. Docker returning a running container is not SQL readiness.
+`bootstrap.sh` emits `internal-target-started` immediately after spawning the
+final MariaDB/PostgreSQL process, before it necessarily accepts connections.
+Historical container logs are especially not a restart readiness condition.
+Restarting these disposable tmpfs targets repeats initialization/bootstrap.
+
+The failing path is:
+
+`internalRecovery.smoke.mjs reconcile` -> stored SQLite session/lease and
+encrypted target -> `InternalRecoveryImporter.cleanup` -> activation and CA
+validation -> `RecoveryDatabaseImporter.cleanup` -> native client catalog
+query -> `runRecoveryProcess` -> `database-target-unavailable`.
+
+For MariaDB, the failing subprocess is the actual `/usr/bin/mariadb` client
+with a private `--defaults-file=<0600-file>`, restricted batch/binary/sandbox
+options, verified TLS and SQL `SHOW DATABASES;` on stdin. Connection failure is
+classified locally before any owned `DROP DATABASE` or `removeLease` call.
+The PowerShell exception merely propagates that nonzero smoke-test exit.
+There is no Restic operation in this failing cleanup path.
+
+This was reproduced **before the fix**, retaining the three-second delay, on
+a disposable target restricted to 0.25 CPU. It returned the same
+`database-cleanup/database-target-unavailable` and reconciliation failure.
+Safe inspection showed a running container, attached network, no OOM and a
+current bootstrap marker. After the fix, Linux probes observed successful DNS
+but multiple failed listener checks, then successful verified TLS/native SQL.
+Three consecutive slow-start runs needed approximately **8.33, 5.56 and 9.34
+seconds of readiness probing** and completed reconciliation/receipt checks.
+This demonstrates the missing readiness barrier rather than assuming a delay.
+The final separate-counter run again passed all ten scenarios and the slow
+restart: **zero DNS failures, 12 TCP/listener waits, 13 probes, 3.04 seconds**.
+Thus the reproduced unavailability was the DB listener, not a lost DNS alias.
+
+The original GitHub log does not retain native stderr or a per-probe timeline;
+its precise historical connection errno/CPU pressure cannot be recovered from
+that screenshot. The fixture race and identical failure are proven locally;
+there is no evidence of lost activation/SQLite state, corrupt credentials, OOM,
+or a backend cleanup defect. Variable runner startup timing can expose this
+race. It is not the earlier Windows-separator issue, whose `Join-Path` fix stays.
+
+### Narrow fix and safety
+
+- Start/stop the exact captured container ID and validate its scope label,
+  running state and network attachment. Native readiness is required after both
+  initial bootstrap and restart, not a guessed sleep or a historical log.
+- The new test-only `internalRecovery.readiness.mjs` runs as UID/GID 10001 with
+  existing genuine native clients and TLS verification. The retry window is
+  45 seconds, interval 250 ms, DNS timeout 500 ms/one try, TCP timeout 500 ms,
+  native query timeout three seconds. A last bounded probe can finish beyond
+  the retry-window edge. Only read-only connection/probe timeout failures retry;
+  authentication, TLS, activation, target mismatch and unknown failures stop.
+  No import, DDL, cleanup, lease deletion or success receipt is retried here.
+- Restart readiness opens existing SQLite read-only/query-only/file-must-exist,
+  uses the existing fixture encryption key and encrypted target, validates the
+  original session/CA/activation and exact snapshot, and verifies the guard
+  purpose by native SQL. Leases and `cleanupReady=false` must remain unchanged.
+  Private probe credentials use exclusive 0600 files in 0700 temporary storage;
+  no passwords enter argv, environment, logs or returned errors.
+- The restart scenario now explicitly stops the target first and asserts that
+  real native cleanup fails with `database-target-unavailable`, retaining the
+  byte-identical lease/session, original snapshot and no removal approval. A
+  stale activation is refused. Only then does it start the same target, await
+  native readiness and run the original cleanup/catalog/workspace/receipt checks.
+- The existing final receipt and service-result rules remain unchanged. SQL
+  success alone cannot become Passed; failed/interrupted imports cannot become
+  Passed merely because infrastructure was removed. Empty tmpfs after restart
+  is not assumed clean: a live authenticated catalog check remains mandatory.
+- Failure diagnostics expose only closed scenario/stage/error categories,
+  DNS/TCP readiness, attempts/time, pending-lease count, container state/health,
+  exit/OOM/network flags and filtered current-boot marker counts. No raw native
+  output, config, SQL rows, TLS private keys or application secrets are printed.
+- Fixture failure teardown validates the exact ID and fixture label; operator
+  regression assertions additionally refuse foreign installation/activation/
+  engine labels, IDs, images and mounts. No foreign deletion is approved.
+
+### Changed files
+
+| File | Change |
+| --- | --- |
+| `scripts/validate-internal-recovery.ps1` | Native startup/restart barrier, exact ID, unavailable negative path, safe diagnostics, optional scenario/CPU-lower-only reproduction controls |
+| `backend/__tests__/integration/internalRecovery.readiness.mjs` | Bounded read-only TLS/native readiness with persisted binding checks |
+| `backend/__tests__/integration/internalRecovery.smoke.mjs` | Native outage preserves leases/snapshot; stale activation refusal |
+| `scripts/__tests__/internalRecoveryReadiness.test.cjs` | Nine deterministic retry/deadline/terminal-error/safety regressions |
+| `scripts/__tests__/internalRecovery.test.cjs` | Portable readiness path and foreign-label cleanup rejection |
+| `.github/workflows/container.yml` | Run the new regression tests as well as existing operator checks; no skipped/removed gates |
+| `scripts/fixtures/internal-recovery-linux/Dockerfile` | Digest-pinned Ubuntu PowerShell/Docker CLI image for local test orchestration only; no runtime/Compose wiring |
+| `docs/INTERNAL_DATABASE_RECOVERY_AND_RESTORE_REPORT.md` | This follow-up section |
+
+### Validation on this follow-up
+
+| Check | Result |
+| --- | --- |
+| Previously failing MariaDB restart, pre-fix 0.25 CPU | Reproduced the reported failure; not counted as a passing negative test |
+| Native Internal matrix from Windows-host PowerShell / Linux Docker | 10/10 scenarios passed, plus second-engine exclusion, exact receipt and pending-cleanup guards |
+| Exact Ubuntu PowerShell workflow command | 10/10 passed on repeated Linux runs, including the bounded-DNS variant; no scenario skipped |
+| Linux slow-start restart, 0.25 CPU | 3/3 consecutive passes, then 3/3 again with bounded DNS (5.81, 3.30 and 3.82 seconds of readiness probing) |
+| All backend tests | 158 suites, 3,082 passed, four skipped, zero failed (3,086 total) |
+| Linux recovery API/service/store/client/process/managed-SFTP tests | Nine suites, 263 passed, one skipped, zero failed |
+| Focused recovery service/store/API/Internal admission recheck | Four suites, 88 passed, zero failed |
+| Frontend and script tests | 128 passed: 91 frontend + 37 script, zero failed; 16 Internal fixture tests also passed in Linux |
+| Linux Agent tests | 120 passed, zero skipped/failed |
+| Genuine Oracle MySQL worker matrix | 12/12 passed against disposable Oracle 8.4.11 with private IPC/verified TLS, including restart, cancellation, failure and cleanup |
+| Phase 5/6 real SFTP/Restic integrations | 8/8 scenarios passed, including mixed failure, Browse/Download/staged Restore, exact snapshot/SQL hashes and cleanup |
+| Phase 7 native integration | Isolated HTTP/HMAC, SMTP/auth/rejection, timeout, restart/dedup and verified/untrusted TLS passed |
+| Backend lint; backend/frontend/agent typechecks; `pnpm build` | Passed (Node 24.16.0, pnpm 10.20.0) |
+| `Dockerfile.source` and optional worker Docker builds | Passed, locally loaded only; server native clients execute as 10001, no DB servers in the app image |
+| Final-image client/import checks | MariaDB/PostgreSQL actual import/catalog/content/owned cleanup passed; MariaDB MySQL alias rejected; genuine MySQL handled only by the separate validated worker |
+| Compose | Both Internal profiles plus server/Internal and server/worker overlays validated with synthetic placeholders; no services deployed |
+| Patch/sensitive-marker review | `git diff --check` passed; eight changed/new files reviewed, no production identifiers or private-key/token markers introduced |
+| Frontend lint | Same unchanged ESLint 10/typescript-eslint config-loader baseline failure described in section 17; no source lint success claimed |
+
+The extra Linux Jest run needs the test-dependency image explicitly:
+`./scripts/validate-phase6.ps1 -BackendTests -Image pluton-phase6-tests:local`.
+The ordinary real-DB fixture image lacks Jest; using that default first failed
+to launch a test runner, then the correct test image passed all nine suites.
+Likewise, Compose validation needs placeholder image references (the intended
+required-image guard rejects an unset reference). Neither setup correction
+required an application change or skipping an assertion.
+
+The exact workflow command is unchanged:
+
+```powershell
+./scripts/validate-internal-recovery.ps1 -RuntimeImage pluton-recovery-ci:local
+# Additional disposable slow-start reproduction, not a different endpoint:
+./scripts/validate-internal-recovery.ps1 -RuntimeImage pluton-recovery-ci:local -Engines mariadb -Variants restart -TargetCpus 0.25
+```
+
+Linux execution used Ubuntu 24.04.1, PowerShell 7.5.0 and Docker CLI 28.5.1
+against a local Linux Docker daemon. Only the six selected synthetic fixture
+source files were copied into a disposable Linux-native volume; bind sources
+were Linux absolute paths visible to the daemon, not Windows paths. With the
+user's **explicit, one-time authorization**, a temporary local orchestration
+container could access that local daemon socket. This is host-equivalent Docker
+authority despite a read-only socket mount; it is not a safe application mount.
+The image does not configure such access by default. No Pluton, worker or DB
+container received a Docker socket, privileged mode, host ports or host data.
+This setup is a local Ubuntu equivalent, **not an actual GitHub-hosted run**.
+
+### Compatibility and handoff
+
+No new schema migration, API/agent protocol or agent update is needed. No
+production deployment, secret rotation, identity change, repository operation,
+new plan or retained Database Restore feature was performed. Existing TLS,
+ownership, admission, durable leases, snapshot binding and operator lifecycle
+remain intact. No commit, push, merge, release or image publication was done.
+The local fixture teardown removes only scoped disposable resources; it cannot
+authorize application infrastructure cleanup or substitute a production receipt.
+
+Rerun PR CI after the user publishes these branch changes; do not merge based
+only on local success. A remote Actions result and production acceptance remain
+unverified. Reverting these test-only edits needs no database/data rollback and
+must not delete persistent volumes, keys, leases, repositories or agent identity.
