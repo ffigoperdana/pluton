@@ -14,6 +14,7 @@ import type { RemoteRepositoryRecoveryService } from './RemoteRepositoryRecovery
 import { RemoteBackupService } from './RemoteBackupService';
 import { ManagedRepositoryAccessError } from '../utils/restic/ManagedSftpRepositorySession';
 import { RecoveryDatabaseImporter } from '../utils/recoveryDatabaseImport';
+import { WorkerRecoveryDatabaseImporter } from '../utils/mysqlRecoveryWorkerClient';
 import {
 	checkRecoveryCancellation,
 	recoveryArtifacts,
@@ -41,7 +42,7 @@ export class RecoveryTestService {
 		importer?: RecoveryDatabaseImporter
 	) {
 		this.workspace = new RecoveryWorkspace(root);
-		this.importer = importer || new RecoveryDatabaseImporter(store);
+		this.importer = importer || new WorkerRecoveryDatabaseImporter(store);
 	}
 	private async ownedPlan(planId: string) {
 		const plan = await this.plans.getById(planId, false);
@@ -246,6 +247,20 @@ export class RecoveryTestService {
 					throw new RecoveryTestError(stage, 'recovery-target-not-configured');
 				}
 				const { id: targetId, ...target } = saved;
+				if (entry.engine === 'mysql') {
+					const plan = await this.ownedPlan(row.planId);
+					const lifecycle = plan.settings?.remoteLifecycle;
+					const sources = lifecycle?.databases || (lifecycle?.database ? [lifecycle.database] : []);
+					if (
+						sources.some(
+							source =>
+								source.engine === 'mysql' &&
+								source.host.toLowerCase() === target.host.toLowerCase() &&
+								source.port === target.port
+						)
+					)
+						throw new RecoveryTestError(stage, 'recovery-target-unsafe');
+				}
 				await this.importer.importDatabase({
 					testId: row.id,
 					targetId,

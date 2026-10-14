@@ -127,3 +127,4 @@ compose.override.yaml
 #todos
 TODO
 *.TODO
+mysql-worker-dist/
