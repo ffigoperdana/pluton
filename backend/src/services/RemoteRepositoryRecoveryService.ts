@@ -31,6 +31,7 @@ import { configService } from './ConfigService';
 import { RemoteBackupService } from './RemoteBackupService';
 import {
 	checkRecoveryCancellation,
+	recoveryArtifacts,
 	RecoveryTestError,
 	validateRestoredFiles,
 } from '../utils/recoveryValidation';
@@ -81,6 +82,53 @@ export class RemoteRepositoryRecoveryService {
 			repositoryId: context.repositoryId,
 			snapshotId: context.snapshotId,
 		};
+	}
+
+	/** Bounded read-only metadata preview. The authenticated completion receipt supplies
+	 * engine/name/hash; the exact repository snapshot proves paths and sizes. SQL hash
+	 * verification is deliberately still mandatory after restore, before any import. */
+	async testMetadata(backupId: string, planId: string, snapshotId: string) {
+		const context = await this.context(backupId, planId);
+		if (context.snapshotId !== snapshotId)
+			throw new RecoveryTestError('snapshot-validation', 'snapshot-binding-mismatch');
+		const backup = await this.backups.getById(backupId);
+		const entries = recoveryArtifacts(backup?.completionStats?.lifecycle);
+		return this.sessions.withSession(context.access, async session => {
+			const files = await this.boundFiles(context, session);
+			for (const entry of entries) {
+				const file = files.find(file => file.path === entry.path);
+				if (!file || file.type !== 'file' || file.size !== entry.bytes)
+					throw new RecoveryTestError(
+						'database-artifact-validation',
+						'database-metadata-incomplete'
+					);
+			}
+			if (
+				files.some(
+					file =>
+						file.type === 'file' &&
+						file.path.startsWith('/pluton/database/') &&
+						!entries.some(entry => entry.path === file.path)
+				)
+			)
+				throw new RecoveryTestError('database-artifact-validation', 'database-metadata-incomplete');
+			const current = await this.context(backupId, planId);
+			const currentBackup = await this.backups.getById(backupId);
+			if (
+				current.repositoryId !== context.repositoryId ||
+				current.snapshotId !== snapshotId ||
+				JSON.stringify(recoveryArtifacts(currentBackup?.completionStats?.lifecycle)) !==
+					JSON.stringify(entries)
+			)
+				throw new RecoveryTestError('snapshot-validation', 'snapshot-binding-mismatch');
+			return {
+				planId,
+				backupId,
+				repositoryId: context.repositoryId,
+				snapshotId,
+				databases: entries,
+			};
+		});
 	}
 
 	/** Same allowlisted Phase 4 session/selection/restore, with a caller-owned private workspace. */

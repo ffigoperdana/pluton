@@ -116,6 +116,14 @@ jobs:
         shell: pwsh
         run: ./scripts/validate-mysql-recovery-worker.ps1 -RuntimeImage pluton-recovery-ci:local
 
+      - name: Check Internal recovery profiles and operator permission boundaries
+        # Test-only native assertions; no dependency installation or application startup.
+        run: node --test scripts/__tests__/internalRecovery.test.cjs scripts/__tests__/internalRecoveryReadiness.test.cjs
+
+      - name: Verify disposable native Internal targets and mandatory infrastructure cleanup
+        shell: pwsh
+        run: ./scripts/validate-internal-recovery.ps1 -RuntimeImage pluton-recovery-ci:local
+
   publish:
     name: Publish immutable GHCR image
     needs: [validate, build-pr]

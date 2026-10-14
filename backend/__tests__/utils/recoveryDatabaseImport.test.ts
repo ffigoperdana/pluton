@@ -74,6 +74,9 @@ describe('Phase 6 safe native database import', () => {
 			sql.push(text);
 			if (text.startsWith('SELECT purpose')) return 'pluton-phase6-recovery-only\n';
 			if (text.startsWith('SELECT count(*) FROM pg_roles')) return '0\n0\n';
+			if (text === 'SHOW server_version;') return '18.6\n';
+			if (text === 'SELECT VERSION();')
+				return target.engine === 'mariadb' ? '11.8.8-MariaDB\n' : '8.4.11\n';
 			if (text === 'SHOW GRANTS;')
 				return 'GRANT USAGE ON *.* TO `recovery_user`@`localhost`\nGRANT ALL PRIVILEGES ON `example\\_db`.* TO `recovery_user`@`localhost`\nGRANT SELECT ON `pluton_recovery_guard`.`pluton_recovery_guard` TO `recovery_user`@`localhost`\n';
 			if (/SHOW DATABASES|SELECT datname/.test(text))
@@ -111,6 +114,59 @@ describe('Phase 6 safe native database import', () => {
 		signal: new AbortController().signal,
 		allowedDatabases: ['example_db'],
 		stage: jest.fn(),
+	});
+	it('checks the actual target and refuses a newer or cross-engine SQL header before CREATE/lease', async () => {
+		for (const header of [
+			'-- Server version 12.0.1-MariaDB\n',
+			'-- Server version 8.4.11\n',
+			'-- Dumped from database version 18.6\n',
+		]) {
+			await fs.writeFile(file, header + 'SELECT 1;\n');
+			await expect(importer.importDatabase(importInput())).rejects.toMatchObject({
+				code: 'database-client-incompatible',
+			});
+		}
+		expect(store.addLease).not.toHaveBeenCalled();
+		expect(sql.some(text => text.startsWith('CREATE DATABASE'))).toBe(false);
+	});
+	it('internal PostgreSQL cancellation cleanup only terminates this role in the exact ownership-checked temporary DB', async () => {
+		target.engine = entry.engine = 'postgresql';
+		await importer.importDatabase({ ...importInput(), targetId: `irt_${'b'.repeat(24)}` });
+		await importer.cleanup(leases[0], scratch, true);
+		const terminated = sql.find(value => value.includes('pg_terminate_backend'))!;
+		expect(terminated).toContain('usename=current_user');
+		expect(terminated).toContain("backend_type='client backend'");
+		expect(terminated).toContain('pid<>pg_backend_pid()');
+		const index = sql.indexOf(terminated);
+		expect(sql[index - 1]).toContain('SELECT owner_token');
+		expect(sql[index + 1]).toContain('SELECT owner_token');
+		expect(leases).toHaveLength(0);
+	});
+	it('internal termination never runs for an unowned database or a Custom target', async () => {
+		target.engine = entry.engine = 'postgresql';
+		await importer.importDatabase(importInput());
+		await expect(importer.cleanup(leases[0], scratch, true)).rejects.toMatchObject({
+			code: 'database-cleanup-failed',
+		});
+		expect(sql.some(value => value.includes('pg_terminate_backend'))).toBe(false);
+	});
+	it('mandatory empty-catalog confirmation rejects unknown databases and changed recovery markers', async () => {
+		await expect(
+			importer.verifyEmptyTarget({ ...target, id: 'irt_example' }, scratch)
+		).resolves.toBeUndefined();
+		const original = run.getMockImplementation()!;
+		run.mockImplementation(async input =>
+			input.input === 'SHOW DATABASES;' ? 'pluton_recovery_guard\nunknown_db\n' : original(input)
+		);
+		await expect(
+			importer.verifyEmptyTarget({ ...target, id: 'irt_example' }, scratch)
+		).rejects.toMatchObject({ code: 'database-cleanup-failed' });
+		run.mockImplementation(async input =>
+			input.input.startsWith('SELECT purpose') ? 'wrong-purpose' : original(input)
+		);
+		await expect(
+			importer.verifyEmptyTarget({ ...target, id: 'irt_example' }, scratch)
+		).rejects.toMatchObject({ code: 'database-cleanup-failed' });
 	});
 	it.each(['mariadb', 'mysql', 'postgresql'])(
 		'%s imports with a separate private credential file, bounded native client and fixed catalog verification',

@@ -134,7 +134,7 @@ export async function runRecoveryProcess(input: RecoveryProcessInput): Promise<s
 								stderr
 							)
 								? 'database-authentication-failed'
-								: /(?:certificate verify|certificate verification|server certificate|root certificate|server does not support SSL)/i.test(
+								: /(?:\bERROR\s+2026\b|TLS\/SSL error|certificate verify|certificate verification|server certificate|root certificate|server does not support SSL)/i.test(
 											stderr
 									  )
 									? 'database-tls-failed'

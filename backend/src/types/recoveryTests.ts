@@ -17,8 +17,14 @@ export type RecoveryStage =
 	| 'database-import-validation'
 	| 'database-cleanup'
 	| 'workspace-cleanup'
+	| 'infrastructure-cleanup'
 	| 'job';
 export type RecoveryCode =
+	| 'recovery-workload-busy'
+	| 'internal-target-not-provisioned'
+	| 'internal-target-unsafe'
+	| 'internal-resources-insufficient'
+	| 'internal-cleanup-required'
 	| 'mysql-worker-not-configured'
 	| 'mysql-worker-unavailable'
 	| 'mysql-worker-busy'
@@ -74,8 +80,10 @@ export type RecoveryDatabaseResult = {
 	failureCode?: RecoveryCode;
 	tables?: number;
 	views?: number;
+	versionValidation?: 'header-and-target-checked' | 'not-recorded';
 };
 export type RecoveryResult = {
+	internalEngine?: InternalRecoveryEngine;
 	filesystem?: {
 		files: number;
 		bytes: number;
@@ -83,12 +91,18 @@ export type RecoveryResult = {
 		integrity: 'restic-restore-and-structure';
 	};
 	databases: RecoveryDatabaseResult[];
-	cleanup: { workspace: boolean; databases: boolean };
+	cleanup: { workspace: boolean; databases: boolean; infrastructure?: boolean };
 };
+export type InternalRecoveryEngine = 'mariadb' | 'postgresql';
+export type RecoveryTargetMode = 'internal' | 'custom';
 export type RecoveryPolicy = {
 	enabled: boolean;
 	databaseImport: 'disabled' | 'required';
 	enabledAt?: number;
+	/** Missing entries preserve the original Custom behavior. MySQL is always Custom. */
+	targetModes?: Partial<Record<InternalRecoveryEngine, RecoveryTargetMode>>;
+	/** Internal per-job fingerprint, never accepted by the saved-policy API. */
+	snapshotMetadataToken?: string;
 };
 export type RecoveryTargetConfig = {
 	engine: RecoveryEngine;

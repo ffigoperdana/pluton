@@ -26,6 +26,7 @@ import { Modal, SidePanel, SnapshotViewer } from '../..';
 import { useRecoveryAction, useRecoveryTests } from '../../../services/recoveryTests';
 import { canTestRecovery, recoveryActive, recoveryForBackup, recoveryStatusLabel } from '../../../utils/recoveryTests';
 import RecoveryResult from '../RecoveryTesting/RecoveryResult';
+import RecoveryConfirmation from '../RecoveryTesting/RecoveryConfirmation';
 import recoveryClasses from '../RecoveryTesting/RecoveryTesting.module.scss';
 import { backupStatistics, statisticHelp } from '../../../utils/backupStatistics';
 
@@ -126,15 +127,8 @@ const Backups = ({
    );
    const recoveryAction = useRecoveryAction(planId);
    const [recoveryResultId, setRecoveryResultId] = useState<string>();
+   const [recoveryConfirmation, setRecoveryConfirmation] = useState<{ backupId: string; snapshotId: string; operation: 'test' | 'restore' }>();
    const shownRecovery = recoveryTests.data?.find((test) => test.id === recoveryResultId);
-   const runRecovery = (backupId: string) =>
-      recoveryAction.mutate(
-         { backupId },
-         {
-            onSuccess: (test) => setRecoveryResultId(test.id),
-            onError: (error) => toast.error(error.message),
-         },
-      );
 
    const snapshotFiles = browseSnapshotMutation.data?.result;
 
@@ -340,11 +334,29 @@ const Backups = ({
                                  <button
                                     disabled={recoveryAction.isPending || (recoveryTests.data || []).some(recoveryActive)}
                                     onClick={() => {
-                                       runRecovery(id);
+                                       setRecoveryConfirmation({
+                                          backupId: id,
+                                          snapshotId: snapshot.completionStats!.snapshot_id,
+                                          operation: 'test',
+                                       });
                                        setShowSnapOptions(false);
                                     }}
                                  >
                                     <Icon type="restore" size={14} /> Run Recovery Test
+                                 </button>
+                              )}
+                              {isRemoteManaged && canTestRecovery(snapshot) && (
+                                 <button
+                                    onClick={() => {
+                                       setRecoveryConfirmation({
+                                          backupId: id,
+                                          snapshotId: snapshot.completionStats!.snapshot_id,
+                                          operation: 'restore',
+                                       });
+                                       setShowSnapOptions(false);
+                                    }}
+                                 >
+                                    <Icon type="restore" size={14} /> Restore Database (availability)
                                  </button>
                               )}
                               {isRemoteManaged && recovery && (
@@ -424,6 +436,23 @@ const Backups = ({
                })}
             {backups.length === 0 && <div className={classes.noBackups}>Hasn't been backed up yet.</div>}
          </div>
+         {recoveryConfirmation && (
+            <RecoveryConfirmation
+               {...recoveryConfirmation}
+               planId={planId}
+               pending={recoveryAction.isPending}
+               close={() => !recoveryAction.isPending && setRecoveryConfirmation(undefined)}
+               confirm={(body) =>
+                  recoveryAction.mutate(body, {
+                     onSuccess: (test) => {
+                        setRecoveryConfirmation(undefined);
+                        setRecoveryResultId(test.id);
+                     },
+                     onError: (error) => toast.error(error.message),
+                  })
+               }
+            />
+         )}
          {shownRecovery && (
             <RecoveryResult
                test={shownRecovery}

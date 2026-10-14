@@ -66,6 +66,12 @@ export default function RecoveryResult({
                   <div>
                      {databaseImportLabel(database.importValidation)} {database.failureCode && `· ${database.failureCode}`}
                   </div>
+                  <div>
+                     Version check:{' '}
+                     {database.versionValidation === 'header-and-target-checked'
+                        ? 'Recorded-engine SQL header and actual target checked; not an application compatibility guarantee'
+                        : 'Source/dump version not recorded or not reported by worker v1 — compatibility not certified'}
+                  </div>
                   {database.importValidation === 'passed' && database.tables !== undefined && (
                      <div>
                         Catalog verified: {database.tables} tables · {database.views || 0} views
@@ -75,6 +81,13 @@ export default function RecoveryResult({
             ))}
             {!test.result?.databases.length && <p>No database artifact checks recorded.</p>}
             <h4>Cleanup</h4>
+            {test.result?.internalEngine && (
+               <p>
+                  Internal {test.result.internalEngine} infrastructure:{' '}
+                  {test.result.cleanup.infrastructure ? 'Complete' : 'Cleanup Required — operator deactivation pending'}. SQL/catalog success alone is
+                  not a completed recovery test.
+               </p>
+            )}
             <p>
                Workspace: {test.result?.cleanup.workspace ? 'Complete' : 'Not confirmed'} · Temporary databases:{' '}
                {test.result?.cleanup.databases ? 'Complete' : 'Not confirmed'}

@@ -8,6 +8,7 @@ import { readMigrationFiles } from 'drizzle-orm/migrator';
 import Cryptr from 'cryptr';
 import { plans } from '../../src/db/schema/plans';
 import { backups } from '../../src/db/schema/backups';
+import { restores } from '../../src/db/schema/restores';
 import {
 	recoveryTests,
 	recoveryTargets,
@@ -15,6 +16,10 @@ import {
 	recoveryImportLeases,
 } from '../../src/db/schema/recoveryTests';
 import { RecoveryTestStore } from '../../src/stores/RecoveryTestStore';
+import {
+	internalRecoverySessions,
+	internalRecoveryImportLeases,
+} from '../../src/db/schema/internalRecovery';
 import type { DatabaseType } from '../../src/db';
 
 const scenario = process.argv[2];
@@ -26,6 +31,8 @@ const schema = {
 	recoveryTargets,
 	recoveryTestPolicies,
 	recoveryImportLeases,
+	internalRecoverySessions,
+	internalRecoveryImportLeases,
 };
 const db = drizzle(sqlite, { schema }) as unknown as DatabaseType;
 const key = crypto.randomBytes(32).toString('hex');
@@ -132,6 +139,73 @@ try {
 		automationKey: `after-backup:backup-01:${snapshotId}`,
 		policy: { enabled: true, databaseImport: 'disabled' as const },
 	};
+	if (scenario === 'internal') {
+		await store.saveTarget('plan-01', target);
+		const custom = db.select().from(recoveryTargets).get()!;
+		await store.savePolicy('plan-01', {
+			enabled: false,
+			databaseImport: 'required',
+			targetModes: { mariadb: 'internal' },
+		});
+		await assert.rejects(
+			store.savePolicy('plan-01', { enabled: true, databaseImport: 'required' })
+		);
+		await store.savePolicy('plan-01', { enabled: false, databaseImport: 'required' });
+		assert.equal((await store.policy('plan-01')).targetModes?.mariadb, 'internal');
+		assert.deepEqual(db.select().from(recoveryTargets).get(), custom);
+		await store.enqueue({ ...row, trigger: 'manual', policy: await store.policy('plan-01') });
+		const input = {
+			testId: id,
+			engine: 'mariadb' as const,
+			installationId: '1'.repeat(32),
+			activationId: '2'.repeat(32),
+			target: {
+				...target,
+				engine: 'mariadb' as const,
+				host: 'internal-mariadb',
+				tls: 'verify-identity' as const,
+				dedicated: true as const,
+			},
+			caSha256: '3'.repeat(64),
+		};
+		await assert.rejects(store.beginInternalSession(input));
+		await store.claim();
+		const saved = await store.beginInternalSession(input);
+		assert(saved.id.startsWith('irt_'));
+		assert(
+			!JSON.stringify(db.select().from(internalRecoverySessions).get()).includes(target.password)
+		);
+		assert.equal((await store.leaseTarget(saved.id))!.password, target.password);
+		assert.equal(((await store.leaseTarget(saved.id)) as any).id, undefined);
+		await assert.rejects(store.beginInternalSession(input));
+		const lease = {
+			id: '4'.repeat(24),
+			testId: id,
+			targetId: saved.id,
+			database: 'example_db',
+			ownerToken: '5'.repeat(48),
+		};
+		await store.addLease(lease);
+		assert(lease.id.startsWith('il_'));
+		assert.equal((await store.leases(id)).length, 1);
+		await assert.rejects(store.markInternalCleanupReady(saved.id));
+		await assert.rejects(store.assertPlanRemovable('plan-01'));
+		assert.throws(() => sqlite.prepare('DELETE FROM recovery_tests WHERE id=?').run(id));
+		await store.removeLease(lease.id);
+		await store.markInternalCleanupReady(saved.id);
+		assert.equal((await store.pendingInternalSessions()).length, 1);
+		sqlite.exec(
+			"CREATE TRIGGER reject_release BEFORE UPDATE ON internal_recovery_sessions BEGIN SELECT RAISE(ABORT,'fixture'); END;"
+		);
+		await assert.rejects(store.completeInternalCleanup(saved.id, { status: 'passed' }));
+		assert.equal((await store.get(id))!.status, 'running');
+		sqlite.exec('DROP TRIGGER reject_release');
+		await store.completeInternalCleanup(saved.id, { status: 'failed' });
+		await store.assertPlanRemovable('plan-01');
+		sqlite.prepare('DELETE FROM recovery_tests WHERE id=?').run(id);
+		assert.equal((await store.pendingInternalSessions()).length, 0);
+		assert.deepEqual(db.select().from(recoveryTargets).get(), custom);
+	}
 	if (scenario === 'persistence') {
 		await store.saveTarget('plan-01', target);
 		const raw = db.select().from(recoveryTargets).get()!;
@@ -250,6 +324,26 @@ try {
 		await store.update(second.id, { status: 'cancelled' });
 		assert.equal((await store.requestCancellation(second.id))?.status, 'cancelled');
 		assert.equal(db.select().from(backups).get()!.status, 'completed');
+	}
+	if (scenario === 'workload-admission') {
+		await store.enqueue(row);
+		await assert.rejects(
+			store.enqueue({
+				...row,
+				id: 'f'.repeat(24),
+				trigger: 'manual',
+				automationKey: null,
+				policy: { ...row.policy, enabled: false, snapshotMetadataToken: 'f'.repeat(64) },
+			}),
+			/already queued or running/
+		);
+		db.update(backups).set({ inProgress: true }).run();
+		assert.equal(await store.claim(), null);
+		db.update(backups).set({ inProgress: false }).run();
+		db.insert(restores).values({ id: 'restore-01', sourceId: 'main', inProgress: true }).run();
+		assert.equal(await store.claim(), null);
+		db.update(restores).set({ inProgress: false }).run();
+		assert.equal((await store.claim())?.id, id);
 	}
 	if (scenario === 'concurrency') {
 		db.insert(plans)

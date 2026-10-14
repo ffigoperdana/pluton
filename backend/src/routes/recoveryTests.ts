@@ -9,6 +9,8 @@ export function createRecoveryTestRouter(
 	router.get('/:planId/configuration', controller.configuration.bind(controller));
 	router.put('/:planId/policy', controller.savePolicy.bind(controller));
 	router.put('/:planId/target', controller.saveTarget.bind(controller));
+	router.post('/:planId/preparation', controller.preparation.bind(controller));
+	router.post('/:planId/database-restores', controller.databaseRestore.bind(controller));
 	router.get('/:planId/tests', controller.list.bind(controller));
 	router.post('/:planId/tests/lookup', controller.lookup.bind(controller));
 	router.post('/:planId/tests', controller.run.bind(controller));

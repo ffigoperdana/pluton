@@ -1,10 +1,11 @@
 import crypto from 'crypto';
 import Cryptr from 'cryptr';
-import { and, asc, desc, eq, inArray, sql, notExists, or, gt } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql, notExists, or, gt, isNull } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 import type { DatabaseType } from '../db';
 import { backups } from '../db/schema/backups';
 import { plans } from '../db/schema/plans';
+import { restores } from '../db/schema/restores';
 import { remoteManagedRepositories } from '../db/schema/remoteManagedRepositories';
 import {
 	recoveryTests,
@@ -16,6 +17,7 @@ import {
 	type RecoveryImportLease,
 } from '../db/schema/recoveryTests';
 import type {
+	InternalRecoveryEngine,
 	RecoveryEngine,
 	RecoveryPolicy,
 	RecoveryTarget,
@@ -28,6 +30,11 @@ import {
 	recoveryTargetSchema,
 } from '../utils/recoveryTestPolicy';
 import { AppError, NotFoundError } from '../utils/AppError';
+import {
+	internalRecoverySessions,
+	internalRecoveryImportLeases,
+	type InternalRecoverySession,
+} from '../db/schema/internalRecovery';
 
 const active = ['queued', 'running'] as const;
 export class RecoveryTestStore {
@@ -38,6 +45,25 @@ export class RecoveryTestStore {
 
 	async get(id: string): Promise<RecoveryTest | null> {
 		return this.db.select().from(recoveryTests).where(eq(recoveryTests.id, id)).get() || null;
+	}
+	async activity() {
+		return {
+			backup: !!this.db
+				.select({ id: backups.id })
+				.from(backups)
+				.where(eq(backups.inProgress, true))
+				.get(),
+			restore: !!this.db
+				.select({ id: restores.id })
+				.from(restores)
+				.where(eq(restores.inProgress, true))
+				.get(),
+			recovery: !!this.db
+				.select({ id: recoveryTests.id })
+				.from(recoveryTests)
+				.where(eq(recoveryTests.status, 'running'))
+				.get(),
+		};
 	}
 	async list(planId: string, backupIds: string[] = []): Promise<RecoveryTest[]> {
 		const recent = this.db
@@ -118,12 +144,19 @@ export class RecoveryTestStore {
 				.get()?.policy;
 			const saved = {
 				...policy,
+				// An older UI saving a policy must not silently reset target selection.
+				targetModes: policy.targetModes ?? previous?.targetModes,
 				enabledAt: policy.enabled
 					? previous?.enabled
 						? previous.enabledAt
 						: Math.floor(Date.now() / 1000) * 1000
 					: undefined,
 			};
+			if (saved.enabled && Object.values(saved.targetModes || {}).includes('internal'))
+				throw new AppError(
+					400,
+					'Internal targets require manual operator activation and cleanup. Disable after-backup automation before selecting Internal.'
+				);
 			tx.insert(recoveryTestPolicies)
 				.values({ planId, policy: saved })
 				.onConflictDoUpdate({
@@ -206,6 +239,12 @@ export class RecoveryTestStore {
 		return this.materialize(row);
 	}
 	async leaseTarget(targetId: string): Promise<RecoveryTarget | null> {
+		if (targetId.startsWith('irt_')) {
+			const session = await this.internalSession(targetId);
+			if (!session || session.releasedAt) return null;
+			const { id: _id, ...target } = this.materialize(session);
+			return target;
+		}
 		const row = this.db
 			.select()
 			.from(recoveryTargets)
@@ -216,6 +255,18 @@ export class RecoveryTestStore {
 		return target;
 	}
 	async assertPlanRemovable(planId: string): Promise<void> {
+		if (
+			this.db
+				.select()
+				.from(internalRecoverySessions)
+				.innerJoin(recoveryTests, eq(recoveryTests.id, internalRecoverySessions.testId))
+				.where(and(eq(recoveryTests.planId, planId), isNull(internalRecoverySessions.releasedAt)))
+				.get()
+		)
+			throw new AppError(
+				409,
+				'Resolve internal recovery infrastructure cleanup before removing this plan.'
+			);
 		if (
 			this.db
 				.select()
@@ -267,7 +318,9 @@ export class RecoveryTestStore {
 					)
 			);
 	}
-	private materialize(row: typeof recoveryTargets.$inferSelect): RecoveryTarget & { id: string } {
+	private materialize(
+		row: Pick<typeof recoveryTargets.$inferSelect, 'id' | 'config' | 'encryptedPassword'>
+	): RecoveryTarget & { id: string } {
 		try {
 			const target = parseRecoveryInput(recoveryTargetSchema, {
 				...row.config,
@@ -326,6 +379,11 @@ export class RecoveryTestStore {
 				)
 				.get();
 			if (current) {
+				if (row.policy.snapshotMetadataToken)
+					throw new AppError(
+						409,
+						'A recovery test is already queued or running. Review its result before submitting another confirmation.'
+					);
 				if (current.backupId === row.backupId && current.snapshotId === row.snapshotId)
 					return current;
 				throw new AppError(409, 'One recovery test is already queued or running for this plan.');
@@ -338,12 +396,25 @@ export class RecoveryTestStore {
 		return this.db.transaction(tx => {
 			if (tx.select().from(recoveryTests).where(eq(recoveryTests.status, 'running')).get())
 				return null;
+			// Recovery yields to existing backup/restore work. It never pauses backups
+			// or retries a refused import in a tight loop. Check again on the next tick.
+			if (
+				tx.select().from(backups).where(eq(backups.inProgress, true)).get() ||
+				tx.select().from(restores).where(eq(restores.inProgress, true)).get()
+			)
+				return null;
+			const pendingInternal = !!tx
+				.select()
+				.from(internalRecoverySessions)
+				.where(isNull(internalRecoverySessions.releasedAt))
+				.get();
 			const row = tx
 				.select()
 				.from(recoveryTests)
 				.where(eq(recoveryTests.status, 'queued'))
 				.orderBy(asc(recoveryTests.createdAt))
-				.get();
+				.all()
+				.find(value => !pendingInternal || value.policy.databaseImport === 'disabled');
 			if (!row) return null;
 			return (
 				tx
@@ -360,7 +431,10 @@ export class RecoveryTestStore {
 			.select()
 			.from(recoveryTestPolicies)
 			.all()
-			.filter(row => row.policy.enabled);
+			.filter(
+				row =>
+					row.policy.enabled && !Object.values(row.policy.targetModes || {}).includes('internal')
+			);
 		const candidates: string[] = [];
 		for (const row of policies) {
 			if (
@@ -419,18 +493,142 @@ export class RecoveryTestStore {
 		return rows;
 	}
 	async leases(testId?: string): Promise<RecoveryImportLease[]> {
-		return testId
+		const custom = testId
 			? this.db
 					.select()
 					.from(recoveryImportLeases)
 					.where(eq(recoveryImportLeases.testId, testId))
 					.all()
 			: this.db.select().from(recoveryImportLeases).all();
+		const internal = testId
+			? this.db
+					.select()
+					.from(internalRecoveryImportLeases)
+					.where(eq(internalRecoveryImportLeases.testId, testId))
+					.all()
+			: this.db.select().from(internalRecoveryImportLeases).all();
+		return [...custom, ...internal];
 	}
 	async addLease(lease: RecoveryImportLease) {
+		if (lease.targetId.startsWith('irt_')) {
+			const session = await this.internalSession(lease.targetId);
+			if (
+				!session ||
+				session.testId !== lease.testId ||
+				session.releasedAt ||
+				session.cleanupReady ||
+				!/^[a-f0-9]{24}$/.test(lease.id) ||
+				!/^[a-f0-9]{48}$/.test(lease.ownerToken)
+			)
+				throw new AppError(409, 'Internal recovery activation is unavailable.');
+			// The importer retains this object for immediate, ownership-checked cleanup.
+			lease.id = `il_${lease.id}`;
+			this.db.insert(internalRecoveryImportLeases).values(lease).run();
+			return;
+		}
 		this.db.insert(recoveryImportLeases).values(lease).run();
 	}
 	async removeLease(id: string) {
+		if (id.startsWith('il_')) {
+			this.db
+				.delete(internalRecoveryImportLeases)
+				.where(eq(internalRecoveryImportLeases.id, id))
+				.run();
+			return;
+		}
 		this.db.delete(recoveryImportLeases).where(eq(recoveryImportLeases.id, id)).run();
+	}
+	async internalSession(id: string): Promise<InternalRecoverySession | null> {
+		return (
+			this.db
+				.select()
+				.from(internalRecoverySessions)
+				.where(eq(internalRecoverySessions.id, id))
+				.get() || null
+		);
+	}
+	async pendingInternalSessions(): Promise<InternalRecoverySession[]> {
+		return this.db
+			.select()
+			.from(internalRecoverySessions)
+			.where(isNull(internalRecoverySessions.releasedAt))
+			.all();
+	}
+	async beginInternalSession(input: {
+		testId: string;
+		engine: InternalRecoveryEngine;
+		installationId: string;
+		activationId: string;
+		target: RecoveryTarget;
+		caSha256: string;
+	}): Promise<RecoveryTarget & { id: string }> {
+		const { password, ...config } = parseRecoveryInput(recoveryTargetSchema, input.target);
+		if (!password || config.engine !== input.engine || config.tls !== 'verify-identity')
+			throw new AppError(409, 'Unsafe internal target.');
+		const id = `irt_${crypto.randomBytes(12).toString('hex')}`;
+		this.db.transaction(tx => {
+			const test = tx.select().from(recoveryTests).where(eq(recoveryTests.id, input.testId)).get();
+			if (
+				!test ||
+				test.status !== 'running' ||
+				test.policy.databaseImport !== 'required' ||
+				test.policy.targetModes?.[input.engine] !== 'internal' ||
+				!/^[a-f0-9]{32}$/.test(input.installationId) ||
+				!/^[a-f0-9]{32}$/.test(input.activationId) ||
+				!/^[a-f0-9]{64}$/.test(input.caSha256)
+			)
+				throw new AppError(409, 'Internal recovery activation is unavailable.');
+			tx.insert(internalRecoverySessions)
+				.values({
+					id,
+					testId: input.testId,
+					engine: input.engine,
+					installationId: input.installationId,
+					activationId: input.activationId,
+					config,
+					encryptedPassword: new Cryptr(this.secret).encrypt(password),
+					caSha256: input.caSha256,
+				})
+				.run();
+		});
+		return { ...config, password, id };
+	}
+	async markInternalCleanupReady(id: string) {
+		const session = await this.internalSession(id);
+		if (!session || (await this.leases(session.testId)).length)
+			throw new AppError(409, 'Database cleanup is incomplete.');
+		this.db
+			.update(internalRecoverySessions)
+			.set({ cleanupReady: true })
+			.where(eq(internalRecoverySessions.id, id))
+			.run();
+	}
+	async completeInternalCleanup(id: string, changes: Partial<RecoveryTest>) {
+		this.db.transaction(tx => {
+			const session = tx
+				.select()
+				.from(internalRecoverySessions)
+				.where(eq(internalRecoverySessions.id, id))
+				.get();
+			if (
+				!session?.cleanupReady ||
+				tx
+					.select()
+					.from(internalRecoveryImportLeases)
+					.where(eq(internalRecoveryImportLeases.testId, session.testId))
+					.get() ||
+				tx
+					.select()
+					.from(recoveryImportLeases)
+					.where(eq(recoveryImportLeases.testId, session.testId))
+					.get()
+			)
+				throw new AppError(409, 'Database cleanup is incomplete.');
+			tx.update(recoveryTests).set(changes).where(eq(recoveryTests.id, session.testId)).run();
+			tx.update(internalRecoverySessions)
+				.set({ releasedAt: new Date() })
+				.where(eq(internalRecoverySessions.id, id))
+				.run();
+		});
 	}
 }

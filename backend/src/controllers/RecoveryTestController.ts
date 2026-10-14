@@ -1,6 +1,8 @@
 import type { Request, Response } from 'express';
 import type { RecoveryTestService } from '../services/RecoveryTestService';
 import { AppError } from '../utils/AppError';
+import { parseRecoveryInput } from '../utils/recoveryTestPolicy';
+import { recoverySnapshotSelection, recoveryManualSelection } from '../utils/recoveryPreparation';
 
 export class RecoveryTestController {
 	constructor(private readonly service: RecoveryTestService) {}
@@ -8,12 +10,10 @@ export class RecoveryTestController {
 		try {
 			res.status(status).json({ success: true, result: await action() });
 		} catch (error) {
-			res
-				.status(error instanceof AppError ? error.statusCode : 500)
-				.json({
-					success: false,
-					error: error instanceof AppError ? error.message : 'Recovery testing request failed.',
-				});
+			res.status(error instanceof AppError ? error.statusCode : 500).json({
+				success: false,
+				error: error instanceof AppError ? error.message : 'Recovery testing request failed.',
+			});
 		}
 	}
 	async configuration(req: Request, res: Response) {
@@ -50,6 +50,10 @@ export class RecoveryTestController {
 		await this.respond(
 			res,
 			async () => {
+				if (req.body && Object.keys(req.body).some(key => key !== 'backupId')) {
+					const input = parseRecoveryInput(recoveryManualSelection, req.body);
+					return this.service.enqueueManual(req.params.planId, input);
+				}
 				if (
 					!req.body ||
 					Object.keys(req.body).some(key => key !== 'backupId') ||
@@ -61,6 +65,18 @@ export class RecoveryTestController {
 			},
 			202
 		);
+	}
+	async preparation(req: Request, res: Response) {
+		await this.respond(res, () => {
+			const input = parseRecoveryInput(recoverySnapshotSelection, req.body);
+			return this.service.preparation(req.params.planId, input.backupId, input.snapshotId);
+		});
+	}
+	async databaseRestore(req: Request, res: Response) {
+		await this.respond(res, () => {
+			parseRecoveryInput(recoverySnapshotSelection, req.body);
+			return this.service.databaseRestoreUnavailable(req.params.planId);
+		});
 	}
 	async cancel(req: Request, res: Response) {
 		await this.respond(res, () => this.service.cancel(req.params.planId, req.params.id));
