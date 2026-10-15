@@ -23,7 +23,7 @@
       top: 20%;
       padding: 20px;
       box-sizing: border-box;
-      max-height: calc(100vh - 32px);
+      max-height: min(80vh, calc(100dvh - 32px));
       overflow-y: auto;
       box-shadow: 0 0 20px var(--modal-shadow-color);
       word-break: break-word;
@@ -40,6 +40,8 @@
 
       h3 {
          margin-top: 0;
+         padding-right: 32px;
+         font-size: 1.0625rem;
          color: var(--content-text-color);
       }
    }

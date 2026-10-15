@@ -2,7 +2,7 @@ import { useMemo, useRef, useState, useEffect } from 'react';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Filler, Tooltip, Legend, ChartOptions } from 'chart.js';
 import { Line } from 'react-chartjs-2';
 import Icon from '../../common/Icon/Icon';
-import { Backup } from '../../../@types/backups';
+import { BackupChartPoint } from '../../../@types/backups';
 import { formatBytes, formatNumberToK } from '../../../utils/helpers';
 import { useTheme } from '../../../context/ThemeContext';
 import classes from './PlanSizeChart.module.scss';
@@ -21,7 +21,7 @@ const RANGE_OPTIONS: { key: RangeKey; label: string; labelFull: string; days: nu
 ];
 
 interface PlanSizeChartProps {
-   backups: Backup[];
+   backups: BackupChartPoint[];
    remoteManaged?: boolean;
    isSync?: boolean;
 }

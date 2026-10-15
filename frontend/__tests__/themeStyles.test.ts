@@ -73,6 +73,7 @@ for (const theme of ['light', 'dark']) {
          ['--error-text-color', '--error-bg-color-active'],
          ['--primary-text-color', '--primary-color'],
          ['--error-active-text', '--error-button-color'],
+         ['--progress-text', '--progress-fill'],
       ]) {
          const ratio = contrast(theme, text, background);
          assert.ok(ratio >= 4.5, `${text} on ${background}: ${ratio.toFixed(2)}`);

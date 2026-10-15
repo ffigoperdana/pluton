@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-toastify';
 import { API_URL } from '../utils/constants';
 import { NewPlanSettings, Plan, PlanAddRunSettings, PlanNotification } from '../@types/plans';
+import { historyApiQuery } from '../utils/backupHistory';
+import type { HistoryPage, HistoryState } from '../utils/backupHistory';
 
 type BackupRunConfig = {
    skipDryRun?: boolean;
@@ -39,6 +41,7 @@ export async function getSinglePlan(id: string) {
       throw new Error('ID Not Provided.');
    }
    const url = new URL(`${API_URL}/plans/${id}`);
+   url.searchParams.set('backupHistory', 'summary');
 
    const res = await fetch(url.toString(), {
       method: 'GET',
@@ -60,6 +63,25 @@ export function useGetPlan(id: string) {
       refetchOnMount: true,
       retry: false,
       staleTime: 0,
+   });
+}
+
+export function useBackupHistory(id: string, state: HistoryState, enabled = true) {
+   return useQuery({
+      // Existing plan mutations/progress invalidations also refresh the current page.
+      queryKey: ['plan', id, 'backupHistory', state],
+      queryFn: async ({ signal }): Promise<HistoryPage<Plan['backups'][number]>> => {
+         const response = await fetch(`${API_URL}/plans/${encodeURIComponent(id)}/backups?${historyApiQuery(state)}`, {
+            credentials: 'include',
+            signal,
+         });
+         const data = await response.json();
+         if (!response.ok || !data.success) throw new Error(data.error || 'Could not load backup history.');
+         return data.result;
+      },
+      enabled,
+      retry: false,
+      placeholderData: (previous) => previous,
    });
 }
 

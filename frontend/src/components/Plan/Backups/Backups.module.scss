@@ -252,10 +252,75 @@
 @media only screen and (max-width: 768px) {
    .backupsTable {
       overflow: auto;
-      max-width: 80vw;
+      max-width: 100%;
       .backupsTableHead,
       .backupsTableContent {
          width: 760px;
+      }
+   }
+}
+
+// One shared column definition keeps headings and row values aligned. Horizontal
+// scrolling is confined to the table on narrow viewports, not the whole page.
+.backupsTable {
+   font-size: 0.8125rem;
+   font-variant-numeric: tabular-nums;
+   color: var(--content-text-color);
+   .backupsTableHead,
+   .backupsTableContent .backupsTableRow {
+      display: grid;
+      grid-template-columns: minmax(170px, 1.5fr) minmax(150px, 1.1fr) 80px minmax(100px, 0.8fr) 110px minmax(150px, 1fr) 36px;
+      align-items: center;
+      & > div:not(.settings),
+      & > div:nth-child(1),
+      & > div:last-child:not(.settings) {
+         width: auto;
+         min-width: 0;
+         padding: 12px 10px;
+         box-sizing: border-box;
+         overflow-wrap: anywhere;
+      }
+   }
+   .backupsTableHead {
+      background: var(--surface-muted);
+   }
+   .backupsTableContent .backupsTableRow {
+      border-bottom: 1px solid var(--line-color);
+      &:last-child {
+         border-bottom: 0;
+      }
+      &:hover,
+      &:focus-within {
+         background: var(--surface-muted);
+      }
+      &:focus-within .editIcon {
+         visibility: visible;
+         opacity: 1;
+      }
+      .snapOptsBtn button {
+         width: 30px;
+         height: 32px;
+         border-radius: 5px;
+      }
+      .settings {
+         box-shadow: var(--card-shadow);
+         button {
+            min-height: 34px;
+            font-size: 0.8125rem;
+         }
+      }
+      time {
+         display: block;
+         text-align: left;
+      }
+   }
+}
+@media (max-width: 1150px) {
+   .backupsTable {
+      overflow-x: auto;
+      .backupsTableHead,
+      .backupsTableContent {
+         width: 900px;
       }
    }
 }

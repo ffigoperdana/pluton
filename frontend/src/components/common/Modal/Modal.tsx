@@ -73,7 +73,7 @@ const Modal = ({ children, width, closeModal, title, disablePortal = false, clas
          >
             <div className={`${classes.modalContent} ${isActive ? classes.active : ''}`} style={{ width: width }} ref={modalContentRef}>
                {title && <h3>{title}</h3>}
-               <button className={classes.modalClose} onClick={handleClose}>
+               <button type="button" className={classes.modalClose} onClick={handleClose} aria-label="Close dialog">
                   <Icon type="close" size={24} />
                </button>
                <div className={classes.modalChildren}>{children}</div>

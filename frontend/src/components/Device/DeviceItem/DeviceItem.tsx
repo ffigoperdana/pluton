@@ -64,7 +64,12 @@ const DeviceItem = ({ device, layout }: DeviceItemProps) => {
                   <Icon type="logo" size={13} /> <i>{agentVersion ? 'v' + agentVersion : 'latest'}</i>
                </div>
             )}
-            <button className={`${classes.moreBtn} ${showSettings ? classes.moreBtnActive : ''}`} onClick={() => setShowSettings(!showSettings)}>
+            <button
+               aria-label={`Source actions for ${name}`}
+               aria-expanded={showSettings}
+               className={`${classes.moreBtn} ${showSettings ? classes.moreBtnActive : ''}`}
+               onClick={() => setShowSettings(!showSettings)}
+            >
                <Icon type="dots-vertical" size={14} />
             </button>
             {showSettings && (

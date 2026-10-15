@@ -38,6 +38,7 @@ import { prepareRemoteLifecycleCollection } from '../utils/remoteLifecycle';
 import type { DatabaseCredential } from '../types/remoteLifecycle';
 import { configService } from './ConfigService';
 import type { RecoveryTestStore } from '../stores/RecoveryTestStore';
+import { parseBackupHistoryQuery } from '../utils/backupHistoryQuery';
 
 /**
  * PlanService is the central orchestrator for all business logic related to backup plans.
@@ -71,12 +72,37 @@ export class PlanService {
 			: new LocalBackupStrategy(this.localAgent);
 	}
 
-	public async getPlan(planId: string, history: boolean = true): Promise<Plan | null> {
-		const result = await this.planStore.getById(planId, history);
+	public async getPlan(
+		planId: string,
+		history: boolean = true,
+		backupSummary = false
+	): Promise<Plan | null> {
+		const result = backupSummary
+			? await this.planStore.getById(planId, history, true)
+			: await this.planStore.getById(planId, history);
 		if (!result) {
 			throw new NotFoundError('Plan not found');
 		}
 		return result;
+	}
+
+	public async getBackupHistory(planId: string, input: unknown) {
+		const query = parseBackupHistoryQuery(input);
+		// Reuse the same authenticated administrative plan boundary. This public
+		// community schema has no per-user plan ownership/tenant field.
+		const plan = await this.planStore.getById(planId, false);
+		if (!plan) throw new NotFoundError('Plan not found');
+		const result = await this.backupStore.getHistoryPage(plan.id, query);
+		const items = this.planStore.handleBackupStats(
+			plan.method,
+			result.items,
+			plan.stats,
+			plan.sourceType === 'device' && plan.sourceId !== 'main'
+		);
+		return {
+			...result,
+			items: plan.settings?.replication ? this.planStore.handleBackupMirrors(plan, items) : items,
+		};
 	}
 
 	public async getAllPlans(history: boolean = true): Promise<Plan[] | null> {

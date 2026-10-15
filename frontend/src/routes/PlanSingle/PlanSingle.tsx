@@ -111,7 +111,12 @@ const PlanSingle = () => {
                         <button className={classes.actionBtn} onClick={() => setShowEditModal(true)}>
                            <Icon size={14} type="edit-settings" /> Edit
                         </button>
-                        <button className={`${classes.actionBtn} ${classes.actionMoreBtn}`} onClick={() => setShowMoreOptions(!showMoreOptions)}>
+                        <button
+                           aria-label="More plan actions"
+                           aria-expanded={showMoreOptions}
+                           className={`${classes.actionBtn} ${classes.actionMoreBtn}`}
+                           onClick={() => setShowMoreOptions(!showMoreOptions)}
+                        >
                            <Icon size={14} type="dots-vertical" />
                         </button>
 

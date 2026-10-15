@@ -60,7 +60,9 @@ const SideNav = () => {
                )}
             </NavLink>
             <NavLink to="/database-restores" aria-label="Database Restores">
-               <span className={classes.navMenuLabel} title="Database Restores"><Icon type="restore" size={26}/></span>
+               <span className={classes.navMenuLabel} title="Database Restores">
+                  <Icon type="restore" size={26} />
+               </span>
             </NavLink>
             <NavLink to="/sources" end aria-label="Sources">
                {() => (
@@ -90,7 +92,7 @@ const SideNav = () => {
                   </span>
                )}
             </NavLink>
-            <a onClick={() => setShowLogoutModal(true)} aria-label="Logout">
+            <button type="button" onClick={() => setShowLogoutModal(true)} aria-label="Logout">
                <span
                   className={classes.navMenuLabel}
                   data-tooltip-id="appTooltip"
@@ -101,7 +103,7 @@ const SideNav = () => {
                >
                   <Icon type="logout" size={30} />
                </span>
-            </a>
+            </button>
             <a href="/docs" aria-label="Documentation">
                <span className={classes.navMenuLabel} title="Documentation">
                   <Icon type="note" size={26} />

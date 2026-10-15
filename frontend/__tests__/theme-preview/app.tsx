@@ -3,7 +3,8 @@
 import { createRoot } from 'react-dom/client';
 import { useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, Link } from 'react-router';
+import { MemoryRouter, Link, useNavigate } from 'react-router';
+import { parseBackupHistoryQuery } from '../../../backend/src/utils/backupHistoryQuery';
 import { AppRoutes } from '../../src/router';
 import { ThemeProvider, useTheme } from '../../src/context/ThemeContext';
 import { DEFAULT_PLAN_SETTINGS } from '../../src/utils/constants';
@@ -11,20 +12,30 @@ import sftpFields from '../../../backend/src/utils/providers/sftp';
 import '../../src/styles/global.scss';
 
 const now = Date.now();
-const backups = ['completed', 'failed', 'cancelled'].map((status, index) => ({
-   id: `example-backup-${index}`,
+// Synthetic API responses only. Production pagination is separately tested
+// against real migrated SQLite, never this in-memory UI fixture.
+const backups = Array.from({ length: 237 }, (_, index) => ({
+   id: `example-${String(237 - index).padStart(4, '0')}`,
    title: `Example backup ${index + 1}`,
-   snapshotId: index ? '' : 'a'.repeat(64),
-   started: now - (index + 1) * 3600000,
-   ended: now - (index + 1) * 3600000 + 60000,
-   duration: 60,
-   status,
+   snapshotId: (237 - index).toString(16).padStart(64, '0'),
+   started: now - (index + 1) * 6 * 3600000,
+   ended: now - (index + 1) * 6 * 3600000 + 44000,
+   duration: 44,
+   status: index > 0 && index % 23 === 0 ? 'failed' : 'completed',
    inProgress: false,
-   totalFiles: 12,
-   totalSize: 2048,
-   active: status === 'completed',
+   totalFiles: 5200,
+   totalSize: 1200 * 1024 ** 2,
+   active: true,
+   completionStats: {
+      snapshot_id: (237 - index).toString(16).padStart(64, '0'),
+      total_files_processed: 5200,
+      total_bytes_processed: 1200 * 1024 ** 2,
+      files_new: index === 0 ? 2 : 0,
+      files_changed: 1,
+      files_unmodified: 5197,
+   },
    changes: { new: 3, modified: 2, removed: 1 },
-   errorMsg: status === 'failed' ? 'Synthetic backup failure.' : '',
+   errorMsg: index > 0 && index % 23 === 0 ? 'Synthetic backup failure.' : '',
 }));
 const storage = {
    id: 'example-storage',
@@ -61,7 +72,58 @@ const device = {
    lastSeen: new Date().toISOString(),
    plans: [],
    tags: [],
-   metrics: null,
+   metrics: {
+      system: { manufacturer: 'Example', model: 'Disposable UI fixture', version: '1', serial: '', uuid: '' },
+      os: { platform: 'linux', distro: 'Example Linux', release: '24.04', kernel: '6.8', arch: 'x86_64', hostname: 'app-01.example.internal' },
+      time: { current: now, uptime: 300000, timezone: 'UTC', timezoneName: 'UTC' },
+      cpu: {
+         manufacturer: 'Example',
+         brand: 'Infrastructure CPU 8-core',
+         cores: 8,
+         physicalCores: 4,
+         speed: 3.2,
+         processors: 1,
+         cache: {},
+         load: { currentLoad: 23, cpus: [] },
+      },
+      memory: {
+         total: 16 * 1024 ** 3,
+         available: 12 * 1024 ** 3,
+         used: 4 * 1024 ** 3,
+         free: 12 * 1024 ** 3,
+         active: 4 * 1024 ** 3,
+         swapTotal: 0,
+         swapFree: 0,
+         swapUsed: 0,
+         layout: [],
+      },
+      disks: {
+         physical: [],
+         filesystems: [
+            {
+               fs: '/dev/example',
+               type: 'ext4',
+               size: 100 * 1024 ** 3,
+               used: 36 * 1024 ** 3,
+               available: 64 * 1024 ** 3,
+               use: 36,
+               mount: '/srv/example-app',
+               name: 'Example data volume',
+            },
+         ],
+      },
+      network: [
+         {
+            iface: 'eth0',
+            ifaceName: 'Example private network',
+            ip4: '192.0.2.10',
+            ip6: '2001:db8::10',
+            operstate: 'up',
+            type: 'wired',
+            internal: false,
+         },
+      ],
+   },
    settings: {},
    agent: {
       agentId: 'example-agent-identity',
@@ -96,8 +158,15 @@ const plan = {
    device,
    sourceConfig: { includes: ['/srv/example-app'], excludes: [] },
    verified: { status: 'completed', result: {}, startedAt: now, endedAt: now, hasError: false },
-   stats: { size: 2048, snapshots: ['a'.repeat(64)] },
-   backups,
+   stats: { size: 1200 * 1024 ** 2, snapshots: backups.map((backup) => backup.snapshotId) },
+   backups: backups.slice(0, 90),
+   backupChart: backups.map(({ status, started, completionStats, totalFiles, totalSize }) => ({
+      status,
+      started,
+      completionStats,
+      totalFiles,
+      totalSize,
+   })),
    restores: [
       {
          id: 'example-restore',
@@ -201,13 +270,33 @@ window.fetch = async (input, init) => {
    } else if (method === 'POST' && path === '/restores/action/dryrestore') {
       // UI-only preview; this does not start Restic or write a staging directory.
       result = { stats: plan.restores[0].taskStats, files: files.map((file) => ({ ...file, action: 'restored' })) };
+   } else if (method === 'POST' && path.startsWith('/recovery-testing/') && path.endsWith('/tests/lookup')) {
+      result = [];
    } else if (method !== 'GET') {
       throw new Error('Mutation refused: this theme preview has no backend.');
    } else if (path === '/user/validate') result = { username: 'example_reader' };
    else if (path === '/settings/version/latest') result = { latestVersion: 'dev' };
    else if (path === '/settings') result = settings;
    else if (path === '/plans') result = [plan, localPlan];
-   else if (path === '/plans/example-plan') result = plan;
+   else if (/^\/plans\/example-(?:local-)?plan\/backups$/.test(path)) {
+      const query = parseBackupHistoryQuery(Object.fromEntries(url.searchParams));
+      const matching = backups.filter(
+         (backup) =>
+            (query.from === undefined || backup.ended / 1000 >= query.from) && (query.until === undefined || backup.ended / 1000 < query.until),
+      );
+      const totalPages = Math.max(1, Math.ceil(matching.length / query.pageSize));
+      const page = Math.min(query.page, totalPages);
+      result = {
+         items: matching.slice((page - 1) * query.pageSize, page * query.pageSize),
+         total: matching.length,
+         page,
+         pageSize: query.pageSize,
+         totalPages,
+         hasPrevious: page > 1,
+         hasNext: page < totalPages,
+         timeZone: query.timeZone,
+      };
+   } else if (path === '/plans/example-plan') result = plan;
    else if (path === '/plans/example-local-plan') result = localPlan;
    else if (path.endsWith('/checkactive')) result = { backups: [], restores: [] };
    else if (path.endsWith('/logs'))
@@ -219,11 +308,21 @@ window.fetch = async (input, init) => {
    else if (path === '/devices') result = [device, { ...device, id: 'main', name: 'Main device', agent: null, isRemote: false }];
    else if (path.startsWith('/devices/')) result = { device, plans: [plan], storages: [storage] };
    else if (path === '/storages/available') result = { sftp: { name: 'SFTP', authTypes: ['password'], settings: sftpFields } };
-   else if (path === '/storages') result = [storage];
+   else if (path === '/storages')
+      result = [
+         {
+            ...storage,
+            usedSize: 1200 * 1024 ** 2,
+            plans: [{ id: plan.id, title: plan.title, method: plan.method, stats: plan.stats, isActive: true }],
+         },
+         { ...storage, id: 'example-archive', name: 'Example Archive SFTP', usedSize: 800 * 1024 ** 2 },
+         { ...storage, id: 'example-secondary', name: 'Example Secondary SFTP', usedSize: 0 },
+      ];
    else if (path === '/storages/example-storage') result = { ...storage, authTypes: ['password'] };
    else if (path.startsWith('/backups/') && path.endsWith('/files')) result = files;
    else if (path.startsWith('/backups/')) result = backups[0];
    else if (path === '/restores') result = plan.restores;
+   else if (path.startsWith('/recovery-testing/') && path.endsWith('/tests')) result = [];
    else throw new Error(`Unmapped synthetic API: ${method} ${path}`);
    return new Response(JSON.stringify({ success: true, result }), {
       headers: { 'content-type': 'application/json', 'x-app-version': 'dev', 'x-install-type': 'dev', 'x-server-os': 'linux' },
@@ -239,6 +338,29 @@ window.addEventListener('unhandledrejection', () => {
 function PreviewControls() {
    const { theme, setTheme } = useTheme();
    const [diagnostics, setDiagnostics] = useState('');
+   const [expanded, setExpanded] = useState(true);
+   const navigate = useNavigate();
+   if (!expanded)
+      return (
+         <button
+            type="button"
+            aria-label="Show preview controls"
+            onClick={() => setExpanded(true)}
+            style={{
+               position: 'fixed',
+               top: 4,
+               right: 8,
+               zIndex: 2147483647,
+               fontSize: 11,
+               background: 'var(--content-background-color)',
+               color: 'var(--content-text-color)',
+               border: '1px solid var(--line-color)',
+               borderRadius: 4,
+            }}
+         >
+            Synthetic fixture · Show controls
+         </button>
+      );
    return (
       <aside
          style={{
@@ -251,6 +373,8 @@ function PreviewControls() {
             border: '1px solid var(--line-color)',
             padding: 8,
             borderRadius: 6,
+            maxWidth: 'calc(100vw - 32px)',
+            fontSize: 12,
          }}
       >
          <strong>Synthetic · {theme}</strong> <button onClick={() => setTheme('light')}>Light</button>{' '}
@@ -264,7 +388,8 @@ function PreviewControls() {
          {' · '}
          <Link to="/storages">Storages</Link>
          {' · '}
-         <Link to="/sources">Machines</Link>{' '}
+         <Link to="/sources">Machines</Link> <Link to="/device/example-agent">Source detail</Link> <button onClick={() => navigate(-1)}>Back</button>{' '}
+         <button onClick={() => setExpanded(false)}>Hide preview controls</button>{' '}
          <button
             onClick={() =>
                setDiagnostics(
@@ -279,7 +404,8 @@ function PreviewControls() {
    );
 }
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
-createRoot(document.getElementById('root')!).render(
+const root = createRoot(document.getElementById('root')!);
+root.render(
    <QueryClientProvider client={queryClient}>
       <ThemeProvider>
          <MemoryRouter>
@@ -289,3 +415,4 @@ createRoot(document.getElementById('root')!).render(
       </ThemeProvider>
    </QueryClientProvider>,
 );
+if (import.meta.hot) import.meta.hot.dispose(() => root.unmount());

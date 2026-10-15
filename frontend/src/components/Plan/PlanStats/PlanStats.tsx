@@ -91,7 +91,7 @@ const PlanStats = ({ plan, isSync, lastBackupItem, storageAction }: PlanStatsPro
                </span>
             </div>
             <div className={classes.snapshotsContent}>
-               <PlanSizeChart backups={plan.backups} remoteManaged={remoteManaged} isSync={isSync} />
+               <PlanSizeChart backups={plan.backupChart ?? plan.backups} remoteManaged={remoteManaged} isSync={isSync} />
             </div>
          </div>
          <div className={classes.health}>

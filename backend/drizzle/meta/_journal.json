@@ -92,6 +92,13 @@
       "when": 1792028800000,
       "tag": "0012_persistent_database_restores",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1792115200000,
+      "tag": "0013_backup_history_index",
+      "breakpoints": true
     }
   ]
 }
