@@ -167,6 +167,7 @@ export class SettingsController {
 				await this.settingsService.setupTwoFactorAuth();
 
 			// SECURELY store the secret on the server in the user's session.
+			if (res.locals?.webOrigin) req.session.webOrigin = res.locals.webOrigin;
 			req.session.totpSecret = tempSecret;
 
 			// Send only the visual parts to the client.

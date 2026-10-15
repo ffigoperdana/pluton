@@ -93,6 +93,16 @@ describe('AgentService', () => {
 		}
 	});
 
+	it('uses the operator private Agent URL only for new enrollment instructions, independently of canonical web origin',async()=>{
+		(configService.config as any).AGENT_SERVER_URL='http://192.0.2.10:5173';
+		try {
+			expect((await service.createEnrollment({name:'app-01'})).serverUrl).toBe('http://192.0.2.10:5173');
+			expect(configService.config.APP_URL).toBe('https://pluton.example.internal');
+			expect(store.updateHeartbeat).not.toHaveBeenCalled();
+			expect(store.enrollAgent).not.toHaveBeenCalled();
+		} finally { delete (configService.config as any).AGENT_SERVER_URL; }
+	});
+
 	it.each(['expired', 'reused', 'revoked'])('rejects a %s enrollment token', async () => {
 		store.enrollAgent.mockResolvedValue(null);
 		await expect(service.enroll({ token: 'a'.repeat(43), inventory })).rejects.toThrow(

@@ -2,8 +2,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import express, { type Express } from 'express';
 import { registerSpaFallback } from './utils/spaFallback';
-import { IncomingMessage, ServerResponse } from 'http';
-import cors from 'cors';
 import session from 'express-session';
 import createMemoryStore from 'memorystore';
 import helmet from 'helmet';
@@ -85,6 +83,8 @@ import { createNotificationRouter, notificationInputError } from './routes/notif
 import { DatabaseRestoreStore } from './stores/DatabaseRestoreStore';
 import { DatabaseRestoreService } from './services/DatabaseRestoreService';
 import { createDatabaseRestoreRouter, databaseRestoreInputError } from './routes/databaseRestores';
+import { parseWebOrigins } from './utils/webOrigins';
+import { webAccess, originAwareSession, sameOriginCors } from './middlewares/webAccess';
 
 const MemoryStore = createMemoryStore(session);
 
@@ -223,21 +223,13 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		app.set('trust proxy', parseTrustProxy(trustProxy));
 	}
 
-	app.use(
-		cors({
-			origin: [
-				process.env.APP_URL as string, // Vite core frontend dev server
-				configService.config.APP_URL, // Production domain
-			],
-			credentials: true,
-			methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-			exposedHeaders: ['X-App-Version', 'X-Server-OS', 'X-Install-Type', 'X-Setup-Pending'],
-		})
-	);
+	const webPolicy = parseWebOrigins(configService.config);
+	app.use(webAccess(webPolicy));
+	app.use(sameOriginCors(webPolicy));
 
 	// Session Middleware for 2FA Setup Process
-	app.use(
-		session({
+	app.use('/api',
+		originAwareSession(webPolicy, {
 			store: new MemoryStore({
 				checkPeriod: 86400000,
 			}),
@@ -245,8 +237,8 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 			resave: false,
 			saveUninitialized: false,
 			cookie: {
-				secure: configService.config.APP_URL?.startsWith('https'),
 				httpOnly: true,
+				sameSite: 'lax',
 				maxAge: 1000 * 60 * 15,
 			},
 		})
@@ -265,25 +257,12 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	app.use(notificationInputError);
 
 	// helmet security middleware
-	const appUrl = configService.config.APP_URL || 'http://localhost';
 	const serverPort = configService.config.SERVER_PORT;
 	const isDev = configService.isDevelopment();
 
-	// Dynamically derive the request origin from the Host header.
-	// This handles all access methods: localhost, LAN IPs, custom domains,
-	// and reverse proxies (Nginx, Traefik, etc.) that set x-forwarded-proto.
-	const dynamicOrigin = (req: IncomingMessage, _res: ServerResponse) => {
-		const host = req.headers.host;
-		if (host) {
-			const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
-			return `${proto}://${host}`;
-		}
-		return `http://localhost:${serverPort}`;
-	};
-
 	// In dev, also allow explicit localhost/127.0.0.1 with the backend port
 	// so the Vite dev server (different origin) can reach the API.
-	const connectSrc: (string | typeof dynamicOrigin)[] = ["'self'", appUrl, dynamicOrigin];
+	const connectSrc: string[] = ["'self'"];
 	if (isDev) {
 		connectSrc.push(`http://localhost:${serverPort}`, `http://127.0.0.1:${serverPort}`);
 	}

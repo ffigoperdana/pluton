@@ -256,7 +256,7 @@ export class AgentService {
 			token,
 			expiresAt,
 			deviceName: created.deviceName,
-			serverUrl: configService.config.APP_URL,
+			serverUrl: configService.config.AGENT_SERVER_URL || configService.config.APP_URL,
 			insecureHttpAllowed: configService.config.ALLOW_INSECURE_AGENT_HTTP === true,
 		};
 	}

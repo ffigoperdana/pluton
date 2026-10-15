@@ -12,6 +12,7 @@ import authMiddleware from '../middlewares/authMiddleware';
 import { configService } from '../services/ConfigService';
 import type { DatabaseRestoreService } from '../services/DatabaseRestoreService';
 import { AppError } from '../utils/AppError';
+import { parseWebOrigins, sameOriginJson } from '../utils/webOrigins';
 
 export const databaseRestoreInputError: ErrorRequestHandler = (error, req, res, next) => {
 	if (
@@ -43,16 +44,8 @@ export function databaseRestoreAdmin(req: Request, res: Response, next: NextFunc
 		return;
 	}
 	if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
-		const allowed = new Set([`${req.protocol}://${req.get('host')}`]);
-		try {
-			if (configService.config.APP_URL) allowed.add(new URL(configService.config.APP_URL).origin);
-		} catch {
-			/* Fail closed. */
-		}
 		if (
-			!req.headers.origin ||
-			!allowed.has(req.headers.origin) ||
-			req.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json' ||
+			!sameOriginJson(req, parseWebOrigins(configService.config)) ||
 			Number(req.headers['content-length'] || 0) > 8192
 		) {
 			res.status(403).json({ success: false, error: 'Restore changes require same-origin JSON.' });

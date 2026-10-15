@@ -93,6 +93,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Verify isolated dual-origin HTTPS and LAN sessions
+        shell: pwsh
+        run: ./scripts/validate-dual-origin.ps1 -Image pluton-recovery-ci:local -Compiled
+
       - name: Build isolated database-only fixture
         run: docker build -f backend/__tests__/fixtures/recovery-clients/Dockerfile -t pluton-recovery-db-only:local .
 
@@ -118,7 +122,7 @@ jobs:
 
       - name: Check Internal recovery profiles and operator permission boundaries
         # Test-only native assertions; no dependency installation or application startup.
-        run: node --test scripts/__tests__/internalRecovery.test.cjs scripts/__tests__/internalRecoveryReadiness.test.cjs scripts/__tests__/persistentRestore.test.cjs
+        run: node --test scripts/__tests__/internalRecovery.test.cjs scripts/__tests__/internalRecoveryReadiness.test.cjs scripts/__tests__/persistentRestore.test.cjs scripts/__tests__/dualOrigin.test.cjs
 
       - name: Verify disposable native Internal targets and mandatory infrastructure cleanup
         shell: pwsh

@@ -79,12 +79,14 @@ describe('Retained restore API administrator, CSRF and input boundary', () => {
 	it('records the sole administrator owner and never accepts an endpoint for an operator action', async () => {
 		const result = await request(app)
 			.post('/api/database-restores/a/stop')
+			.set('Host', 'backup.example.invalid')
 			.set('Origin', 'https://backup.example.invalid')
 			.send({});
 		expect(result.status).toBe(202);
 		expect(service.operator).toHaveBeenCalledWith('a', 'administrator', 'stop');
 		const bad = await request(app)
 			.post('/api/database-restores/a/resume')
+			.set('Host', 'backup.example.invalid')
 			.set('Origin', 'https://backup.example.invalid')
 			.send({ command: 'sh' });
 		expect(bad.status).toBe(400);

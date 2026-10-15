@@ -26,6 +26,7 @@ describe('authenticated notification administration', () => {
 	afterEach(() => fixture.sqlite.close());
 	const approved = (action: any) =>
 		action
+			.set('Host', 'app.example.internal')
 			.set('Cookie', cookie)
 			.set('Origin', 'https://app.example.internal')
 			.set('Content-Type', 'application/json');

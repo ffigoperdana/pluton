@@ -11,6 +11,7 @@ import { configService } from '../services/ConfigService';
 import { AppError } from '../utils/AppError';
 import type { NotificationDeliveryStore } from '../stores/NotificationDeliveryStore';
 import type { Delivery } from '../types/notificationDelivery';
+import { parseWebOrigins, sameOriginJson } from '../utils/webOrigins';
 function publicDelivery(row: Delivery) {
 	const { leaseOwner: _owner, ...view } = row;
 	return view;
@@ -30,17 +31,7 @@ export const notificationInputError: ErrorRequestHandler = (error, req, res, nex
 };
 export function notificationOriginGuard(req: Request, res: Response, next: NextFunction) {
 	if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
-	const allowed = new Set([`${req.protocol}://${req.get('host')}`]);
-	try {
-		if (configService.config.APP_URL) allowed.add(new URL(configService.config.APP_URL).origin);
-	} catch {
-		/* Invalid APP_URL is not an approved origin. */
-	}
-	if (
-		!req.headers.origin ||
-		!allowed.has(req.headers.origin) ||
-		req.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json'
-	) {
+	if (!sameOriginJson(req, parseWebOrigins(configService.config))) {
 		res.status(403).json({
 			success: false,
 			error: 'Notification changes require an authenticated same-origin JSON request.',
