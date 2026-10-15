@@ -121,7 +121,7 @@ export class RecoveryTestService {
 				lifecycle: 'operator-managed' as const,
 				persistentRestore: {
 					status: 'unavailable' as const,
-					reason: 'bounded-persistent-storage-and-ownership-controller-required' as const,
+					reason: 'separate-retained-workflow-at-api-database-restores' as const,
 				},
 			};
 		} finally {
@@ -182,10 +182,10 @@ export class RecoveryTestService {
 	}
 	async databaseRestoreUnavailable(planId: string) {
 		await this.ownedPlan(planId);
-		// There is deliberately no executor, retained DB, Docker operation or cleanup bypass.
+		// Deprecated disposable route is not an alias for the separately authorized retained lifecycle.
 		throw new AppError(
 			409,
-			'Persistent Database Restore is not available: bounded persistent storage, separate durable ownership/TTL and an approved lifecycle controller are required. Use Restore to Staging for the original SQL artifact.'
+			'Persistent Database Restore is not available through the disposable Recovery Testing route. Use the separate Restore Database workflow and /api/database-restores.'
 		);
 	}
 	async savePolicy(planId: string, input: unknown) {

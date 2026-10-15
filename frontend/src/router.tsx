@@ -15,6 +15,7 @@ import Footer from './components/App/Footer/Footer';
 import NotFoundRoute from './routes/NotFoundRoute/NotFoundRoute';
 import Icon from './components/common/Icon/Icon';
 import DocumentationRedirect from './docs/DocumentationRedirect';
+import DatabaseRestores from './routes/DatabaseRestores/DatabaseRestores';
 
 function PublicRoute({ children }: { children: React.ReactNode }) {
    const { data: authData, isLoading: authLoading } = useAuth();
@@ -76,6 +77,8 @@ export function AppRoutes() {
             <Route path="legacy-repositories" element={<LegacyRepositories />} />
             <Route path="legacy-repositories/:id" element={<LegacyRepositoryDetail />} />
             <Route path="sources" element={<Sources />} />
+            <Route path="database-restores" element={<DatabaseRestores />} />
+            <Route path="database-restores/:id" element={<DatabaseRestores />} />
             <Route path={'device/:id'} element={<DeviceSingle />} />
             <Route path={'plan/:id'} element={<PlanSingle />} />
             <Route path="*" element={<NotFoundRoute />} />

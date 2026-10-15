@@ -59,6 +59,9 @@ const SideNav = () => {
                   </span>
                )}
             </NavLink>
+            <NavLink to="/database-restores" aria-label="Database Restores">
+               <span className={classes.navMenuLabel} title="Database Restores"><Icon type="restore" size={26}/></span>
+            </NavLink>
             <NavLink to="/sources" end aria-label="Sources">
                {() => (
                   <span

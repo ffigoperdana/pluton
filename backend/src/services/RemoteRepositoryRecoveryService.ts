@@ -227,6 +227,40 @@ export class RemoteRepositoryRecoveryService {
 		);
 	}
 
+	/** Persistent DB restore stages ONLY the selected receipt-proven SQL file.
+	 * No source-agent call, full filesystem restore, or repository mutation. */
+	async databaseRestoreArtifact(
+		binding: {backupId:string;planId:string;repositoryId:string;snapshotId:string;databaseId:string;sha256:string},
+		target: string, signal: AbortSignal, assertWorkspace: () => Promise<void>
+	) {
+		const metadata=await this.testMetadata(binding.backupId,binding.planId,binding.snapshotId);
+		const entry=metadata.databases.find(value=>value.databaseId===binding.databaseId);
+		if(!entry || entry.sha256!==binding.sha256 || metadata.repositoryId!==binding.repositoryId ||
+			/[*?[\]\\]/.test(entry.path))
+			throw new RecoveryTestError('snapshot-validation','snapshot-binding-mismatch');
+		const context=await this.context(binding.backupId,binding.planId);
+		return this.sessions.withSession(context.access,async session=>{
+			await assertWorkspace();
+			const files=await this.boundFiles(context,session);
+			const selected=files.find(file=>file.path===entry.path && file.type==='file' && file.size===entry.bytes);
+			if(!selected) throw new RecoveryTestError('snapshot-validation','snapshot-binding-mismatch');
+			const stat=await fs.lstat(target),disk=await fs.statfs(target);
+			if(!stat.isDirectory() || stat.isSymbolicLink() || (await fs.readdir(target)).length)
+				throw new RecoveryTestError('staged-restore','unsafe-workspace');
+			if(disk.bavail*disk.bsize<entry.bytes+512*1024**2)
+				throw new RecoveryTestError('staged-restore','insufficient-space');
+			checkRecoveryCancellation(signal);
+			await session.restore(binding.snapshotId,[entry.path],target);
+			await assertWorkspace();
+			await validateRestoredFiles([selected],target,signal);
+			await this.boundFiles(context,session);
+			const current=await this.testMetadata(binding.backupId,binding.planId,binding.snapshotId);
+			if(JSON.stringify(current)!==JSON.stringify(metadata))
+				throw new RecoveryTestError('snapshot-validation','snapshot-binding-mismatch');
+			return entry;
+		},signal,{restoreTimeoutMs:60*60_000,temporaryRoot:path.dirname(target)});
+	}
+
 	async browse(backupId: string, replicationId?: string): Promise<SnapShotFile[]> {
 		if (replicationId)
 			throw new AppError(400, 'Remote recovery supports only the original managed repository.');

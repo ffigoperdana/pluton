@@ -16,7 +16,8 @@ foreach ($mode in $Modes) {
         '-e','NODE_ENV=test','-e','PLUTON_DATA_DIR=/data','-e','PLUTON_RECOVERY_NATIVE_FIXTURE=1',
         '-e',"ENCRYPTION_KEY=$fixtureKey",'-e','USER_NAME=fixture-admin','-e',"USER_PASSWORD=$fixturePassword")
     foreach ($mapping in @(@('backend/src','/app/backend/src'), @('backend/__tests__','/app/backend/__tests__'),
-        @('backend/drizzle','/app/backend/drizzle'), @('agent/dist','/app/agent/dist'), @('agent/package.json','/app/agent/package.json'))) {
+        @('backend/drizzle','/app/backend/drizzle'), @('deploy/persistent-restore','/app/deploy/persistent-restore'),
+        @('agent/dist','/app/agent/dist'), @('agent/package.json','/app/agent/package.json'))) {
         $source = (Resolve-Path (Join-Path $repoRoot $mapping[0])).Path
         $dockerArguments += @('--mount',"type=bind,source=$source,target=$($mapping[1]),readonly")
     }
@@ -28,6 +29,7 @@ foreach ($mode in $Modes) {
             '__tests__/utils/recoveryDatabaseClients.test.ts','__tests__/utils/recoveryProcess.test.ts',
             '__tests__/routes/recoveryTests.test.ts','__tests__/services/RemoteRepositoryRecoveryService.test.ts',
             '__tests__/utils/restic/ManagedSftpRepositorySession.test.ts')
+        $dockerArguments += @('__tests__/stores/DatabaseRestoreStore.test.ts','__tests__/routes/databaseRestores.test.ts','__tests__/utils/persistentDatabaseImporter.test.ts')
     } else {
         $dockerArguments += @($Image,'/app/backend/__tests__/integration/phase5Database.smoke.ts',$mode)
     }

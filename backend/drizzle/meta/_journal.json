@@ -85,6 +85,13 @@
       "when": 1791942400000,
       "tag": "0011_internal_recovery_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1792028800000,
+      "tag": "0012_persistent_database_restores",
+      "breakpoints": true
     }
   ]
 }

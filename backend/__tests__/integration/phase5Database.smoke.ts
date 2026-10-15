@@ -562,6 +562,17 @@ CREATE USER 'backup_logs'@'127.0.0.1' IDENTIFIED BY '${logsPassword}'; GRANT SEL
 		(await execute('/usr/local/bin/restic', ['version'])).trim(),
 		(await execute('/usr/local/bin/rclone', ['version'])).split('\n')[0].trim(),
 	];
+	// Real Restic/SFTP granular SQL path, independent of any database import mock.
+	const restoreMetadata=await recovery.testMetadata(backup.id,plan.id,backup.completionStats!.snapshot_id!);
+	const selectedDatabase=restoreMetadata.databases.find(entry=>entry.databaseId);
+	if(selectedDatabase?.databaseId){
+		const sqlOnly=path.join(scratch,'persistent-selected-sql');await fs.mkdir(sqlOnly,{mode:0o700});
+		await recovery.databaseRestoreArtifact({...restoreMetadata,databaseId:selectedDatabase.databaseId,sha256:selectedDatabase.sha256},
+			sqlOnly,new AbortController().signal,async()=>{assert((await fs.lstat(sqlOnly)).isDirectory());});
+		assert.equal(hash(await fs.readFile(path.join(sqlOnly,selectedDatabase.path.slice(1)))),selectedDatabase.sha256);
+		await assert.rejects(fs.lstat(path.join(sqlOnly,'srv')));
+		console.log('PASS persistent exact-snapshot SQL-only staging over real SFTP/Restic; no filesystem source staged');
+	}
 	if (phase6) {
 		// Stop source database servers before recovery: credentials/endpoints used
 		// for backup cannot possibly supply recovery contents or accept an import.

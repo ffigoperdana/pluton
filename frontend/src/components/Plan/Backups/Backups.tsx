@@ -27,6 +27,7 @@ import { useRecoveryAction, useRecoveryTests } from '../../../services/recoveryT
 import { canTestRecovery, recoveryActive, recoveryForBackup, recoveryStatusLabel } from '../../../utils/recoveryTests';
 import RecoveryResult from '../RecoveryTesting/RecoveryResult';
 import RecoveryConfirmation from '../RecoveryTesting/RecoveryConfirmation';
+import DatabaseRestoreWizard from '../../Restore/DatabaseRestore/DatabaseRestoreWizard';
 import recoveryClasses from '../RecoveryTesting/RecoveryTesting.module.scss';
 import { backupStatistics, statisticHelp } from '../../../utils/backupStatistics';
 
@@ -356,7 +357,7 @@ const Backups = ({
                                        setShowSnapOptions(false);
                                     }}
                                  >
-                                    <Icon type="restore" size={14} /> Restore Database (availability)
+                                    <Icon type="restore" size={14} /> Restore Database
                                  </button>
                               )}
                               {isRemoteManaged && recovery && (
@@ -436,7 +437,9 @@ const Backups = ({
                })}
             {backups.length === 0 && <div className={classes.noBackups}>Hasn't been backed up yet.</div>}
          </div>
-         {recoveryConfirmation && (
+         {recoveryConfirmation?.operation==='restore'&&<DatabaseRestoreWizard selection={{planId,backupId:recoveryConfirmation.backupId,snapshotId:recoveryConfirmation.snapshotId}}
+            close={()=>setRecoveryConfirmation(undefined)}/>}
+         {recoveryConfirmation?.operation==='test' && (
             <RecoveryConfirmation
                {...recoveryConfirmation}
                planId={planId}

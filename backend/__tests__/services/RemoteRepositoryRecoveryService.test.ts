@@ -227,6 +227,25 @@ describe('Phase 4 remote managed repository recovery', () => {
 			);
 		}
 	});
+	it('persistent restore stages only the selected receipt-proven SQL from the exact repository/snapshot',async()=>{
+		const entry={databaseId:'db_example',engine:'mariadb',database:'example_db',path:'/pluton/database/db_example.sql',bytes:10,sha256:'c'.repeat(64)};
+		backup.completionStats.lifecycle={databases:[entry]};
+		session.files.mockResolvedValue([...nodes,{...nodes[2],path:entry.path,size:10}] as any);
+		session.restore.mockImplementation(async(_snapshot,includes,target)=>{
+			expect(includes).toEqual([entry.path]);
+			await fs.mkdir(path.join(target,'pluton/database'),{recursive:true});
+			await fs.writeFile(path.join(target,'pluton/database/db_example.sql'),'0123456789');
+			return {files_restored:1,bytes_restored:10};
+		});
+		const target=path.join(scratch,'persistent-sql');await fs.mkdir(target);
+		const binding={backupId:backup.id,planId:plan.id,repositoryId:repository.id,snapshotId,databaseId:entry.databaseId,sha256:entry.sha256};
+		await expect(service.databaseRestoreArtifact(binding,target,new AbortController().signal,jest.fn())).resolves.toMatchObject(entry);
+		expect(session.restore).toHaveBeenCalledWith(snapshotId,[entry.path],target);
+		expect(stores.restores.create).not.toHaveBeenCalled();
+		for(const patch of [{repositoryId:'foreign-repo'},{snapshotId:'d'.repeat(64)},{databaseId:'db_other'},{sha256:'e'.repeat(64)}])
+			await expect(service.databaseRestoreArtifact({...binding,...patch},target,new AbortController().signal,jest.fn())).rejects.toBeDefined();
+		expect(session.restore).toHaveBeenCalledTimes(1);
+	});
 	it('refuses a foreign plan, repository snapshot or changed tags during metadata resolution', async () => {
 		await expect(service.testMetadata(backup.id, 'plan-other', snapshotId)).rejects.toThrow();
 		await expect(service.testMetadata(backup.id, plan.id, 'b'.repeat(64))).rejects.toThrow();

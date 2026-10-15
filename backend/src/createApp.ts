@@ -82,6 +82,9 @@ import { jobQueue } from './jobs/JobQueue';
 import { NotificationDeliveryStore } from './stores/NotificationDeliveryStore';
 import { NotificationDeliveryManager } from './notifications/NotificationDeliveryManager';
 import { createNotificationRouter, notificationInputError } from './routes/notifications';
+import { DatabaseRestoreStore } from './stores/DatabaseRestoreStore';
+import { DatabaseRestoreService } from './services/DatabaseRestoreService';
+import { createDatabaseRestoreRouter, databaseRestoreInputError } from './routes/databaseRestores';
 
 const MemoryStore = createMemoryStore(session);
 
@@ -130,6 +133,9 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		planStore,
 		backupStore,
 		remoteRecoveryService
+	);
+	const databaseRestoreService = new DatabaseRestoreService(
+		new DatabaseRestoreStore(sqlite, configService.config.SECRET), planStore, remoteRecoveryService
 	);
 
 	// Event Listeners
@@ -246,6 +252,8 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		})
 	);
 	app.use(versionMiddleware);
+	app.use('/api/database-restores', express.json({ limit: '8kb' }));
+	app.use(databaseRestoreInputError);
 	app.use(
 		express.json({
 			verify: (req, _res, buffer) => {
@@ -344,6 +352,8 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		createRecoveryTestRouter(new RecoveryTestController(recoveryTestService))
 	);
 	app.use('/api/health', createHealthRouter());
+	app.use('/api/database-restores', createDatabaseRestoreRouter(databaseRestoreService));
+	app.use(databaseRestoreInputError);
 
 	// For any other request that doesn't match an API route or a static file,
 	// serve the index.html file. This is the key for Single Page Applications.
@@ -353,6 +363,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	await new StartupRecovery(planService).run();
 	await legacyRepositoryService.recoverInterruptedRestores();
 	await recoveryTestService.recoverInterrupted();
+	await databaseRestoreService.recoverInterrupted();
 
 	// Reconcile CronManager schedules with the database (fixes drift on restart)
 	try {
@@ -376,7 +387,12 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	jobProcessor.addTask(new RecoveryTestTask(recoveryTestService));
 	// The durable recovery queue is reconciled independently of backup completion
 	// callbacks, including a crash between completion persistence and dispatch.
-	const recoveryTick = setInterval(() => jobQueue.add('RecoveryTest', undefined, 1), 5000);
+	const recoveryTick = setInterval(() => {
+		jobQueue.add('RecoveryTest', undefined, 1);
+		void databaseRestoreService.tick().catch(() => {
+			// Durable executor/cleanup intent remains in SQLite. No raw provider error logging.
+		});
+	}, 5000);
 	recoveryTick.unref();
 	jobQueue.add('RecoveryTest', undefined, 1);
 
@@ -389,6 +405,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 			await notificationManager.shutdown();
 			clearInterval(recoveryTick);
 			await recoveryTestService.shutdown();
+			await databaseRestoreService.shutdown();
 		},
 	};
 }

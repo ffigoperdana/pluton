@@ -37,7 +37,9 @@ const identifier = (value: string) => {
 };
 
 /** mysql grants are inspected, not logged. Reject global/role/FILE/SUPER/admin scope. */
-export function assertRecoveryMysqlGrants(output: string, allowedDatabases: string[]) {
+export function assertRecoveryMysqlGrants(output: string, allowedDatabases: string[], purpose: 'recovery'|'persistent'='recovery') {
+	const guardDatabase=purpose==='persistent'?'pluton_restore_guard':GUARD;
+	const guardTable=purpose==='persistent'?'contract':'pluton_recovery_guard';
 	const lines = output.trim().split(/\r?\n/);
 	if (!lines.length)
 		throw new RecoveryTestError('database-target-preflight', 'recovery-target-unsafe');
@@ -49,7 +51,7 @@ export function assertRecoveryMysqlGrants(output: string, allowedDatabases: stri
 		if (grant[2] === '*.*' && grant[1] === 'USAGE') continue;
 		const scope = /^`((?:[^`]|``)+)`\.\*$/.exec(grant[2]);
 		const guard =
-			grant[2] === `\`${GUARD}\`.\`pluton_recovery_guard\`` || grant[2] === `\`${GUARD}\`.*`;
+			grant[2] === `\`${guardDatabase}\`.\`${guardTable}\`` || grant[2] === `\`${guardDatabase}\`.*`;
 		if (guard && grant[1] === 'SELECT') continue;
 		if (
 			!scope ||
@@ -146,7 +148,7 @@ export class RecoveryDatabaseImporter {
 		private readonly trust = recoveryTrustFile
 	) {}
 
-	private async connection(target: RecoveryTarget, directory: string, signal: AbortSignal) {
+	protected async connection(target: RecoveryTarget, directory: string, signal: AbortSignal) {
 		const parsed = parseRecoveryInput(recoveryTargetSchema, target);
 		if (!parsed.password)
 			throw new RecoveryTestError('database-target-preflight', 'recovery-target-not-configured');

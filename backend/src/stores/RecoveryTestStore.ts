@@ -394,7 +394,8 @@ export class RecoveryTestStore {
 	/** One global worker, claimed transactionally even if multiple ticks arrive. */
 	async claim(): Promise<RecoveryTest | null> {
 		return this.db.transaction(tx => {
-			if (tx.select().from(recoveryTests).where(eq(recoveryTests.status, 'running')).get())
+			if (tx.select().from(recoveryTests).where(eq(recoveryTests.status, 'running')).get() ||
+				tx.get(sql`SELECT 1 FROM persistent_database_restores WHERE status IN ('importing','deleting') LIMIT 1`))
 				return null;
 			// Recovery yields to existing backup/restore work. It never pauses backups
 			// or retries a refused import in a tight loop. Check again on the next tick.

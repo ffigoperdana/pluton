@@ -1,0 +1,433 @@
+/* Manual root operator. No listener, Docker proxy, command shell, caller paths or arbitrary commands. */
+const fs=require('node:fs');
+const path=require('node:path');
+const crypto=require('node:crypto');
+const {execFileSync}=require('node:child_process');
+const storage=require('./storage.cjs');
+const PURPOSE='pluton-persistent-database-restore-v1';
+const ROOT='/etc/pluton-persistent-restores';
+const DATA='/var/lib/pluton-persistent-restores';
+const REQUESTS='/var/lib/pluton-persistent-restore-requests';
+const NETWORK='pluton-persistent-restores';
+const LOCK='pluton-internal-recovery-lock';
+const images={
+  mariadb:'mariadb:11.8.8@sha256:24e76fcec8c003a0362d0dd53f4806e7e79458d7fdeaf47437760e19496f5a9c',
+  postgresql:'postgres:18.6-bookworm@sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c'
+};
+const idPattern=/^[a-f0-9]{24}$/;
+function fail(code='operator-safety-refused'){throw Object.assign(new Error('Persistent restore operator refused.'),{code});}
+function run(binary,args,timeout=60000){
+  return execFileSync(binary,args,{encoding:'utf8',timeout,maxBuffer:65536,stdio:['ignore','pipe','pipe'],
+    env:{PATH:'/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',LANG:'C',LC_ALL:'C'}}).trim();
+}
+function read(file,uid=0,mode=0o600,max=65536){
+  storage.rootParent(file);
+  const fd=fs.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);
+  try {
+    const stat=fs.fstatSync(fd);
+    if(!stat.isFile()||stat.uid!==uid||(stat.mode&0o777)!==mode||stat.size>max)fail();
+    return JSON.parse(fs.readFileSync(fd,'utf8'));
+  } finally {fs.closeSync(fd);}
+}
+function write(file,value,gid=0,mode=0o600){
+  const tmp=file+'.'+crypto.randomBytes(12).toString('hex')+'.tmp';
+  const fd=fs.openSync(tmp,'wx',mode);
+  try {fs.writeFileSync(fd,typeof value==='string'?value:JSON.stringify(value));fs.fchownSync(fd,0,gid);fs.fchmodSync(fd,mode);fs.fsyncSync(fd);}
+  finally{fs.closeSync(fd);}
+  fs.renameSync(tmp,file);
+  const parent=fs.openSync(path.dirname(file),'r');try{fs.fsyncSync(parent);}finally{fs.closeSync(parent);}
+}
+function rootCode(file){const stat=fs.lstatSync(file);storage.rootParent(file);
+  if(!stat.isFile()||stat.isSymbolicLink()||stat.uid!==0||(stat.mode&0o022))fail();}
+function init(){
+  if(!fs.existsSync(ROOT))fs.mkdirSync(ROOT,{mode:0o755});
+  storage.directory(ROOT,0,0,0o755);
+  const marker=path.join(ROOT,'installation.json');
+  if(!fs.existsSync(marker)){
+    if(fs.readdirSync(ROOT).some(file=>file!=='operator.lock'))fail('unknown-operator-installation');
+    write(marker,{purpose:PURPOSE,installationId:crypto.randomBytes(16).toString('hex')});
+  }
+  const installation=read(marker);
+  if(installation.purpose!==PURPOSE||!/^[a-f0-9]{32}$/.test(installation.installationId))fail();
+  for(const directory of [DATA,path.join(DATA,'images'),path.join(ROOT,'private')])storage.directory(directory);
+  for(const directory of [path.join(DATA,'view'),path.join(ROOT,'public')]){
+    if(!fs.existsSync(directory)){fs.mkdirSync(directory,{mode:0o750});fs.chownSync(directory,0,10001);}
+    storage.directory(directory,0,10001,0o750);
+  }
+  if(!fs.existsSync(REQUESTS)){fs.mkdirSync(REQUESTS,{mode:0o700});fs.chownSync(REQUESTS,10001,10001);}
+  storage.directory(REQUESTS,10001,10001,0o700);
+  // Private mount propagation is a deployment prerequisite; never alter the host root mount.
+  const mounted=storage.mounted(path.join(DATA,'view'));
+  if(!mounted)run('/usr/bin/mount',['--bind',path.join(DATA,'view'),path.join(DATA,'view')]);
+  run('/usr/bin/mount',['--make-rshared',path.join(DATA,'view')]);
+  ensureNetwork();
+  return installation;
+}
+function ensureNetwork(){
+  const names=run('docker',['network','ls','--format','{{.Name}}']).split(/\r?\n/);
+  if(!names.includes(NETWORK))run('docker',['network','create','--internal','--label','org.pluton.purpose='+PURPOSE,NETWORK]);
+  const network=JSON.parse(run('docker',['network','inspect',NETWORK]))[0];
+  if(!network.Internal||network.Labels?.['org.pluton.purpose']!==PURPOSE)fail('foreign-network');
+}
+function policy(){
+  const file=path.join(ROOT,'public','policy.json');
+  const value=fs.existsSync(file)?read(file,0,0o640,2048):{maxSqlBytes:128*1024**2,maxRetentionSeconds:86400};
+  if(Object.keys(value).sort().join(',')!=='maxRetentionSeconds,maxSqlBytes'||
+    !Number.isSafeInteger(value.maxSqlBytes)||value.maxSqlBytes<1||value.maxSqlBytes>448*1024**2||
+    !Number.isSafeInteger(value.maxRetentionSeconds)||value.maxRetentionSeconds<86400||value.maxRetentionSeconds>30*86400)fail('operator-policy-unsafe');
+  return value;
+}
+function validateRequest(request,id,stat){
+  const keys=['version','purpose','mode','action','restoreId','snapshotId','databaseId','engine','database','sha256','bytes','expiresAt','cleanupReady','targetFingerprint'];
+  if(!stat.isFile()||stat.uid!==10001||(stat.mode&0o777)!==0o600||stat.size>8192||
+    Object.keys(request).some(key=>!keys.includes(key))||request.version!==1||request.purpose!==PURPOSE||
+    request.mode!=='internal'||request.restoreId!==id||!idPattern.test(id)||
+    !['provision','stop','resume','delete'].includes(request.action)||!Object.hasOwn(images,request.engine)||
+    !/^[a-f0-9]{64}$/.test(request.snapshotId)||!/^db_[A-Za-z0-9_-]{1,80}$/.test(request.databaseId)||
+    !/^[a-f0-9]{64}$/.test(request.sha256)||!/^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/.test(request.database)||
+    ['mysql','sys','postgres','template0','template1','information_schema','performance_schema','pluton_recovery_guard','pluton_restore_guard'].includes(request.database.toLowerCase())||
+    !Number.isSafeInteger(request.bytes)||request.bytes<=0||request.bytes>448*1024**2||
+    !Number.isSafeInteger(request.expiresAt)||typeof request.cleanupReady!=='boolean'||
+    (request.targetFingerprint!==null&&!/^[a-f0-9]{64}$/.test(request.targetFingerprint)))fail('request-unsafe');
+  return request;
+}
+function request(id){
+  storage.directory(REQUESTS,10001,10001,0o700);
+  const file=path.join(REQUESTS,id+'.json'),fd=fs.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);
+  try{const stat=fs.fstatSync(fd);if(stat.size>8192)fail();return validateRequest(JSON.parse(fs.readFileSync(fd,'utf8')),id,stat);}
+  finally{fs.closeSync(fd);}
+}
+function bootstrapSql(engine,database,password,activation,storageId,username='restore_user'){
+  if(!Object.hasOwn(images,engine)||!/^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/.test(database)||
+    !/^[a-f0-9]{64}$/.test(password)||!/^[a-f0-9]{32}$/.test(activation)||!/^[a-f0-9-]{32,36}$/.test(storageId)||
+    !/^[a-z][a-z0-9_]{0,62}$/.test(username)||['root','postgres','admin','administrator'].includes(username))fail();
+  if(engine==='mariadb')return `CREATE DATABASE pluton_restore_guard;
+CREATE TABLE pluton_restore_guard.contract(purpose VARCHAR(64),activation_id VARCHAR(32),storage_id VARCHAR(36));
+INSERT INTO pluton_restore_guard.contract VALUES ('${PURPOSE}','${activation}','${storageId}');
+CREATE USER '${username}'@'%' IDENTIFIED BY '${password}' REQUIRE SSL;
+GRANT SELECT ON pluton_restore_guard.contract TO '${username}'@'%';
+GRANT ALL PRIVILEGES ON \`${database.replaceAll('_','\\_')}\`.* TO '${username}'@'%';
+`;
+  return `CREATE DATABASE pluton_restore_guard;
+\\connect pluton_restore_guard
+CREATE TABLE contract(purpose VARCHAR(64),activation_id VARCHAR(32),storage_id VARCHAR(36));
+INSERT INTO contract VALUES ('${PURPOSE}','${activation}','${storageId}');
+CREATE ROLE ${username} LOGIN PASSWORD '${password}' NOSUPERUSER CREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 6;
+REVOKE ALL ON DATABASE pluton_restore_guard FROM PUBLIC;
+GRANT CONNECT ON DATABASE pluton_restore_guard TO ${username};
+GRANT USAGE ON SCHEMA public TO ${username};
+GRANT SELECT ON contract TO ${username};
+ALTER ROLE postgres NOLOGIN;
+`;
+}
+function metadata(id){
+  const meta=read(path.join(ROOT,'private',id,'metadata.json'));
+  if(meta.id!==id||!Object.hasOwn(images,meta.engine)||meta.volume?.file!==path.join(DATA,'images',id+'.ext4')||
+    meta.volume?.mountpoint!==path.join(DATA,'view',id)||meta.volume.identity?.restoreId!==id||
+    meta.approval?.id!==id||meta.approval?.purpose!==PURPOSE||meta.approval?.mode!=='internal'||
+    meta.approval?.storage.id!==meta.volume.identity.storageId||meta.approval.activationId!==meta.volume.identity.activationId||
+    !/^[a-f0-9]{64}$/.test(meta.containerId))fail('root-metadata-unsafe');
+  return meta;
+}
+function approvalFingerprint(approval){
+  const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?
+    Object.fromEntries(Object.entries(value).sort(([a],[b])=>a<b?-1:a>b?1:0).map(([key,item])=>[key,canonical(item)])):value;
+  return crypto.createHash('sha256').update(JSON.stringify(canonical(approval))).digest('hex');
+}
+function ownership(inspect,meta){
+  const config=inspect.Config||{},host=inspect.HostConfig||{},labels=config.Labels||{},mounts=inspect.Mounts||[];
+  const temporary=host.Tmpfs?.['/tmp']?.split(',')||[];
+  const base=meta.engine==='mariadb'?'/var/lib/mysql':'/var/lib/postgresql';
+  const approved=new Map([[base,meta.volume.mountpoint],['/run/pluton-persistent-bootstrap',path.join(ROOT,'private',meta.id)],
+    ['/opt/pluton-persistent/bootstrap.sh',path.join(__dirname,'bootstrap.sh')],['/run/pluton-internal-lock',LOCK]]);
+  if(inspect.Id!==meta.containerId||!idPattern.test(meta.id)||config.Image!==images[meta.engine]||config.User!=='999:999'||
+    labels['org.pluton.persistent.restore']!==meta.id||labels['org.pluton.persistent.activation']!==meta.approval.activationId||
+    labels['org.pluton.persistent.storage']!==meta.approval.storage.id||labels['org.pluton.purpose']!==PURPOSE||
+    host.Privileged||!host.ReadonlyRootfs||host.NetworkMode==='host'||Object.keys(host.PortBindings||{}).length||
+    host.Memory!==2147483648||host.MemorySwap!==2147483648||host.NanoCpus!==1e9||host.PidsLimit!==128||
+    !host.CapDrop?.includes('ALL')||!host.SecurityOpt?.some(v=>v==='no-new-privileges:true'||v==='no-new-privileges')||
+    (host.CapAdd||[]).length||(host.Devices||[]).length||mounts.length!==4||
+    Object.keys(host.Tmpfs||{}).length!==1||temporary.length!==8||
+    ['rw','noexec','nosuid','nodev','uid=999','gid=999','mode=700'].some(option=>!temporary.includes(option))||
+    !temporary.some(option=>option==='size=128m'||option==='size=134217728')||
+    mounts.some(m=>approved.get(m.Destination)!==(m.Type==='volume'?m.Name:m.Source)||
+      (m.Destination!==base&&m.Destination!=='/run/pluton-internal-lock'&&m.RW))||
+    Object.keys(inspect.NetworkSettings?.Networks||{}).length!==1||!inspect.NetworkSettings.Networks[NETWORK]||
+    host.NetworkMode!==NETWORK||host.PublishAllPorts||
+    JSON.stringify(config.Entrypoint)!==JSON.stringify(['/bin/bash'])||
+    JSON.stringify(config.Cmd)!==JSON.stringify(['/opt/pluton-persistent/bootstrap.sh',meta.engine]))fail('resource-ownership-mismatch');
+}
+function state(meta,value){
+  write(path.join(ROOT,'public',meta.id+'.state.json'),{purpose:PURPOSE,restoreId:meta.id,
+    snapshotId:meta.request.snapshotId,activationId:meta.approval.activationId,storageId:meta.approval.storage.id,
+    containerId:meta.containerId,state:value,observedAt:Date.now()},10001,0o640);
+}
+function inspect(meta){const value=JSON.parse(run('docker',['inspect',meta.containerId]))[0];ownership(value,meta);return value;}
+function bindRequest(meta,req){
+  if(req.snapshotId!==meta.request.snapshotId||req.sha256!==meta.request.sha256||req.databaseId!==meta.request.databaseId||
+    req.engine!==meta.engine||req.database!==meta.request.database||req.expiresAt!==meta.request.expiresAt||
+    req.targetFingerprint!==(meta.fingerprint||approvalFingerprint(meta.approval)))
+    fail('request-binding-mismatch');
+}
+function resourceAdmission(bytes){
+  const text=fs.readFileSync('/proc/meminfo','utf8'),field=name=>Number(new RegExp('^'+name+':\\s+(\\d+) kB$','m').exec(text)?.[1])*1024;
+  const pressure=Number(/^some avg10=(\d+(?:\.\d+)?)/m.exec(fs.readFileSync('/proc/pressure/memory','utf8'))?.[1]);
+  if(!Number.isFinite(field('MemAvailable'))||!Number.isFinite(pressure)||field('MemTotal')<3800*1024**2||
+    field('MemAvailable')<2560*1024**2||field('SwapTotal')-field('SwapFree')>128*1024**2||pressure>1||
+    bytes*4+256*1024**2>2*1024**3)fail('resource-admission-refused');
+}
+function nativeReady(meta){
+  const privatePath='/run/pluton-persistent-bootstrap';
+  const password=meta.approval.target.password,host=meta.approval.target.host;
+  const directory=path.join(ROOT,'private',meta.id);
+  const pg=meta.engine==='postgresql';
+  const file=path.join(directory,pg?'ready.pgpass':'ready.cnf');
+  write(file,pg?host+':5432:pluton_restore_guard:restore_user:'+password+'\n':
+    '[client]\nhost='+host+'\nport=3306\nuser=restore_user\npassword='+password+
+    '\nssl=ON\nssl-verify-server-cert=ON\nssl-ca='+privatePath+'/ca.pem\n',999,0o640);
+  // pgpass must be 0600 and readable as the native UID, not passed via PGPASSWORD.
+  if(pg){fs.chownSync(file,999,999);fs.chmodSync(file,0o600);}
+  const expected=[PURPOSE,meta.approval.activationId,meta.approval.storage.id].join('|');
+  const end=Date.now()+45000;
+  try{
+    while(Date.now()<end){
+      const current=inspect(meta);if(!current.State.Running)fail('target-process-stopped');
+      try{
+        const common=['exec','--user','999:999'];
+        const sql='SELECT purpose,activation_id,storage_id FROM contract;';
+        const args=pg?[...common,'-e','PGPASSFILE='+privatePath+'/ready.pgpass','-e','PGSSLMODE=verify-full',
+          '-e','PGSSLROOTCERT='+privatePath+'/ca.pem','-e','PGCONNECT_TIMEOUT=2','-e','PGOPTIONS=-c statement_timeout=2000',
+          meta.containerId,'psql','-X','--no-password','--no-psqlrc','--quiet','--host',host,'--username','restore_user',
+          '--dbname','pluton_restore_guard','--tuples-only','--no-align','--set','ON_ERROR_STOP=1','--command',sql]
+          :[...common,meta.containerId,'mariadb','--defaults-file='+privatePath+'/ready.cnf','--batch','--raw',
+            '--skip-column-names','--connect-timeout=2','--database=pluton_restore_guard','--execute',sql];
+        const output=run('docker',args,5000).split(/[|\t]/).join('|');
+        if(output!==expected)fail('target-purpose-mismatch');
+        return;
+      }catch(error){
+        if(error.code==='target-purpose-mismatch')throw error;
+        // Classify locally; never expose native provider output or credentials.
+        const stderr=String(error.stderr||'');
+        if(/1045|Access denied|password authentication failed/.test(stderr))fail('target-authentication-failed');
+        if(/TLS\/SSL|certificate verif|server certificate/.test(stderr))fail('target-tls-failed');
+        if(!/200[2356]|Can't connect|connection refused|could not translate host|connection timed out/.test(stderr))
+          fail('target-readiness-failed');
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,250);
+    }
+    fail('target-readiness-timeout');
+  }finally{if(fs.existsSync(file))fs.unlinkSync(file);}
+}
+function provision(req){
+  const approved=policy();
+  if(req.action!=='provision'||req.expiresAt<=Date.now()||req.expiresAt>Date.now()+approved.maxRetentionSeconds*1000)fail('request-expired');
+  if(req.bytes>approved.maxSqlBytes)fail('operator-sql-budget');
+  rootCode(path.join(__dirname,'bootstrap.sh'));resourceAdmission(req.bytes);
+  const directory=path.join(ROOT,'private',req.restoreId);
+  if(fs.existsSync(directory)){
+    const previous=metadata(req.restoreId);
+    if(req.snapshotId!==previous.request.snapshotId||req.sha256!==previous.request.sha256||
+      req.databaseId!==previous.request.databaseId||previous.removed)fail('existing-provisioning-retained');
+    storage.resume(previous.volume);const current=inspect(previous);
+    if(!current.State.Running)run('docker',['start',previous.containerId]);
+    nativeReady(previous);
+    write(path.join(ROOT,'public',req.restoreId+'-ca.pem'),fs.readFileSync(path.join(directory,'ca.pem'),'utf8'),10001,0o640);
+    write(path.join(ROOT,'public',req.restoreId+'.json'),previous.approval,10001,0o640);state(previous,'active');return;
+  }
+  fs.mkdirSync(directory,{mode:0o750});fs.chownSync(directory,0,999);
+  const activation=crypto.randomBytes(16).toString('hex'),password=crypto.randomBytes(32).toString('hex');
+  write(path.join(directory,'intent.json'),{purpose:PURPOSE,request:req,activation});
+  const volume=storage.create(path.join(DATA,'images'),path.join(DATA,'view'),req.restoreId,activation);
+  const host='persistent-db-'+req.restoreId;
+  const certificateDays=String(Math.ceil(approved.maxRetentionSeconds/86400)+2);
+  run('openssl',['req','-x509','-newkey','rsa:3072','-nodes','-sha256','-days',certificateDays,'-subj','/CN=Pluton Persistent Restore CA',
+    '-keyout',path.join(ROOT,'private',req.restoreId+'-ca.key'),'-out',path.join(directory,'ca.pem')]);
+  run('openssl',['req','-new','-newkey','rsa:3072','-nodes','-subj','/CN='+host,'-keyout',path.join(directory,'server.key'),'-out',path.join(directory,'server.csr')]);
+  write(path.join(directory,'server.ext'),'subjectAltName=DNS:'+host+'\nextendedKeyUsage=serverAuth\n');
+  run('openssl',['x509','-req','-in',path.join(directory,'server.csr'),'-CA',path.join(directory,'ca.pem'),'-CAkey',path.join(ROOT,'private',req.restoreId+'-ca.key'),
+    '-set_serial','0x'+activation,'-days',certificateDays,'-sha256','-extfile',path.join(directory,'server.ext'),'-out',path.join(directory,'server.pem')]);
+  for(const file of ['ca.pem','server.pem','server.key']){fs.chownSync(path.join(directory,file),0,999);fs.chmodSync(path.join(directory,file),0o640);}
+  write(path.join(directory,'identity.json'),fs.readFileSync(path.join(volume.mountpoint,'identity.json'),'utf8'),999,0o640);
+  write(path.join(directory,'bootstrap.sql'),bootstrapSql(req.engine,req.database,password,activation,volume.identity.storageId),999,0o640);
+  const ca=fs.readFileSync(path.join(directory,'ca.pem'));
+  const approval={version:1,id:req.restoreId,purpose:PURPOSE,mode:'internal',activationId:activation,engine:req.engine,database:req.database,
+    target:{engine:req.engine,host,port:req.engine==='mariadb'?3306:5432,username:'restore_user',tls:'verify-identity',enabled:true,dedicated:true,password},
+    caSha256:crypto.createHash('sha256').update(ca).digest('hex'),...approved,
+    storage:{id:volume.identity.storageId,quotaBytes:volume.identity.quotaBytes,kind:'fixed-ext4'},
+    binding:{restoreId:req.restoreId,snapshotId:req.snapshotId,sha256:req.sha256}};
+  ensureNetwork();
+  // Shared with disposable Phase 6 bootstraps: flock prevents two native engine stacks.
+  let fresh=false;try{run('docker',['volume','inspect',LOCK]);}catch{run('docker',['volume','create',LOCK]);fresh=true;}
+  if(fresh)run('docker',['run','--rm','--network','none','--read-only','--user','0:0','--mount','type=volume,source='+LOCK+',target=/lock',
+    '--entrypoint','/bin/sh',images[req.engine],'-ec','chown 999:999 /lock && chmod 700 /lock']);
+  const base=req.engine==='mariadb'?'/var/lib/mysql':'/var/lib/postgresql';
+  const containerId=run('docker',['create','--init','--name','pluton-persistent-'+req.restoreId,'--network',NETWORK,'--network-alias',host,
+    '--hostname',host,'--user','999:999','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true',
+    '--memory','2g','--memory-swap','2g','--cpus','1','--pids-limit','128',
+    '--label','org.pluton.purpose='+PURPOSE,'--label','org.pluton.persistent.restore='+req.restoreId,
+    '--label','org.pluton.persistent.activation='+activation,'--label','org.pluton.persistent.storage='+volume.identity.storageId,
+    '--tmpfs','/tmp:rw,noexec,nosuid,nodev,uid=999,gid=999,mode=700,size=128m',
+    '--mount','type=bind,source='+volume.mountpoint+',target='+base,
+    '--mount','type=bind,source='+directory+',target=/run/pluton-persistent-bootstrap,readonly',
+    '--mount','type=bind,source='+path.join(__dirname,'bootstrap.sh')+',target=/opt/pluton-persistent/bootstrap.sh,readonly',
+    '--mount','type=volume,source='+LOCK+',target=/run/pluton-internal-lock',
+    '--entrypoint','/bin/bash',images[req.engine],'/opt/pluton-persistent/bootstrap.sh',req.engine]);
+  if(!/^[a-f0-9]{64}$/.test(containerId))fail();
+  approval.containerId=containerId;
+  const meta={id:req.restoreId,engine:req.engine,containerId,volume,approval,request:req,fingerprint:approvalFingerprint(approval)};
+  write(path.join(directory,'metadata.json'),meta);
+  inspect(meta);run('docker',['start',containerId]);nativeReady(meta);
+  write(path.join(ROOT,'public',req.restoreId+'-ca.pem'),ca.toString('utf8'),10001,0o640);
+  write(path.join(ROOT,'public',req.restoreId+'.json'),approval,10001,0o640);
+  state(meta,'active');
+}
+function containerPresent(meta){
+  return run('docker',['container','ls','--all','--no-trunc','--filter','id='+meta.containerId,'--format','{{.ID}}'])
+    .split(/\r?\n/).includes(meta.containerId);
+}
+function deleteOwned(meta,req){
+  if(req.action!=='delete'||!req.cleanupReady)fail('database-cleanup-not-verified');
+  if(!meta.deleteIntent){
+    inspect(meta);storage.resume(meta.volume);
+    meta.deleteIntent=true;write(path.join(ROOT,'private',meta.id,'metadata.json'),meta);
+  }
+  if(containerPresent(meta)){
+    const current=inspect(meta);
+    if(current.State.Running)run('docker',['stop','--time','30',meta.containerId]);
+    if(inspect(meta).State.Running)fail();
+    // Native owned-database cleanup has already been attested by Pluton.
+    run('docker',['rm',meta.containerId]);
+  }
+  if(containerPresent(meta))fail('container-removal-unverified');
+  // The durable root intent permits recovery across unmount/rmdir/unlink crash boundaries.
+  storage.remove(meta.volume,true);
+  meta.removed=true;write(path.join(ROOT,'private',meta.id,'metadata.json'),meta);
+  state(meta,'removed');
+  // After verified physical deletion, erase exact no-longer-needed credential files; retain non-secret audit binding.
+  for(const file of [path.join(ROOT,'public',meta.id+'.json'),path.join(ROOT,'private',meta.id,'bootstrap.sql'),
+    path.join(ROOT,'private',meta.id,'server.key'),path.join(ROOT,'private',meta.id+'-ca.key')]){
+    if(fs.existsSync(file)){
+      storage.rootParent(file);const stat=fs.lstatSync(file);
+      if(!stat.isFile()||stat.isSymbolicLink()||stat.uid!==0||(stat.mode&0o022))fail('credential-cleanup-unsafe');
+      fs.unlinkSync(file);
+    }
+  }
+  delete meta.approval.target.password;write(path.join(ROOT,'private',meta.id,'metadata.json'),meta);
+}
+function verifyNeverProvisioned(req){
+  const id=req.restoreId;
+  if(req.action!=='delete'||req.cleanupReady||req.targetFingerprint!==null||
+    fs.existsSync(path.join(ROOT,'private',id))||fs.existsSync(path.join(DATA,'images',id+'.ext4'))||
+    fs.existsSync(path.join(DATA,'view',id))||storage.mounted(path.join(DATA,'view',id)))fail('unprovisioned-absence-uncertain');
+  // Daemon/command failure is an error, never an empty inventory.
+  if(run('docker',['container','ls','--all','--no-trunc','--filter','label=org.pluton.persistent.restore='+id,'--format','{{.ID}}']))
+    fail('unprovisioned-absence-uncertain');
+  write(path.join(ROOT,'public',id+'.absent.json'),{purpose:PURPOSE,restoreId:id,snapshotId:req.snapshotId,
+    sha256:req.sha256,state:'never-provisioned',observedAt:Date.now()},10001,0o640);
+}
+function customApproval(id){
+  if(!idPattern.test(id))fail('custom-approval-unsafe');
+  const approval=read(path.join(ROOT,'private',id+'.candidate.json'));
+  const target=approval.target||{},store=approval.storage||{};
+  if(Object.keys(approval).some(key=>!['version','id','purpose','mode','activationId','engine','database','target','caSha256','maxSqlBytes','maxRetentionSeconds','storage'].includes(key))||
+    Object.keys(target).some(key=>!['engine','host','port','username','tls','enabled','dedicated','password'].includes(key))||
+    Object.keys(store).some(key=>!['id','kind','quotaBytes'].includes(key)))fail('custom-approval-unsafe');
+  if(approval.version!==1||approval.id!==id||approval.purpose!==PURPOSE||approval.mode!=='custom'||
+    !Object.hasOwn(images,approval.engine)||target.engine!==approval.engine||target.tls!=='verify-identity'||
+    target.enabled!==true||target.dedicated!==true||typeof target.host!=='string'||target.host.length>253||
+    !/^(?:[A-Za-z0-9][A-Za-z0-9.:-]*|::1)$/.test(target.host)||!Number.isSafeInteger(target.port)||target.port<1||target.port>65535||
+    !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(target.username)||['root','postgres','admin','administrator'].includes(target.username.toLowerCase())||
+    typeof target.password!=='string'||!target.password||/[\0\r\n]/.test(target.password)||
+    !/^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/.test(approval.database)||
+    !/^[a-f0-9]{32}$/.test(approval.activationId)||store.kind!=='operator-approved-external'||
+    !/^[a-f0-9-]{32,36}$/.test(store.id)||store.quotaBytes<512*1024**2||store.quotaBytes>2*1024**3||
+    approval.maxSqlBytes<1||approval.maxSqlBytes>448*1024**2||approval.maxRetentionSeconds<86400||
+    approval.maxRetentionSeconds>30*86400||approval.binding||approval.containerId)fail('custom-approval-unsafe');
+  if(![store.quotaBytes,approval.maxSqlBytes,approval.maxRetentionSeconds].every(Number.isSafeInteger)||
+    ['mysql','sys','postgres','template0','template1','information_schema','performance_schema','pluton_recovery_guard','pluton_restore_guard'].includes(approval.database.toLowerCase()))
+    fail('custom-approval-unsafe');
+  const caFile=path.join(ROOT,'private',id+'-ca.pem');storage.rootParent(caFile);
+  const stat=fs.lstatSync(caFile);
+  if(!stat.isFile()||stat.isSymbolicLink()||stat.uid!==0||(stat.mode&0o777)!==0o600||stat.size>16384)fail('custom-ca-unsafe');
+  const ca=fs.readFileSync(caFile);
+  if(crypto.createHash('sha256').update(ca).digest('hex')!==approval.caSha256)fail('custom-ca-mismatch');
+  return {approval,ca};
+}
+function approveCustom(id){
+  if(fs.existsSync(path.join(ROOT,'public',id+'.json')))fail('approval-already-exists');
+  const {approval,ca}=customApproval(id);
+  // Registration is explicit operator attestation, not provisioning or an automatic SQL mutation.
+  write(path.join(ROOT,'public',id+'-ca.pem'),ca.toString('utf8'),10001,0o640);
+  write(path.join(ROOT,'public',id+'.json'),approval,10001,0o640);
+}
+function operate(action,id){
+  if(!idPattern.test(id))fail();
+  if(action==='approve-custom'){approveCustom(id);return;}
+  if(action==='prepare-custom'){
+    const {approval}=customApproval(id),file=path.join(ROOT,'private',id+'.bootstrap.sql');
+    if(fs.existsSync(file))fail('private-bootstrap-already-exists');
+    const sql=bootstrapSql(approval.engine,approval.database,approval.target.password,approval.activationId,approval.storage.id,approval.target.username);
+    const descriptor=fs.openSync(file,'wx',0o600);
+    try{fs.writeFileSync(descriptor,sql);fs.fsyncSync(descriptor);}finally{fs.closeSync(descriptor);}
+    return;
+  }
+  const req=request(id);
+  if(action==='provision'){provision(req);return;}
+  if(action==='delete'&&!fs.existsSync(path.join(ROOT,'private',id,'metadata.json'))){verifyNeverProvisioned(req);return;}
+  const meta=metadata(id);bindRequest(meta,req);
+  if(action==='delete'){deleteOwned(meta,req);return;}
+  if(meta.removed||meta.deleteIntent)fail('restore-deletion-in-progress');
+  storage.resume(meta.volume);
+  const current=inspect(meta);
+  if(action==='stop'){
+    if(req.action!=='stop')fail();
+    if(current.State.Running)run('docker',['stop','--time','30',meta.containerId]);
+    if(inspect(meta).State.Running)fail();state(meta,'stopped');
+  }else if(action==='resume'){
+    if(req.action!=='resume'||req.expiresAt<=Date.now())fail('request-expired');
+    resourceAdmission(req.bytes);
+    if(!current.State.Running)run('docker',['start',meta.containerId]);
+    nativeReady(meta);state(meta,'active');
+  }else if(action==='resume-cleanup'){
+    if(req.action!=='delete')fail();resourceAdmission(req.bytes);
+    if(!current.State.Running)run('docker',['start',meta.containerId]);nativeReady(meta);state(meta,'active');
+  }else if(action==='status'){
+    if(current.State.Running)nativeReady(meta);
+    state(meta,current.State.Running?'active':'stopped');
+  }else fail();
+}
+module.exports={PURPOSE,images,validateRequest,bootstrapSql,ownership,approvalFingerprint,approveCustom};
+if(require.main===module){
+  try{
+    if(process.platform!=='linux'||process.getuid()!==0||Number(process.versions.node.split('.')[0])<20)fail('root-linux-node20-required');
+    rootCode(__filename);rootCode(path.join(__dirname,'storage.cjs'));
+    // Serialize all root lifecycle actions. A delete/absence receipt cannot race an old provisioning request.
+    if(process.env.PLUTON_PERSISTENT_OPERATOR_LOCKED!=='1'){
+      if(!fs.existsSync(ROOT))fs.mkdirSync(ROOT,{mode:0o755});
+      storage.directory(ROOT,0,0,0o755);
+      const lock=path.join(ROOT,'operator.lock');
+      const descriptor=fs.openSync(lock,fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_NOFOLLOW,0o600);
+      const stat=fs.fstatSync(descriptor);fs.closeSync(descriptor);
+      if(!stat.isFile()||stat.uid!==0||(stat.mode&0o777)!==0o600)fail('operator-lock-unsafe');
+      try{
+        const output=execFileSync('/usr/bin/flock',['--exclusive','--nonblock',lock,process.execPath,__filename,...process.argv.slice(2)],
+          {encoding:'utf8',stdio:['ignore','pipe','pipe'],maxBuffer:4096,
+            env:{PATH:'/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',LANG:'C',LC_ALL:'C',PLUTON_PERSISTENT_OPERATOR_LOCKED:'1'}});
+        process.stdout.write(output);
+      }catch{fail('operator-locked-or-operation-refused');}
+      process.exit(0);
+    }
+    const [action,id,...extra]=process.argv.slice(2);
+    if(action==='set-policy'&&extra.length===1){
+      read(path.join(ROOT,'installation.json'));
+      const value={maxSqlBytes:Number(id),maxRetentionSeconds:Number(extra[0])};
+      if(!Number.isSafeInteger(value.maxSqlBytes)||value.maxSqlBytes<1||value.maxSqlBytes>448*1024**2||
+        !Number.isSafeInteger(value.maxRetentionSeconds)||value.maxRetentionSeconds<86400||value.maxRetentionSeconds>30*86400)fail('operator-policy-unsafe');
+      write(path.join(ROOT,'public','policy.json'),value,10001,0o640);
+    }else{
+      if(extra.length)fail();
+      if(action==='init'&&!id)init();else{read(path.join(ROOT,'installation.json'));operate(action,id);}
+    }
+    process.stdout.write(JSON.stringify({event:'persistent_restore_operator',action,status:'verified'})+'\n');
+  }catch(error){process.stderr.write(JSON.stringify({event:'persistent_restore_operator_refused',code:error.code||'operator-operation-failed'})+'\n');process.exitCode=1;}
+}
