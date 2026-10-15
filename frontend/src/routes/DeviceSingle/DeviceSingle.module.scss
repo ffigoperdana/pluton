@@ -5,8 +5,9 @@
    border-radius: 7px;
    box-sizing: border-box;
    background-color: var(--content-background-color);
-   color: var(--content-text-color-light);
-   box-shadow: 0 0 15px var(--content-shadow-color);
+   color: var(--content-text-color);
+   box-shadow: var(--card-shadow);
+   border: 1px solid var(--line-color);
    min-height: 200px;
    margin-top: 20px;
    display: flex;

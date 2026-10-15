@@ -12,7 +12,7 @@
    text-rendering: optimizeLegibility;
    -webkit-font-smoothing: antialiased;
    -moz-osx-font-smoothing: grayscale;
-   --container-width: 1200px;
+   --container-width: 1560px;
    --border-radius: 12px;
    --line-color: #dcdfea;
    --line-active-color: #73778a;
@@ -25,7 +25,7 @@
    --primary-color-light: #eeeffd;
    --primary-color-lighter: #f6f7ff;
    --primary-text-color: #fff;
-   --background-color: #f5f8ff;
+   --background-color: #f5f7fc;
    --background-text-color: #71717a;
    --background-text-color-dark: #71717a;
    --content-background-color: #fff;
@@ -35,7 +35,12 @@
    --content-text-color: #525252;
    --content-text-color-light: #6b6b75;
    --nav-color: #737382;
-   --content-font-size: 13px;
+   --content-font-size: 14px;
+   --surface-muted: #f7f8fc;
+   --surface-hover: #eeeffd;
+   --card-shadow: 0 2px 10px rgba(28, 39, 77, 0.04);
+   --progress-fill: #087b6c;
+   --progress-text: #ffffff;
 
    --error-bg-color: #ffecec;
    --error-bg-active: #b54444;
@@ -78,9 +83,12 @@
    --primary-color-light: #212235;
    --primary-color-lighter: #1a1a1e;
    --primary-text-color: #fff;
-   --background-color: #141414;
-   --content-background-color: #1c1c1c;
-   --field-bg: #1e1e1e;
+   --background-color: #14161d;
+   --content-background-color: #1c1f29;
+   --field-bg: #202430;
+   --surface-muted: #222631;
+   --surface-hover: #25273f;
+   --card-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
    --text-primary: #e1e1e1;
    --text-secondary: #c0c0c0;
    --text-light: #a2a2ae;
@@ -185,7 +193,7 @@ button {
    background-color: transparent;
    border: none;
    cursor: pointer;
-   font-size: 0.75rem;
+   font-size: 0.8125rem;
    &.notAllowed {
       cursor: not-allowed;
    }
@@ -289,7 +297,7 @@ button {
 
 // Labels
 .label {
-   font-size: 0.6875rem;
+   font-size: 0.75rem;
    // line-height: 14px;
    font-weight: 400;
    padding: 2px 10px;
@@ -416,6 +424,17 @@ i.pipe {
 @keyframes shimmer {
    100% {
       transform: translateX(100%);
+   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+   *,
+   *::before,
+   *::after {
+      scroll-behavior: auto !important;
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
    }
 }
 

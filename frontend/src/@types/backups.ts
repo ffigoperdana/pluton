@@ -58,6 +58,7 @@ export type Backup = {
    title?: string;
    description?: string;
    snapshotId: string;
+   createdAt?: string | number;
    started: number;
    ended: number;
    duration: number;
@@ -82,6 +83,12 @@ export type Backup = {
       error?: string;
    };
    mirrors?: BackupMirror[];
+};
+
+export type BackupChartPoint = Pick<Backup, 'status' | 'started'> & {
+   completionStats?: { total_files_processed: number | null; total_bytes_processed: number | null } | null;
+   totalFiles?: number;
+   totalSize?: number;
 };
 
 export interface BackupProgressEvent {

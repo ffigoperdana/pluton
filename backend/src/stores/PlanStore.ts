@@ -10,6 +10,28 @@ import {
 	remotePlanDatabaseEntryCredentials,
 } from '../db/schema/remotePlanCredentials';
 import type { DatabaseCredential } from '../types/remoteLifecycle';
+import { backupHistoryColumns, backupHistoryDate } from './BackupStore';
+import { desc } from 'drizzle-orm';
+import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
+
+type ChartStats = NonNullable<NonNullable<PlanFull['backupChart']>[number]['completionStats']>;
+// Only the two plotted counters leave SQLite. Do not hydrate old SQL artifact
+// manifests, mirrors, errors, source settings or IDs for a trend graph.
+const chartCounters = (column: AnySQLiteColumn) =>
+	sql<ChartStats | null>`
+   CASE WHEN json_valid(${column}) THEN CASE WHEN json_type(${column}) = 'object' THEN
+      json_object('total_files_processed', json_extract(${column}, '$.total_files_processed'),
+                  'total_bytes_processed', json_extract(${column}, '$.total_bytes_processed'))
+   END END`.mapWith((value: string | null): ChartStats | null => {
+		if (!value) return null;
+		const counters = JSON.parse(value);
+		const measured = (raw: unknown) =>
+			typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : null;
+		return {
+			total_files_processed: measured(counters.total_files_processed),
+			total_bytes_processed: measured(counters.total_bytes_processed),
+		};
+	});
 
 /**
  * PlanStore is a class for managing plan records in the database.
@@ -88,7 +110,12 @@ export class PlanStore {
 		return null;
 	}
 
-	async getById(planId: string, history: boolean = false): Promise<PlanFull | null> {
+	async getById(
+		planId: string,
+		history: boolean = false,
+		backupSummary = false
+	): Promise<PlanFull | null> {
+		let backupChart: PlanFull['backupChart'];
 		const thePlan = await this.db.query.plans.findFirst({
 			where: eq(plans.id, planId),
 			with: {
@@ -107,8 +134,10 @@ export class PlanStore {
 					},
 				},
 				backups: {
-					limit: history ? 999 : 10,
-					orderBy: (backups, { desc }) => [desc(backups.ended)],
+					limit: backupSummary ? 90 : history ? 999 : 10,
+					orderBy: backupSummary
+						? [desc(backupHistoryDate), desc(backups.id)]
+						: (backups, { desc }) => [desc(backups.ended)],
 					columns: {
 						id: true,
 						title: true,
@@ -143,6 +172,46 @@ export class PlanStore {
 			},
 		});
 
+		if (thePlan && backupSummary) {
+			// The UI's chart/health strip is a bounded recent summary, not history.
+			// Preserve long-running tasks and the latest successful measurement even
+			// when they fall outside the recent window. No repository scans.
+			const active = await this.db.query.backups.findMany({
+				where: and(eq(backups.planId, planId), eq(backups.inProgress, true)),
+				columns: backupHistoryColumns,
+			});
+			const completed = await this.db.query.backups.findFirst({
+				where: and(eq(backups.planId, planId), eq(backups.status, 'completed')),
+				columns: backupHistoryColumns,
+				orderBy: [desc(backupHistoryDate), desc(backups.id)],
+			});
+			thePlan.backups = [
+				...new Map(
+					[...thePlan.backups, ...active, ...(completed ? [completed] : [])].map(row => [
+						row.id,
+						row,
+					])
+				).values(),
+			];
+			const measurements = await this.db
+				.select({
+					status: backups.status,
+					started: backups.started,
+					completionStats: chartCounters(backups.completionStats),
+					taskStats: chartCounters(backups.taskStats),
+				})
+				.from(backups)
+				.where(eq(backups.planId, planId))
+				.orderBy(desc(backups.ended), desc(backups.id))
+				.limit(999);
+			// Preserve the previous chart's 999-record budget and range behavior,
+			// independently of the 90-outcome health strip and 50-row history cap.
+			backupChart = measurements.map(({ taskStats, ...point }) => ({
+				...point,
+				totalFiles: taskStats?.total_files_processed ?? 0,
+				totalSize: taskStats?.total_bytes_processed ?? 0,
+			}));
+		}
 		if (thePlan && thePlan.backups) {
 			thePlan.backups = this.handleBackupStats(
 				thePlan.method,
@@ -157,7 +226,11 @@ export class PlanStore {
 			thePlan.backups = this.handleBackupMirrors(thePlan, thePlan.backups);
 		}
 
-		return thePlan || null;
+		return thePlan
+			? backupSummary
+				? { ...thePlan, backupChart: backupChart || [] }
+				: thePlan
+			: null;
 	}
 
 	async getStoragePlans(storageId: string): Promise<Plan[] | null> {
@@ -213,7 +286,7 @@ export class PlanStore {
 		// (e.g. if the storage was removed after the backup was taken)
 		const replicationSettings = plan.settings.replication as PlanBackupSettings['replication'];
 		const availableMirrorStorages = replicationSettings?.storages.map(s => s.storageId) || [];
-		return plan.backups.map(backup => {
+		return backups.map(backup => {
 			if (backup.mirrors) {
 				backup.mirrors = backup.mirrors.filter(mirror =>
 					availableMirrorStorages.includes(mirror.storageId)

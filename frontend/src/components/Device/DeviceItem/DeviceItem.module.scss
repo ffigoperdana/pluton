@@ -3,13 +3,14 @@
    flex-direction: row;
    align-items: center;
    position: relative;
-   padding: 10px;
-   margin-bottom: 20px;
+   padding: 16px;
+   margin-bottom: 12px;
    gap: 10px;
    border-radius: 7px;
    background-color: var(--content-background-color);
    color: var(--content-text-color-light);
-   box-shadow: 0 0 15px var(--content-shadow-color);
+   box-shadow: var(--card-shadow);
+   border: 1px solid var(--line-color);
    transition: all 0.2s linear;
    &:hover {
       box-shadow: 0 0 20px var(--content-shadow-color);
@@ -82,6 +83,7 @@
       line-height: 0.9rem;
    }
    h4 {
+      font-size: 0.875rem;
       margin: 0;
       margin-bottom: 2px;
       color: var(--content-text-color);

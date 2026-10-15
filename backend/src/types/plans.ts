@@ -277,6 +277,14 @@ export type PlanRestoreItem = Pick<
 export type PlanStorageItem = Pick<Storage, 'id' | 'name' | 'type'>;
 export type PlanDeviceItem = Pick<Device, 'id' | 'name' | 'hostname'>;
 export interface PlanFull extends Plan {
+	backupChart?: (Pick<Backup, 'status' | 'started'> & {
+		completionStats: {
+			total_files_processed: number | null;
+			total_bytes_processed: number | null;
+		} | null;
+		totalFiles: number;
+		totalSize: number;
+	})[];
 	device: PlanDeviceItem | null;
 	storage: PlanStorageItem | null;
 	backups: PlanBackupItem[];

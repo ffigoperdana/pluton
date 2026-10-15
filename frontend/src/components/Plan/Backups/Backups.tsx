@@ -3,7 +3,7 @@ import { toast } from 'react-toastify';
 import { Plan } from '../../../@types/plans';
 import { Backup } from '../../../@types/backups';
 import { backupRowActions } from '../../../utils/backupDownload';
-import { formatBytes, formatDateTime, formatDuration, formatNumberToK, timeAgo } from '../../../utils/helpers';
+import { formatBytes, formatDuration, formatNumberToK } from '../../../utils/helpers';
 import Icon from '../../common/Icon/Icon';
 import classes from './Backups.module.scss';
 import ActionModal from '../../common/ActionModal/ActionModal';
@@ -30,6 +30,7 @@ import RecoveryConfirmation from '../RecoveryTesting/RecoveryConfirmation';
 import DatabaseRestoreWizard from '../../Restore/DatabaseRestore/DatabaseRestoreWizard';
 import recoveryClasses from '../RecoveryTesting/RecoveryTesting.module.scss';
 import { backupStatistics, statisticHelp } from '../../../utils/backupStatistics';
+import { displayTimeZone, formatHistoryDate, historyIsoDate } from '../../../utils/backupHistory';
 
 const DownloadLabel = ({ download, downloadBackup }: { download: Backup['download']; downloadBackup: () => void }) => {
    if (download?.status === 'started') {
@@ -88,6 +89,8 @@ const Backups = ({
    replicationSettings,
    storage,
    deviceId,
+   timeZone = displayTimeZone(),
+   emptyMessage = "Hasn't been backed up yet.",
    // snapLimit,
 }: {
    planId: string;
@@ -97,6 +100,8 @@ const Backups = ({
    sourceType: string;
    snapLimit: number;
    deviceId: string;
+   timeZone?: string;
+   emptyMessage?: string;
    storage: {
       id: string;
       type: string;
@@ -132,8 +137,6 @@ const Backups = ({
    const shownRecovery = recoveryTests.data?.find((test) => test.id === recoveryResultId);
 
    const snapshotFiles = browseSnapshotMutation.data?.result;
-
-   console.log('backups :', backups);
 
    const removeBackup = (backup: Backup) => {
       console.log('remove :', backup.id);
@@ -222,6 +225,7 @@ const Backups = ({
                .map((snapshot) => {
                   const { id, title, description, started, ended, download, status, errorMsg, duration, totalFiles, totalSize, changes, active } =
                      snapshot;
+                  const dateValue = ended ?? started ?? snapshot.createdAt;
                   const isDownloading = !isRemoteManaged && download && download.status === 'started';
                   const actions = backupRowActions(snapshot, isSync, isRemoteManaged);
                   const lifecycleWarning = status === 'completed' && !!snapshot.completionStats?.lifecycle?.warnings.length;
@@ -317,15 +321,19 @@ const Backups = ({
                         <div
                            data-tooltip-id="htmlToolTip"
                            data-tooltip-html={`
-                                          <div><b>Started</b>: ${formatDateTime(started)}</div>
-                                          <div><b>Ended</b>: ${ended ? formatDateTime(ended) : ''}</div>
+                                          <div><b>Started</b>: ${started ? formatHistoryDate(started, timeZone) : 'Not recorded'}</div>
+                                          <div><b>Ended</b>: ${ended ? formatHistoryDate(ended, timeZone) : 'Not recorded'}</div>
                                        `}
-                           title={formatDateTime(ended || started)}
+                           title={`${formatHistoryDate(dateValue, timeZone)} (${timeZone})`}
                         >
-                           {ended ? timeAgo(new Date(ended)) : timeAgo(started ? new Date(started) : new Date())}
+                           <time dateTime={historyIsoDate(dateValue)}>{formatHistoryDate(dateValue, timeZone)}</time>
                         </div>
                         <div className={classes.snapOptsBtn}>
-                           <button onClick={() => setShowSnapOptions(showSnapOptions && showSnapOptions === id ? false : id)}>
+                           <button
+                              aria-label={`Actions for backup-${id}`}
+                              aria-expanded={showSnapOptions === id}
+                              onClick={() => setShowSnapOptions(showSnapOptions && showSnapOptions === id ? false : id)}
+                           >
                               <Icon type="dots-vertical" size={12} />
                            </button>
                         </div>
@@ -435,11 +443,15 @@ const Backups = ({
                      </div>
                   );
                })}
-            {backups.length === 0 && <div className={classes.noBackups}>Hasn't been backed up yet.</div>}
+            {backups.length === 0 && <div className={classes.noBackups}>{emptyMessage}</div>}
          </div>
-         {recoveryConfirmation?.operation==='restore'&&<DatabaseRestoreWizard selection={{planId,backupId:recoveryConfirmation.backupId,snapshotId:recoveryConfirmation.snapshotId}}
-            close={()=>setRecoveryConfirmation(undefined)}/>}
-         {recoveryConfirmation?.operation==='test' && (
+         {recoveryConfirmation?.operation === 'restore' && (
+            <DatabaseRestoreWizard
+               selection={{ planId, backupId: recoveryConfirmation.backupId, snapshotId: recoveryConfirmation.snapshotId }}
+               close={() => setRecoveryConfirmation(undefined)}
+            />
+         )}
+         {recoveryConfirmation?.operation === 'test' && (
             <RecoveryConfirmation
                {...recoveryConfirmation}
                planId={planId}

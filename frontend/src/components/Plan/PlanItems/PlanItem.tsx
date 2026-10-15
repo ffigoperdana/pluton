@@ -206,7 +206,12 @@ const PlanItem = ({ plan, layout = 'list' }: PlanItemProps) => {
                {inProgress ? 'In Progress' : lastBackupTime ? timeAgo(new Date(lastBackupTime as string)) : 'Not Yet'}
             </div>
             <PlanHistory planId={id} history={backups} />
-            <button className={`${classes.moreBtn} ${showSettings ? classes.moreBtnActive : ''}`} onClick={() => setShowSettings(!showSettings)}>
+            <button
+               aria-label={`Plan actions for ${plan.title}`}
+               aria-expanded={showSettings}
+               className={`${classes.moreBtn} ${showSettings ? classes.moreBtnActive : ''}`}
+               onClick={() => setShowSettings(!showSettings)}
+            >
                <Icon type="dots-vertical" size={14} />
             </button>
          </div>

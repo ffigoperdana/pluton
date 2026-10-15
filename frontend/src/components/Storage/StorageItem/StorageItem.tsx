@@ -74,6 +74,7 @@ const StorageItem = ({ storage, layout }: StorageItemProps) => {
             </div>
             <button
                className={classes.browseBtn}
+               aria-label={`Browse storage ${name}`}
                onClick={() => setShowBrowser(true)}
                data-tooltip-id="appTooltip"
                data-tooltip-content="Browse Files"
@@ -83,6 +84,8 @@ const StorageItem = ({ storage, layout }: StorageItemProps) => {
             </button>
             <button
                className={`${classes.moreBtn} ${showSettings ? classes.moreBtnActive : ''}`}
+               aria-label={`Storage actions for ${name}`}
+               aria-expanded={showSettings}
                onClick={() => setShowSettings(!showSettings)}
                disabled={isLocalStorage}
             >

@@ -1,4 +1,4 @@
-import { Backup } from './backups';
+import { Backup, BackupChartPoint } from './backups';
 import { RestoreSlim } from './restores';
 
 export type PlanPrune = {
@@ -218,6 +218,7 @@ export type Plan = {
    storage: { name: string; type: string; id: string };
    device?: { name: string; id: string; hostname: string };
    backups: Backup[];
+   backupChart?: BackupChartPoint[];
    restores?: RestoreSlim[];
 };
 
