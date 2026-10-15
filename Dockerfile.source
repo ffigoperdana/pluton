@@ -82,6 +82,7 @@ COPY --from=build /workspace/backend/loader.mjs ./backend/loader.mjs
 COPY --from=restic /usr/bin/restic /usr/local/bin/restic
 COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
 COPY scripts/verify-database-recovery-clients.mjs /usr/local/libexec/pluton/verify-database-recovery-clients.mjs
+COPY deploy/healthcheck.cjs /usr/local/libexec/pluton/healthcheck.cjs
 
 RUN printf '%s\n' '#!/bin/sh' 'exec /usr/local/bin/rclone --config /data/config/rclone.conf "$$@"' > /usr/local/bin/prclone
 RUN printf '%s\n' '#!/bin/sh' 'export RCLONE_CONFIG=/data/config/rclone.conf' 'exec /usr/local/bin/restic -o rclone.program=/usr/local/bin/rclone "$$@"' > /usr/local/bin/prestic
@@ -92,7 +93,7 @@ ENV NODE_ENV=production IS_DOCKER=true SERVER_PORT=5173 APP_VERSION=${APP_VERSIO
 EXPOSE 5173
 VOLUME ["/data"]
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 CMD wget --no-verbose --tries=1 --spider "http://127.0.0.1:${SERVER_PORT}/api/health" || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 CMD ["node", "/usr/local/libexec/pluton/healthcheck.cjs"]
 
 USER pluton
 

@@ -3,7 +3,7 @@
 This deployment path builds one production Node container that serves the
 frontend and backend together. GitHub Actions builds it from public source,
 tests it, and publishes it to GitHub Container Registry (GHCR). A Linux VM
-only needs Docker Engine, the Docker Compose plugin, the small files in
+only needs Docker Engine, Docker Compose v2, Python 3.8+ (stdlib), the files in
 deploy/, a persistent Docker volume, and a VM-local .env file. It does not
 need Git, Node.js, pnpm, TypeScript, or build tools.
 
@@ -14,6 +14,11 @@ this deployment workflow.
 This document applies to the public community fork. It does not change the
 read-only guarantees for imported Restic repositories or enable any new backup
 operation.
+
+Existing installations must first follow the separate, operator-approved
+[one-time host-bundle upgrade](DEPLOYMENT_OVERLAY_AND_HEALTHCHECK_FIX.md#8-a--one-time-host-script-upgrade).
+Pulling a new image does not update already installed scripts. That runbook also
+covers customized base Compose reconciliation and script-only rollback.
 
 ## Image build and release flow
 
@@ -60,38 +65,37 @@ it uses the workflow GITHUB_TOKEN.
 
 Install Docker Engine and the Docker Compose plugin using the VM distribution's
 normal administration process. The scripts deliberately do not install operating
-system packages. The VM needs outbound access to GHCR and, for a new key,
-openssl.
+system packages. The VM needs outbound access to GHCR. Configure credentials
+offline; scripts never generate or rotate application encryption keys.
 
 Copy the tracked deploy/ directory to the VM by a release artifact, SCP, or
 another approved transfer method. The deployment itself does not require a Git
-checkout. Configure the VM-local file before the first start:
+checkout. For a genuinely absent installation directory, prepare the reviewed
+bundle (the first command deliberately stops for configuration without starting
+services):
 
 ~~~sh
-sudo install -d -m 750 /opt/pluton
-sudo cp deploy/.env.example /opt/pluton/.env
-sudo chmod 600 /opt/pluton/.env
+sudo sh deploy/install.sh 'sha256:<verified-image-digest>' /opt/pluton
 sudoedit /opt/pluton/.env
 ~~~
 
 Set PLUTON_IMAGE to the lower-case GHCR repository for this fork, set a strong
-USER_PASSWORD, and set APP_URL to the external URL when applicable. Keep
-PLUTON_VERSION as the release tag that will be installed. Do not put an actual
+USER_PASSWORD, a securely generated ENCRYPTION_KEY for the NEW empty volume only,
+and APP_URL to the external URL when applicable. Existing data always needs its
+original keys. Do not put an actual
 password, encryption key, registry token, or production host name in a tracked
 file.
 
-Run the installer with an explicit release tag:
+Run the installed script with an approved immutable digest:
 
 ~~~sh
-sudo sh deploy/install.sh v0.1.0-alpha.1 /opt/pluton
+sudo sh /opt/pluton/install.sh 'sha256:<verified-image-digest>'
 ~~~
 
-On a new installation, install.sh copies the deployment files, keeps an
-existing .env unchanged, writes a randomly generated ENCRYPTION_KEY only when
-the target Docker volume does not already exist, pulls the requested image, and
-waits for its health check. It refuses to replace a missing key when a matching
-volume already exists. This prevents an accidental key rotation from making
-encrypted credentials or repositories unusable.
+The installer preserves credentials and application data, applies the approved
+Compose stack, and requires Docker health plus bounded GET /api/health readiness.
+It does not overwrite an existing directory from a checkout: use the one-time
+reviewed bundle upgrade rather than copying over local configuration.
 
 The application persists SQLite, its WAL sidecars, configuration, logs,
 rclone.conf, schedules, and keys.json in the named /data volume. The external
@@ -100,29 +104,34 @@ does not discard the database or generated session/API secrets.
 
 ## Update, pinning, and rollback
 
-Update with a specific release tag:
+After the one-time host-bundle upgrade, use the normal workflow:
 
 ~~~sh
-sudo sh /opt/pluton/deploy.sh v0.1.0-alpha.2
+cd /opt/pluton
+docker pull ghcr.io/<fork-owner>/pluton:main
+# Review and approve the immutable sha256 digest from the pull result.
+sudo sh ./install.sh 'sha256:<approved-image-digest>'
+sudo sh ./status.sh
 ~~~
 
-deploy.sh validates the tag before using it, pulls it before stopping the
-current container, stores the previous image reference, stops the service
-gracefully, copies the stopped SQLite database and WAL sidecars to
-/opt/pluton/backups/, recreates the container, and waits for /api/health. It
-does not remove the previous image. If the new container is unhealthy, it
-restores the previous image reference and verifies it before returning failure.
-
-For a digest pin, pass the digest instead of a tag:
-
-~~~sh
-sudo sh /opt/pluton/deploy.sh sha256:replace-with-a-64-character-image-digest
-~~~
+deploy.sh validates the digest, effective Compose, current image and complete
+mount contract before stopping only pluton. It retains a consistent stopped
+SQLite directory copy under /opt/pluton/backups/, recreates only that service
+with --no-deps, then verifies readiness, image, UID/GID and mounts. Failure
+restores the previous actual immutable image with the SAME overlays and verifies
+it before reporting the rollback outcome. A recovered failed deployment still
+exits nonzero. An already healthy identical digest is not recreated.
 
 This records an image reference in the form
 ghcr.io/owner/repository@sha256:..., which Compose pulls exactly. Production
-deployments must use a release tag or digest. The scripts reject latest and
-main because both are moving references.
+deployments must use a digest. All tags, including version tags, latest and main,
+are refused as deployment arguments because tags can move.
+
+The ordered stack is compose.yml, optional approved compose.lab.yml, then local
+basenames listed explicitly in compose.overlays. It is shared by deploy, SQLite
+backup, status and rollback. A missing previously approved overlay or changed
+mount/volume is refused, not silently discarded. No extra manual Compose up is
+needed, and optional DB/worker services are not auto-started.
 
 To roll back the image selected by the last successful update:
 
@@ -139,18 +148,17 @@ data automatically.
 
 ## Verify and troubleshoot
 
-Check the rendered Compose configuration before starting:
+The tools validate the effective merged configuration privately before starting.
+Use the sanitized shared status helper and public GET readiness:
 
 ~~~sh
-sudo docker compose --project-directory /opt/pluton --env-file /opt/pluton/.env -f /opt/pluton/compose.yml config
+sudo sh /opt/pluton/status.sh
+curl -i http://127.0.0.1:5173/api/health
 ~~~
 
-Check service health and the public health endpoint:
-
-~~~sh
-sudo docker compose --project-directory /opt/pluton --env-file /opt/pluton/.env -f /opt/pluton/compose.yml ps
-sudo docker compose --project-directory /opt/pluton --env-file /opt/pluton/.env -f /opt/pluton/compose.yml exec pluton wget -qO- http://127.0.0.1:5173/api/health
-~~~
+Do not print expanded Compose config or full Docker inspect output: both can
+contain credentials. Loopback HEAD/spider is intentionally NOT a web Host-policy
+exemption. The fixed GET probe needs no extra browser origin or trust proxy.
 
 Inspect non-secret image metadata when diagnosing a release:
 

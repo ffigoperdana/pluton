@@ -34,7 +34,31 @@ services:
       DISABLE_EVENT_SCRIPTS: "${DISABLE_EVENT_SCRIPTS:-false}"
       TRUST_PROXY: "${TRUST_PROXY:-}"
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:5173/api/health || exit 1"]
+      # GET only: HEAD is intentionally not a browser Host-policy exemption.
+      # Inline probe also supports rollback images predating the probe file.
+      test:
+        - CMD
+        - node
+        - -e
+        - |
+          const http = require('node:http');
+          const fail = code => process.exit(code);
+          const deadline = setTimeout(() => fail(10), 4000);
+          const request = http.get({ host: '127.0.0.1', port: 5173, path: '/api/health', method: 'GET' }, response => {
+            if (response.statusCode !== 200) return fail(11);
+            if ((response.headers['content-type'] || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') return fail(12);
+            let body = '';
+            response.on('data', chunk => { body += chunk; if (Buffer.byteLength(body) > 1024) fail(12); });
+            response.on('error', () => fail(10));
+            response.on('end', () => {
+              try {
+                const value = JSON.parse(body);
+                if (!value || Array.isArray(value) || Object.keys(value).length !== 1 || value.status !== 'healthy') return fail(13);
+                clearTimeout(deadline);
+              } catch { fail(12); }
+            });
+          });
+          request.on('error', () => fail(10));
       interval: 30s
       timeout: 5s
       retries: 3

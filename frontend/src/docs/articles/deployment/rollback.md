@@ -8,9 +8,12 @@ Catat image reference/digest yang healthy, migration journal, agent source revis
 
 `deploy/rollback.sh` memakai state image sebelumnya dan mempertahankan `.env` serta volume. Operator harus memeriksa schema compatibility terlebih dahulu: image rollback tidak otomatis mengembalikan migration database. Task ini sendiri tidak menambah migration.
 
+Setelah bundle host direview dan di-upgrade, rollback memakai digest immutable dan stack overlay lengkap yang sama, termasuk `compose.lab.yml`. Keberhasilan memerlukan Docker healthy, respons GET health valid, image benar, UID/GID, dan mount yang tidak berubah. Backup SQLite tidak pernah ditimpa otomatis; lease/ownership records tetap dipertahankan. Kegagalan deploy tetap exit nonzero meskipun automatic rollback berhasil.
+
 ```sh
 cd /opt/pluton
 sh rollback.sh
+sh status.sh
 ```
 
 Gunakan hanya pada deployment yang memakai script tersebut dan telah mempunyai `.deploy-state` valid. Jangan menebak tag/image lama atau mengganti volume dengan volume kosong.

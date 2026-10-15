@@ -46,6 +46,12 @@ jobs:
       - name: Test backend
         run: pnpm --filter @plutonhq/core-backend test --runInBand
 
+      - name: Check deployment probe, overlay policy and POSIX shell syntax
+        run: |
+          node --test scripts/__tests__/deployment.test.cjs
+          python3 scripts/__tests__/deployment_policy_test.py
+          for script in deploy/*.sh; do sh -n "$script"; done
+
       - name: Type-check backend
         run: pnpm --filter @plutonhq/core-backend exec tsc --noEmit -p tsconfig.json
 
@@ -96,6 +102,10 @@ jobs:
       - name: Verify isolated dual-origin HTTPS and LAN sessions
         shell: pwsh
         run: ./scripts/validate-dual-origin.ps1 -Image pluton-recovery-ci:local -Compiled
+
+      - name: Verify real disposable immutable deployment and automatic rollback
+        # Native Linux operator test; no socket or new privileges in Pluton.
+        run: python3 scripts/validate-deployment.py pluton-recovery-ci:local
 
       - name: Build isolated database-only fixture
         run: docker build -f backend/__tests__/fixtures/recovery-clients/Dockerfile -t pluton-recovery-db-only:local .

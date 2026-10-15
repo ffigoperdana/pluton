@@ -46,10 +46,12 @@ docker build -f Dockerfile.source -t pluton:reviewed .
 The Docker source image is the maintained server deployment path. Review
 [deploy/compose.yml](deploy/compose.yml), its placeholder-only environment example,
 and [deploy/install.sh](deploy/install.sh) / [deploy/deploy.sh](deploy/deploy.sh).
-Production deployment must use a reviewed immutable image digest/release,
+Production deployment must use a reviewed immutable image digest,
 preserve the existing volume, `SECRET`, `ENCRYPTION_KEY`, agent identity and
 repository credentials, and take a consistent control-plane backup first.
 Do not deploy a mutable `latest`/`main` tag or regenerate keys during an update.
+Existing hosts need a separate [reviewed one-time script-bundle upgrade](docs/DEPLOYMENT_OVERLAY_AND_HEALTHCHECK_FIX.md)
+before the normal digest-based installer can preserve local overlays and verify rollback.
 
 Historical native installers that fetch unverified helper binaries from upstream
 commercial CDN are disabled before any download/system change. Do not use old

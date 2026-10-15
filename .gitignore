@@ -128,3 +128,13 @@ compose.override.yaml
 TODO
 *.TODO
 mysql-worker-dist/
+
+# Operator-local deployment state, inventory and stopped SQLite/script backups.
+/deploy/compose.lab.yml
+/deploy/compose.overlays
+/deploy/.deploy-*
+/deploy/.deployment-lock/
+/deploy/.bundle-*/
+/deploy/backups/
+__pycache__/
+*.pyc

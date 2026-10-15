@@ -80,4 +80,5 @@ documentation/.source/
 !deploy/
 deploy/*
 !deploy/compose.yml
+!deploy/healthcheck.cjs
 .turbo/
