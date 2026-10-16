@@ -41,7 +41,18 @@ export function DatabaseRestoreForm({
             <div>
                <label>
                   Recorded database
-                  <select value={choice.databaseId} onChange={(event) => setChoice({ ...choice, databaseId: event.target.value, targetId: '' })}>
+                  <select
+                     value={choice.databaseId}
+                     onChange={(event) =>
+                        setChoice({
+                           ...choice,
+                           databaseId: event.target.value,
+                           mode:
+                              preview.databases.find((entry) => entry.databaseId === event.target.value)?.engine === 'mysql' ? 'custom' : 'internal',
+                           targetId: '',
+                        })
+                     }
+                  >
                      <option value="">Select a recorded database</option>
                      {preview.databases
                         .filter((entry) => entry.databaseId)
@@ -56,6 +67,8 @@ export function DatabaseRestoreForm({
                   Auto-detected engine: <strong>{artifact?.engine || 'Not recorded'}</strong> · SQL: {formatBytes(artifact?.bytes || 0)}
                   <br />
                   SHA-256: <code>{artifact?.sha256}</code>
+                  <br />
+                  Artifact: <code>{artifact?.path || 'Not recorded'}</code>
                </p>
                <label>
                   Destination
@@ -63,8 +76,12 @@ export function DatabaseRestoreForm({
                      value={choice.mode}
                      onChange={(event) => setChoice({ ...choice, mode: event.target.value as 'internal' | 'custom', targetId: '' })}
                   >
-                     <option value="internal">Internal — manual operator provisioning</option>
-                     <option value="custom">Custom — root-approved dedicated target</option>
+                     <option value="internal" disabled={!artifact?.engine || !preview.engines[artifact.engine].includes('internal')}>
+                        {artifact?.engine === 'mysql' ? 'MySQL Internal — Not yet supported' : 'Internal — manual operator provisioning'}
+                     </option>
+                     <option value="custom" disabled={!artifact?.engine || !preview.engines[artifact.engine].includes('custom')}>
+                        Custom — root-approved dedicated target
+                     </option>
                   </select>
                </label>
                {choice.mode === 'custom' && (
@@ -95,9 +112,17 @@ export function DatabaseRestoreForm({
             <div>
                <h4>Resources and isolation</h4>
                <p>
-                  Estimated database expansion: {formatBytes((artifact?.bytes || 0) * 4 + 256 * 1024 ** 2)}. Internal hard limits: 2 GiB storage, 2
-                  GiB memory, 1 CPU and 128 PIDs; default SQL budget {formatBytes(preview.internalPolicy.maxSqlBytes)}. This estimate is not a
-                  guarantee; database temporary files are bounded separately.
+                  Estimated database expansion: {formatBytes((artifact?.bytes || 0) * 4 + 256 * 1024 ** 2)}.
+                  {choice.mode === 'internal'
+                     ? ' Internal hard limits: 2 GiB storage, 2 GiB memory, 1 CPU and 128 PIDs.'
+                     : ' Custom uses an externally provisioned isolated database, not an Internal container or filesystem quota.'}{' '}
+                  SQL budget:{' '}
+                  {formatBytes(
+                     (choice.mode === 'custom'
+                        ? targets.find((target) => target.id === choice.targetId)?.maxSqlBytes
+                        : preview.internalPolicy.maxSqlBytes) || preview.internalPolicy.maxSqlBytes,
+                  )}
+                  . This estimate is not a guarantee; database temporary files are bounded separately.
                </p>
                {sample ? (
                   <p>
@@ -122,6 +147,13 @@ export function DatabaseRestoreForm({
                   Metadata inspection only; no row content. Expiration revokes inspection and requests cleanup. Physical resources remain Cleanup
                   Required until verified.
                </p>
+               {artifact?.engine === 'mysql' && (
+                  <p>
+                     Requires the genuine Oracle MySQL worker and an approved MySQL 8.4 Custom target with verified TLS. Connection, purpose,
+                     privileges and empty-database checks run before import. Success retains the owned database until expiry or explicit deletion. SQL
+                     import/catalog validation is not application recovery verification.
+                  </p>
+               )}
             </div>
          </div>
          <label>

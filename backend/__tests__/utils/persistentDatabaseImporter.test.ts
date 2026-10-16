@@ -150,6 +150,44 @@ describe('Retained native import purpose and ambiguous cleanup boundaries', () =
 		expect(sql).not.toContain('DROP DATABASE');
 		expect(sql).toContain('__pluton_persistent_owner');
 	});
+	it.each(['11.8.8-MariaDB', '8.0.42', '9.0.1', 'invalid'])(
+		'refuses unsupported MySQL server %s before lease/CREATE',
+		async version => {
+			approval.engine = approval.target.engine = row.artifact.engine = 'mysql';
+			const original = query.getMockImplementation()!;
+			query.mockImplementation(async (...args) =>
+				args[1] === 'SELECT VERSION();'
+					? version
+					: args[1] === 'SELECT @@version_comment;'
+						? 'MySQL Community Server - GPL'
+						: original(...args)
+			);
+			await expect(restore()).rejects.toMatchObject({ code: 'database-client-incompatible' });
+			expect(store.addLease).not.toHaveBeenCalled();
+		}
+	);
+	it('every MySQL inspect/delete rechecks the real server vendor, not only its stored engine label', async () => {
+		approval.engine = approval.target.engine = row.artifact.engine = 'mysql';
+		const original = query.getMockImplementation()!;
+		let vendor = 'MySQL Community Server - GPL';
+		query.mockImplementation(async (...args) =>
+			args[1] === 'SELECT VERSION();'
+				? '8.4.11'
+				: args[1] === 'SELECT @@version_comment;'
+					? vendor
+					: original(...args)
+		);
+		await restore();
+		vendor = 'MariaDB Server';
+		await expect(client.inspect(row, directory)).rejects.toMatchObject({
+			code: 'database-client-incompatible',
+		});
+		await expect(client.removeOwned(row, directory)).rejects.toMatchObject({
+			code: 'database-client-incompatible',
+		});
+		expect(lease).not.toBeNull();
+		expect(query.mock.calls.some(call => String(call[1]).startsWith('DROP DATABASE'))).toBe(false);
+	});
 	it.each(['purpose', 'activation', 'storage'])(
 		'refuses a wrong %s guard before CREATE',
 		async field => {

@@ -21,9 +21,10 @@ export function needsRestoreRefresh(row: DatabaseRestoreView) {
    return row.status !== 'deleted';
 }
 export function initialRestoreChoice(preview: RestorePreview): RestoreChoice {
+   const first = preview.databases.find((entry) => entry.databaseId);
    return {
-      databaseId: preview.databases.find((entry) => entry.databaseId)?.databaseId || '',
-      mode: 'internal',
+      databaseId: first?.databaseId || '',
+      mode: first?.engine === 'mysql' ? 'custom' : 'internal',
       targetId: '',
       ttlSeconds: 86400,
       resources: false,
@@ -34,7 +35,11 @@ export function restoreRefusal(preview: RestorePreview, choice: RestoreChoice) {
    const artifact = preview.databases.find((entry) => entry.databaseId === choice.databaseId);
    if (!artifact?.databaseId || !artifact.engine || !artifact.database) return 'Trusted database identity is missing; no engine is guessed.';
    if (!preview.engines[artifact.engine].includes(choice.mode))
-      return 'This engine/destination is not implemented. MySQL persistent restore is unavailable.';
+      return artifact.engine === 'mysql'
+         ? choice.mode === 'internal'
+            ? 'MySQL Internal restore is not yet supported. Use an approved Custom target.'
+            : 'The Oracle MySQL persistent worker is not configured. Ordinary backups are unaffected.'
+         : 'This engine/destination is not implemented.';
    const target = preview.targets.find((entry) => entry.id === choice.targetId);
    if (choice.mode === 'custom' && (!target || target.engine !== artifact.engine || target.database !== artifact.database))
       return 'Select an approved dedicated target for this exact engine and database.';

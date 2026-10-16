@@ -14,17 +14,15 @@ import {
 	requestSchema,
 	responseSchema,
 	protocolError,
+	workerError,
 } from '../mysql-worker/protocol';
 
 type ImportInput = Parameters<RecoveryDatabaseImporter['importDatabase']>[0];
 type ImportStore = Pick<RecoveryTestStore, 'addLease' | 'removeLease' | 'leases' | 'leaseTarget'>;
 /** Optional Unix IPC only. No generic process proxy, executable/argv/path RPC or network API. */
-export class MysqlRecoveryWorkerClient {
-	constructor(
-		private readonly store: ImportStore,
-		private readonly enabled = () => process.env.PLUTON_MYSQL_WORKER === 'enabled'
-	) {}
-	private async socket(signal: AbortSignal) {
+export class MysqlWorkerConnection {
+	constructor(protected readonly enabled = () => process.env.PLUTON_MYSQL_WORKER === 'enabled') {}
+	protected async socket(signal: AbortSignal) {
 		if (!this.enabled())
 			throw new RecoveryTestError('database-target-preflight', 'mysql-worker-not-configured');
 		if (signal.aborted) throw new RecoveryTestError('database-import', 'cancelled');
@@ -68,6 +66,14 @@ export class MysqlRecoveryWorkerClient {
 			throw new RecoveryTestError('database-target-preflight', 'mysql-worker-unavailable');
 		}
 	}
+}
+export class MysqlRecoveryWorkerClient extends MysqlWorkerConnection {
+	constructor(
+		private readonly store: ImportStore,
+		enabled?: () => boolean
+	) {
+		super(enabled);
+	}
 	async importDatabase(input: ImportInput) {
 		let socket: Socket | undefined;
 		let handle: fs.FileHandle | undefined;
@@ -102,7 +108,7 @@ export class MysqlRecoveryWorkerClient {
 				if (!parsed.success) throw protocolError();
 				const response = parsed.data;
 				if (response.type === 'heartbeat') continue;
-				if (response.type === 'error') throw new RecoveryTestError(response.stage, response.code);
+				if (response.type === 'error') throw workerError(response.stage, response.code);
 				if (response.type === 'ready' && !ready) {
 					ready = true;
 					handle = await fs.open(input.file, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -177,7 +183,7 @@ export class MysqlRecoveryWorkerClient {
 					if (!parsed.success) throw protocolError();
 					const response = parsed.data;
 					if (response.type === 'heartbeat') continue;
-					if (response.type === 'error') throw new RecoveryTestError(response.stage, response.code);
+					if (response.type === 'error') throw workerError(response.stage, response.code);
 					if (response.type !== 'cleaned') throw protocolError();
 					await this.store.removeLease(lease.id);
 					return;

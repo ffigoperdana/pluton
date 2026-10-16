@@ -10,6 +10,7 @@ import type { RemoteRepositoryRecoveryService } from './RemoteRepositoryRecovery
 import type { PlanStore } from '../stores/PlanStore';
 import { PersistentRestoreTargets } from '../utils/persistentRestoreTargets';
 import { PersistentDatabaseImporter } from '../utils/persistentDatabaseImporter';
+import { MysqlPersistentDatabaseImporter } from '../utils/mysqlPersistentDatabaseImporter';
 import {
 	restoreInput,
 	restoreRequest,
@@ -41,7 +42,9 @@ export class DatabaseRestoreService {
 		private readonly targets = new PersistentRestoreTargets(),
 		root = path.join(appPaths.getDataDir(), 'persistent-database-restores'),
 		private readonly importer = (approval: PersistentTargetApproval, ca: string): Importer =>
-			new PersistentDatabaseImporter(store, approval, ca)
+			approval.engine === 'mysql'
+				? new MysqlPersistentDatabaseImporter(store, approval)
+				: new PersistentDatabaseImporter(store, approval, ca)
 	) {
 		this.workspace = new RecoveryWorkspace(root);
 	}
@@ -83,6 +86,10 @@ export class DatabaseRestoreService {
 			stage: row.stage,
 			cleanup: row.cleanup,
 			createdAt: row.createdAt,
+			startedAt: row.startedAt,
+			completedAt: row.completedAt ?? null,
+			failureStage: row.failureStage ?? null,
+			failureCode: row.failureCode ?? null,
 			expiresAt: row.expiresAt,
 			lastValidatedAt: row.lastValidatedAt,
 			errorCode: row.errorCode,
@@ -114,7 +121,11 @@ export class DatabaseRestoreService {
 				targets: await this.targets.list(),
 				resources: await this.targets.resourceView(path.dirname(this.workspace.root)),
 				workloadBusy: this.store.busy(),
-				engines: { mariadb: ['internal', 'custom'], postgresql: ['internal', 'custom'], mysql: [] },
+				engines: {
+					mariadb: ['internal', 'custom'],
+					postgresql: ['internal', 'custom'],
+					mysql: process.env.PLUTON_MYSQL_WORKER === 'enabled' ? ['custom'] : [],
+				},
 				internalPolicy: policy,
 				retentionSeconds: [
 					3600,
@@ -125,7 +136,7 @@ export class DatabaseRestoreService {
 				warnings: [
 					'SQL integrity is verified after private staging, before import.',
 					'Operator-managed Internal targets use separate bounded persistent storage.',
-					'No source overwrite. MySQL persistent imports remain unavailable until the retained worker protocol is validated.',
+					'No source overwrite. MySQL supports only explicitly approved Custom targets through the optional Oracle worker; Internal is not supported.',
 				],
 			};
 		} finally {
@@ -144,8 +155,10 @@ export class DatabaseRestoreService {
 		const artifact = preview.databases.find(entry => entry.databaseId === request.databaseId);
 		if (!artifact?.database || !artifact.engine)
 			throw new DatabaseRestoreError('database-metadata-incomplete');
-		if (artifact.engine === 'mysql')
-			throw new DatabaseRestoreError('mysql-persistent-worker-unavailable');
+		if (artifact.engine === 'mysql' && request.mode !== 'custom')
+			throw new DatabaseRestoreError('mysql-internal-not-supported');
+		if (artifact.engine === 'mysql' && process.env.PLUTON_MYSQL_WORKER !== 'enabled')
+			throw new DatabaseRestoreError('mysql-worker-not-configured');
 		if (artifact.bytes > preview.internalPolicy.maxSqlBytes && request.mode === 'internal')
 			throw new DatabaseRestoreError('resource-operator-sql-budget');
 		const id = crypto.randomBytes(12).toString('hex'),
@@ -440,6 +453,7 @@ export class DatabaseRestoreService {
 			);
 			if (signal.aborted || this.store.get(row.id)?.cancelRequested)
 				throw new DatabaseRestoreError('cancelled');
+			if (row.expiresAt <= Date.now()) throw new DatabaseRestoreError('restore-expired');
 			await this.workspace.remove(row.id);
 			directory = undefined;
 			this.store.update(row.id, {
@@ -447,6 +461,7 @@ export class DatabaseRestoreService {
 				stage: 'active',
 				inspection,
 				lastValidatedAt: Date.now(),
+				completedAt: Date.now(),
 				cleanup: 'none',
 				errorCode: null,
 			});
@@ -455,6 +470,12 @@ export class DatabaseRestoreService {
 			this.store.update(row.id, {
 				cancelRequested: true,
 				errorCode: this.code(error),
+				failureCode: this.code(error),
+				failureStage:
+					(error instanceof RecoveryTestError || error instanceof DatabaseRestoreError) &&
+					error.stage
+						? error.stage
+						: this.store.get(row.id)?.stage,
 				cleanup: 'requested',
 			});
 			await this.cleanup(this.store.get(row.id)!, directory);
@@ -527,7 +548,9 @@ export class DatabaseRestoreService {
 	async shutdown() {
 		this.stopping = true;
 		if (this.running) {
-			this.store.requestDelete(this.running.id);
+			// Cancelling metadata-only inspection must not delete a previously retained restore.
+			if (this.store.get(this.running.id)?.status === 'importing')
+				this.store.requestDelete(this.running.id);
 			this.running.controller.abort();
 			await this.running.done;
 		}

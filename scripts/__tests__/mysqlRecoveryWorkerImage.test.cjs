@@ -45,3 +45,12 @@ test('native fixture targets only randomized private containers, never host serv
   assert.match(runner, /Unsafe fixture cleanup target/);
   assert(!/--privileged|--network host|--publish|--port|docker.sock|\[string\]\$(?:Password|Target|Host|Secret)/.test(runner));
 });
+test('persistent MySQL gate is required and Custom-only fixtures never request privileged mount infrastructure',()=>{
+  const workflow=read('.github/workflows/container.yml');
+  assert.match(workflow,/run: \.\/scripts\/validate-mysql-persistent-restore\.ps1 -WorkerImage pluton-mysql-worker:local -RuntimeImage pluton-recovery-ci:local/);
+  const runner=read('scripts/validate-mysql-persistent-restore.ps1');
+  for(const value of ['docker network create --internal',"--user '10001:10001'",'--cap-drop ALL','--network none','Unsafe fixture cleanup target.'])assert(runner.includes(value));
+  assert(!/--privileged|SYS_ADMIN|loop-control|docker\.sock|--publish|--network host/.test(runner));
+  const fixture=read('backend/__tests__/integration/mysqlPersistentRestore.smoke.mjs');
+  assert.match(fixture,/attempt < 20/);assert.match(fixture,/database-target-preflight.*database-import/);
+});

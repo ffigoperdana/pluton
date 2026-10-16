@@ -57,6 +57,10 @@ export type DatabaseRestoreView = RestoreSelection & {
    stage: string;
    cleanup: string;
    createdAt: number;
+   startedAt?: number | null;
+   completedAt?: number | null;
+   failureStage?: string | null;
+   failureCode?: string | null;
    expiresAt: number;
    lastValidatedAt: number | null;
    errorCode: string | null;

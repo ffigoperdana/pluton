@@ -51,10 +51,10 @@ export const persistentApprovalSchema = z
 		purpose: z.literal(RESTORE_PURPOSE),
 		mode: z.enum(['internal', 'custom']),
 		activationId: z.string().regex(/^[a-f0-9]{32}$/),
-		engine: z.enum(['mariadb', 'postgresql']),
+		engine: z.enum(['mariadb', 'mysql', 'postgresql']),
 		database: restoreDatabaseName,
 		target: recoveryTargetSchema.safeExtend({
-			engine: z.enum(['mariadb', 'postgresql']),
+			engine: z.enum(['mariadb', 'mysql', 'postgresql']),
 			tls: z.literal('verify-identity'),
 			enabled: z.literal(true),
 			password: recoveryTargetSchema.shape.password.unwrap().min(1),
@@ -98,6 +98,7 @@ export const persistentApprovalSchema = z
 	.superRefine((value, ctx) => {
 		if (
 			value.engine !== value.target.engine ||
+			(value.engine === 'mysql' && value.mode !== 'custom') ||
 			(value.mode === 'internal' &&
 				(!value.binding || !value.containerId || value.storage.kind !== 'fixed-ext4')) ||
 			(value.mode === 'custom' && value.storage.kind !== 'operator-approved-external')
@@ -118,7 +119,10 @@ export function restoreInput<T>(schema: z.ZodType<T>, input: unknown): T {
 }
 /** Closed categories only. Never retain native output or arbitrary exception messages. */
 export class DatabaseRestoreError extends AppError {
-	constructor(readonly code: string) {
+	constructor(
+		readonly code: string,
+		readonly stage?: string
+	) {
 		super(409, `Database restore refused (${code}).`);
 		Object.setPrototypeOf(this, new.target.prototype);
 	}

@@ -7,12 +7,13 @@ import { RecoveryDatabaseImporter } from '../utils/recoveryDatabaseImport';
 import { RecoveryTestError } from '../utils/recoveryValidation';
 import { detectRecoveryClient } from '../utils/recoveryDatabaseClients';
 import { runRecoveryProcess } from '../utils/recoveryProcess';
+import { executePersistentMysql } from './persistent';
 import {
 	CHUNK_BYTES,
 	DEADLINE_MS,
 	SOCKET,
-	codes,
-	stages,
+	workerFailure,
+	refuseBusy,
 	requestSchema,
 	frames,
 	send,
@@ -86,29 +87,32 @@ export async function startMysqlWorker(config: WorkerConfig, trust: () => string
 	}
 	process.umask(0o077);
 	let busy = false;
+	let poisoned = false;
+	const operations = new Set<Promise<void>>();
 	const connections = new Set<Socket>();
 	const server = net.createServer(socket => {
 		connections.add(socket);
+		socket.on('error', () => {}); // includes clients disconnecting during busy refusal
 		socket.once('close', () => connections.delete(socket));
+		if (poisoned) {
+			socket.destroy();
+			return;
+		}
 		if (busy) {
-			void send(socket, {
-				type: 'error',
-				stage: 'database-target-preflight',
-				code: 'mysql-worker-busy',
-			})
-				.then(() => socket.end())
-				.catch(() => socket.destroy());
+			void refuseBusy(socket);
 			return;
 		}
 		busy = true;
-		void execute(socket)
+		const operation = execute(socket)
 			.catch(() => {
 				process.stderr.write('MySQL recovery worker private staging cleanup failed.\n');
 			})
 			.finally(() => {
 				busy = false;
 				socket.destroy();
+				operations.delete(operation);
 			});
+		operations.add(operation);
 	});
 	server.maxConnections = 2;
 	async function execute(socket: Socket) {
@@ -126,6 +130,7 @@ export async function startMysqlWorker(config: WorkerConfig, trust: () => string
 		}, 10_000);
 		let directory: string | undefined;
 		let stage: RecoveryStage = 'database-target-preflight';
+		let terminal: unknown;
 		try {
 			const reader = frames(socket);
 			const read = async (timeoutMs: number) => {
@@ -139,6 +144,26 @@ export async function startMysqlWorker(config: WorkerConfig, trust: () => string
 			const request = requestSchema.safeParse((await read(5000)).value);
 			if (!request.success) throw protocolError();
 			const input = request.data;
+			if (input.operation !== 'import' && input.operation !== 'cleanup') {
+				directory = await fs.mkdtemp('/tmp/pluton-mysql-');
+				await fs.chmod(directory, 0o700);
+				await executePersistentMysql(input, config, {
+					socket,
+					directory,
+					signal: controller.signal,
+					binary,
+					ca: trust(),
+					read,
+					finish: result => {
+						terminal = result;
+					},
+					stage: value => {
+						stage = value;
+						void send(socket, { type: 'stage', stage: value }).catch(cancel);
+					},
+				});
+				return;
+			}
 			if (
 				input.target.host.toLowerCase() !== config.host.toLowerCase() ||
 				input.target.port !== config.port ||
@@ -182,7 +207,7 @@ export async function startMysqlWorker(config: WorkerConfig, trust: () => string
 			if (input.operation === 'cleanup') {
 				stage = 'database-cleanup';
 				await importer.cleanup(input.lease, directory);
-				await send(socket, { type: 'cleaned' });
+				terminal = { type: 'cleaned' };
 				return;
 			}
 			if (input.entry.bytes > config.maxArtifactBytes)
@@ -252,14 +277,10 @@ export async function startMysqlWorker(config: WorkerConfig, trust: () => string
 					void send(socket, { type: 'stage', stage: value }).catch(cancel);
 				},
 			});
-			await send(socket, { type: 'complete', tables: entry.tables, views: entry.views });
+			terminal = { type: 'complete', tables: entry.tables, views: entry.views };
 		} catch (error) {
-			const safe =
-				error instanceof RecoveryTestError &&
-				(codes as readonly string[]).includes(error.code) &&
-				(stages as readonly string[]).includes(error.stage)
-					? error
-					: new RecoveryTestError(stage, 'mysql-worker-protocol-failed');
+			terminal = undefined;
+			const safe = workerFailure(error, stage);
 			// No exception text, target, SQL, credential or provider stdout/stderr is logged.
 			process.stderr.write(
 				JSON.stringify({
@@ -273,7 +294,27 @@ export async function startMysqlWorker(config: WorkerConfig, trust: () => string
 			clearTimeout(timer);
 			clearInterval(heartbeat);
 			controller.abort();
-			if (directory) await fs.rm(directory, { recursive: true, force: true });
+			if (directory) {
+				try {
+					await fs.rm(directory, { recursive: true, force: true });
+				} catch {
+					poisoned = true;
+					terminal = undefined;
+					process.stderr.write(
+						JSON.stringify({
+							event: 'mysql_recovery_worker_failed',
+							stage: 'database-cleanup',
+							code: 'workspace-cleanup-failed',
+						}) + '\n'
+					);
+					await send(socket, {
+						type: 'error',
+						stage: 'database-cleanup',
+						code: 'workspace-cleanup-failed',
+					}).catch(() => {});
+				}
+			}
+			if (terminal) await send(socket, terminal).catch(() => {});
 		}
 	}
 	await new Promise<void>((resolve, reject) => {
@@ -284,8 +325,10 @@ export async function startMysqlWorker(config: WorkerConfig, trust: () => string
 	return {
 		server,
 		stop: async () => {
+			const closed = new Promise<void>(resolve => server.close(() => resolve()));
 			for (const connection of connections) connection.destroy();
-			await new Promise<void>(resolve => server.close(() => resolve()));
+			await Promise.allSettled([...operations]); // native child close + credentials/SQL cleanup
+			await closed;
 		},
 	};
 }

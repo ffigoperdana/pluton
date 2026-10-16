@@ -26,6 +26,11 @@ export function RestoreDetails({
             Stage: {row.stage} · Cleanup: {row.cleanup}
             {row.errorCode && ` · Error: ${row.errorCode}`}
          </p>
+         {row.failureCode && (
+            <p role="status">
+               Original failure: {row.failureStage || 'Not recorded'} / {row.failureCode}
+            </p>
+         )}
          <p>
             Restore: <code>{row.id}</code> · {row.mode} · {row.engine}
             <br />
@@ -43,6 +48,9 @@ export function RestoreDetails({
          </p>
          <p>
             Created {new Date(row.createdAt).toLocaleString()} · Expires {new Date(row.expiresAt).toLocaleString()}
+            <br />
+            Started: {row.startedAt ? new Date(row.startedAt).toLocaleString() : 'Not yet'} · Import validated:{' '}
+            {row.completedAt ? new Date(row.completedAt).toLocaleString() : 'Not recorded'}
             <br />
             Last validated: {row.lastValidatedAt ? new Date(row.lastValidatedAt).toLocaleString() : 'Not yet'}
          </p>
@@ -79,7 +87,17 @@ export function RestoreDetails({
          <button disabled={pending || !inspectable} onClick={() => act('inspect', {})}>
             Refresh metadata inspection
          </button>
-         <p>No row data or SQL execution is exposed. Inspection is revoked at expiration.</p>
+         <p>
+            No row data or SQL execution is exposed. Inspection is revoked at expiration. Import/catalog validation does not verify application
+            recovery.
+         </p>
+         {row.mode === 'custom' && (
+            <p>
+               Custom Target: the successfully restored database is retained. Expiry or confirmed Delete removes only the database whose ownership
+               marker matches this restore; it never removes the external database server or unrelated pre-existing data. The history record is
+               retained.
+            </p>
+         )}
          {inspectable && row.inspection && (
             <div>
                <h4>Validated catalog</h4>

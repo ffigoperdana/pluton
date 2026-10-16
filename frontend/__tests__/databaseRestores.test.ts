@@ -75,6 +75,37 @@ test('queued, expired and uncertain cleanup states are never shown as successful
    assert(needsRestoreRefresh(base));
    assert(!needsRestoreRefresh({ ...base, status: 'deleted' }));
 });
+test('MySQL defaults to Custom but requires an explicit approved matching target; Internal stays unavailable', () => {
+   const target = {
+      id: 'd'.repeat(24),
+      engine: 'mysql' as const,
+      database: 'example_db',
+      mode: 'custom' as const,
+      maxSqlBytes: 128 * 1024 ** 2,
+      maxRetentionSeconds: 86400,
+      quotaBytes: 2 * 1024 ** 3,
+   };
+   const mysql: RestorePreview = {
+      ...preview,
+      databases: [{ ...preview.databases[0], engine: 'mysql' }],
+      engines: { ...preview.engines, mysql: ['custom'] },
+      targets: [target],
+   };
+   const choice = { ...initialRestoreChoice(mysql), resources: true, security: true };
+   assert.equal(choice.mode, 'custom');
+   assert.equal(choice.targetId, '');
+   assert(restoreRefusal(mysql, choice));
+   const selected = { ...choice, targetId: target.id };
+   assert.equal(restoreRefusal(mysql, selected), null);
+   assert.equal(restoreBody(mysql, selected).targetId, target.id);
+   assert.equal(restoreBody(mysql, selected).databaseId, 'db_example');
+   assert.match(restoreRefusal(mysql, { ...selected, mode: 'internal' })!, /not yet supported/);
+   assert.match(restoreRefusal({ ...mysql, engines: { ...mysql.engines, mysql: [] } }, selected)!, /not configured/);
+   assert(restoreRefusal({ ...mysql, targets: [{ ...target, engine: 'mariadb' }] }, selected));
+   assert(restoreRefusal({ ...mysql, targets: [{ ...target, database: 'another_db' }] }, selected));
+   assert(restoreRefusal({ ...mysql, databases: [{ ...mysql.databases[0], bytes: 128 * 1024 ** 2 + 1 }] }, selected));
+   for (const field of ['password', 'engine', 'host', 'sql', 'ownerToken']) assert(!Object.hasOwn(restoreBody(mysql, selected), field));
+});
 test('real wizard and management components render metadata-only controls with explicit operator steps', async () => {
    const require = createRequire(new URL('../../backend/package.json', import.meta.url)),
       frontend = createRequire(new URL('../package.json', import.meta.url));
@@ -145,5 +176,88 @@ test('real wizard and management components render metadata-only controls with e
       assert.match(markup, /operator/);
       assert.match(markup, /SQL/);
       assert(!markup.includes('Restore — Not Available'));
+   }
+});
+test('real MySQL wizard and management show Custom-only mode, durable validation and safe deletion semantics', async () => {
+   const require = createRequire(new URL('../../backend/package.json', import.meta.url)),
+      frontend = createRequire(new URL('../package.json', import.meta.url));
+   const { build } = require('esbuild'),
+      React = frontend('react'),
+      { renderToStaticMarkup } = frontend('react-dom/server');
+   const mysql = { ...preview, databases: [{ ...preview.databases[0], engine: 'mysql' }], engines: { ...preview.engines, mysql: ['custom'] } };
+   for (const [entry, exported, props] of [
+      [
+         'components/Restore/DatabaseRestore/DatabaseRestoreWizard.tsx',
+         'DatabaseRestoreForm',
+         { preview: mysql, pending: false, confirm: () => {}, refresh: () => {} },
+      ],
+      [
+         'routes/DatabaseRestores/DatabaseRestores.tsx',
+         'RestoreDetails',
+         {
+            row: {
+               ...preview,
+               id: 'd'.repeat(24),
+               mode: 'custom',
+               engine: 'mysql',
+               logicalDatabase: 'example_db',
+               databaseId: 'db_example',
+               database: 'example_db',
+               targetId: 'd'.repeat(24),
+               sqlBytes: 1024,
+               sha256: 'c'.repeat(64),
+               status: 'active',
+               stage: 'active',
+               cleanup: 'none',
+               createdAt: 1,
+               startedAt: 2,
+               completedAt: 3,
+               lastValidatedAt: 4,
+               expiresAt: Date.now() + 3600000,
+               errorCode: null,
+               inspection: null,
+            },
+            act: () => {},
+            pending: false,
+         },
+      ],
+   ] as const) {
+      const compiled = await build({
+         entryPoints: [fileURLToPath(new URL('../src/' + entry, import.meta.url))],
+         bundle: true,
+         platform: 'node',
+         format: 'cjs',
+         jsx: 'automatic',
+         write: false,
+         packages: 'external',
+         loader: { '.scss': 'empty' },
+         define: { 'import.meta.env': '{"MODE":"test"}' },
+         plugins: [
+            {
+               name: 'format-only',
+               setup(builder: any) {
+                  builder.onLoad({ filter: /utils[\\/]helpers\.ts$/ }, () => ({
+                     contents: 'export const formatBytes=bytes=>String(bytes)+" bytes";',
+                     loader: 'js',
+                  }));
+               },
+            },
+         ],
+      });
+      const module = { exports: {} as any };
+      new Function('require', 'module', 'exports', compiled.outputFiles[0].text)(frontend, module, module.exports);
+      const markup = renderToStaticMarkup(React.createElement(module.exports[exported], props));
+      assert.match(markup, /mysql/i);
+      assert(markup.includes(preview.snapshotId));
+      assert(!markup.includes('type="password"'));
+      if (exported === 'DatabaseRestoreForm') {
+         assert.match(markup, /<option value="internal" disabled="">MySQL Internal — Not yet supported/);
+         assert.match(markup, /<option value="custom" selected="">/);
+         assert.match(markup, /Oracle MySQL worker/);
+      } else {
+         assert.match(markup, /Import validated:/);
+         assert.match(markup, /history record is retained/);
+         assert.match(markup, /does not verify application recovery/);
+      }
    }
 });

@@ -53,6 +53,9 @@ export type DatabaseRestore = {
 	cleanup: DatabaseRestoreCleanup;
 	createdAt: number;
 	startedAt: number | null;
+	completedAt?: number | null;
+	failureStage?: string | null;
+	failureCode?: string | null;
 	expiresAt: number;
 	ttlSeconds: number;
 	lastValidatedAt: number | null;
@@ -66,7 +69,7 @@ export type PersistentTargetApproval = {
 	purpose: typeof RESTORE_PURPOSE;
 	mode: 'internal' | 'custom';
 	activationId: string;
-	engine: 'mariadb' | 'postgresql';
+	engine: 'mariadb' | 'mysql' | 'postgresql';
 	database: string;
 	target: RecoveryTarget;
 	caSha256: string;

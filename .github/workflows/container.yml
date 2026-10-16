@@ -130,6 +130,10 @@ jobs:
         shell: pwsh
         run: ./scripts/validate-mysql-recovery-worker.ps1 -RuntimeImage pluton-recovery-ci:local
 
+      - name: Verify retained MySQL Custom restores and repeated real cancellation
+        shell: pwsh
+        run: ./scripts/validate-mysql-persistent-restore.ps1 -WorkerImage pluton-mysql-worker:local -RuntimeImage pluton-recovery-ci:local
+
       - name: Check Internal recovery profiles and operator permission boundaries
         # Test-only native assertions; no dependency installation or application startup.
         run: node --test scripts/__tests__/internalRecovery.test.cjs scripts/__tests__/internalRecoveryReadiness.test.cjs scripts/__tests__/persistentRestore.test.cjs scripts/__tests__/dualOrigin.test.cjs

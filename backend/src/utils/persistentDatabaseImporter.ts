@@ -62,6 +62,8 @@ export class PersistentDatabaseImporter extends RecoveryDatabaseImporter {
 			!/^[a-f0-9]{64}$/.test(row.snapshotId) ||
 			!/^[a-f0-9]{64}$/.test(row.artifact.sha256) ||
 			!restoreDatabaseName.safeParse(row.artifact.database).success ||
+			row.artifact.engine !== this.approval.engine ||
+			row.artifact.database !== this.approval.database ||
 			this.approval.target.engine !== this.approval.engine ||
 			(row.mode === 'internal' &&
 				(binding?.restoreId !== row.id ||
@@ -96,6 +98,19 @@ export class PersistentDatabaseImporter extends RecoveryDatabaseImporter {
 			parts[2] !== this.approval.storage.id
 		)
 			throw new DatabaseRestoreError('restore-purpose-guard-mismatch');
+		if (this.approval.engine === 'mysql') {
+			const version = await connection.query('', 'SELECT VERSION();', 'database-target-preflight');
+			const vendor = await connection.query(
+				'',
+				'SELECT @@version_comment;',
+				'database-target-preflight'
+			);
+			if (
+				!/^8\.4\.\d+(?:\D|$)/.test(version.trim()) ||
+				!/^MySQL Community Server\b/.test(vendor.trim())
+			)
+				throw new DatabaseRestoreError('database-client-incompatible');
+		}
 		if (this.pg()) {
 			const unsafe = await connection.query(
 				'postgres',
@@ -188,7 +203,7 @@ export class PersistentDatabaseImporter extends RecoveryDatabaseImporter {
 			const names = await this.exclusive(connection, database);
 			if (names.includes(database)) throw new DatabaseRestoreError('database-already-exists');
 			checkRecoveryCancellation(signal);
-			this.persistent.addLease({
+			await this.persistent.addLease({
 				restoreId: row.id,
 				targetId: row.targetId,
 				database,
@@ -201,7 +216,7 @@ export class PersistentDatabaseImporter extends RecoveryDatabaseImporter {
 				`CREATE DATABASE ${identifier};`,
 				'database-target-preflight'
 			);
-			this.persistent.leaseState(row.id, 'created');
+			await this.persistent.leaseState(row.id, 'created');
 			await connection.query(
 				database,
 				`CREATE TABLE ${OWNER} (restore_id VARCHAR(24) NOT NULL,snapshot_id VARCHAR(64) NOT NULL,artifact_sha256 VARCHAR(64) NOT NULL,owner_token VARCHAR(48) NOT NULL,purpose VARCHAR(64) NOT NULL);
@@ -221,7 +236,7 @@ export class PersistentDatabaseImporter extends RecoveryDatabaseImporter {
 			await this.assertOwner(connection, row, database);
 			await this.exclusive(connection, database);
 			const inspection = await this.metadata(connection, database);
-			this.persistent.leaseState(row.id, 'validated');
+			await this.persistent.leaseState(row.id, 'validated');
 			return inspection;
 		} finally {
 			await handle?.close();
@@ -344,7 +359,7 @@ export class PersistentDatabaseImporter extends RecoveryDatabaseImporter {
 				if ((await this.catalog(connection)).includes(lease.database))
 					throw new DatabaseRestoreError('database-cleanup-failed');
 			}
-			this.persistent.removeLease(row.id);
+			await this.persistent.removeLease(row.id);
 			return true;
 		} finally {
 			await connection.close();

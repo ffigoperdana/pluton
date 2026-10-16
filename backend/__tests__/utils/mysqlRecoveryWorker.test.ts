@@ -15,9 +15,45 @@ import {
 	responseSchema,
 	workerConfigSchema,
 	FRAME_LIMIT,
+	workerFailure,
+	refuseBusy,
 } from '../../src/mysql-worker/protocol';
+import { RecoveryTestError } from '../../src/utils/recoveryValidation';
 
 describe('optional Oracle MySQL worker boundary', () => {
+	it('busy refusal drains unread request bytes and closes the connection slot', async () => {
+		let accept: Socket | undefined;
+		let closed!: () => void;
+		const closing = new Promise<void>(resolve => { closed = resolve; });
+		const listener = net.createServer(socket => {
+			accept = socket; socket.on('error',()=>{}); socket.once('close',closed); void refuseBusy(socket);
+		});
+		await new Promise<void>(resolve=>listener.listen(0,'127.0.0.1',resolve));
+		const client=net.connect((listener.address() as net.AddressInfo).port,'127.0.0.1');client.on('error',()=>{});
+		try {
+			await new Promise<void>(resolve=>client.once('connect',resolve));
+			client.write(Buffer.alloc(4096));
+			const reply=(await frames(client).next()).value;
+			expect(reply).toMatchObject({type:'error',code:'mysql-worker-busy'});
+			await closing;
+		} finally {client.destroy();accept?.destroy();await new Promise<void>(resolve=>listener.close(()=>resolve()));}
+	});
+	it('a closed IPC socket is transport failure, not malformed protocol or successful cancellation', async () => {
+		const socket = new net.Socket();
+		socket.on('error', () => {});
+		socket.destroy();
+		await expect(send(socket, { type: 'end' })).rejects.toMatchObject({
+			code: 'mysql-worker-unavailable',
+		});
+	});
+	it('serializes explicit job-stage cancellation at the active DB stage, not as a protocol failure', () => {
+		expect(
+			workerFailure(new RecoveryTestError('job', 'cancelled'), 'database-target-preflight')
+		).toEqual({ stage: 'database-target-preflight', code: 'cancelled' });
+		expect(
+			workerFailure(new Error('synthetic private process failure'), 'database-target-preflight')
+		).toEqual({ stage: 'database-target-preflight', code: 'mysql-worker-protocol-failed' });
+	});
 	let scratch: string, input: any, store: any, leases: any[], server: net.Server, sockets: Socket[];
 	beforeEach(async () => {
 		scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'mysql-worker-unit-'));

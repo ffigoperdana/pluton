@@ -2,6 +2,9 @@ import { z } from 'zod';
 import type { Socket } from 'net';
 import { recoveryTargetSchema } from '../utils/recoveryTestPolicy';
 import { RecoveryTestError } from '../utils/recoveryValidation';
+import { persistentApprovalSchema, DatabaseRestoreError } from '../utils/persistentRestorePolicy';
+import type { RecoveryCode } from '../types/recoveryTests';
+import { RESTORE_PURPOSE } from '../types/databaseRestores';
 
 export const SOCKET = '/run/pluton-mysql-worker/worker.sock';
 export const FRAME_LIMIT = 96 * 1024;
@@ -23,6 +26,75 @@ const target = recoveryTargetSchema.safeExtend({
 	tls: z.literal('verify-identity'),
 	password: recoveryTargetSchema.shape.password.unwrap(),
 });
+export const persistentLeaseSchema = z
+	.object({
+		restoreId: id,
+		targetId: id,
+		database,
+		ownerToken: z.string().regex(/^[a-f0-9]{48}$/),
+		state: z.enum(['intended', 'created', 'validated']),
+	})
+	.strict();
+export const persistentContextSchema = z
+	.object({
+		id,
+		targetId: id,
+		purpose: z.literal(RESTORE_PURPOSE),
+		mode: z.literal('custom'),
+		ownerToken: z.string().regex(/^[a-f0-9]{48}$/),
+		snapshotId: z.string().regex(/^[a-f0-9]{64}$/),
+		expiresAt: z.number().int().positive(),
+		cancelRequested: z.boolean(),
+		artifact: z
+			.object({
+				engine: z.literal('mysql'),
+				database,
+				bytes: z
+					.number()
+					.int()
+					.positive()
+					.max(448 * 1024 ** 2),
+				sha256: z.string().regex(/^[a-f0-9]{64}$/),
+				artifactValidation: z.enum(['pending', 'passed', 'failed']),
+			})
+			.strict(),
+	})
+	.strict();
+export const persistentInspectionSchema = z
+	.object({
+		engine: z.literal('mysql'),
+		version: z.string().regex(/^8\.4\.\d+$/),
+		database,
+		tables: z.number().int().nonnegative(),
+		views: z.number().int().nonnegative(),
+		bytes: z.number().int().nonnegative().nullable(),
+		observedAt: z.number().int().positive(),
+		catalogTruncated: z.boolean(),
+		catalog: z
+			.array(
+				z
+					.object({
+						schema: z
+							.string()
+							.max(256)
+							.regex(/^[^\0\r\n]+$/),
+						name: z
+							.string()
+							.max(256)
+							.regex(/^[^\0\r\n]+$/),
+						type: z.enum(['BASE TABLE', 'VIEW']),
+					})
+					.strict()
+			)
+			.max(200),
+	})
+	.strict();
+export const persistentAckSchema = z
+	.object({
+		type: z.literal('persistent-ack'),
+		state: persistentLeaseSchema.shape.state,
+	})
+	.strict();
 export const requestSchema = z.discriminatedUnion('operation', [
 	z
 		.object({
@@ -50,6 +122,18 @@ export const requestSchema = z.discriminatedUnion('operation', [
 	z
 		.object({ version: z.literal(1), operation: z.literal('cleanup'), target, lease: leaseSchema })
 		.strict(),
+	z
+		.object({
+			version: z.literal(1),
+			operation: z.enum(['persistent-import', 'persistent-inspect', 'persistent-cleanup']),
+			approval: persistentApprovalSchema.safeExtend({
+				engine: z.literal('mysql'),
+				mode: z.literal('custom'),
+			}),
+			context: persistentContextSchema,
+			lease: persistentLeaseSchema.nullable(),
+		})
+		.strict(),
 ]);
 export type WorkerRequest = z.infer<typeof requestSchema>;
 export const workerConfigSchema = z
@@ -63,6 +147,24 @@ export const workerConfigSchema = z
 			.int()
 			.positive()
 			.max(100 * 1024 ** 3),
+		// Explicit independent operator approval; existing disposable workers remain unchanged.
+		persistent: z
+			.object({
+				targetId: id,
+				activationId: z.string().regex(/^[a-f0-9]{32}$/),
+				storageId: z.string().regex(/^[a-f0-9-]{32,36}$/),
+				host: recoveryTargetSchema.shape.host,
+				port: recoveryTargetSchema.shape.port,
+				username: recoveryTargetSchema.shape.username,
+				database,
+				maxArtifactBytes: z
+					.number()
+					.int()
+					.positive()
+					.max(448 * 1024 ** 2),
+			})
+			.strict()
+			.optional(),
 	})
 	.strict();
 export type WorkerConfig = z.infer<typeof workerConfigSchema>;
@@ -73,7 +175,7 @@ export const stages = [
 	'database-import-validation',
 	'database-cleanup',
 ] as const;
-export const codes = [
+const recoveryCodes = [
 	'cancelled',
 	'database-client-missing',
 	'database-client-incompatible',
@@ -91,8 +193,44 @@ export const codes = [
 	'database-artifact-size-mismatch',
 	'database-artifact-hash-mismatch',
 	'mysql-worker-busy',
+	'mysql-worker-unavailable',
+	'workspace-cleanup-failed',
 	'mysql-worker-protocol-failed',
 ] as const;
+const persistentCodes = [
+	'target-binding-mismatch',
+	'target-tls-binding-mismatch',
+	'restore-purpose-guard-mismatch',
+	'target-privileges-unsafe',
+	'target-catalog-not-dedicated',
+	'restore-ownership-uncertain',
+	'database-engine-or-artifact-mismatch',
+	'database-version-unavailable',
+	'inspection-output-invalid',
+	'restore-access-not-active',
+	'restore-expired',
+] as const;
+export const codes = [...recoveryCodes, ...persistentCodes] as const;
+export function workerError(stage: (typeof stages)[number], code: (typeof codes)[number]) {
+	return (persistentCodes as readonly string[]).includes(code)
+		? new DatabaseRestoreError(code, stage)
+		: new RecoveryTestError(stage, code as RecoveryCode);
+}
+/** A shared cancellation check uses stage "job", which is not a wire stage.
+ * Remap ONLY that explicit cancellation, never an unexpected process failure. */
+export function workerFailure(error: unknown, stage: (typeof stages)[number]) {
+	if (error instanceof RecoveryTestError && error.code === 'cancelled' && error.stage === 'job')
+		return { stage, code: 'cancelled' as const };
+	if (
+		(error instanceof RecoveryTestError || error instanceof DatabaseRestoreError) &&
+		(codes as readonly string[]).includes(error.code)
+	) {
+		const actualStage = error.stage || stage;
+		if ((stages as readonly string[]).includes(actualStage))
+			return { stage: actualStage, code: error.code };
+	}
+	return { stage, code: 'mysql-worker-protocol-failed' as const };
+}
 export const responseSchema = z.discriminatedUnion('type', [
 	z.object({ type: z.literal('ready') }).strict(),
 	z.object({ type: z.literal('heartbeat') }).strict(),
@@ -106,6 +244,10 @@ export const responseSchema = z.discriminatedUnion('type', [
 		})
 		.strict(),
 	z.object({ type: z.literal('cleaned') }).strict(),
+	z.object({ type: z.literal('persistent-lease'), lease: persistentLeaseSchema }).strict(),
+	z
+		.object({ type: z.literal('persistent-complete'), inspection: persistentInspectionSchema })
+		.strict(),
 	z.object({ type: z.literal('error'), stage: z.enum(stages), code: z.enum(codes) }).strict(),
 ]);
 export function protocolError(): RecoveryTestError {
@@ -139,7 +281,24 @@ export function send(socket: Socket, value: unknown): Promise<void> {
 	header.writeUInt32BE(body.length);
 	return new Promise((resolve, reject) =>
 		socket.write(Buffer.concat([header, body]), error =>
-			error ? reject(protocolError()) : resolve()
+			error
+				? reject(new RecoveryTestError('database-target-preflight', 'mysql-worker-unavailable'))
+				: resolve()
 		)
 	);
+}
+/** Refuse a second request AND release its slot even if its unread request data
+ * keeps the peer's readable side paused. Otherwise maxConnections can stay full. */
+export async function refuseBusy(socket: Socket) {
+	socket.resume();
+	try {
+		await send(socket, {
+			type: 'error',
+			stage: 'database-target-preflight',
+			code: 'mysql-worker-busy',
+		});
+		socket.end(() => socket.destroy());
+	} catch {
+		socket.destroy();
+	}
 }
