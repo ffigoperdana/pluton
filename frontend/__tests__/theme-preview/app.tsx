@@ -245,6 +245,17 @@ const files = [
    },
 ];
 const settings = { id: 'example-settings', settings: { integration: {}, smtp: {}, maxConcurrentBackups: 2 }, integration: {}, smtp: {} };
+const repository = {
+   id: 'example-repository',
+   displayName: 'Example read-only archive',
+   repositoryPath: '/srv/example-archive',
+   backend: 'local',
+   isReadOnly: true,
+   validationStatus: 'available',
+   lastValidatedAt: new Date(now).toISOString(),
+   createdAt: new Date(now).toISOString(),
+   updatedAt: null,
+};
 const requests: string[] = [];
 let failures = 0;
 const realFetch = window.fetch.bind(window);
@@ -320,7 +331,36 @@ window.fetch = async (input, init) => {
       ];
    else if (path === '/storages/example-storage') result = { ...storage, authTypes: ['password'] };
    else if (path.startsWith('/backups/') && path.endsWith('/files')) result = files;
-   else if (path.startsWith('/backups/')) result = backups[0];
+   else if (path.startsWith('/backups/')) result = backups.find((backup) => path === `/backups/${backup.id}`);
+   else if (path === '/legacy-repositories') result = [repository];
+   else if (path === '/legacy-repositories/example-repository') result = repository;
+   else if (path === '/legacy-repositories/example-repository/stats')
+      result = {
+         totalSize: 1024 ** 3,
+         totalUncompressedSize: 2 * 1024 ** 3,
+         compressionRatio: 2,
+         totalBlobCount: 500,
+         snapshotCount: 1,
+      };
+   else if (path === '/legacy-repositories/example-repository/snapshots')
+      result = {
+         items: [
+            {
+               id: 'a'.repeat(64),
+               shortId: 'aaaaaaaa',
+               time: new Date(now).toISOString(),
+               hostname: 'app-01',
+               tags: ['example'],
+               paths: ['/srv/example-app'],
+            },
+         ],
+         total: 1,
+         page: 1,
+         pageSize: 30,
+         totalPages: 1,
+         workloads: [],
+         datasets: [],
+      };
    else if (path === '/restores') result = plan.restores;
    else if (path.startsWith('/recovery-testing/') && path.endsWith('/tests')) result = [];
    else throw new Error(`Unmapped synthetic API: ${method} ${path}`);

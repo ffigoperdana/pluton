@@ -31,6 +31,7 @@ import DatabaseRestoreWizard from '../../Restore/DatabaseRestore/DatabaseRestore
 import recoveryClasses from '../RecoveryTesting/RecoveryTesting.module.scss';
 import { backupStatistics, statisticHelp } from '../../../utils/backupStatistics';
 import { displayTimeZone, formatHistoryDate, historyIsoDate } from '../../../utils/backupHistory';
+import BackupRowMenu from './BackupRowMenu';
 
 const DownloadLabel = ({ download, downloadBackup }: { download: Backup['download']; downloadBackup: () => void }) => {
    if (download?.status === 'started') {
@@ -209,7 +210,7 @@ const Backups = ({
    };
 
    return (
-      <div className={classes.backupsTable}>
+      <div className={classes.backupsTable} data-backup-table>
          <div className={classes.backupsTableHead}>
             <div>{isSync ? 'Sync' : 'Backup'} ID</div>
             <div>Status</div>
@@ -217,7 +218,7 @@ const Backups = ({
             <div>Changes</div>
             <div title={statisticHelp.snapshotSize}>{isSync ? 'Size' : 'Snapshot Size'}</div>
             <div>Date</div>
-            <div></div>
+            <div aria-label="Actions"></div>
          </div>
          <div className={classes.backupsTableContent}>
             {backups
@@ -329,16 +330,7 @@ const Backups = ({
                            <time dateTime={historyIsoDate(dateValue)}>{formatHistoryDate(dateValue, timeZone)}</time>
                         </div>
                         <div className={classes.snapOptsBtn}>
-                           <button
-                              aria-label={`Actions for backup-${id}`}
-                              aria-expanded={showSnapOptions === id}
-                              onClick={() => setShowSnapOptions(showSnapOptions && showSnapOptions === id ? false : id)}
-                           >
-                              <Icon type="dots-vertical" size={12} />
-                           </button>
-                        </div>
-                        {showSnapOptions === id && (
-                           <div className={classes.settings}>
+                           <BackupRowMenu backupId={id} open={showSnapOptions === id} onOpenChange={(open) => setShowSnapOptions(open ? id : false)}>
                               {isRemoteManaged && canTestRecovery(snapshot) && (
                                  <button
                                     disabled={recoveryAction.isPending || (recoveryTests.data || []).some(recoveryActive)}
@@ -438,8 +430,8 @@ const Backups = ({
                                     <Icon type="trash" size={14} /> Remove
                                  </button>
                               )}
-                           </div>
-                        )}
+                           </BackupRowMenu>
+                        </div>
                      </div>
                   );
                })}
