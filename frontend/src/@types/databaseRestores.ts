@@ -18,6 +18,7 @@ export type RestorePreview = RestoreSelection & {
    }[];
    engines: Record<RecoveryEngine, ('internal' | 'custom')[]>;
    internalPolicy: { maxSqlBytes: number; maxRetentionSeconds: number };
+   lifecycle?: { available: boolean; maxSqlBytes?: number; quotaBytes?: number };
    retentionSeconds: number[];
    workloadBusy: boolean;
    warnings: string[];
@@ -67,6 +68,7 @@ export type DatabaseRestoreView = RestoreSelection & {
    expired: boolean;
    cancelRequested: boolean;
    operatorAction: boolean;
+   lifecycle?: { mode: 'automatic'; state: string; code: string | null; quotaBytes: number };
    inspection: null | {
       engine: RecoveryEngine;
       version: string;

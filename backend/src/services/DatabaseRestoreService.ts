@@ -66,6 +66,7 @@ export class DatabaseRestoreService {
 		return row;
 	}
 	private view(row: DatabaseRestore) {
+		const lifecycle = row.mode === 'internal' ? this.targets.automatic?.record(row.id) : undefined;
 		// Positive allowlist: no credentials, owner tokens, paths, SQL or approval internals.
 		return {
 			id: row.id,
@@ -98,7 +99,20 @@ export class DatabaseRestoreService {
 			cancelRequested: row.cancelRequested,
 			operatorAction:
 				row.mode === 'internal' &&
-				['provisioning_required', 'cleanup_required', 'expired', 'stopped'].includes(row.status),
+				(lifecycle
+					? lifecycle.state === 'cleanup-required' || row.errorCode === 'lifecycle-unavailable'
+					: ['provisioning_required', 'cleanup_required', 'expired', 'stopped'].includes(
+							row.status
+						)),
+			lifecycle:
+				row.mode === 'internal' && this.targets.automatic?.record(row.id)
+					? {
+							mode: 'automatic' as const,
+							state: this.targets.automatic.record(row.id)!.state,
+							code: this.targets.automatic.record(row.id)!.code,
+							quotaBytes: 2147483648,
+						}
+					: undefined,
 		};
 	}
 	async preview(input: unknown) {
@@ -127,6 +141,7 @@ export class DatabaseRestoreService {
 					mysql: process.env.PLUTON_MYSQL_WORKER === 'enabled' ? ['custom'] : [],
 				},
 				internalPolicy: policy,
+				lifecycle: this.targets.automatic ? await this.targets.automatic.capability() : undefined,
 				retentionSeconds: [
 					3600,
 					21600,
@@ -181,7 +196,10 @@ export class DatabaseRestoreService {
 			ownerToken: crypto.randomBytes(24).toString('hex'),
 			database: null,
 			status: request.mode === 'internal' ? 'provisioning_required' : 'queued',
-			stage: 'operator-provisioning',
+			stage:
+				request.mode === 'internal' && this.targets.automatic
+					? 'checking-resources'
+					: 'operator-provisioning',
 			cleanup: 'none',
 			createdAt: now,
 			startedAt: null,
@@ -195,6 +213,7 @@ export class DatabaseRestoreService {
 		if (row.mode === 'internal' && row.ttlSeconds > preview.internalPolicy.maxRetentionSeconds)
 			throw new DatabaseRestoreError('retention-not-approved');
 		if (row.mode === 'internal') {
+			if (this.store.busy()) throw new DatabaseRestoreError('database-workload-busy');
 			const reason = preview.resources.sample
 				? internalResourceReason(
 						preview.resources.sample,
@@ -210,13 +229,18 @@ export class DatabaseRestoreService {
 			this.store.assertNotSource(approval);
 			await this.targets.admission(approval, row, path.dirname(this.workspace.root));
 		}
+		if (row.mode === 'internal') this.targets.automatic?.assertAvailable();
 		row = this.store.create(row);
 		if (approval) row = this.store.bind(row.id, approval);
 		if (row.mode === 'internal') {
 			try {
 				await this.targets.request(row, 'provision');
 			} catch {
-				row = this.store.update(id, { errorCode: 'operator-request-directory-unavailable' });
+				row = this.store.update(id, {
+					errorCode: this.targets.automatic
+						? 'lifecycle-unavailable'
+						: 'operator-request-directory-unavailable',
+				});
 			}
 		}
 		return this.view(row);
@@ -297,11 +321,16 @@ export class DatabaseRestoreService {
 			row.status === 'deleted' ||
 			(action === 'provision' && row.status !== 'provisioning_required') ||
 			(action === 'stop' && row.status !== 'active') ||
-			(action === 'resume' && row.status !== 'stopped')
+			(action === 'resume' &&
+				row.status !== 'stopped' &&
+				!(
+					row.status === 'provisioning_required' &&
+					this.targets.automatic?.record(row.id)?.state === 'stopped'
+				))
 		)
 			throw new DatabaseRestoreError('operator-action-not-allowed');
 		await this.targets.request(row, action);
-		return { requested: true, automatic: false };
+		return { requested: true, automatic: !!this.targets.automatic };
 	}
 	tick() {
 		if (this.running) {
@@ -318,12 +347,83 @@ export class DatabaseRestoreService {
 	}
 	private async dispatch() {
 		for (let row of this.store.pending()) {
+			// Reconcile old prematurely finalized history against the full authenticated
+			// host receipt. Never recreate/import/delete anything from a Deleted row.
+			if (row.status === 'deleted') {
+				await this.targets.automatic?.receipt(row.id);
+				continue;
+			}
+			if (
+				row.mode === 'internal' &&
+				row.stage === 'checking-resources' &&
+				this.targets.automatic &&
+				!this.targets.automatic.record(row.id)
+			) {
+				try {
+					await this.targets.request(row, row.cancelRequested ? 'delete' : 'provision');
+				} catch {
+					/* Keep the denied/unavailable request visible; no legacy/manual fallback. */
+				}
+			}
 			if (row.expiresAt <= Date.now() && !row.cancelRequested)
 				row = this.store.update(row.id, {
 					status: 'expired',
 					cancelRequested: true,
 					cleanup: 'requested',
 				});
+			if (row.mode === 'internal' && this.targets.automatic?.record(row.id)) {
+				const lifecycle = this.targets.automatic;
+				const record = lifecycle.record(row.id)!;
+				try {
+					// Replay only the durable operation, never replay an uncertain SQL import.
+					await lifecycle.persistent(
+						row,
+						row.cancelRequested ? 'delete' : record.action,
+						row.cleanup === 'infrastructure_pending',
+						true
+					);
+				} catch {
+					/* Keep durable cancellation and retry only the bounded host intent. */
+				}
+				const receipt = await lifecycle.receipt(row.id);
+				if (receipt?.state === 'removed' && row.cancelRequested && !this.store.lease(row.id)) {
+					this.store.finishDeleted(row.id);
+					continue;
+				}
+				if (receipt?.state === 'cleanup-required') {
+					this.store.update(row.id, {
+						stage: 'host-ownership-unverified',
+						...(row.status !== 'provisioning_required'
+							? { status: 'cleanup_required' as const, cleanup: 'uncertain' as const }
+							: {}),
+						errorCode: receipt.code || 'host-ownership-unverified',
+					});
+					continue; // No import, inspection approval or native SQL deletion on uncertain infrastructure.
+				}
+				if (
+					receipt?.state === 'ready' &&
+					row.stage === 'host-ownership-unverified' &&
+					row.completedAt &&
+					!row.cancelRequested
+				)
+					row = this.store.update(row.id, {
+						status: 'active',
+						stage: 'active',
+						cleanup: 'none',
+						errorCode: null,
+					});
+				if (row.status === 'provisioning_required' && receipt) {
+					row = this.store.update(row.id, { stage: receipt.state, errorCode: receipt.code });
+				}
+				if (
+					row.status === 'provisioning_required' &&
+					!row.cancelRequested &&
+					(receipt?.state !== 'ready' ||
+						receipt.observedAt < Date.now() - 30000 ||
+						!(await lifecycle.capability()).available)
+				)
+					continue;
+			}
 			if (row.mode === 'internal' && row.encryptedApproval) {
 				try {
 					const approval = this.store.approval(row.id),
@@ -331,7 +431,8 @@ export class DatabaseRestoreService {
 					if (
 						state.state === 'removed' &&
 						row.cleanup === 'infrastructure_pending' &&
-						!this.store.lease(row.id)
+						!this.store.lease(row.id) &&
+						!this.targets.automatic?.record(row.id)
 					) {
 						this.store.finishDeleted(row.id);
 						continue;

@@ -3,6 +3,9 @@ import { recoveryActive, recoveryStatusLabel, recoveryStatusExplanation, databas
 import { formatBytes } from '../../../utils/helpers';
 import Modal from '../../common/Modal/Modal';
 import classes from './RecoveryTesting.module.scss';
+import { restoreStage } from '../../../utils/databaseRestores';
+import { recoveryProgress } from '../../../utils/recoveryProgress';
+import OperationProgress from '../../common/OperationProgress/OperationProgress';
 export default function RecoveryResult({
    test,
    close,
@@ -14,12 +17,11 @@ export default function RecoveryResult({
    cancel: () => void;
    pending: boolean;
 }) {
-   const seconds = test.startedAt
-      ? Math.max(0, Math.round(((test.completedAt ? new Date(test.completedAt).getTime() : Date.now()) - new Date(test.startedAt).getTime()) / 1000))
-      : 0;
+   const progress = recoveryProgress(test);
    return (
-      <Modal width="760px" title="Recovery Test Result" closeModal={close}>
+      <Modal width="760px" title="Recovery Test Result" closeModal={close} stableLayout>
          <div className={`${classes.panel} styled__scrollbar`}>
+            <OperationProgress state={progress} start={test.createdAt} end={progress.busy ? undefined : test.completedAt} />
             <div className={classes.detail}>
                <div>
                   Backup: <code>{test.backupId}</code>
@@ -30,9 +32,8 @@ export default function RecoveryResult({
                <div>
                   Exact snapshot: <code>{test.snapshotId}</code>
                </div>
-               <div>
-                  Recovery: {recoveryStatusLabel[test.status]} · Duration: {seconds}s
-               </div>
+               <div>Backend recovery status: {recoveryStatusLabel[test.status]}</div>
+               {test.stage && <div>Last reported stage: {restoreStage(test.stage)}</div>}
                <div>Tested at: {test.completedAt ? new Date(test.completedAt).toLocaleString() : 'Not completed'}</div>
                {test.failureCode && (
                   <div role="alert">
@@ -84,8 +85,10 @@ export default function RecoveryResult({
             {test.result?.internalEngine && (
                <p>
                   Internal {test.result.internalEngine} infrastructure:{' '}
-                  {test.result.cleanup.infrastructure ? 'Complete' : 'Cleanup Required — operator deactivation pending'}. SQL/catalog success alone is
-                  not a completed recovery test.
+                  {test.result.cleanup.infrastructure
+                     ? 'Complete — owned removal verified'
+                     : 'Cleanup pending — awaiting ownership-verified host removal'}
+                  . SQL/catalog success alone is not a completed recovery test.
                </p>
             )}
             <p>

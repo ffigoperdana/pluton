@@ -82,6 +82,9 @@ import { NotificationDeliveryManager } from './notifications/NotificationDeliver
 import { createNotificationRouter, notificationInputError } from './routes/notifications';
 import { DatabaseRestoreStore } from './stores/DatabaseRestoreStore';
 import { DatabaseRestoreService } from './services/DatabaseRestoreService';
+import { AutomaticRecoveryLifecycle } from './utils/automaticRecoveryLifecycle';
+import { PersistentRestoreTargets } from './utils/persistentRestoreTargets';
+import { InternalRecoveryTargets } from './utils/internalRecoveryTargets';
 import { createDatabaseRestoreRouter, databaseRestoreInputError } from './routes/databaseRestores';
 import { parseWebOrigins } from './utils/webOrigins';
 import { webAccess, originAwareSession, sameOriginCors } from './middlewares/webAccess';
@@ -128,14 +131,25 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		agentStore
 	);
 	const recoveryTestStore = new RecoveryTestStore(db, configService.config.SECRET);
+	const automaticLifecycle =
+		process.env.PLUTON_AUTOMATIC_RECOVERY === 'enabled'
+			? new AutomaticRecoveryLifecycle(sqlite)
+			: undefined;
+	const internalTargets = new InternalRecoveryTargets(undefined, undefined, automaticLifecycle);
 	const recoveryTestService = new RecoveryTestService(
 		recoveryTestStore,
 		planStore,
 		backupStore,
-		remoteRecoveryService
+		remoteRecoveryService,
+		undefined,
+		undefined,
+		internalTargets
 	);
 	const databaseRestoreService = new DatabaseRestoreService(
-		new DatabaseRestoreStore(sqlite, configService.config.SECRET), planStore, remoteRecoveryService
+		new DatabaseRestoreStore(sqlite, configService.config.SECRET),
+		planStore,
+		remoteRecoveryService,
+		new PersistentRestoreTargets(undefined, undefined, undefined, undefined, automaticLifecycle)
 	);
 
 	// Event Listeners
@@ -228,7 +242,8 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	app.use(sameOriginCors(webPolicy));
 
 	// Session Middleware for 2FA Setup Process
-	app.use('/api',
+	app.use(
+		'/api',
 		originAwareSession(webPolicy, {
 			store: new MemoryStore({
 				checkPeriod: 86400000,

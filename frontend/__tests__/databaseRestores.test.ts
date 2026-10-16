@@ -2,7 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { initialRestoreChoice, restoreRefusal, restoreBody, restoreStatus, needsRestoreRefresh } from '../src/utils/databaseRestores.ts';
+import {
+   initialRestoreChoice,
+   restoreRefusal,
+   restoreBody,
+   restoreStatus,
+   needsRestoreRefresh,
+   restoreStage,
+} from '../src/utils/databaseRestores.ts';
 import type { RestorePreview, DatabaseRestoreView } from '../src/@types/databaseRestores.ts';
 const preview: RestorePreview = {
    planId: 'plan-01',
@@ -42,6 +49,24 @@ const preview: RestorePreview = {
       },
    },
 };
+test('automatic lifecycle displays measured stages, remains opt-in, and never enables MySQL Internal', () => {
+   for (const stage of [
+      'checking-resources',
+      'provisioning-container',
+      'starting-database',
+      'database-import',
+      'database-import-validation',
+      'cleaning-up',
+      'cleanup-required',
+   ])
+      assert.notEqual(restoreStage(stage), stage);
+   assert.match(restoreStage('ready'), /not imported/);
+   const choice = { ...initialRestoreChoice(preview), resources: true, security: true };
+   assert.match(restoreRefusal({ ...preview, lifecycle: { available: false } }, choice)!, /operator unavailable/);
+   assert.equal(restoreRefusal({ ...preview, lifecycle: { available: true } }, choice), null);
+   const mysql = { ...preview, lifecycle: { available: true }, databases: [{ ...preview.databases[0], engine: 'mysql' as const }] };
+   assert.match(restoreRefusal(mysql, choice)!, /not yet supported/);
+});
 test('wizard submits stable snapshot/database IDs, not a guessed engine, SQL, credentials or endpoint', () => {
    const choice = { ...initialRestoreChoice(preview), resources: true, security: true };
    assert.equal(restoreRefusal(preview, choice), null);

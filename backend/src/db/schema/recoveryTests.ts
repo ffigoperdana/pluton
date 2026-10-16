@@ -59,6 +59,7 @@ export const recoveryTests = sqliteTable(
 		completedAt: integer('completed_at', { mode: 'timestamp' }),
 		result: text('result', { mode: 'json' }).$type<RecoveryResult>(),
 		failureStage: text('failure_stage').$type<RecoveryStage>(),
+		stage: text('stage').$type<RecoveryStage>(),
 		failureCode: text('failure_code').$type<RecoveryCode>(),
 		warnings: text('warnings', { mode: 'json' }).$type<RecoveryWarning[]>().notNull().default([]),
 		/** Cancellation is durable even while a process is still shutting down. */

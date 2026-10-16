@@ -26,7 +26,7 @@ export type RecoveryPreparation = {
          diskAvailable: number;
       };
    };
-   lifecycle: 'operator-managed';
+   lifecycle: 'operator-managed' | 'automatic';
    workloads: { backup: boolean; restore: boolean; recovery: boolean };
    versionCompatibility: 'not-recorded-in-receipt';
    persistentRestore: { status: 'unavailable'; reason: string };
@@ -39,7 +39,7 @@ export type RecoveryPolicy = {
 export type InternalTargetView = {
    engine: 'mariadb' | 'postgresql';
    status: 'not_provisioned' | 'ready' | 'running' | 'cleanup_required';
-   mode: 'operator-managed';
+   mode: 'operator-managed' | 'automatic';
 };
 export type RecoveryTarget = {
    engine: RecoveryEngine;
@@ -62,6 +62,7 @@ export type RecoveryTest = {
    startedAt?: string;
    completedAt?: string;
    failureStage?: string;
+   stage?: string;
    failureCode?: string;
    warnings: { stage: string; code: string }[];
    result?: {

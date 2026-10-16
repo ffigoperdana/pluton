@@ -2,7 +2,9 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useDatabaseRestores, restoreRequest } from '../../services/databaseRestores';
-import { restoreStatus } from '../../utils/databaseRestores';
+import { restoreStatus, restoreStage, restoreActionNotice } from '../../utils/databaseRestores';
+import { restoreProgress, stageLabel } from '../../utils/recoveryProgress';
+import OperationProgress from '../../components/common/OperationProgress/OperationProgress';
 import type { DatabaseRestoreView } from '../../@types/databaseRestores';
 import PageHeader from '../../components/common/PageHeader/PageHeader';
 import { formatBytes } from '../../utils/helpers';
@@ -19,11 +21,27 @@ export function RestoreDetails({
 }) {
    const [confirmation, setConfirmation] = useState('');
    const inspectable = row.status === 'active' && !row.expired && !row.cancelRequested;
+   const progress = restoreProgress(row);
+   const control =
+      row.status === 'active'
+         ? 'stop'
+         : row.status === 'stopped' || (row.status === 'provisioning_required' && row.lifecycle?.state === 'stopped')
+           ? 'resume'
+           : row.status === 'provisioning_required'
+             ? 'provision'
+             : null;
    return (
       <div className={classes.card}>
          <h3>{restoreStatus(row)}</h3>
+         <OperationProgress
+            state={progress}
+            start={row.createdAt}
+            end={progress.busy ? undefined : row.status === 'deleted' ? row.lastValidatedAt : row.completedAt}
+            timeLabel={row.status === 'active' || row.status === 'stopped' ? 'Restore preparation/import duration' : 'Elapsed since request'}
+         />
          <p>
-            Stage: {row.stage} · Cleanup: {row.cleanup}
+            {row.status === 'active' || row.status === 'stopped' ? 'Historical import stage' : 'Last backend restore stage'}:{' '}
+            {restoreStage(row.stage)} · Cleanup: {row.cleanup}
             {row.errorCode && ` · Error: ${row.errorCode}`}
          </p>
          {row.failureCode && (
@@ -57,31 +75,33 @@ export function RestoreDetails({
          {row.mode === 'internal' && row.status !== 'deleted' && (
             <div className={classes.card}>
                <p>
-                  Lifecycle is manual operator-managed. Buttons submit a bounded request, not a Docker command or completion claim. Operator status is
-                  the last verified observation, not a live container probe.
+                  {row.lifecycle
+                     ? 'Automatic host-operator lifecycle. Successful restores remain retained until TTL or authorized Delete.'
+                     : 'Lifecycle is manual operator-managed.'}{' '}
+                  Buttons submit a bounded intent, not a Docker command or completion claim.
+                  {row.lifecycle &&
+                     ' Current host state: ' + stageLabel(row.lifecycle.state) + ' · Storage quota: ' + formatBytes(row.lifecycle.quotaBytes)}
                </p>
-               {row.status === 'provisioning_required' && (
-                  <button disabled={pending} onClick={() => act('provision', {})}>
-                     Request provisioning
-                  </button>
-               )}
-               {row.status === 'active' && (
-                  <button disabled={pending || row.expired} onClick={() => act('stop', {})}>
-                     Request stop
-                  </button>
-               )}
-               {row.status === 'stopped' && (
-                  <button disabled={pending || row.expired} onClick={() => act('resume', {})}>
-                     Request resume
-                  </button>
-               )}
+               <div style={{ minHeight: '3em' }}>
+                  {control && (
+                     <button disabled={pending || row.expired || row.cancelRequested} onClick={() => act(control, {})}>
+                        {control === 'provision' ? 'Request provisioning' : control === 'stop' ? 'Request stop' : 'Request resume'}
+                     </button>
+                  )}
+               </div>
                {(row.cancelRequested || row.expired) && (
                   <p>
-                     Cleanup Required: an operator may need to resume the target for ownership-checked database cleanup, then approve exact
-                     infrastructure removal. No resource is considered Deleted from a missing connection.
+                     {row.lifecycle
+                        ? 'The automatic reconciler resumes only the exact owned target when required for database cleanup, then verifies infrastructure removal.'
+                        : 'Cleanup Required: an operator may need to resume the target for ownership-checked database cleanup, then approve exact infrastructure removal.'}{' '}
+                     No resource is considered Deleted from a missing connection.
                   </p>
                )}
-               <p>Ask the Linux operator to review this restore ID and its private request. See the persistent restore runbook.</p>
+               <p>
+                  {row.lifecycle
+                     ? 'If Cleanup Required persists, ask the host operator to verify exact ownership; unknown resources are never deleted automatically.'
+                     : 'Ask the Linux operator to review this restore ID and its private request. See the persistent restore runbook.'}
+               </p>
             </div>
          )}
          <button disabled={pending || !inspectable} onClick={() => act('inspect', {})}>
@@ -168,12 +188,7 @@ export default function DatabaseRestores() {
       action.mutate(
          { operation, body },
          {
-            onSuccess: () =>
-               setNotice(
-                  ['provision', 'stop', 'resume'].includes(operation)
-                     ? 'Request saved. Manual operator action is still required.'
-                     : 'State updated; verify the current status below.',
-               ),
+            onSuccess: () => setNotice(restoreActionNotice(operation, !!(query.data && !Array.isArray(query.data) && query.data.lifecycle))),
          },
       );
    };
@@ -208,7 +223,7 @@ export default function DatabaseRestores() {
                      ))}
                   </>
                ) : (
-                  <RestoreDetails row={query.data} act={act} pending={action.isPending} />
+                  <RestoreDetails key={query.data.id} row={query.data} act={act} pending={action.isPending} />
                ))}
          </div>
       </>

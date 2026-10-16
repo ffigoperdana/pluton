@@ -37,9 +37,13 @@ const identifier = (value: string) => {
 };
 
 /** mysql grants are inspected, not logged. Reject global/role/FILE/SUPER/admin scope. */
-export function assertRecoveryMysqlGrants(output: string, allowedDatabases: string[], purpose: 'recovery'|'persistent'='recovery') {
-	const guardDatabase=purpose==='persistent'?'pluton_restore_guard':GUARD;
-	const guardTable=purpose==='persistent'?'contract':'pluton_recovery_guard';
+export function assertRecoveryMysqlGrants(
+	output: string,
+	allowedDatabases: string[],
+	purpose: 'recovery' | 'persistent' = 'recovery'
+) {
+	const guardDatabase = purpose === 'persistent' ? 'pluton_restore_guard' : GUARD;
+	const guardTable = purpose === 'persistent' ? 'contract' : 'pluton_recovery_guard';
 	const lines = output.trim().split(/\r?\n/);
 	if (!lines.length)
 		throw new RecoveryTestError('database-target-preflight', 'recovery-target-unsafe');
@@ -51,7 +55,8 @@ export function assertRecoveryMysqlGrants(output: string, allowedDatabases: stri
 		if (grant[2] === '*.*' && grant[1] === 'USAGE') continue;
 		const scope = /^`((?:[^`]|``)+)`\.\*$/.exec(grant[2]);
 		const guard =
-			grant[2] === `\`${guardDatabase}\`.\`${guardTable}\`` || grant[2] === `\`${guardDatabase}\`.*`;
+			grant[2] === `\`${guardDatabase}\`.\`${guardTable}\`` ||
+			grant[2] === `\`${guardDatabase}\`.*`;
 		if (guard && grant[1] === 'SELECT') continue;
 		if (
 			!scope ||
@@ -145,7 +150,7 @@ export class RecoveryDatabaseImporter {
 		private readonly store: ImportStore,
 		private readonly run: RunProcess = runRecoveryProcess,
 		private readonly client = detectRecoveryClient,
-		private readonly trust = recoveryTrustFile
+		private readonly trust: () => string | Promise<string> = recoveryTrustFile
 	) {}
 
 	protected async connection(target: RecoveryTarget, directory: string, signal: AbortSignal) {
@@ -154,7 +159,7 @@ export class RecoveryDatabaseImporter {
 			throw new RecoveryTestError('database-target-preflight', 'recovery-target-not-configured');
 		const binary = this.client(target.engine);
 		const postgres = target.engine === 'postgresql';
-		const ca = target.tls === 'verify-identity' ? this.trust() : undefined;
+		const ca = target.tls === 'verify-identity' ? await this.trust() : undefined;
 		const credentials = path.join(
 			directory,
 			`credentials-${crypto.randomBytes(12).toString('hex')}.${postgres ? 'pgpass' : 'cnf'}`

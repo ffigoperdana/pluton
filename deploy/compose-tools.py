@@ -12,6 +12,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 
 
 class Refused(Exception):
@@ -211,6 +212,53 @@ def image_valid(image_file, ref):
     return image["Id"]
 
 
+def boot(directory, action):
+    """Cold boot of an already deployed, sealed installation. Never deploy,
+    pull, migrate storage, rotate secrets, recreate or adopt a container here.
+    """
+    require(os.geteuid() == 0 and action in ("start", "stop"), "root-boot-action-required")
+    root = Path(directory)
+    for name in (".deploy-contract.json", ".deploy-compose-files.json"):
+        trusted(root / name)
+    require(selection(directory) == load(root / ".deploy-compose-files.json"), "boot-overlay-change")
+    with tempfile.TemporaryDirectory(prefix=".boot-run.", dir=directory) as workspace:
+        os.chmod(workspace, 0o700)
+        snapshot(directory, workspace)
+        def execute(arguments, output):
+            with open(Path(workspace) / output, "wb") as stream:
+                # Private capture only: docker inspect/config may contain secrets.
+                # compose() inherits OS fds, not Python's sys.stdout.
+                saved = os.dup(1)
+                saved_error = os.dup(2)
+                try:
+                    os.dup2(stream.fileno(), 1)
+                    os.dup2(stream.fileno(), 2)
+                    require(compose(directory, workspace, arguments) == 0, "boot-compose-failed")
+                finally:
+                    os.dup2(saved, 1)
+                    os.dup2(saved_error, 2)
+                    os.close(saved)
+                    os.close(saved_error)
+            return Path(workspace) / output
+        config_file = execute(["config", "--format", "json"], "config.json")
+        config = load(config_file)
+        service = config["services"]["pluton"]
+        ref = service.get("image", "")
+        require(re.fullmatch(r"(?:ghcr\.io/[a-z0-9._/-]+@)?sha256:[a-f0-9]{64}", ref), "boot-image-not-immutable")
+        validate_config(config_file, ref, Path(__file__).with_name("healthcheck.cjs"), directory)
+        require(service.get("restart") == "on-failure", "boot-restart-policy-required")
+        container_id = execute(["ps", "-q", "--all", "pluton"], "id").read_text().strip()
+        require(re.fullmatch(r"[a-f0-9]{64}", container_id), "boot-existing-container-required")
+        result = subprocess.run(["docker", "inspect", container_id], capture_output=True, timeout=20, check=True)
+        inspect_file = Path(workspace) / "inspect.json"
+        inspect_file.write_bytes(result.stdout)
+        container = check_container(config_file, inspect_file)
+        require(container["HostConfig"]["RestartPolicy"]["Name"] == "on-failure", "boot-container-policy-mismatch")
+        require(container["Config"]["Image"] == ref, "boot-container-image-mismatch")
+        # start/stop only; no `up`, no recreation or lifecycle change.
+        execute(["start", "pluton"] if action == "start" else ["stop", "--timeout", "45", "pluton"], "action")
+
+
 def main(args):
     action, *values = args
     if action == "snapshot":
@@ -245,6 +293,8 @@ def main(args):
             path.mkdir(mode=0o700)
         trusted_directory(path)
         require(not path.stat().st_mode & 0o077, "private-directory-mode-required")
+    elif action == "boot":
+        boot(*values)
     else:
         raise Refused("unsupported-operation")
     return 0

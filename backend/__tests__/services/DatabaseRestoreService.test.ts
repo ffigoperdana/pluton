@@ -120,6 +120,126 @@ describe('Persistent MySQL service lifecycle and immutable binding', () => {
 		await service.idle();
 		return result.id;
 	};
+	it('automatic deletion waits for the complete Removed receipt, not the earlier native/public Removed state', async () => {
+		target.engine = target.target.engine = item.artifact.engine = 'mariadb';
+		target.mode = item.mode = 'internal';
+		item.status = 'cleanup_required';
+		item.cleanup = 'infrastructure_pending';
+		item.cancelRequested = true;
+		db.store.create(item);
+		db.store.bind(item.id, target);
+		db.store.update(item.id, { cancelRequested: true, cleanup: 'infrastructure_pending' });
+		let removed = false;
+		targets.automatic = {
+			record: () => ({ state: removed ? 'removed' : 'cleaning-up', action: 'delete', code: null }),
+			persistent: jest.fn(async () => {}),
+			receipt: jest.fn(async () => ({ state: removed ? 'removed' : 'cleaning-up', code: null })),
+		};
+		targets.state = async () => ({ state: 'removed' });
+		await service.tick();
+		await service.idle();
+		expect(db.store.get(item.id)?.status).toBe('cleanup_required');
+		expect(native.restore).not.toHaveBeenCalled();
+		expect(native.removeOwned).not.toHaveBeenCalled();
+		removed = true;
+		await service.tick();
+		expect(db.store.get(item.id)?.status).toBe('deleted');
+	});
+	it.each(['mariadb', 'postgresql'] as const)(
+		'%s automatic Internal waits for host readiness, then retains a validated restore',
+		async engine => {
+			target.engine = target.target.engine = item.artifact.engine = engine;
+			target.mode = 'internal';
+			item.metadataToken = recoveryMetadataToken(await recovery.testMetadata());
+			targets.resourceView = async () => ({
+				status: 'measured',
+				observedAt: Date.now(),
+				sample: {
+					total: 8192 * 1024 ** 2,
+					available: 4096 * 1024 ** 2,
+					swapUsed: 0,
+					pressure: 0,
+					limit: 1536 * 1024 ** 2,
+					used: 128 * 1024 ** 2,
+					cgroupSwap: 0,
+					diskAvailable: 10 * 1024 ** 3,
+					cpuAvailable: 2,
+				},
+			});
+			let ready = false,
+				unsafe = false;
+			const host = {
+				assertAvailable: jest.fn(),
+				capability: async () => ({ available: true }),
+				record: () => ({
+					state: unsafe ? 'cleanup-required' : ready ? 'ready' : 'provisioning-container',
+					action: 'provision',
+					code: null,
+				}),
+				persistent: jest.fn(async () => {}),
+				receipt: async () => ({
+					state: unsafe ? 'cleanup-required' : ready ? 'ready' : 'provisioning-container',
+					code: null,
+					observedAt: Date.now(),
+				}),
+			};
+			targets.automatic = host;
+			targets.request = jest.fn(async current => {
+				target.id = current.id;
+				target.binding = {
+					restoreId: current.id,
+					snapshotId: current.snapshotId,
+					sha256: current.artifact.sha256,
+				};
+			});
+			const original = targets.assertBinding;
+			targets.assertBinding = jest.fn(async current => {
+				if (!ready) throw new DatabaseRestoreError('operator-target-unavailable');
+				return original(current);
+			});
+			const created = await service.create(
+				{ ...request(), mode: 'internal', targetId: undefined },
+				'administrator'
+			);
+			expect(targets.request).toHaveBeenCalledWith(
+				expect.objectContaining({ id: created.id }),
+				'provision'
+			);
+			await service.tick();
+			await service.idle();
+			expect(native.restore).not.toHaveBeenCalled();
+			expect(service.get(created.id, 'administrator').stage).toBe('provisioning-container');
+			ready = true;
+			await service.tick();
+			await service.idle();
+			const retained = service.get(created.id, 'administrator');
+			expect(retained.status).toBe('active');
+			expect(db.store.lease(created.id)?.state).toBe('validated');
+			await service.tick();
+			await service.idle();
+			expect(native.removeOwned).not.toHaveBeenCalled();
+			expect(retained.lifecycle).toMatchObject({
+				mode: 'automatic',
+				state: 'ready',
+				quotaBytes: 2147483648,
+			});
+			expect(JSON.stringify(retained)).not.toContain(target.target.password);
+			expect(JSON.stringify(retained)).not.toContain(db.store.get(created.id)!.ownerToken);
+			unsafe = true;
+			await service.tick();
+			await service.idle();
+			expect(service.get(created.id, 'administrator').status).toBe('cleanup_required');
+			await expect(service.inspect(created.id, 'administrator')).rejects.toThrow(
+				'restore-access-not-active'
+			);
+			expect(native.removeOwned).not.toHaveBeenCalled();
+			unsafe = false;
+			await service.tick();
+			await service.idle();
+			expect(service.get(created.id, 'administrator').status).toBe('active');
+			expect(native.restore).toHaveBeenCalledTimes(1);
+		}
+	);
 	it('keeps a verified restore active with durable completion, exact source identity and safe view', async () => {
 		const id = await run(),
 			result = service.get(id, 'administrator');

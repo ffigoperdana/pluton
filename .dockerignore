@@ -82,3 +82,6 @@ deploy/*
 !deploy/compose.yml
 !deploy/healthcheck.cjs
 .turbo/
+
+# Disposable guest/root rehearsal tools are source-review inputs, never image inputs.
+scripts/automatic-recovery-vm-*

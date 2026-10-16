@@ -12,6 +12,7 @@ $bootstrapPath=Join-Path $repo 'deploy/internal-recovery/bootstrap.sh'
 $smokePath=Join-Path $repo 'backend/__tests__/integration/internalRecovery.smoke.mjs'
 $readinessPath=Join-Path $repo 'backend/__tests__/integration/internalRecovery.readiness.mjs'
 $distPath=Join-Path $repo 'backend/dist'
+$migrationsPath=Join-Path $repo 'backend/drizzle'
 foreach($fixturePath in @($preparePath,$operatorPath,$bootstrapPath,$smokePath,$readinessPath)) {
   if(-not (Test-Path -LiteralPath $fixturePath -PathType Leaf)){throw 'Required Internal recovery fixture file is missing.'}
 }
@@ -72,7 +73,8 @@ foreach($engine in $Engines) { foreach($variant in $Variants) {
       '--mount',"type=volume,source=$($volumes['requests']),target=/run/pluton-internal-requests",
       '--mount',"type=volume,source=$($volumes['state']),target=/fixture-state",'--mount',"type=bind,source=$smokePath,target=/fixture-smoke.mjs,readonly",
       '--mount',"type=bind,source=$readinessPath,target=/fixture-readiness.mjs,readonly")
-    if($WorkingTreeCode){$client+=@('--mount',"type=bind,source=$distPath,target=/app/backend/dist,readonly")}
+    if($WorkingTreeCode){$client+=@('--mount',"type=bind,source=$distPath,target=/app/backend/dist,readonly",
+      '--mount',"type=bind,source=$migrationsPath,target=/app/drizzle,readonly")}
     # Initialize only the disposable client lease directory; never the application's /data.
     & docker run --rm --network none --read-only --user '0:0' --mount "type=volume,source=$($volumes['state']),target=/state" --entrypoint sh $RuntimeImage -ec 'chown 10001:10001 /state && chmod 700 /state' | Out-Null
     if($LASTEXITCODE -ne 0){throw 'Fixture lease directory initialization failed.'}

@@ -31,6 +31,7 @@ import {
 	manualRecoveryPolicy,
 	type RecoveryManualSelection,
 } from '../utils/recoveryPreparation';
+import { DatabaseRestoreError } from '../utils/persistentRestorePolicy';
 
 /** Durable jobs and a separate result. No backup writes or source-agent calls. */
 export class RecoveryTestService {
@@ -118,7 +119,7 @@ export class RecoveryTestService {
 				mysqlWorker: configuration.mysqlWorker,
 				resources: await this.internal.resourceView(path.dirname(this.workspace.root)),
 				workloads: await this.store.activity(),
-				lifecycle: 'operator-managed' as const,
+				lifecycle: this.internal.automatic ? ('automatic' as const) : ('operator-managed' as const),
 				persistentRestore: {
 					status: 'unavailable' as const,
 					reason: 'separate-retained-workflow-at-api-database-restores' as const,
@@ -235,6 +236,13 @@ export class RecoveryTestService {
 		}));
 	}
 	private async dispatch(): Promise<void> {
+		if (this.internal.automatic) {
+			const activity = await this.store.activity();
+			if (!activity.backup && !activity.restore) {
+				const retry = await this.internal.automatic.cleanupRetryIds();
+				if (retry.size) await this.recoverInterrupted(retry);
+			}
+		}
 		await this.reconcileInfrastructure();
 		for (const backupId of await this.store.automaticCandidates()) {
 			const backup = await this.backups.getById(backupId);
@@ -313,6 +321,20 @@ export class RecoveryTestService {
 		};
 		const setStage = (value: RecoveryStage) => {
 			stage = value;
+			// Stage display is advisory, not an ownership/cleanup checkpoint. Its
+			// rejected promise must not terminate the server or leak provider output.
+			// Authoritative job/lease/result writes below remain awaited and fail closed.
+			void this.store.update(row.id, { stage: value }).catch(() => {
+				planLogger('restore', row.planId, row.backupId).warn(
+					{
+						event: 'recovery_test_stage_persistence_failed',
+						recoveryTestId: row.id,
+						stage: value,
+						code: 'stage-persistence-failed',
+					},
+					'Recovery stage display could not be persisted.'
+				);
+			});
 			this.log(row.planId, row.backupId, 'stage', value, undefined, row.id);
 		};
 		let directory: string | undefined;
@@ -340,6 +362,22 @@ export class RecoveryTestService {
 					throw new RecoveryTestError('snapshot-validation', 'snapshot-binding-mismatch');
 			};
 			assertReceipt(backup.completionStats?.lifecycle);
+			if (
+				this.internal.automatic &&
+				row.policy.databaseImport === 'required' &&
+				recoveryArtifacts(backup.completionStats?.lifecycle).some(
+					entry =>
+						entry.engine &&
+						entry.engine !== 'mysql' &&
+						row.policy.targetModes?.[entry.engine] === 'internal'
+				)
+			) {
+				try {
+					this.internal.automatic.assertAvailable(row.id);
+				} catch {
+					throw new RecoveryTestError('database-target-preflight', 'recovery-workload-busy');
+				}
+			}
 			if ((await this.store.get(row.id))?.cancelRequested)
 				throw new RecoveryTestError('job', 'cancelled');
 			directory = await this.workspace.create(row.id);
@@ -392,7 +430,26 @@ export class RecoveryTestService {
 				const engine = internalEngines[0] as 'mariadb' | 'postgresql';
 				result.internalEngine = engine;
 				const entries = result.databases.filter(entry => entry.engine === engine);
-				const activation = await this.internal.prepare(engine, entries);
+				// Admission precedes host provisioning and is repeated before native import.
+				if (this.internal.automatic) {
+					const activity = await this.store.activity();
+					if (activity.backup || activity.restore)
+						throw new RecoveryTestError('database-target-preflight', 'recovery-workload-busy');
+					await this.internal.preflight(engine, entries, directory);
+				}
+				const activation = await this.internal.prepare(
+					engine,
+					entries,
+					this.internal.automatic
+						? {
+								testId: row.id,
+								snapshotId: row.snapshotId,
+								createdAt: row.createdAt.getTime(),
+								signal,
+								stage: value => setStage(value as RecoveryStage),
+							}
+						: undefined
+				);
 				checkRecoveryCancellation(signal);
 				internalTarget = await this.store.beginInternalSession({ testId: row.id, ...activation });
 				result.internalEngine = engine;
@@ -465,21 +522,32 @@ export class RecoveryTestService {
 		} catch (error) {
 			failure = signal.aborted
 				? new RecoveryTestError(stage, 'cancelled')
-				: error instanceof RecoveryTestError
-					? error
-					: error instanceof ManagedRepositoryAccessError
-						? new RecoveryTestError(
-								stage,
-								error.code === 'wrong-password'
-									? 'repository-auth-failed'
-									: error.code === 'timeout'
-										? 'restore-timeout'
-										: 'repository-access-failed'
-							)
-						: new RecoveryTestError(
-								stage,
-								stage === 'snapshot-validation' ? 'snapshot-binding-mismatch' : 'unexpected'
-							);
+				: error instanceof DatabaseRestoreError
+					? new RecoveryTestError(
+							stage,
+							error.code === 'lifecycle-unavailable'
+								? 'internal-operator-unavailable'
+								: error.code === 'lifecycle-readiness-timeout'
+									? 'internal-provisioning-timeout'
+									: error.code === 'internal-lifecycle-busy'
+										? 'recovery-workload-busy'
+										: 'internal-target-unsafe'
+						)
+					: error instanceof RecoveryTestError
+						? error
+						: error instanceof ManagedRepositoryAccessError
+							? new RecoveryTestError(
+									stage,
+									error.code === 'wrong-password'
+										? 'repository-auth-failed'
+										: error.code === 'timeout'
+											? 'restore-timeout'
+											: 'repository-access-failed'
+								)
+							: new RecoveryTestError(
+									stage,
+									stage === 'snapshot-validation' ? 'snapshot-binding-mismatch' : 'unexpected'
+								);
 			this.log(row.planId, row.backupId, 'failed', failure.stage, failure.code, row.id);
 		} finally {
 			setStage('database-cleanup');
@@ -542,6 +610,22 @@ export class RecoveryTestService {
 				}
 			warnings.push({ stage: 'infrastructure-cleanup', code: 'internal-cleanup-required' });
 			failure ||= new RecoveryTestError('infrastructure-cleanup', 'internal-cleanup-required');
+		} else if (this.internal.automatic?.record(row.id)) {
+			// Creation may have finished after cancellation / before the session was bound.
+			result.cleanup.infrastructure = false;
+			try {
+				await this.internal.automatic.action(
+					row.id,
+					'delete',
+					result.cleanup.workspace &&
+						result.cleanup.databases &&
+						!(await this.store.leases(row.id)).length
+				);
+			} catch {
+				/* Intent remains durable; no absence inference. */
+			}
+			warnings.push({ stage: 'infrastructure-cleanup', code: 'internal-cleanup-required' });
+			failure ||= new RecoveryTestError('infrastructure-cleanup', 'internal-cleanup-required');
 		}
 		const cancelled = signal.aborted || (await this.store.get(row.id))?.cancelRequested;
 		await this.store.update(row.id, {
@@ -560,8 +644,8 @@ export class RecoveryTestService {
 		});
 	}
 	/** Running work is not resumed after a crash. Cleanup requires the durable DB owner marker. */
-	async recoverInterrupted() {
-		const interrupted = await this.store.interrupted();
+	async recoverInterrupted(onlyIds?: Set<string>) {
+		const interrupted = onlyIds ? [] : await this.store.interrupted();
 		const leases = await this.store.leases();
 		const ids = new Set([
 			...interrupted.map(row => row.id),
@@ -570,6 +654,7 @@ export class RecoveryTestService {
 			...(await this.store.pendingInternalSessions()).map(row => row.testId),
 		]);
 		for (const id of ids) {
+			if (onlyIds && !onlyIds.has(id)) continue;
 			const row = await this.store.get(id);
 			if (!row || ['queued', 'running'].includes(row.status)) continue;
 			let directory: string | undefined;
@@ -617,14 +702,15 @@ export class RecoveryTestService {
 			}
 			await this.store.update(id, {
 				warnings,
-				...(row.result
+				...(row.result || this.internal.automatic?.record(id)
 					? {
 							result: {
-								...row.result,
+								...(row.result || { databases: [] }),
 								cleanup: {
-									...row.result.cleanup,
+									...row.result?.cleanup,
 									databases: databasesClean,
 									workspace: workspaceClean,
+									...(this.internal.automatic?.record(id) ? { infrastructure: false } : {}),
 								},
 							},
 						}
@@ -649,6 +735,7 @@ export class RecoveryTestService {
 	}
 	/** A root-authenticated removal receipt is required; SQL success alone cannot mean Passed. */
 	private async reconcileInfrastructure() {
+		await this.internal.automatic?.reconcileTesting();
 		for (const session of await this.store.pendingInternalSessions()) {
 			const row = await this.store.get(session.testId);
 			if (
@@ -656,7 +743,8 @@ export class RecoveryTestService {
 				['queued', 'running'].includes(row.status) ||
 				!session.cleanupReady ||
 				(await this.store.leases(row.id)).length ||
-				!this.internal.removed(session, row.snapshotId)
+				!(await (this.internal.automaticallyRemoved?.(session, row.snapshotId) ??
+					this.internal.removed(session, row.snapshotId)))
 			)
 				continue;
 			const warnings = row.warnings.filter(warning => warning.code !== 'internal-cleanup-required');

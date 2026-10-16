@@ -143,6 +143,31 @@ describe('Phase 6 durable recovery orchestration', () => {
 		await service.idle();
 		return rows.get(row!.id);
 	}
+	it('handles advisory stage persistence rejection without an unhandled promise or raw diagnostic and still verifies cleanup', async () => {
+		store.update.mockImplementationOnce(async () => {
+			throw new Error('synthetic-private-provider-detail');
+		});
+		const result = await run();
+		await new Promise(resolve => setImmediate(resolve));
+		expect(result.status).toBe('passed');
+		expect(result.result.cleanup).toEqual({ workspace: true, databases: true });
+		const events = (planLogger as jest.Mock).mock.results.flatMap(
+			entry => entry.value.warn.mock.calls
+		);
+		expect(events).toEqual(
+			expect.arrayContaining([
+				expect.arrayContaining([
+					expect.objectContaining({
+						event: 'recovery_test_stage_persistence_failed',
+						recoveryTestId: result.id,
+						stage: 'staged-restore',
+						code: 'stage-persistence-failed',
+					}),
+				]),
+			])
+		);
+		expect(JSON.stringify(events)).not.toContain('synthetic-private-provider-detail');
+	});
 	function internalFixture() {
 		backup.completionStats.lifecycle = { databases: [artifact()] };
 		store.policy.mockResolvedValue({

@@ -11,7 +11,9 @@ export function recoveryDestinationStatus(preview: RecoveryPreparation, selectio
       const target = preview.internalTargets.find((view) => view.engine === engine);
       if (target?.status !== 'ready') return target?.status === 'cleanup_required' ? 'Cleanup Required' : 'Not Provisioned / unavailable';
       if (target.admission?.status !== 'admitted') return `Insufficient Resources / ${target.admission?.reason || 'capacity-unknown'}`;
-      return 'Ready — operator-managed; execution checks again';
+      return target.mode === 'automatic'
+         ? 'Ready to provision — automatic provisioning and verified disposable cleanup; execution checks again'
+         : 'Ready — operator-managed; execution checks again';
    }
    if (!preview.customTargets.some((target) => target.engine === engine && target.status === 'configured')) return 'Not Configured';
    if (engine === 'mysql' && preview.mysqlWorker !== 'ready') return 'Worker Unavailable';

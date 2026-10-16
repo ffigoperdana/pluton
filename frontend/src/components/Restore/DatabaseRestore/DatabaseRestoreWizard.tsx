@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
-import type { RestorePreview, RestoreSelection, DatabaseRestoreView } from '../../../@types/databaseRestores';
+import type { RestorePreview, RestoreSelection, DatabaseRestoreView, RestoreChoice } from '../../../@types/databaseRestores';
 import { useRestorePreview, restoreRequest } from '../../../services/databaseRestores';
 import { initialRestoreChoice, restoreRefusal, restoreBody } from '../../../utils/databaseRestores';
 import { formatBytes } from '../../../utils/helpers';
@@ -21,7 +21,13 @@ export function DatabaseRestoreForm({
    confirm: (body: ReturnType<typeof restoreBody>) => void;
    refresh: () => void;
 }) {
-   const [choice, setChoice] = useState(() => initialRestoreChoice(preview));
+   const [draft, setDraft] = useState(() => ({ ...initialRestoreChoice(preview), verifiedToken: preview.metadataToken }));
+   const choice = {
+      ...draft,
+      resources: draft.verifiedToken === preview.metadataToken && draft.resources,
+      security: draft.verifiedToken === preview.metadataToken && draft.security,
+   };
+   const setChoice = (next: RestoreChoice) => setDraft({ ...next, verifiedToken: preview.metadataToken });
    const artifact = preview.databases.find((entry) => entry.databaseId === choice.databaseId);
    const targets = preview.targets.filter((target) => target.engine === artifact?.engine && target.database === artifact?.database);
    const refusal = restoreRefusal(preview, choice);
@@ -77,7 +83,11 @@ export function DatabaseRestoreForm({
                      onChange={(event) => setChoice({ ...choice, mode: event.target.value as 'internal' | 'custom', targetId: '' })}
                   >
                      <option value="internal" disabled={!artifact?.engine || !preview.engines[artifact.engine].includes('internal')}>
-                        {artifact?.engine === 'mysql' ? 'MySQL Internal — Not yet supported' : 'Internal — manual operator provisioning'}
+                        {artifact?.engine === 'mysql'
+                           ? 'MySQL Internal — Not yet supported'
+                           : preview.lifecycle
+                             ? 'Internal — automatic host lifecycle'
+                             : 'Internal — manual operator provisioning'}
                      </option>
                      <option value="custom" disabled={!artifact?.engine || !preview.engines[artifact.engine].includes('custom')}>
                         Custom — root-approved dedicated target
@@ -136,8 +146,11 @@ export function DatabaseRestoreForm({
                   <p role="alert">Capacity unknown. Import cannot start.</p>
                )}
                <p>
-                  Internal storage is separately owned and hard-bounded, not disposable tmpfs. The operator must provision, stop/resume and physically
-                  delete it. There is no automatic container startup. Custom targets need independent quota and purpose-guard approval.
+                  Internal storage is separately owned and hard-bounded.{' '}
+                  {preview.lifecycle
+                     ? 'The installed host operator automatically provisions and retains this restore until TTL or authorized deletion.'
+                     : 'Manual host provisioning, stop/resume and physical deletion are required.'}{' '}
+                  Custom targets need independent quota and purpose-guard approval.
                </p>
                <p>
                   Only the selected SQL artifact is staged. Its digest and exact snapshot binding are checked again before import. No source
@@ -183,25 +196,25 @@ export default function DatabaseRestoreWizard({ selection, close }: { selection:
       onSuccess: (row) => navigate(`/database-restores/${row.id}`),
    });
    return (
-      <Modal width="920px" title="Restore Database" closeModal={() => !action.isPending && close()}>
-         {preview.isFetching ? (
-            <p>Verifying selected backup and exact snapshot…</p>
-         ) : preview.error ? (
+      <Modal width="920px" title="Restore Database" stableLayout closeDisabled={action.isPending} closeModal={close}>
+         <div role="status" style={{ minHeight: '1.6em' }}>
+            {preview.isFetching ? 'Verifying selected backup and exact snapshot…' : ''}
+         </div>
+         {preview.error && (
             <div role="alert">
                {preview.error.message}
                <button onClick={() => void preview.refetch()}>Retry</button>
             </div>
-         ) : (
-            preview.data && (
-               <DatabaseRestoreForm
-                  key={`${preview.data.metadataToken}:${preview.dataUpdatedAt}`}
-                  preview={preview.data}
-                  pending={action.isPending}
-                  error={action.error?.message}
-                  confirm={(body) => action.mutate(body)}
-                  refresh={() => void preview.refetch()}
-               />
-            )
+         )}
+         {preview.data && (
+            <DatabaseRestoreForm
+               key={`${preview.data.planId}:${preview.data.backupId}:${preview.data.snapshotId}`}
+               preview={preview.data}
+               pending={action.isPending || preview.isFetching || !!preview.error}
+               error={action.error?.message}
+               confirm={(body) => action.mutate(body)}
+               refresh={() => void preview.refetch()}
+            />
          )}
       </Modal>
    );

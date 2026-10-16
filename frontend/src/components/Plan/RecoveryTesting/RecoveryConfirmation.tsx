@@ -26,7 +26,8 @@ export function RecoveryConfirmationContent({
    refresh: () => void;
 }) {
    const [selection, setSelection] = useState<RecoverySelection>(() => initialRecoverySelection(preview));
-   const [acknowledged, setAcknowledged] = useState(false);
+   const [acknowledgedToken, setAcknowledgedToken] = useState<string>();
+   const acknowledged = acknowledgedToken === preview.metadataToken;
    const [databaseId, setDatabaseId] = useState(preview.databases[0]?.path || '');
    const [retention, setRetention] = useState('24');
    const restore = operation === 'restore';
@@ -157,8 +158,11 @@ export function RecoveryConfirmationContent({
             override server limits or the operator SQL budget (default 128 MiB).
          </p>
          <p>
-            Lifecycle is operator-managed, not automatic container startup/shutdown. An approved target must already be active. After testing,
-            database/workspace cleanup and the operator removal receipt are mandatory before Passed.
+            {preview.lifecycle === 'automatic'
+               ? 'The installed host operator automatically provisions a disposable Internal target after admission.'
+               : 'Lifecycle is operator-managed, not automatic container startup/shutdown. An approved target must already be active.'}{' '}
+            After testing, database/workspace cleanup and the exact operator removal receipt are mandatory before Passed. Disposable targets are never
+            retained as persistent restores.
          </p>
          <p>
             One native import/test at a time. All recorded databases are included; partial tests are not offered. Saved plan policies and after-backup
@@ -169,8 +173,12 @@ export function RecoveryConfirmationContent({
          </button>
          {!restore && (
             <label>
-               <input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /> I understand the
-               additional resource usage and required cleanup. This is not a resource override.
+               <input
+                  type="checkbox"
+                  checked={acknowledged}
+                  onChange={(event) => setAcknowledgedToken(event.target.checked ? preview.metadataToken : undefined)}
+               />{' '}
+               I understand the additional resource usage and required cleanup. This is not a resource override.
             </label>
          )}
          <button
@@ -208,25 +216,31 @@ export default function RecoveryConfirmation({
 }) {
    const preview = useRecoveryPreparation(planId, backupId, snapshotId);
    return (
-      <Modal width="820px" title={operation === 'test' ? 'Confirm Recovery Test' : 'Restore Database — availability'} closeModal={close}>
-         {preview.isFetching ? (
-            <p>Verifying exact snapshot metadata and current capacity…</p>
-         ) : preview.error ? (
+      <Modal
+         width="820px"
+         stableLayout
+         closeDisabled={pending}
+         title={operation === 'test' ? 'Confirm Recovery Test' : 'Restore Database — availability'}
+         closeModal={close}
+      >
+         <div role="status" style={{ minHeight: '1.6em' }}>
+            {preview.isFetching ? 'Verifying exact snapshot metadata and current capacity…' : ''}
+         </div>
+         {preview.error && (
             <div role="alert">
                {preview.error.message}
                <button onClick={() => void preview.refetch()}>Retry preparation</button>
             </div>
-         ) : (
-            preview.data && (
-               <RecoveryConfirmationContent
-                  key={`${preview.data.metadataToken}:${preview.dataUpdatedAt}`}
-                  preview={preview.data}
-                  operation={operation}
-                  pending={pending}
-                  confirm={confirm}
-                  refresh={() => void preview.refetch()}
-               />
-            )
+         )}
+         {preview.data && (
+            <RecoveryConfirmationContent
+               key={`${preview.data.planId}:${preview.data.backupId}:${preview.data.snapshotId}:${operation}`}
+               preview={preview.data}
+               operation={operation}
+               pending={pending || preview.isFetching || !!preview.error}
+               confirm={confirm}
+               refresh={() => void preview.refetch()}
+            />
          )}
       </Modal>
    );

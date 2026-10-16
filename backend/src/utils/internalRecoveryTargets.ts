@@ -13,6 +13,7 @@ import type {
 import { recoveryTargetSchema } from './recoveryTestPolicy';
 import { RecoveryTestError } from './recoveryValidation';
 import { assertRecoveryClientPath } from './recoveryDatabaseClients';
+import { AutomaticRecoveryLifecycle } from './automaticRecoveryLifecycle';
 
 const ROOT = '/run/pluton-internal-recovery';
 const REQUESTS = '/run/pluton-internal-requests';
@@ -54,9 +55,10 @@ const targetSchema = z
 export type InternalReadiness = {
 	engine: InternalRecoveryEngine;
 	status: 'not_provisioned' | 'ready' | 'running' | 'cleanup_required';
-	mode: 'operator-managed';
+	mode: 'operator-managed' | 'automatic';
 };
 export type ResourceSample = {
+	cpuAvailable?: number;
 	total: number;
 	available: number;
 	swapUsed: number;
@@ -72,6 +74,7 @@ export function internalResourceReason(
 	maxSqlBytes: number
 ) {
 	if (Object.values(sample).some(n => !Number.isFinite(n) || n < 0)) return 'capacity-unknown';
+	if (sample.cpuAvailable !== undefined && sample.cpuAvailable < 1) return 'cpu-headroom';
 	if (
 		!Number.isSafeInteger(sqlBytes) ||
 		!Number.isSafeInteger(maxSqlBytes) ||
@@ -116,6 +119,11 @@ async function resources(directory: string): Promise<ResourceSample> {
 			(await fs.readFile(`/sys/fs/cgroup/${file}`, 'utf8')).trim();
 		const limit = await read('memory.max');
 		const disk = await fs.statfs(directory);
+		const cpu = (await read('cpu.max')).split(/\s+/);
+		const cpuset = (await read('cpuset.cpus.effective')).split(',').reduce((sum, range) => {
+			const [start, end = start] = range.split('-').map(Number);
+			return sum + end - start + 1;
+		}, 0);
 		return {
 			total: field('MemTotal'),
 			available: field('MemAvailable'),
@@ -125,6 +133,7 @@ async function resources(directory: string): Promise<ResourceSample> {
 			used: Number(await read('memory.current')),
 			cgroupSwap: Number(await read('memory.swap.current')),
 			diskAvailable: disk.bavail * disk.bsize,
+			cpuAvailable: cpu[0] === 'max' ? cpuset : Math.min(cpuset, Number(cpu[0]) / Number(cpu[1])),
 		};
 	} catch {
 		// Linux cgroup v2 + PSI is required; unknown capacity is not approval.
@@ -154,7 +163,8 @@ const reachable = (host: string, port: number) =>
 export class InternalRecoveryTargets {
 	constructor(
 		private readonly sample = resources,
-		private readonly probe = reachable
+		private readonly probe = reachable,
+		readonly automatic?: AutomaticRecoveryLifecycle
 	) {}
 	/** Read-only advisory sample. Unknown is never reported as safe; execution samples again. */
 	async resourceView(directory: string) {
@@ -172,7 +182,9 @@ export class InternalRecoveryTargets {
 		directory: string
 	) {
 		try {
-			const config = this.target(engine);
+			const config = this.automatic ? await this.automatic.capability() : this.target(engine);
+			if (!('maxSqlBytes' in config))
+				throw new RecoveryTestError('database-target-preflight', 'internal-target-not-provisioned');
 			const reason = internalResourceReason(
 				await this.sample(directory),
 				entries.reduce((sum, entry) => sum + entry.bytes, 0),
@@ -241,9 +253,20 @@ export class InternalRecoveryTargets {
 		session: Pick<
 			InternalRecoverySession,
 			'engine' | 'installationId' | 'activationId' | 'caSha256'
-		>,
+		> & { testId?: string },
 		cleanup = false
 	) {
+		if (this.automatic && session.testId && this.automatic.record(session.testId))
+			return this.automatic.target(session.testId, cleanup).then(target => {
+				if (
+					target.engine !== session.engine ||
+					target.activationId !== session.activationId ||
+					target.installationId !== session.installationId ||
+					target.caSha256 !== session.caSha256
+				)
+					throw new RecoveryTestError('database-target-preflight', 'internal-target-unsafe');
+				return target.caFile;
+			});
 		const state = this.state();
 		if (
 			state.status !== 'active' ||
@@ -267,7 +290,16 @@ export class InternalRecoveryTargets {
 				let status: InternalReadiness['status'] = 'not_provisioned';
 				const active = pending.find(value => value.engine === engine);
 				if (active) status = active.cleanupReady ? 'cleanup_required' : 'running';
-				else
+				else if (this.automatic) {
+					if ((await this.automatic.capability()).available) {
+						try {
+							this.automatic.assertAvailable();
+							status = 'ready';
+						} catch {
+							status = 'running';
+						}
+					}
+				} else
 					try {
 						const state = this.state();
 						const config = this.target(engine);
@@ -281,11 +313,33 @@ export class InternalRecoveryTargets {
 					} catch {
 						/* Curated readiness only; credentials and parser output are never returned. */
 					}
-				return { engine, status, mode: 'operator-managed' as const };
+				return {
+					engine,
+					status,
+					mode: this.automatic ? ('automatic' as const) : ('operator-managed' as const),
+				};
 			})
 		);
 	}
-	async prepare(engine: InternalRecoveryEngine, entries: RecoveryDatabaseResult[]) {
+	async prepare(
+		engine: InternalRecoveryEngine,
+		entries: RecoveryDatabaseResult[],
+		context?: {
+			testId: string;
+			snapshotId: string;
+			createdAt: number;
+			signal: AbortSignal;
+			stage: (value: string) => void;
+		}
+	) {
+		if (this.automatic) {
+			if (!context)
+				throw new RecoveryTestError('database-target-preflight', 'internal-target-unsafe');
+			await this.automatic.testing(context.testId, context.snapshotId, entries, context.createdAt);
+			const target = await this.automatic.waitReady(context.testId, context.signal, context.stage);
+			await this.automatic.verifyStorage(context.testId, target.storage, target.activationId);
+			return target;
+		}
 		const state = this.state();
 		const config = this.target(engine);
 		if (
@@ -300,7 +354,7 @@ export class InternalRecoveryTargets {
 			throw new RecoveryTestError('database-target-preflight', 'internal-target-unsafe');
 		const caFile = assertRecoveryClientPath(path.join(ROOT, `${engine}-ca.pem`), false);
 		const caSha256 = crypto.createHash('sha256').update(readFileSync(caFile)).digest('hex');
-		this.trust({ ...state, caSha256 });
+		await this.trust({ ...state, caSha256 });
 		return {
 			engine,
 			installationId: state.installationId,
@@ -314,7 +368,9 @@ export class InternalRecoveryTargets {
 		entries: RecoveryDatabaseResult[],
 		directory: string
 	) {
-		const config = this.target(engine);
+		const config = this.automatic ? await this.automatic.capability() : this.target(engine);
+		if (!('maxSqlBytes' in config))
+			throw new RecoveryTestError('database-target-preflight', 'internal-target-not-provisioned');
 		assertInternalResources(
 			await this.sample(directory),
 			entries.reduce((n, entry) => n + entry.bytes, 0),
@@ -322,6 +378,13 @@ export class InternalRecoveryTargets {
 		);
 	}
 	async requestCleanup(session: InternalRecoverySession, snapshotId: string) {
+		if (this.automatic?.record(session.testId)) {
+			const binding = JSON.parse(this.automatic.record(session.testId)!.binding);
+			if (binding.snapshotId !== snapshotId)
+				throw new RecoveryTestError('infrastructure-cleanup', 'internal-target-unsafe');
+			await this.automatic.action(session.testId, 'delete', session.cleanupReady);
+			return;
+		}
 		try {
 			const stat = await fs.lstat(REQUESTS);
 			if (
@@ -365,6 +428,13 @@ export class InternalRecoveryTargets {
 		} catch {
 			return false;
 		}
+	}
+	async automaticallyRemoved(session: InternalRecoverySession, snapshotId: string) {
+		const row = this.automatic?.record(session.testId);
+		return row
+			? JSON.parse(row.binding).snapshotId === snapshotId &&
+					(await this.automatic!.receipt(session.testId))?.state === 'removed'
+			: this.removed(session, snapshotId);
 	}
 }
 

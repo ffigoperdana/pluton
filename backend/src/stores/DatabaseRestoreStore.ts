@@ -97,7 +97,12 @@ export class DatabaseRestoreStore {
 		return (
 			this.sqlite
 				.prepare(
-					"SELECT * FROM persistent_database_restores WHERE status != 'deleted' ORDER BY created_at LIMIT 200"
+					`SELECT * FROM persistent_database_restores
+					 WHERE status != 'deleted' OR EXISTS (
+					   SELECT 1 FROM automatic_recovery_lifecycle AS lifecycle
+					   WHERE lifecycle.id=persistent_database_restores.id AND lifecycle.mode='persistent'
+					     AND lifecycle.state!='removed'
+					 ) ORDER BY created_at LIMIT 200`
 				)
 				.all() as Stored[]
 		).map(row => this.decode(row)!);

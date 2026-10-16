@@ -7,6 +7,15 @@ export type RecoveryStatus =
 	| 'cancelled'
 	| 'passed_with_warning';
 export type RecoveryStage =
+	| 'checking-resources'
+	| 'provisioning-container'
+	| 'starting-database'
+	| 'ready'
+	| 'cleaning-up'
+	| 'cleanup-required'
+	| 'requested'
+	| 'stopped'
+	| 'removed'
 	| 'snapshot-validation'
 	| 'repository-access'
 	| 'staged-restore'
@@ -20,6 +29,8 @@ export type RecoveryStage =
 	| 'infrastructure-cleanup'
 	| 'job';
 export type RecoveryCode =
+	| 'internal-operator-unavailable'
+	| 'internal-provisioning-timeout'
 	| 'recovery-workload-busy'
 	| 'internal-target-not-provisioned'
 	| 'internal-target-unsafe'

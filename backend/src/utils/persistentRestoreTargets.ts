@@ -11,6 +11,7 @@ import {
 } from './persistentRestorePolicy';
 import { approvalFingerprint } from '../stores/DatabaseRestoreStore';
 import { InternalRecoveryTargets, internalResourceReason } from './internalRecoveryTargets';
+import { AutomaticRecoveryLifecycle, isReadonlyRecoveryMount } from './automaticRecoveryLifecycle';
 
 export const PERSISTENT_PUBLIC = '/run/pluton-persistent-restores';
 export const PERSISTENT_REQUESTS = '/run/pluton-persistent-restore-requests';
@@ -21,7 +22,8 @@ export class PersistentRestoreTargets {
 		private readonly root = PERSISTENT_PUBLIC,
 		private readonly requests = PERSISTENT_REQUESTS,
 		private readonly storage = PERSISTENT_STORAGE,
-		private readonly resources = new InternalRecoveryTargets()
+		private readonly resources = new InternalRecoveryTargets(),
+		readonly automatic?: AutomaticRecoveryLifecycle
 	) {}
 	async policy() {
 		try {
@@ -45,6 +47,8 @@ export class PersistentRestoreTargets {
 		}
 	}
 	async verifiedAbsent(row: DatabaseRestore) {
+		if (this.automatic?.record(row.id))
+			return (await this.automatic.receipt(row.id))?.state === 'removed';
 		try {
 			const receipt = JSON.parse(
 				(await this.trustedFile(path.join(this.root, `${row.id}.absent.json`), 4096)).toString(
@@ -161,6 +165,16 @@ export class PersistentRestoreTargets {
 			throw new DatabaseRestoreError('persistent-storage-quota-insufficient');
 		if (approval.mode === 'internal') {
 			const directory = path.join(this.storage, row.id);
+			if (this.automatic?.record(row.id)) {
+				let mountinfo: string;
+				try {
+					mountinfo = await fs.readFile('/proc/self/mountinfo', 'utf8');
+				} catch {
+					throw new DatabaseRestoreError('persistent-storage-not-mounted');
+				}
+				if (!isReadonlyRecoveryMount(mountinfo, directory))
+					throw new DatabaseRestoreError('persistent-storage-not-mounted');
+			}
 			const stat = await fs.lstat(directory),
 				parent = await fs.stat(this.storage);
 			if (
@@ -222,6 +236,14 @@ export class PersistentRestoreTargets {
 		action: 'provision' | 'stop' | 'resume' | 'delete',
 		cleanupReady = false
 	) {
+		if (
+			this.automatic &&
+			row.mode === 'internal' &&
+			(this.automatic.record(row.id) || row.stage === 'checking-resources')
+		) {
+			await this.automatic.persistent(row, action, cleanupReady);
+			return;
+		}
 		const stat = await fs.lstat(this.requests);
 		if (
 			!stat.isDirectory() ||

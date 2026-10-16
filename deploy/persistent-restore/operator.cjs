@@ -3,13 +3,16 @@ const fs=require('node:fs');
 const path=require('node:path');
 const crypto=require('node:crypto');
 const {execFileSync}=require('node:child_process');
-const storage=require('./storage.cjs');
-const PURPOSE='pluton-persistent-database-restore-v1';
-const ROOT='/etc/pluton-persistent-restores';
-const DATA='/var/lib/pluton-persistent-restores';
-const REQUESTS='/var/lib/pluton-persistent-restore-requests';
-const NETWORK='pluton-persistent-restores';
-const LOCK='pluton-internal-recovery-lock';
+const defaultStorage=require('./storage.cjs');
+// Factory options come ONLY from reviewed root-owned host code, never from the mailbox/API.
+function createOperator(options={}){
+const storage=options.storage||defaultStorage;
+const PURPOSE=options.purpose||'pluton-persistent-database-restore-v1';
+const ROOT=options.root||'/etc/pluton-persistent-restores';
+const DATA=options.data||'/var/lib/pluton-persistent-restores';
+const REQUESTS=options.requests||'/var/lib/pluton-persistent-restore-requests';
+const NETWORK=options.network||'pluton-persistent-restores';
+const LOCK=options.lock||'pluton-internal-recovery-lock';
 const images={
   mariadb:'mariadb:11.8.8@sha256:24e76fcec8c003a0362d0dd53f4806e7e79458d7fdeaf47437760e19496f5a9c',
   postgresql:'postgres:18.6-bookworm@sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c'
@@ -17,8 +20,10 @@ const images={
 const idPattern=/^[a-f0-9]{24}$/;
 function fail(code='operator-safety-refused'){throw Object.assign(new Error('Persistent restore operator refused.'),{code});}
 function run(binary,args,timeout=60000){
-  return execFileSync(binary,args,{encoding:'utf8',timeout,maxBuffer:65536,stdio:['ignore','pipe','pipe'],
-    env:{PATH:'/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',LANG:'C',LC_ALL:'C'}}).trim();
+  return execFileSync(binary,args,{encoding:'utf8',timeout,killSignal:'SIGKILL',maxBuffer:65536,stdio:['ignore','pipe','pipe'],
+    env:{PATH:'/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',LANG:'C',LC_ALL:'C',
+      ...(options.automatic?{DOCKER_HOST:options.dockerSocket?'unix://'+options.dockerSocket:'unix:///var/run/docker.sock',
+        DOCKER_CONFIG:options.dockerConfig||'/etc/pluton-automatic-recovery/docker-cli'}:{})}}).trim();
 }
 function read(file,uid=0,mode=0o600,max=65536){
   storage.rootParent(file);
@@ -40,7 +45,7 @@ function write(file,value,gid=0,mode=0o600){
 function rootCode(file){const stat=fs.lstatSync(file);storage.rootParent(file);
   if(!stat.isFile()||stat.isSymbolicLink()||stat.uid!==0||(stat.mode&0o022))fail();}
 function init(){
-  if(!fs.existsSync(ROOT))fs.mkdirSync(ROOT,{mode:0o755});
+  if(!fs.existsSync(ROOT)){fs.mkdirSync(ROOT,{mode:0o755});fs.chmodSync(ROOT,0o755);}
   storage.directory(ROOT,0,0,0o755);
   const marker=path.join(ROOT,'installation.json');
   if(!fs.existsSync(marker)){
@@ -51,14 +56,19 @@ function init(){
   if(installation.purpose!==PURPOSE||!/^[a-f0-9]{32}$/.test(installation.installationId))fail();
   for(const directory of [DATA,path.join(DATA,'images'),path.join(ROOT,'private')])storage.directory(directory);
   for(const directory of [path.join(DATA,'view'),path.join(ROOT,'public')]){
-    if(!fs.existsSync(directory)){fs.mkdirSync(directory,{mode:0o750});fs.chownSync(directory,0,10001);}
+    if(!fs.existsSync(directory)){fs.mkdirSync(directory,{mode:0o750});fs.chownSync(directory,0,10001);fs.chmodSync(directory,0o750);}
     storage.directory(directory,0,10001,0o750);
   }
   if(!fs.existsSync(REQUESTS)){fs.mkdirSync(REQUESTS,{mode:0o700});fs.chownSync(REQUESTS,10001,10001);}
   storage.directory(REQUESTS,10001,10001,0o700);
   // Private mount propagation is a deployment prerequisite; never alter the host root mount.
   const mounted=storage.mounted(path.join(DATA,'view'));
-  if(!mounted)run('/usr/bin/mount',['--bind',path.join(DATA,'view'),path.join(DATA,'view')]);
+  if(!mounted){
+    run('/usr/bin/mount',['--bind',path.join(DATA,'view'),path.join(DATA,'view')]);
+    // A new self-bind must leave its parent's peer group before becoming the
+    // dedicated shared anchor, otherwise later submounts can propagate twice.
+    run('/usr/bin/mount',['--make-private',path.join(DATA,'view')]);
+  }
   run('/usr/bin/mount',['--make-rshared',path.join(DATA,'view')]);
   ensureNetwork();
   return installation;
@@ -101,6 +111,7 @@ function bootstrapSql(engine,database,password,activation,storageId,username='re
   if(!Object.hasOwn(images,engine)||!/^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/.test(database)||
     !/^[a-f0-9]{64}$/.test(password)||!/^[a-f0-9]{32}$/.test(activation)||!/^[a-f0-9-]{32,36}$/.test(storageId)||
     !/^[a-z][a-z0-9_]{0,62}$/.test(username)||['root','postgres','admin','administrator'].includes(username))fail();
+  if(options.bootstrapSql)return options.bootstrapSql(engine,database,password,activation,storageId,username);
   if(engine==='mariadb')return `CREATE DATABASE pluton_restore_guard;
 CREATE TABLE pluton_restore_guard.contract(purpose VARCHAR(64),activation_id VARCHAR(32),storage_id VARCHAR(36));
 INSERT INTO pluton_restore_guard.contract VALUES ('${PURPOSE}','${activation}','${storageId}');
@@ -140,6 +151,8 @@ function ownership(inspect,meta){
   const base=meta.engine==='mariadb'?'/var/lib/mysql':'/var/lib/postgresql';
   const approved=new Map([[base,meta.volume.mountpoint],['/run/pluton-persistent-bootstrap',path.join(ROOT,'private',meta.id)],
     ['/opt/pluton-persistent/bootstrap.sh',path.join(__dirname,'bootstrap.sh')],['/run/pluton-internal-lock',LOCK]]);
+  if(options.automatic&&(labels['org.pluton.automatic.binding']!==options.bindingHash||
+    labels['org.pluton.automatic.mode']!==options.mode||host.RestartPolicy?.Name!=='no'))fail('resource-ownership-mismatch');
   if(inspect.Id!==meta.containerId||!idPattern.test(meta.id)||config.Image!==images[meta.engine]||config.User!=='999:999'||
     labels['org.pluton.persistent.restore']!==meta.id||labels['org.pluton.persistent.activation']!==meta.approval.activationId||
     labels['org.pluton.persistent.storage']!==meta.approval.storage.id||labels['org.pluton.purpose']!==PURPOSE||
@@ -162,6 +175,15 @@ function state(meta,value){
     snapshotId:meta.request.snapshotId,activationId:meta.approval.activationId,storageId:meta.approval.storage.id,
     containerId:meta.containerId,state:value,observedAt:Date.now()},10001,0o640);
 }
+function publish(meta){
+  const file=path.join(ROOT,'private',meta.id,'ca.pem');rootCode(file);
+  const ca=fs.readFileSync(file);
+  if(crypto.createHash('sha256').update(ca).digest('hex')!==meta.approval.caSha256)fail('target-tls-failed');
+  // Re-publish an already verified identity after a readiness interruption.
+  // This reuses the exact stored credentials/CA; it never bootstraps or rotates.
+  write(path.join(ROOT,'public',meta.id+'-ca.pem'),ca.toString('utf8'),10001,0o640);
+  write(path.join(ROOT,'public',meta.id+'.json'),meta.approval,10001,0o640);state(meta,'active');
+}
 function inspect(meta){const value=JSON.parse(run('docker',['inspect',meta.containerId]))[0];ownership(value,meta);return value;}
 function bindRequest(meta,req){
   if(req.snapshotId!==meta.request.snapshotId||req.sha256!==meta.request.sha256||req.databaseId!==meta.request.databaseId||
@@ -176,31 +198,39 @@ function resourceAdmission(bytes){
     field('MemAvailable')<2560*1024**2||field('SwapTotal')-field('SwapFree')>128*1024**2||pressure>1||
     bytes*4+256*1024**2>2*1024**3)fail('resource-admission-refused');
 }
+function classifyReadinessFailure(stderr){
+  if(/1045|access denied|password authentication failed/i.test(stderr))return 'target-authentication-failed';
+  if(/TLS\/SSL|certificate verif|server certificate/i.test(stderr))return 'target-tls-failed';
+  if(/200[2356]|can't connect|connection refused|could not translate host|connection timed out|database system is starting up/i.test(stderr))return null;
+  return 'target-readiness-failed';
+}
 function nativeReady(meta){
   const privatePath='/run/pluton-persistent-bootstrap';
   const password=meta.approval.target.password,host=meta.approval.target.host;
   const directory=path.join(ROOT,'private',meta.id);
   const pg=meta.engine==='postgresql';
   const file=path.join(directory,pg?'ready.pgpass':'ready.cnf');
-  write(file,pg?host+':5432:pluton_restore_guard:restore_user:'+password+'\n':
+  write(file,pg?host+':5432:'+(options.disposable?'pluton_recovery_guard':'pluton_restore_guard')+':restore_user:'+password+'\n':
     '[client]\nhost='+host+'\nport=3306\nuser=restore_user\npassword='+password+
     '\nssl=ON\nssl-verify-server-cert=ON\nssl-ca='+privatePath+'/ca.pem\n',999,0o640);
   // pgpass must be 0600 and readable as the native UID, not passed via PGPASSWORD.
   if(pg){fs.chownSync(file,999,999);fs.chmodSync(file,0o600);}
   const expected=[PURPOSE,meta.approval.activationId,meta.approval.storage.id].join('|');
   const end=Date.now()+45000;
+  let waitingReported=false;
   try{
     while(Date.now()<end){
       const current=inspect(meta);if(!current.State.Running)fail('target-process-stopped');
       try{
         const common=['exec','--user','999:999'];
-        const sql='SELECT purpose,activation_id,storage_id FROM contract;';
+        const guard=options.disposable?'pluton_recovery_guard':'pluton_restore_guard';
+        const sql='SELECT purpose,activation_id,storage_id FROM '+(options.disposable?'pluton_recovery_guard':'contract')+';';
         const args=pg?[...common,'-e','PGPASSFILE='+privatePath+'/ready.pgpass','-e','PGSSLMODE=verify-full',
           '-e','PGSSLROOTCERT='+privatePath+'/ca.pem','-e','PGCONNECT_TIMEOUT=2','-e','PGOPTIONS=-c statement_timeout=2000',
           meta.containerId,'psql','-X','--no-password','--no-psqlrc','--quiet','--host',host,'--username','restore_user',
-          '--dbname','pluton_restore_guard','--tuples-only','--no-align','--set','ON_ERROR_STOP=1','--command',sql]
+          '--dbname',guard,'--tuples-only','--no-align','--set','ON_ERROR_STOP=1','--command',sql]
           :[...common,meta.containerId,'mariadb','--defaults-file='+privatePath+'/ready.cnf','--batch','--raw',
-            '--skip-column-names','--connect-timeout=2','--database=pluton_restore_guard','--execute',sql];
+            '--skip-column-names','--connect-timeout=2','--database='+guard,'--execute',sql];
         const output=run('docker',args,5000).split(/[|\t]/).join('|');
         if(output!==expected)fail('target-purpose-mismatch');
         return;
@@ -208,10 +238,11 @@ function nativeReady(meta){
         if(error.code==='target-purpose-mismatch')throw error;
         // Classify locally; never expose native provider output or credentials.
         const stderr=String(error.stderr||'');
-        if(/1045|Access denied|password authentication failed/.test(stderr))fail('target-authentication-failed');
-        if(/TLS\/SSL|certificate verif|server certificate/.test(stderr))fail('target-tls-failed');
-        if(!/200[2356]|Can't connect|connection refused|could not translate host|connection timed out/.test(stderr))
-          fail('target-readiness-failed');
+        const code=classifyReadinessFailure(stderr);if(code)fail(code);
+        if(options.automatic&&!waitingReported){
+          process.stderr.write(JSON.stringify({event:'native_recovery_target_waiting',engine:meta.engine,category:'connection-not-ready'})+'\n');
+          waitingReported=true;
+        }
       }
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,250);
     }
@@ -231,10 +262,9 @@ function provision(req){
     storage.resume(previous.volume);const current=inspect(previous);
     if(!current.State.Running)run('docker',['start',previous.containerId]);
     nativeReady(previous);
-    write(path.join(ROOT,'public',req.restoreId+'-ca.pem'),fs.readFileSync(path.join(directory,'ca.pem'),'utf8'),10001,0o640);
-    write(path.join(ROOT,'public',req.restoreId+'.json'),previous.approval,10001,0o640);state(previous,'active');return;
+    publish(previous);return;
   }
-  fs.mkdirSync(directory,{mode:0o750});fs.chownSync(directory,0,999);
+  fs.mkdirSync(directory,{mode:0o750});fs.chownSync(directory,0,999);fs.chmodSync(directory,0o750);
   const activation=crypto.randomBytes(16).toString('hex'),password=crypto.randomBytes(32).toString('hex');
   write(path.join(directory,'intent.json'),{purpose:PURPOSE,request:req,activation});
   const volume=storage.create(path.join(DATA,'images'),path.join(DATA,'view'),req.restoreId,activation);
@@ -256,12 +286,39 @@ function provision(req){
     storage:{id:volume.identity.storageId,quotaBytes:volume.identity.quotaBytes,kind:'fixed-ext4'},
     binding:{restoreId:req.restoreId,snapshotId:req.snapshotId,sha256:req.sha256}};
   ensureNetwork();
-  // Shared with disposable Phase 6 bootstraps: flock prevents two native engine stacks.
-  let fresh=false;try{run('docker',['volume','inspect',LOCK]);}catch{run('docker',['volume','create',LOCK]);fresh=true;}
-  if(fresh)run('docker',['run','--rm','--network','none','--read-only','--user','0:0','--mount','type=volume,source='+LOCK+',target=/lock',
+  // A fixed approved control profile is shared by the two native engine bootstraps.
+  let fresh=false;
+  if(options.automatic){
+    const names=run('docker',['volume','ls','--format','{{.Name}}']).split(/\r?\n/);
+    if(!names.includes(LOCK)){
+      run('docker',['volume','create','--label','org.pluton.automatic.installation='+options.installationId,LOCK]);fresh=true;
+    }
+  }else{
+    try{run('docker',['volume','inspect',LOCK]);}catch{run('docker',['volume','create',LOCK]);fresh=true;}
+  }
+  let lockInfo;
+  if(options.automatic){
+    lockInfo=JSON.parse(run('docker',['volume','inspect',LOCK]))[0];
+    if(lockInfo.Labels?.['org.pluton.automatic.installation']!==options.installationId||
+      lockInfo.Driver!=='local'||Object.keys(lockInfo.Options||{}).length||lockInfo.Scope!=='local')fail('foreign-control-volume');
+  }
+  if(options.automatic){
+    // Host operator only: no temporary root container, even to prepare the lock.
+    const dockerRoot=run('docker',['info','--format','{{.DockerRootDir}}']);
+    if(!path.isAbsolute(dockerRoot)||lockInfo.Mountpoint!==path.join(dockerRoot,'volumes',LOCK,'_data'))fail('foreign-control-volume');
+    storage.rootParent(lockInfo.Mountpoint);
+    if(fresh){
+      const stat=fs.lstatSync(lockInfo.Mountpoint);
+      if(!stat.isDirectory()||stat.isSymbolicLink()||stat.uid!==0||fs.readdirSync(lockInfo.Mountpoint).length)fail('foreign-control-volume');
+      fs.chownSync(lockInfo.Mountpoint,999,999);fs.chmodSync(lockInfo.Mountpoint,0o700);
+    }
+    storage.directory(lockInfo.Mountpoint,999,999,0o700);
+  }else if(fresh)run('docker',['run','--rm','--network','none','--read-only','--user','0:0','--mount','type=volume,source='+LOCK+',target=/lock',
     '--entrypoint','/bin/sh',images[req.engine],'-ec','chown 999:999 /lock && chmod 700 /lock']);
   const base=req.engine==='mariadb'?'/var/lib/mysql':'/var/lib/postgresql';
-  const containerId=run('docker',['create','--init','--name','pluton-persistent-'+req.restoreId,'--network',NETWORK,'--network-alias',host,
+  const containerId=run('docker',['create',...(options.automatic?['--pull','never','--restart','no',
+    '--label','org.pluton.automatic.binding='+options.bindingHash,'--label','org.pluton.automatic.mode='+options.mode]:[]),
+    '--init','--name','pluton-persistent-'+req.restoreId,'--network',NETWORK,'--network-alias',host,
     '--hostname',host,'--user','999:999','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true',
     '--memory','2g','--memory-swap','2g','--cpus','1','--pids-limit','128',
     '--label','org.pluton.purpose='+PURPOSE,'--label','org.pluton.persistent.restore='+req.restoreId,
@@ -276,10 +333,8 @@ function provision(req){
   approval.containerId=containerId;
   const meta={id:req.restoreId,engine:req.engine,containerId,volume,approval,request:req,fingerprint:approvalFingerprint(approval)};
   write(path.join(directory,'metadata.json'),meta);
-  inspect(meta);run('docker',['start',containerId]);nativeReady(meta);
-  write(path.join(ROOT,'public',req.restoreId+'-ca.pem'),ca.toString('utf8'),10001,0o640);
-  write(path.join(ROOT,'public',req.restoreId+'.json'),approval,10001,0o640);
-  state(meta,'active');
+  inspect(meta);options.stage?.('starting-database');run('docker',['start',containerId]);nativeReady(meta);
+  publish(meta);
 }
 function containerPresent(meta){
   return run('docker',['container','ls','--all','--no-trunc','--filter','id='+meta.containerId,'--format','{{.ID}}'])
@@ -319,6 +374,8 @@ function verifyNeverProvisioned(req){
   if(req.action!=='delete'||req.cleanupReady||req.targetFingerprint!==null||
     fs.existsSync(path.join(ROOT,'private',id))||fs.existsSync(path.join(DATA,'images',id+'.ext4'))||
     fs.existsSync(path.join(DATA,'view',id))||storage.mounted(path.join(DATA,'view',id)))fail('unprovisioned-absence-uncertain');
+  if(options.appView&&(fs.existsSync(path.join(options.appView,id))||storage.mounted(path.join(options.appView,id))))
+    fail('unprovisioned-absence-uncertain');
   // Daemon/command failure is an error, never an empty inventory.
   if(run('docker',['container','ls','--all','--no-trunc','--filter','label=org.pluton.persistent.restore='+id,'--format','{{.ID}}']))
     fail('unprovisioned-absence-uncertain');
@@ -396,8 +453,13 @@ function operate(action,id){
     state(meta,current.State.Running?'active':'stopped');
   }else fail();
 }
-module.exports={PURPOSE,images,validateRequest,bootstrapSql,ownership,approvalFingerprint,approveCustom};
+return {PURPOSE,images,validateRequest,bootstrapSql,ownership,approvalFingerprint,approveCustom,
+  init,provision,metadata,inspect,nativeReady,state,publish,bindRequest,deleteOwned,containerPresent,
+  read,write,resourceAdmission,rootCode,verifyNeverProvisioned,policy,ROOT,DATA,NETWORK,operate,fail,classifyReadinessFailure};
+}
+module.exports={...createOperator(),createOperator};
 if(require.main===module){
+  const {ROOT,read,write,rootCode,init,operate,fail}=module.exports;
   try{
     if(process.platform!=='linux'||process.getuid()!==0||Number(process.versions.node.split('.')[0])<20)fail('root-linux-node20-required');
     rootCode(__filename);rootCode(path.join(__dirname,'storage.cjs'));
