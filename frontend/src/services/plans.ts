@@ -1,3 +1,4 @@
+import { mutationResponse } from '../utils/httpResponse';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-toastify';
 import { API_URL } from '../utils/constants';
@@ -235,22 +236,18 @@ export type DeletePlanResult = {
 
 export async function deletePlan({ id, removeRemoteData }: { id: string; removeRemoteData: boolean }): Promise<DeletePlanResult> {
    const header = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
-   const res = await fetch(`${API_URL}/plans/${id}?removeData=${removeRemoteData}`, {
+   return mutationResponse<DeletePlanResult>(`${API_URL}/plans/${encodeURIComponent(id)}?removeData=${removeRemoteData}`, {
       method: 'DELETE',
       credentials: 'include',
       headers: header,
-   });
-   const data = await res.json();
-   if (!data.success) {
-      throw new Error(data.error);
-   }
-   return data;
+   }, { allowNoContent: true, allowAccepted: false });
 }
 
 export function useDeletePlan() {
    const queryClient = useQueryClient();
    return useMutation({
       mutationFn: deletePlan,
+      retry: false,
       onSuccess: (res, variables) => {
          console.log('# Plan Removed! :', res);
          // Drop the deleted plan's query, or it keeps refetching a record that now 404s.
@@ -345,22 +342,18 @@ export function useResumePlan() {
 // Prune Backup Plan
 export async function prunePlan(id: string) {
    const header = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
-   const res = await fetch(`${API_URL}/plans/${id}/action/prune`, {
+   return mutationResponse<{ success: boolean; message?: string }>(`${API_URL}/plans/${encodeURIComponent(id)}/action/prune`, {
       method: 'POST',
       credentials: 'include',
       headers: header,
-   });
-   const data = await res.json();
-   if (!data.success) {
-      throw new Error(data.error);
-   }
-   return data;
+   }, { allowNoContent: true, allowAccepted: false });
 }
 
 export function usePrunePlan() {
    const queryClient = useQueryClient();
    return useMutation({
       mutationFn: prunePlan,
+      retry: false,
       onError: (error: Error) => {
          console.log('error :', error?.message);
          toast.error(error.message || `Error Removing Old Backups.`);
@@ -443,23 +436,19 @@ export async function deleteReplicationStorage({
    replicationId?: string;
 }) {
    const header = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
-   const res = await fetch(`${API_URL}/plans/${planID}/action/delete-replication-storage`, {
+   return mutationResponse<{ success: boolean; message?: string }>(`${API_URL}/plans/${encodeURIComponent(planID)}/action/delete-replication-storage`, {
       method: 'POST',
       credentials: 'include',
       headers: header,
       body: JSON.stringify({ storageID, storagePath, removeData, replicationId }),
-   });
-   const data = await res.json();
-   if (!data.success) {
-      throw new Error(data.error);
-   }
-   return data;
+   }, { allowNoContent: true, allowAccepted: false });
 }
 
 export function useDeleteReplicationStorage() {
    const queryClient = useQueryClient();
    return useMutation({
       mutationFn: deleteReplicationStorage,
+      retry: false,
       onError: (error: Error) => {
          console.log('error :', error?.message);
          toast.error(error.message || `Error removing replication storage.`);

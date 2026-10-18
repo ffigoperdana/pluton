@@ -1,3 +1,4 @@
+import { mutationResponse } from '../utils/httpResponse';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-toastify';
 import { API_URL } from '../utils/constants';
@@ -88,22 +89,17 @@ export function useGetBackupDownload() {
 
 // Cancel Download
 export async function cancelBackupDownload({ backupId }: { backupId: string; planId: string }) {
-   const res = await fetch(`${API_URL}/backups/${backupId}/action/download`, {
+   return mutationResponse<{ success: boolean; message?: string }>(`${API_URL}/backups/${encodeURIComponent(backupId)}/action/download`, {
       method: 'DELETE',
       credentials: 'include',
       // headers: header,
-   });
-   // Check if response is ok
-   const data = await res.json();
-   if (!data.success) {
-      throw new Error(data.error);
-   }
-   return data;
+   }, { allowNoContent: true, allowAccepted: false });
 }
 export function useCancelBackupDownload() {
    const queryClient = useQueryClient();
    return useMutation({
       mutationFn: cancelBackupDownload,
+      retry: false,
       onSuccess: (res, payload) => {
          console.log('res :', payload, res);
          queryClient.invalidateQueries({ queryKey: ['plan', payload.planId] });
@@ -114,21 +110,17 @@ export function useCancelBackupDownload() {
 // Remove Backup
 export async function deleteBackup(id: string) {
    const header = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
-   const res = await fetch(`${API_URL}/backups/${id}`, {
+   return mutationResponse<{ success: boolean; message?: string }>(`${API_URL}/backups/${encodeURIComponent(id)}`, {
       method: 'DELETE',
       credentials: 'include',
       headers: header,
-   });
-   const data = await res.json();
-   if (!data.success) {
-      throw new Error(data.error);
-   }
-   return data;
+   }, { allowNoContent: true, allowAccepted: false });
 }
 
 export function useDeleteBackup() {
    return useMutation({
       mutationFn: deleteBackup,
+      retry: false,
       onSuccess: (res) => {
          console.log('# Backup Removed! :', res);
       },

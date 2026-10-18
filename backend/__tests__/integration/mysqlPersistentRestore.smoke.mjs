@@ -8,6 +8,8 @@ import { PersistentRestoreTargets } from '/app/backend/dist/utils/persistentRest
 import { MysqlPersistentDatabaseImporter } from '/app/backend/dist/utils/mysqlPersistentDatabaseImporter.js';
 import { MysqlRecoveryWorkerClient } from '/app/backend/dist/utils/mysqlRecoveryWorkerClient.js';
 import { recoveryMetadataToken } from '/app/backend/dist/utils/recoveryPreparation.js';
+import sourceFixture from './mysqlPersistentRestore.source.cjs';
+const { seedMysqlPersistentSource, admissionDiagnostic } = sourceFixture;
 const require = createRequire('/app/backend/package.json'),
 	Database = require('better-sqlite3');
 const { drizzle } = require('drizzle-orm/better-sqlite3'),
@@ -61,6 +63,8 @@ const metadata = {
 	repositoryId: 'repo-01',
 	databases: [artifact],
 };
+// Resume/reconciliation must reuse the original durable source and restore state.
+if (!['resume', 'app-reconcile'].includes(mode)) seedMysqlPersistentSource(sqlite, metadata);
 const plan = {
 	sourceType: 'device',
 	sourceId: 'app-01',
@@ -247,10 +251,7 @@ try {
 				'oversize': 'resource-operator-sql-budget',
 			}[mode];
 			if (!expected)
-				console.error(
-					'CHECK unexpected fixture admission: ' +
-						(/^[a-z-]+$/.test(error.code || '') ? error.code : 'unclassified')
-				);
+				console.error('CHECK unexpected fixture admission: ' + admissionDiagnostic(error));
 			assert(expected, 'unexpected admission refusal');
 			assert.equal(error.code, expected);
 			assert.equal(store.list().length, 0);

@@ -44,6 +44,8 @@ describe('BackupService', () => {
 		// Instantiate mocks
 		mockBackupStore = new BackupStore(null as any) as jest.Mocked<BackupStore>;
 		mockPlanStore = new PlanStore(null as any) as jest.Mocked<PlanStore>;
+		mockPlanStore.beginSourceRemoval.mockReturnValue(jest.fn());
+		mockPlanStore.deleteBackupIfUnreferenced.mockResolvedValue(true);
 		mockStorageStore = new StorageStore(null as any) as jest.Mocked<StorageStore>;
 		mockRestoreStore = new RestoreStore(null as any) as jest.Mocked<RestoreStore>;
 		mockSnapshotManager = new BaseSnapshotManager() as jest.Mocked<BaseSnapshotManager>;
@@ -256,7 +258,7 @@ describe('BackupService', () => {
 			expect(mockPlanStore.update).toHaveBeenCalledWith(mockBackup.planId, {
 				stats: { size: 1024, snapshots: ['snap1'] },
 			});
-			expect(mockBackupStore.delete).toHaveBeenCalledWith(backupId);
+			expect(mockPlanStore.deleteBackupIfUnreferenced).toHaveBeenCalledWith(backupId);
 			expect(result).toEqual({
 				success: true,
 				result: 'Snapshot removed',
@@ -270,6 +272,44 @@ describe('BackupService', () => {
 
 			// Act & Assert
 			await expect(backupService.deleteBackup(backupId)).rejects.toThrow('Backup not found');
+		});
+
+		it('keeps the snapshot record and plan stats when removal fails', async () => {
+			mockBackupStore.getById.mockResolvedValue(mockBackup);
+			mockStorageStore.getById.mockResolvedValue(mockStorage);
+			mockSnapshotStrategy.removeSnapshot.mockResolvedValue({
+				success: false,
+				result: 'Storage unavailable',
+			});
+			await expect(backupService.deleteBackup(backupId, true)).rejects.toHaveProperty(
+				'statusCode',
+				500
+			);
+			expect(mockBackupStore.delete).not.toHaveBeenCalled();
+			expect(mockPlanStore.update).not.toHaveBeenCalled();
+		});
+
+		it('preserves the explicit no-encryption repository setting during removal', async () => {
+			mockBackupStore.getById.mockResolvedValue({ ...mockBackup, encryption: false });
+			mockStorageStore.getById.mockResolvedValue(mockStorage);
+			mockSnapshotStrategy.removeSnapshot.mockResolvedValue({ success: true, result: 'Removed' });
+			await backupService.deleteBackup(backupId, true);
+			expect(mockSnapshotStrategy.removeSnapshot).toHaveBeenCalledWith(
+				mockBackup.planId,
+				backupId,
+				expect.objectContaining({ encryption: false })
+			);
+		});
+
+		it.each(['backup', 'restore'])('refuses snapshot deletion during an active %s', async kind => {
+			mockBackupStore.getById.mockResolvedValue({ ...mockBackup, inProgress: kind === 'backup' });
+			mockRestoreStore.isRestoreRunning.mockResolvedValue(kind === 'restore');
+			await expect(backupService.deleteBackup(backupId, true)).rejects.toHaveProperty(
+				'statusCode',
+				409
+			);
+			expect(mockSnapshotStrategy.removeSnapshot).not.toHaveBeenCalled();
+			expect(mockBackupStore.delete).not.toHaveBeenCalled();
 		});
 
 		it('refuses remote snapshot deletion until remote forget is implemented', async () => {

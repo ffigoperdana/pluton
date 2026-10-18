@@ -67,6 +67,9 @@ describe('PlanService', () => {
 
 		mockBackupStore.deleteByPlanId = jest.fn();
 		mockRestoreStore.deleteByPlanId = jest.fn();
+		mockPlanStore.getStorageRemovalReferences.mockResolvedValue([]);
+		mockPlanStore.beginSourceRemoval.mockReturnValue(jest.fn());
+		mockStorageStore.getById.mockResolvedValue({ id: 'storage-123', type: 'local' } as any);
 
 		// The service instantiates the strategy, so we need to mock its constructor and methods
 		mockStrategy = new LocalStrategy(mockLocalAgent) as jest.Mocked<LocalStrategy>;
@@ -551,8 +554,7 @@ describe('PlanService', () => {
 				removeRemoteData: true, // We passed true to the service method
 				replicationStorages: [],
 			});
-			expect(mockBackupStore.deleteByPlanId).toHaveBeenCalledWith(planId);
-			expect(mockPlanStore.delete).toHaveBeenCalledWith(planId);
+			expect(mockPlanStore.delete).toHaveBeenCalledWith(planId, true);
 			expect(result).toEqual({ deleted: true, unremovedPaths: [], unremovedReason: '' });
 		});
 
@@ -572,7 +574,7 @@ describe('PlanService', () => {
 			const result = await planService.deletePlan(planId, true);
 
 			// Assert
-			expect(mockPlanStore.delete).toHaveBeenCalledWith(planId);
+			expect(mockPlanStore.delete).toHaveBeenCalledWith(planId, true);
 			expect(result).toEqual({
 				deleted: true,
 				unremovedPaths: [{ storageName: 'Test Storage', storagePath: '/backups/delete' }],
@@ -685,9 +687,7 @@ describe('PlanService', () => {
 
 			await expect(guarded.deletePlan(planId, false)).resolves.toHaveProperty('deleted', true);
 			expect(remote.removeManagedPlan).toHaveBeenCalledTimes(1);
-			expect(mockRestoreStore.deleteByPlanId).toHaveBeenCalledWith(planId);
-			expect(mockBackupStore.deleteByPlanId).toHaveBeenCalledWith(planId);
-			expect(mockPlanStore.delete).toHaveBeenCalledWith(planId);
+			expect(mockPlanStore.delete).toHaveBeenCalledWith(planId, true);
 		});
 	});
 

@@ -214,7 +214,7 @@ test('notification API actions send authenticated JSON and report queued/failed 
    const requests: any[] = [];
    globalThis.fetch = async (url: any, options: any) => {
       requests.push({ url, options });
-      return { ok: true, json: async () => ({ success: true, result: { status: 'pending' } }) } as Response;
+      return new Response(JSON.stringify({ success: true, result: { status: 'pending' } }), { headers: { 'Content-Type': 'application/json' } });
    };
    try {
       const result = await service.notificationRequest('channels/nc_fixture/test', 'POST', {});
@@ -223,7 +223,7 @@ test('notification API actions send authenticated JSON and report queued/failed 
       assert.equal(requests[0].options.headers['Content-Type'], 'application/json');
       await service.notificationRequest('deliveries/nd_fixture/retry', 'POST', {});
       assert.match(requests[1].url, /retry$/);
-      globalThis.fetch = async () => ({ ok: false, json: async () => ({ success: false, error: 'Notification request failed.' }) }) as Response;
+      globalThis.fetch = async () => new Response(JSON.stringify({ success: false, error: 'Notification request failed.' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
       await assert.rejects(service.notificationRequest('channels'), /Notification request failed/);
    } finally {
       globalThis.fetch = original;

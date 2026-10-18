@@ -51,10 +51,25 @@ export class BackupService {
 	}
 
 	async deleteBackup(backupId: string, removeSnapshot: boolean = false) {
+		const release = this.planStore.beginSourceRemoval({ backupId });
+		try {
+			return await this.removeBackup(backupId, removeSnapshot);
+		} finally {
+			release();
+		}
+	}
+
+	private async removeBackup(backupId: string, removeSnapshot: boolean) {
 		const backup = await this.backupStore.getById(backupId);
 		if (!backup) {
-			throw new Error('Backup not found');
+			throw new NotFoundError('Backup not found');
 		}
+		this.planStore.assertNoRetainedDatabaseRestores({ backupId });
+		if (backup.inProgress || (await this.restoreStore.isRestoreRunning(backupId)))
+			throw new AppError(
+				409,
+				'Wait for active backup and restore operations before removing this backup.'
+			);
 		if (RemoteBackupService.isRemoteFilesystemPlan(backup)) {
 			// Remote snapshot deletion is a future forget capability. Do not remove
 			// the server record while leaving the remote repository untouched.
@@ -66,12 +81,16 @@ export class BackupService {
 		const removeResult = await strategy.removeSnapshot(backup.planId as string, backupId, {
 			storageName,
 			storagePath: backup.storagePath || '',
-			encryption: backup.encryption || true,
+			encryption: backup.encryption ?? true,
 			mirrors: backup.mirrors || [],
 		});
 
-		// If snapshot removal fails, it should not throw an error
-		// Because the snapshot might have been removed already by prune process
+		// Only a verified absent snapshot is idempotent. Keep metadata on lookup/forget failure.
+		if (!removeResult.success)
+			throw new AppError(
+				500,
+				'Snapshot removal could not be verified. Backup history was retained.'
+			);
 
 		if (removeResult.stats) {
 			const primaryStats = removeResult.stats.primary;
@@ -98,7 +117,7 @@ export class BackupService {
 			});
 		}
 
-		await this.backupStore.delete(backup.id);
+		await this.planStore.deleteBackupIfUnreferenced(backup.id);
 
 		return removeResult;
 	}

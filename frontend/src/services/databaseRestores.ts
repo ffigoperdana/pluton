@@ -2,17 +2,19 @@ import { useQuery } from '@tanstack/react-query';
 import { API_URL } from '../utils/constants';
 import type { DatabaseRestoreView, RestorePreview, RestoreSelection } from '../@types/databaseRestores';
 import { needsRestoreRefresh } from '../utils/databaseRestores';
+import { mutationResponse, parseApiResponse } from '../utils/httpResponse';
 
 export async function restoreRequest<T>(route = '', body?: unknown): Promise<T> {
-   const response = await fetch(`${API_URL}/database-restores${route}`, {
+   const options: RequestInit = {
       method: body === undefined ? 'GET' : 'POST',
       credentials: 'include',
       cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-   });
-   const data = await response.json();
-   if (!response.ok || !data.success) throw new Error(data.error || 'Database restore request failed.');
+   };
+   const data = body === undefined
+      ? await parseApiResponse<{ result: T }>(await fetch(`${API_URL}/database-restores${route}`, options))
+      : await mutationResponse<{ result: T }>(`${API_URL}/database-restores${route}`, options);
    return data.result;
 }
 export function useRestorePreview(selection: RestoreSelection) {

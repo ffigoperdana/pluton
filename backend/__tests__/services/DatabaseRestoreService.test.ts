@@ -7,6 +7,8 @@ import { RecoveryTestError } from '../../src/utils/recoveryValidation';
 import { DatabaseRestoreError } from '../../src/utils/persistentRestorePolicy';
 import { MysqlWorkerConnection } from '../../src/utils/mysqlRecoveryWorkerClient';
 import { fixture, approval, row, sql } from '../integration/persistentRestore.fixture';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { PlanStore } from '../../src/stores/PlanStore';
 
 describe('Persistent MySQL service lifecycle and immutable binding', () => {
 	let db: ReturnType<typeof fixture>,
@@ -67,7 +69,7 @@ describe('Persistent MySQL service lifecycle and immutable binding', () => {
 					state: 'validated',
 				});
 				return {
-					engine: 'mysql',
+					engine: current.artifact.engine,
 					version: '8.4.11',
 					database: 'example_db',
 					tables: 1,
@@ -588,20 +590,37 @@ describe('Persistent MySQL service lifecycle and immutable binding', () => {
 		expect(service.get(id, 'administrator').failureStage).toBe('database-artifact-validation');
 		expect(native.restore).not.toHaveBeenCalled();
 	});
-	it('expiry and exact-ID deletion clean only owned data and retain history idempotently', async () => {
-		const id = await run();
-		db.store.update(id, { expiresAt: Date.now() - 1 });
-		await expect(service.inspect(id, 'administrator')).rejects.toMatchObject({
-			code: 'restore-access-not-active',
-		});
-		await service.tick();
-		await service.idle();
-		expect(service.get(id, 'administrator').status).toBe('deleted');
-		expect(db.store.lease(id)).toBeNull();
-		await service.delete(id, 'administrator', { confirmation: id });
-		expect(native.removeOwned).toHaveBeenCalledTimes(1);
-		expect(db.store.list()).toHaveLength(1);
-	});
+	it.each(['mysql', 'mariadb', 'postgresql'])(
+		'%s expiry preserves blocked source ownership, then exact-ID deletion cleans only owned data',
+		async engine => {
+			target.engine = target.target.engine = item.artifact.engine = engine;
+			item.metadataToken = recoveryMetadataToken({
+				planId: item.planId,
+				backupId: item.backupId,
+				snapshotId: item.snapshotId,
+				repositoryId: item.repositoryId,
+				databases: [item.artifact],
+			});
+			const id = await run();
+			const sourcePlans = new PlanStore(drizzle(db.sqlite) as any);
+			const lease = db.store.lease(id),
+				before = db.store.get(id);
+			await expect(sourcePlans.delete(item.planId, true)).rejects.toHaveProperty('statusCode', 409);
+			expect(db.store.get(id)).toEqual(before);
+			expect(db.store.lease(id)).toEqual(lease);
+			db.store.update(id, { expiresAt: Date.now() - 1 });
+			await expect(service.inspect(id, 'administrator')).rejects.toMatchObject({
+				code: 'restore-access-not-active',
+			});
+			await service.tick();
+			await service.idle();
+			expect(service.get(id, 'administrator').status).toBe('deleted');
+			expect(db.store.lease(id)).toBeNull();
+			await service.delete(id, 'administrator', { confirmation: id });
+			expect(native.removeOwned).toHaveBeenCalledTimes(1);
+			expect(db.store.list()).toHaveLength(1);
+		}
+	);
 	it('interrupted imports recover to ownership-checked cleanup, never resumed as success', async () => {
 		const saved = await service.create(request(), 'administrator');
 		db.store.claim(saved.id);

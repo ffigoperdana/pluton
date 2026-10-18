@@ -7,6 +7,10 @@ import type {
 	PersistentTargetApproval,
 } from '../types/databaseRestores';
 import { DatabaseRestoreError } from '../utils/persistentRestorePolicy';
+import {
+	assertRestoreSourceNotRemoving,
+	RetainedRestoreDependencyError,
+} from '../utils/retainedRestoreDependency';
 
 const columns = {
 	status: 'status',
@@ -111,6 +115,18 @@ export class DatabaseRestoreStore {
 		try {
 			return this.sqlite
 				.transaction(() => {
+					assertRestoreSourceNotRemoving(row);
+					if (
+						!this.sqlite
+							.prepare(
+								`SELECT 1 FROM plans p JOIN backups b ON b.plan_id=p.id
+						JOIN remote_managed_repositories repo ON repo.plan_id=p.id
+						WHERE p.id=? AND b.id=? AND repo.id=? AND json_valid(b.completion_stats)
+						AND json_extract(b.completion_stats,'$.snapshot_id')=?`
+							)
+							.get(row.planId, row.backupId, row.repositoryId, row.snapshotId)
+					)
+						throw new RetainedRestoreDependencyError();
 					if (
 						Number(
 							(
@@ -155,7 +171,8 @@ export class DatabaseRestoreStore {
 				})
 				.immediate();
 		} catch (error) {
-			if (error instanceof DatabaseRestoreError) throw error;
+			if (error instanceof DatabaseRestoreError || error instanceof RetainedRestoreDependencyError)
+				throw error;
 			throw new DatabaseRestoreError('target-already-reserved');
 		}
 	}

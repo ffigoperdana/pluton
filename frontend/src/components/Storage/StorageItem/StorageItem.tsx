@@ -30,6 +30,7 @@ const StorageItem = ({ storage, layout }: StorageItemProps) => {
    const Browser = useComponentOverride('StorageFileBrowser', StorageFileBrowser);
 
    const removeStorage = () => {
+      if (deleteStorageMutation.isPending) return;
       deleteStorageMutation.mutate(storage.id, {
          onError: (error: Error) => {
             console.log('error :', error?.message);
@@ -166,6 +167,7 @@ const StorageItem = ({ storage, layout }: StorageItemProps) => {
                title={`Remove Storage`}
                message={<>{`Are you sure you want to delete this Storage?`}</>}
                closeModal={() => setShowDeleteModal(false)}
+               errorMessage={deleteStorageMutation.error?.message}
                primaryAction={{
                   title: `Yes, Remove Storage`,
                   type: 'danger',

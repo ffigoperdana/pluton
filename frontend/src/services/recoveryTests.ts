@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { API_URL } from '../utils/constants';
+import { mutationResponse, parseApiResponse } from '../utils/httpResponse';
 import type {
    InternalTargetView,
    RecoveryPolicy,
@@ -9,14 +10,16 @@ import type {
    RecoverySelection,
 } from '../@types/recoveryTests';
 async function request<T>(planId: string, route: string, method = 'GET', body?: unknown): Promise<T> {
-   const res = await fetch(`${API_URL}/recovery-testing/${encodeURIComponent(planId)}/${route}`, {
+   const options: RequestInit = {
       method,
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-   });
-   const data = await res.json();
-   if (!res.ok || !data.success) throw new Error(data.error || 'Recovery testing request failed.');
+   };
+   const url = `${API_URL}/recovery-testing/${encodeURIComponent(planId)}/${route}`;
+   const data = method === 'GET'
+      ? await parseApiResponse<{ result: T }>(await fetch(url, options))
+      : await mutationResponse<{ result: T }>(url, options);
    return data.result;
 }
 export function useRecoveryTests(planId: string, enabled = true, displayedBackups: string[] = []) {
@@ -47,6 +50,7 @@ export function useRecoveryConfiguration(planId?: string) {
 export function useRecoveryAction(planId: string) {
    const queries = useQueryClient();
    return useMutation({
+      retry: false,
       mutationFn: ({
          backupId,
          cancelId,

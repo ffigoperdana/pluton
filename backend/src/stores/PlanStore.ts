@@ -13,6 +13,13 @@ import type { DatabaseCredential } from '../types/remoteLifecycle';
 import { backupHistoryColumns, backupHistoryDate } from './BackupStore';
 import { desc } from 'drizzle-orm';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
+import { legacyRepositories } from '../db/schema/legacyRepositories';
+import type { StorageRemovalReference } from '../utils/storageRemovalScope';
+import {
+	assertNoRetainedRestoreDependency,
+	beginSourceRemoval,
+	type RemovalSource,
+} from '../utils/retainedRestoreDependency';
 
 type ChartStats = NonNullable<NonNullable<PlanFull['backupChart']>[number]['completionStats']>;
 // Only the two plotted counters leave SQLite. Do not hydrate old SQL artifact
@@ -490,8 +497,13 @@ export class PlanStore {
 		return result[0] || null;
 	}
 
-	async delete(id: string): Promise<boolean> {
+	async delete(id: string, removeHistory = false): Promise<boolean> {
 		return this.db.transaction(tx => {
+			assertNoRetainedRestoreDependency(tx, { planId: id });
+			if (removeHistory) {
+				tx.delete(restores).where(eq(restores.planId, id)).run();
+				tx.delete(backups).where(eq(backups.planId, id)).run();
+			}
 			// Existing migrations can leave FK checks disabled; erase the owned
 			// credential explicitly as well as using ON DELETE CASCADE.
 			tx.delete(remotePlanDatabaseEntryCredentials)
@@ -502,6 +514,90 @@ export class PlanStore {
 				.run();
 			return tx.delete(plans).where(eq(plans.id, id)).run().changes > 0;
 		});
+	}
+
+	assertNoRetainedDatabaseRestores(source: RemovalSource) {
+		assertNoRetainedRestoreDependency(this.db, source);
+	}
+
+	beginSourceRemoval(source: RemovalSource) {
+		const snapshots = this.db.all<{ repositoryId: string; snapshotId: string }>(sql`
+			SELECT repo.id AS repositoryId, json_extract(backup.completion_stats,'$.snapshot_id') AS snapshotId
+			FROM backups backup JOIN remote_managed_repositories repo ON repo.plan_id=backup.plan_id
+			WHERE ${source.planId ? sql`backup.plan_id=${source.planId}` : sql`backup.id=${source.backupId!}`}
+			AND json_valid(backup.completion_stats)`);
+		return beginSourceRemoval([source, ...snapshots]);
+	}
+
+	async deleteBackupIfUnreferenced(id: string) {
+		return this.db.transaction(tx => {
+			assertNoRetainedRestoreDependency(tx, { backupId: id });
+			return tx.delete(backups).where(eq(backups.id, id)).run().changes > 0;
+		});
+	}
+
+	/** All retained repository references, without loading backup payloads or credentials. */
+	async getStorageRemovalReferences(): Promise<StorageRemovalReference[]> {
+		const references: StorageRemovalReference[] = [];
+		for (const plan of this.db
+			.select({
+				id: plans.id,
+				storageId: plans.storageId,
+				storagePath: plans.storagePath,
+				settings: plans.settings,
+			})
+			.from(plans)
+			.all()) {
+			references.push({
+				planId: plan.id,
+				storageId: plan.storageId,
+				storagePath: plan.storagePath || '',
+				kind: 'primary',
+			});
+			for (const replica of plan.settings.replication?.storages || [])
+				references.push({
+					planId: plan.id,
+					storageId: replica.storageId,
+					storagePath: replica.storagePath,
+					replicationId: replica.replicationId,
+					kind: 'replica',
+				});
+		}
+		for (const backup of this.db
+			.select({
+				planId: backups.planId,
+				storageId: backups.storageId,
+				storagePath: backups.storagePath,
+				mirrors: backups.mirrors,
+			})
+			.from(backups)
+			.all()) {
+			references.push({
+				planId: backup.planId,
+				storageId: backup.storageId,
+				storagePath: backup.storagePath || '',
+				kind: 'primary',
+			});
+			for (const mirror of backup.mirrors || [])
+				references.push({
+					planId: backup.planId,
+					storageId: mirror.storageId,
+					storagePath: mirror.storagePath,
+					replicationId: mirror.replicationId,
+					kind: 'replica',
+				});
+		}
+		for (const legacy of this.db
+			.select({ repositoryPath: legacyRepositories.repositoryPath })
+			.from(legacyRepositories)
+			.all())
+			references.push({
+				planId: null,
+				storageId: null,
+				storagePath: legacy.repositoryPath,
+				kind: 'legacy',
+			});
+		return references;
 	}
 
 	async hasActiveBackups(planId: string): Promise<boolean> {

@@ -71,6 +71,7 @@ describe('PlanStore', () => {
 		};
 
 		mockDb = {
+			get: jest.fn(),
 			query: {
 				plans: {
 					findMany: jest.fn(),

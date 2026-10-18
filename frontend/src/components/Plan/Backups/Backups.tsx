@@ -7,6 +7,7 @@ import { formatBytes, formatDuration, formatNumberToK } from '../../../utils/hel
 import Icon from '../../common/Icon/Icon';
 import classes from './Backups.module.scss';
 import ActionModal from '../../common/ActionModal/ActionModal';
+import DeleteDependencyNotice from '../../common/ActionModal/DeleteDependencyNotice';
 import {
    useCancelBackupDownload,
    useDeleteBackup,
@@ -140,10 +141,11 @@ const Backups = ({
    const snapshotFiles = browseSnapshotMutation.data?.result;
 
    const removeBackup = (backup: Backup) => {
+      if (deleteBackupMutation.isPending) return;
       console.log('remove :', backup.id);
       deleteBackupMutation.mutate(backup.id, {
-         onError: () => {
-            toast.error(`Failed to Remove "backup-${backup.id}"`);
+         onError: (error: Error) => {
+            toast.error(error.message || `No reliable response for backup removal. Refresh and check its status before trying again.`);
          },
          onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['plan', planId] });
@@ -477,6 +479,7 @@ const Backups = ({
                   </>
                }
                closeModal={() => !deleteBackupMutation.isPending && setShowDeleteModal(false)}
+               errorMessage={deleteBackupMutation.error ? <DeleteDependencyNotice error={deleteBackupMutation.error} /> : undefined}
                width="400px"
                primaryAction={{
                   title: 'Yes, Remove Backup',

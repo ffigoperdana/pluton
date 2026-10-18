@@ -36,6 +36,17 @@ describe('0016 additive explicit Resume migration and rollback compatibility', (
 			target.storage.kind = 'fixed-ext4';
 			const item = row(target);
 			item.status = 'importing';
+			// Reservation requires the same complete source binding as a real 0015 restore.
+			sqlite.exec(`INSERT INTO agent_identities(agent_id,device_id,encrypted_secret,hostname,os,architecture,agent_version,capabilities)
+				VALUES('agent-01','app-01','synthetic-cipher','app-01','Linux','x86_64','0.4.0','{}');
+				UPDATE plans SET storage_path='managed/fixture' WHERE id='plan-01';`);
+			sqlite.prepare('UPDATE backups SET storage_path=?,completion_stats=? WHERE id=?')
+				.run('managed/fixture', JSON.stringify({ snapshot_id: item.snapshotId }), item.backupId);
+			sqlite.prepare(`INSERT INTO remote_managed_repositories(id,plan_id,agent_id,storage_id,storage_path,encrypted_password,initialized_at)
+				VALUES(?,?,'agent-01','storage-01','managed/fixture','synthetic-cipher',1)`)
+				.run(item.repositoryId, item.planId);
+			const sourceTables = ['plans', 'backups', 'agent_identities', 'remote_managed_repositories'];
+			const sourceRows = sourceTables.map(table => sqlite.prepare(`SELECT * FROM ${table}`).all());
 			const store = new DatabaseRestoreStore(sqlite, 'synthetic-migration-encryption-key');
 			store.create(item);
 			store.bind(item.id, target);
@@ -68,6 +79,7 @@ describe('0016 additive explicit Resume migration and rollback compatibility', (
 				.all();
 			migrate(drizzle(sqlite), { migrationsFolder: path.resolve('drizzle') });
 			migrate(drizzle(sqlite), { migrationsFolder: path.resolve('drizzle') });
+			expect(sourceTables.map(table => sqlite.prepare(`SELECT * FROM ${table}`).all())).toEqual(sourceRows);
 			expect(store.get(item.id)).toEqual(original);
 			expect(store.lease(item.id)).toEqual(lease);
 			expect(store.approval(item.id)).toEqual(target);

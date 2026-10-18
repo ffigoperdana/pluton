@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { API_URL } from '../utils/constants';
+import { mutationResponse } from '../utils/httpResponse';
 
 // Get System Metrics
 export async function getSystemMetrics(id: string) {
@@ -62,14 +63,12 @@ export type AgentEnrollment = {
 
 async function agentAdminRequest<T>(pathname: string, method: 'POST', body?: Record<string, unknown>): Promise<T> {
    const headers = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
-   const res = await fetch(`${API_URL}/agent-admin${pathname}`, {
+   const data = await mutationResponse<{ result: T }>(`${API_URL}/agent-admin${pathname}`, {
       method,
       credentials: 'include',
       headers,
       body: body ? JSON.stringify(body) : undefined,
-   });
-   const data = await res.json();
-   if (!data.success) throw new Error(data.error || 'Agent administration request failed.');
+   }, { allowNoContent: pathname.endsWith('/revoke'), allowAccepted: !pathname.endsWith('/revoke') });
    return data.result as T;
 }
 
@@ -81,6 +80,7 @@ export function useCreateAgentEnrollment() {
 
 export function useRevokeAgentEnrollment() {
    return useMutation({
+      retry: false,
       mutationFn: (id: string) => agentAdminRequest<void>(`/enrollments/${encodeURIComponent(id)}/revoke`, 'POST'),
    });
 }
@@ -88,6 +88,7 @@ export function useRevokeAgentEnrollment() {
 export function useRevokeAgentDevice() {
    const queryClient = useQueryClient();
    return useMutation({
+      retry: false,
       mutationFn: (id: string) => agentAdminRequest<void>(`/devices/${encodeURIComponent(id)}/revoke`, 'POST'),
       onSuccess: (_result, id) => {
          queryClient.invalidateQueries({ queryKey: ['devices'] });

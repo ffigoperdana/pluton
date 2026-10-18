@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { BackupService } from '../services/BackupServices';
 import { AppError } from '../utils/AppError';
+import { RetainedRestoreDependencyError } from '../utils/retainedRestoreDependency';
 
 export class BackupController {
 	constructor(protected backupService: BackupService) {}
@@ -189,9 +190,10 @@ export class BackupController {
 			await this.backupService.deleteBackup(req.params.id, removeSnapshot);
 			res.status(200).json({ success: true, result: 'Removed' });
 		} catch (error: any) {
-			res.status(500).json({
+			res.status(error instanceof AppError ? error.statusCode : 500).json({
 				success: false,
 				error: error?.message || 'Failed to delete backup',
+				...(error instanceof RetainedRestoreDependencyError && { code: error.code }),
 			});
 			return;
 		}
