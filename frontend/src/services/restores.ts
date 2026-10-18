@@ -1,3 +1,4 @@
+import { mutationResponse } from '../utils/httpResponse';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-toastify';
 import { API_URL } from '../utils/constants';
@@ -59,21 +60,17 @@ export function useGetRestore(id: string) {
 // Remove Restore
 export async function deleteRestore(id: string) {
    const header = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
-   const res = await fetch(`${API_URL}/restores/${id}`, {
+   return mutationResponse<{ success: boolean; message?: string }>(`${API_URL}/restores/${encodeURIComponent(id)}`, {
       method: 'DELETE',
       credentials: 'include',
       headers: header,
-   });
-   const data = await res.json();
-   if (!data.success) {
-      throw new Error(data.error);
-   }
-   return data;
+   }, { allowNoContent: true, allowAccepted: false });
 }
 
 export function useDeleteRestore() {
    return useMutation({
       mutationFn: deleteRestore,
+      retry: false,
       onSuccess: (res) => {
          console.log('# Restore Removed! :', res);
       },

@@ -42,6 +42,42 @@ describe('bundled public documentation deep links', () => {
 		registerSpaFallback(app, directory);
 		await request(app).get('/api/settings').expect(401).expect('Content-Type', /json/);
 	});
+	it.each(['get', 'post', 'put', 'patch', 'delete'] as const)(
+		'returns JSON 404 for an unmatched API %s rather than SPA/error HTML',
+		async method => {
+			const app = express();
+			registerSpaFallback(app, directory);
+			await request(app)[method]('/api/missing-resource')
+				.expect(404)
+				.expect('Content-Type', /json/)
+				.expect({ success: false, error: 'API route not found.' });
+		}
+	);
+	it('returns JSON for malformed API input without reaching a mutation', async () => {
+		const app = express(), mutate = jest.fn();
+		app.use(express.json());
+		app.delete('/api/plans/synthetic', mutate);
+		registerSpaFallback(app, directory);
+		await request(app).delete('/api/plans/synthetic').set('Content-Type', 'application/json')
+			.send('{broken').expect(400).expect('Content-Type', /json/)
+			.expect({ success: false, error: 'Invalid API request.' });
+		expect(mutate).not.toHaveBeenCalled();
+	});
+	it('redacts uncaught asynchronous API errors without changing their failure status', async () => {
+		const app = express();
+		app.delete('/api/plans/synthetic', async () => { throw new Error('private-provider-details'); });
+		registerSpaFallback(app, directory);
+		const response = await request(app).delete('/api/plans/synthetic').expect(500).expect('Content-Type', /json/);
+		expect(response.body.success).toBe(false);
+		expect(response.text).not.toContain('private-provider-details');
+	});
+	it('preserves a registered deletion response and calls its handler exactly once', async () => {
+		const app = express(), mutation = jest.fn();
+		app.delete('/api/plans/synthetic', (_req, res) => { mutation(); res.status(200).json({ success: true }); });
+		registerSpaFallback(app, directory);
+		await request(app).delete('/api/plans/synthetic').expect(200).expect({ success: true });
+		expect(mutation).toHaveBeenCalledTimes(1);
+	});
 	it.each(['/docs/assets/missing.js', '/docs/missing-index.json', '/docs/licenses/missing.txt'])(
 		'fails with 404 instead of returning executable HTML for missing asset %s',
 		async route => {

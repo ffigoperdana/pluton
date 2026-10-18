@@ -5,6 +5,7 @@ import { BackupController } from '../../src/controllers/BackupController';
 import { BackupService } from '../../src/services/BackupServices';
 import jwt from 'jsonwebtoken';
 import Cookies from 'cookies';
+import { RetainedRestoreDependencyError } from '../../src/utils/retainedRestoreDependency';
 import http from 'http';
 import { AddressInfo } from 'net';
 import { ManagedRepositoryAccessError } from '../../src/utils/restic/ManagedSftpRepositorySession';
@@ -69,6 +70,16 @@ describe('Backup Routes', () => {
 	});
 
 	describe('DELETE /api/backups/:id', () => {
+		it('returns the retained database dependency code with HTTP 409', async () => {
+			mockBackupService.deleteBackup.mockRejectedValue(new RetainedRestoreDependencyError());
+			const response = await request(app).delete('/api/backups/backup-1');
+			expect(response.status).toBe(409);
+			expect(response.body).toMatchObject({
+				success: false,
+				code: 'RETAINED_DATABASE_RESTORE_DEPENDENCY',
+			});
+			expect(response.body.error).toContain('/database-restores');
+		});
 		it('should return 401 if not authenticated', async () => {
 			setupAuthMock(false);
 

@@ -127,6 +127,7 @@ const PlanReplicationSettings = ({
    };
 
    const removeReplicationStorage = () => {
+      if (deleteStorageMutation.isPending) return;
       if (typeof showRemoveModal === 'object' && planID) {
          const storageToRemove = showRemoveModal;
          deleteStorageMutation.mutate(
@@ -306,6 +307,7 @@ const PlanReplicationSettings = ({
                      <p>Are you sure you want to remove this Replication storage from this plan?</p>
                      <Toggle
                         fieldValue={removeStorageData}
+                        disabled={deleteStorageMutation.isPending}
                         onUpdate={() => setRemoveStorageData((prev) => !prev)}
                         description={`Remove replicated data from the Storage`}
                         customClasses={classes.removeRemoteToggle}
@@ -320,7 +322,7 @@ const PlanReplicationSettings = ({
                   }
                }}
                width="400px"
-               errorMessage={deleteStorageMutation.isError && 'Error Removing Replication Storage!'}
+               errorMessage={deleteStorageMutation.error?.message}
                successMessage={deleteStorageMutation.isSuccess && 'Removed Replication Storage Successfully!'}
                primaryAction={{
                   title: 'Yes, Remove Storage',

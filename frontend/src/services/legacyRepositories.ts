@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { API_URL } from '../utils/constants';
+import { mutationResponse, parseApiResponse } from '../utils/httpResponse';
 import type {
    LegacyRepository,
    LegacyRepositoryRegistration,
@@ -19,15 +20,13 @@ type ApiResponse<T> = {
 };
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<ApiResponse<T>> {
-   const response = await fetch(`${API_URL}/legacy-repositories${path}`, {
+   const init: RequestInit = {
       credentials: 'include',
       ...options,
-   });
-   const data = (await response.json()) as ApiResponse<T>;
-   if (!data.success) {
-      throw new Error(data.error || 'Legacy repository request failed.');
-   }
-   return data;
+   };
+   return options.method && options.method !== 'GET'
+      ? mutationResponse<ApiResponse<T>>(`${API_URL}/legacy-repositories${path}`, init, { allowNoContent: options.method === 'DELETE', allowAccepted: options.method !== 'DELETE' })
+      : parseApiResponse<ApiResponse<T>>(await fetch(`${API_URL}/legacy-repositories${path}`, init));
 }
 
 export function getLegacyRepositories() {
@@ -239,6 +238,7 @@ export function useValidateLegacyRepository() {
 export function useDeleteLegacyRepository() {
    const queryClient = useQueryClient();
    return useMutation({
+      retry: false,
       mutationFn: (id: string) =>
          request<void>(`/${encodeURIComponent(id)}`, {
             method: 'DELETE',

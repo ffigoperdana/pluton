@@ -3,6 +3,7 @@ import { NewPlanReq, PlanAddRunSettings } from '../types/plans';
 import { BackupRunConfig } from '../types/backups';
 import { PlanService } from '../services/PlanService';
 import { AppError } from '../utils/AppError';
+import { RetainedRestoreDependencyError } from '../utils/retainedRestoreDependency';
 
 export class PlanController {
 	constructor(protected planService: PlanService) {}
@@ -174,6 +175,7 @@ export class PlanController {
 			res.status(appError.statusCode || 500).json({
 				success: false,
 				error: appError?.message || 'Failed to delete plan',
+				...(error instanceof RetainedRestoreDependencyError && { code: error.code }),
 			});
 		}
 	}

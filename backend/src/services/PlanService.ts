@@ -39,6 +39,7 @@ import type { DatabaseCredential } from '../types/remoteLifecycle';
 import { configService } from './ConfigService';
 import type { RecoveryTestStore } from '../stores/RecoveryTestStore';
 import { parseBackupHistoryQuery } from '../utils/backupHistoryQuery';
+import { assertStorageRemovalScope } from '../utils/storageRemovalScope';
 
 /**
  * PlanService is the central orchestrator for all business logic related to backup plans.
@@ -47,6 +48,7 @@ import { parseBackupHistoryQuery } from '../utils/backupHistoryQuery';
  */
 export class PlanService {
 	protected scheduleReconciler: ScheduleReconciler;
+	private readonly removingPlans = new Set<string>();
 
 	constructor(
 		protected localAgent: BaseBackupManager,
@@ -475,16 +477,37 @@ export class PlanService {
 		unremovedPaths: PlanStoragePath[];
 		unremovedReason: string;
 	}> {
+		if (this.removingPlans.has(planId))
+			throw new AppError(409, 'Plan removal is already in progress.');
+		this.removingPlans.add(planId);
+		let release = () => {};
+		try {
+			release = this.planStore.beginSourceRemoval({ planId });
+			return await this.removePlan(planId, removeRemoteData);
+		} finally {
+			release();
+			this.removingPlans.delete(planId);
+		}
+	}
+
+	private async removePlan(planId: string, removeRemoteData: boolean) {
 		const plan = await this.planStore.getById(planId);
 		if (!plan) throw new NotFoundError('Plan not found.');
+		this.planStore.assertNoRetainedDatabaseRestores({ planId });
+		if (
+			(await this.planStore.hasActiveBackups(planId)) ||
+			(await this.planStore.hasActiveRestore(planId))
+		)
+			throw new AppError(
+				409,
+				'Wait for active backups and restores to finish before removing this plan.'
+			);
 		const storageName = plan.storage?.name || '';
 		if (RemoteBackupService.isRemoteFilesystemPlan(plan)) {
 			await this.recoveryTests?.assertPlanRemovable(planId);
 			const remote = this.requireRemoteBackupService();
 			const retained = await remote.removeManagedPlan(plan);
-			await this.restoreStore.deleteByPlanId(planId);
-			await this.backupStore.deleteByPlanId(planId);
-			const deleted = await this.planStore.delete(planId);
+			const deleted = await this.planStore.delete(planId, true);
 			if (!deleted) throw new AppError(500, 'Failed to delete remote backup plan.');
 			return {
 				deleted,
@@ -497,6 +520,11 @@ export class PlanService {
 		}
 		// Resolve replication storage names so removeBackup can purge them too
 		const replicationStorages = removeRemoteData ? await this.resolveReplicationStorages(plan) : [];
+		if (removeRemoteData) {
+			await this.assertRemovableStorage(plan.storageId, plan.storagePath || '', planId);
+			for (const replica of plan.settings.replication?.storages || [])
+				await this.assertRemovableStorage(replica.storageId, replica.storagePath, planId);
+		}
 
 		const options = {
 			storageName:
@@ -515,9 +543,7 @@ export class PlanService {
 		}
 
 		// Finally, remove from our database
-		await this.restoreStore.deleteByPlanId(planId);
-		await this.backupStore.deleteByPlanId(planId);
-		const deleteRes = await this.planStore.delete(planId);
+		const deleteRes = await this.planStore.delete(planId, true);
 		if (!deleteRes) {
 			throw new AppError(500, 'Failed to delete plan from the database.');
 		}
@@ -535,6 +561,7 @@ export class PlanService {
 	 * Triggers a one-off manual backup for a plan.
 	 */
 	public async performBackup(planId: string, runConfig?: BackupRunConfig): Promise<string> {
+		if (this.removingPlans.has(planId)) throw new AppError(409, 'Plan removal is in progress.');
 		const plan = await this.planStore.getById(planId);
 		if (!plan) throw new NotFoundError(`Plan with ID ${planId} not found.`);
 
@@ -720,6 +747,29 @@ export class PlanService {
 		removeData: boolean,
 		replicationId?: string
 	): Promise<{ success: boolean; message: string }> {
+		if (this.removingPlans.has(planId))
+			throw new AppError(409, 'Plan removal is already in progress.');
+		this.removingPlans.add(planId);
+		try {
+			return await this.removeReplicationStorage(
+				planId,
+				storageID,
+				storagePath,
+				removeData,
+				replicationId
+			);
+		} finally {
+			this.removingPlans.delete(planId);
+		}
+	}
+
+	private async removeReplicationStorage(
+		planId: string,
+		storageID: string,
+		storagePath: string,
+		removeData: boolean,
+		replicationId?: string
+	) {
 		const plan = await this.planStore.getById(planId);
 		if (!plan) throw new NotFoundError('Plan not found.');
 
@@ -737,6 +787,17 @@ export class PlanService {
 			// If the storage to remove isn't found, we can consider it already "removed" for idempotency
 			return { success: true, message: `Replication storage removed successfully.` };
 		}
+		const selectedStorage = replication.storages[storageIndex];
+		if (selectedStorage.storageId !== storageID || selectedStorage.storagePath !== storagePath)
+			throw new AppError(409, 'Replication storage selection changed. Refresh before removing it.');
+		if (
+			(await this.planStore.hasActiveBackups(planId)) ||
+			(await this.planStore.hasActiveRestore(planId))
+		)
+			throw new AppError(
+				409,
+				'Wait for active backups and restores before removing replication storage.'
+			);
 
 		// Resolve storage name for logging and rclone purge
 		let storageName = 'Unknown';
@@ -748,10 +809,18 @@ export class PlanService {
 
 		// If removeData is true, purge the replicated data from the remote storage
 		if (removeData) {
+			if (!selectedStorage.replicationId)
+				throw new AppError(409, 'Replication identity is missing. Retain the storage data.');
+			await this.assertRemovableStorage(
+				selectedStorage.storageId,
+				selectedStorage.storagePath,
+				planId,
+				selectedStorage.replicationId
+			);
 			const strategy = this.getStrategy(plan) as BackupStrategy;
 			const purgeResult = await strategy.removeReplicationStorage(planId, {
 				storageName,
-				storagePath,
+				storagePath: selectedStorage.storagePath,
 				removeData,
 			});
 			if (!purgeResult.success) {
@@ -797,6 +866,24 @@ export class PlanService {
 		);
 
 		return { success: true, message: `Replication storage "${storageName}" removed successfully.` };
+	}
+
+	private async assertRemovableStorage(
+		storageId: string | null | undefined,
+		storagePath: string,
+		planId: string,
+		replicationId?: string
+	) {
+		if (!storageId)
+			throw new AppError(409, 'Storage identity is missing. Retain the storage data.');
+		const storage = await this.storageStore.getById(storageId);
+		if (!storage)
+			throw new AppError(409, 'Storage identity is unavailable. Retain the storage data.');
+		assertStorageRemovalScope(
+			{ storageId, storagePath, local: storage.type === 'local' },
+			await this.planStore.getStorageRemovalReferences(),
+			{ planId, kind: replicationId === undefined ? 'plan' : 'replica', replicationId }
+		);
 	}
 
 	/**

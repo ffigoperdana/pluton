@@ -1,15 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { API_URL } from '../utils/constants';
 import type { Channel, ChannelInput, Delivery, Subscription } from '../utils/notificationDelivery';
+import { mutationResponse, parseApiResponse } from '../utils/httpResponse';
 export async function notificationRequest<T>(route: string, method = 'GET', body?: unknown): Promise<T> {
-   const response = await fetch(`${API_URL}/notifications/${route}`, {
+   const options: RequestInit = {
       method,
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-   });
-   const data = await response.json();
-   if (!response.ok || !data.success) throw new Error(data.error || 'Notification request failed.');
+   };
+   const data = method === 'GET'
+      ? await parseApiResponse<{ result: T }>(await fetch(`${API_URL}/notifications/${route}`, options))
+      : await mutationResponse<{ result: T }>(`${API_URL}/notifications/${route}`, options, { allowNoContent: method === 'DELETE', allowAccepted: method !== 'DELETE' });
    return data.result;
 }
 export function useNotificationChannels() {
@@ -34,6 +36,7 @@ export function useNotificationSubscription(planId?: string) {
 export function useNotificationActions() {
    const queries = useQueryClient();
    return useMutation({
+      retry: false,
       mutationFn: async (
          action:
             | { type: 'save'; id?: string; value: ChannelInput }
