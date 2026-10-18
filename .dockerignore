@@ -12,6 +12,8 @@ frontend/dist-lib/
 # Development data
 data/
 backend/data/
+# Local synthetic archives and private rehearsal drivers are never build inputs.
+/tmp/
 
 # Test files
 coverage/

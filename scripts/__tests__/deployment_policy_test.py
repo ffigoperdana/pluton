@@ -182,6 +182,93 @@ class DeploymentPolicyTests(unittest.TestCase):
             actual = json.loads(result.stdout)["services"]["pluton"]["healthcheck"]["test"]
             self.assertEqual(actual, ["CMD", "node", "-e", POLICY.probe_source(ROOT / "deploy/healthcheck.cjs")])
 
+    def mysql_worker(self):
+        config = self.config()
+        config["services"]["pluton"]["volumes"].append({"type": "volume", "source": "mysql-ipc", "target": "/run/pluton-mysql-worker", "read_only": True})
+        config["services"]["mysql-recovery-worker"] = {
+            "image": "ghcr.io/example/pluton-mysql-recovery-worker@sha256:" + "b" * 64,
+            "user": "10001:10001", "read_only": True, "cap_drop": ["ALL"], "security_opt": ["no-new-privileges:true"],
+            "mem_limit": 384 * 1024 ** 2, "memswap_limit": 384 * 1024 ** 2, "cpus": "0.5", "pids_limit": 64,
+            "tmpfs": ["/tmp:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=700,size=160m"],
+            "networks": {"persistent-restores": {}, "automatic-tests": {}},
+            "volumes": [{"type": "volume", "source": "mysql-ipc", "target": "/run/pluton-mysql-worker"},
+                        {"type": "bind", "source": "/etc/example-worker/target.json", "target": "/run/pluton-mysql-config/target.json", "read_only": True, "bind": {"create_host_path": False}},
+                        {"type": "bind", "source": "/etc/pluton-automatic-recovery/mysql-public", "target": "/run/pluton-mysql-internal", "read_only": True, "bind": {"create_host_path": False}}]}
+        return config
+
+    def test_mysql_internal_worker_is_immutable_private_and_bounded(self):
+        config = self.mysql_worker()
+        POLICY.validate_internal_mysql_worker(config)
+        config["services"]["mysql-recovery-worker"]["image"] = "sha256:" + "c" * 64
+        POLICY.validate_internal_mysql_worker(config)  # Reviewed local archive, never a mutable test tag.
+
+    def test_mysql_worker_refuses_runtime_overrides_and_unbounded_resources(self):
+        for key, value in (("image", "unreviewed:latest"), ("user", "0:0"), ("privileged", True), ("cap_add", ["SYS_ADMIN"]),
+                           ("command", ["arbitrary"]), ("entrypoint", ["arbitrary"]), ("network_mode", "host"),
+                           ("environment", {"UNREVIEWED_OPTION": "true"}), ("mem_limit", 0), ("memswap_limit", -1),
+                           ("pids_limit", 0), ("tmpfs", ["/tmp:size=2g"])):
+            config = self.mysql_worker()
+            config["services"]["mysql-recovery-worker"][key] = value
+            with self.subTest(key=key), self.assertRaises(POLICY.Refused):
+                POLICY.validate_internal_mysql_worker(config)
+
+    def test_mysql_worker_cannot_read_other_engine_mailboxes_or_application_data(self):
+        for patch in ({"source": "/etc/pluton-automatic-recovery/public"}, {"read_only": False},
+                      {"bind": {"create_host_path": True}}):
+            config = self.mysql_worker()
+            config["services"]["mysql-recovery-worker"]["volumes"][2].update(patch)
+            with self.assertRaises(POLICY.Refused):
+                POLICY.validate_internal_mysql_worker(config)
+        config = self.mysql_worker()
+        config["services"]["mysql-recovery-worker"]["volumes"].append({"type": "bind", "source": "/data", "target": "/data", "read_only": True})
+        with self.assertRaises(POLICY.Refused):
+            POLICY.validate_internal_mysql_worker(config)
+
+    def test_mysql_worker_requires_exact_private_ipc_and_networks(self):
+        config = self.mysql_worker()
+        config["services"]["mysql-recovery-worker"]["volumes"][0]["source"] = "foreign-ipc"
+        with self.assertRaises(POLICY.Refused):
+            POLICY.validate_internal_mysql_worker(config)
+        config = self.mysql_worker()
+        config["services"]["mysql-recovery-worker"]["networks"]["unapproved"] = {}
+        with self.assertRaises(POLICY.Refused):
+            POLICY.validate_internal_mysql_worker(config)
+
+    def test_existing_custom_worker_policy_is_unchanged_and_approved_ca_can_coexist(self):
+        POLICY.validate_internal_mysql_worker({"services": {"mysql-recovery-worker": {"image": "legacy-not-an-internal-profile"}}})
+        config = self.mysql_worker()
+        worker = config["services"]["mysql-recovery-worker"]
+        worker["networks"]["mysql-recovery-egress"] = {}
+        worker["volumes"].append({"type": "bind", "source": "/etc/example-worker/ca.pem", "target": "/run/pluton-mysql-config/ca.pem", "read_only": True, "bind": {"create_host_path": True}})
+        POLICY.validate_internal_mysql_worker(config)
+
+    def test_actual_mysql_overlay_is_narrow_alone_and_preserves_an_existing_custom_worker(self):
+        self.write("compose.yml", (ROOT / "deploy/compose.yml").read_text())
+        base = ["compose.persistent-restore.yml", "compose.automatic-recovery.yml"]
+        for custom in (False, True):
+            names = base + (["compose.mysql-recovery-worker.yml"] if custom else []) + ["compose.mysql-internal-recovery.yml"]
+            for name in names:
+                self.write(name, (ROOT / "deploy" / name).read_text())
+            self.write("compose.overlays", "\n".join(names))
+            self.write(".env", "PLUTON_IMAGE_REF=ghcr.io/example/pluton@sha256:" + "a" * 64 + "\nENCRYPTION_KEY=" + os.urandom(32).hex() +
+                       "\nUSER_NAME=fixture-admin\nUSER_PASSWORD=" + os.urandom(24).hex() +
+                       "\nPLUTON_MYSQL_WORKER_IMAGE_REF=ghcr.io/example/pluton-mysql-recovery-worker@sha256:" + "b" * 64 +
+                       "\nPLUTON_MYSQL_WORKER_CONFIG=/etc/example-worker/target.json\nPLUTON_MYSQL_WORKER_CA=/etc/example-worker/ca.pem\n")
+            with tempfile.TemporaryDirectory() as workspace:
+                POLICY.snapshot(self.root, workspace)
+                result = subprocess.run(["python3", str(ROOT / "deploy/compose-tools.py"), "compose", str(self.root), workspace, "config", "--format", "json"], capture_output=True, text=True)
+                diagnostic = result.stderr
+                for line in (self.root / ".env").read_text().splitlines():
+                    if "=" in line:
+                        value = line.split("=", 1)[1]
+                        if value:
+                            diagnostic = diagnostic.replace(value, "<fixture-value>")
+                self.assertEqual(result.returncode, 0, "actual MySQL overlay expansion failed: " + diagnostic[:500])
+                effective = json.loads(result.stdout)
+                POLICY.validate_internal_mysql_worker(effective)
+                ca = [item for item in effective["services"]["mysql-recovery-worker"]["volumes"] if item["target"] == "/run/pluton-mysql-config/ca.pem"]
+                self.assertEqual(len(ca), int(custom), "Custom CA must be preserved, not invented or removed")
+
 
 if __name__ == "__main__":
     unittest.main()

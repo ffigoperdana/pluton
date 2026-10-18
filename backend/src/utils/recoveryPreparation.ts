@@ -53,12 +53,7 @@ export function manualRecoveryPolicy(
 	};
 	const internal = new Set(
 		entries
-			.filter(
-				entry =>
-					entry.engine &&
-					entry.engine !== 'mysql' &&
-					policy.targetModes?.[entry.engine] === 'internal'
-			)
+			.filter(entry => entry.engine && policy.targetModes?.[entry.engine] === 'internal')
 			.map(entry => entry.engine)
 	);
 	if (policy.databaseImport === 'required' && internal.size > 1)

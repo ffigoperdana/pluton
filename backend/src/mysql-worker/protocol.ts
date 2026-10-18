@@ -12,11 +12,15 @@ export const CHUNK_BYTES = 32 * 1024;
 export const DEADLINE_MS = 75 * 60_000;
 const id = z.string().regex(/^[a-f0-9]{24}$/);
 const database = z.string().regex(/^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/);
+export const internalContextSchema = z
+	.object({ id, snapshotId: z.string().regex(/^[a-f0-9]{64}$/) })
+	.strict();
+const recoveryTargetId = z.string().regex(/^(?:[a-f0-9]{24}|irt_[a-f0-9]{24})$/);
 export const leaseSchema = z
 	.object({
 		id,
 		testId: id,
-		targetId: id,
+		targetId: recoveryTargetId,
 		database,
 		ownerToken: z.string().regex(/^[a-f0-9]{48}$/),
 	})
@@ -40,7 +44,11 @@ export const persistentContextSchema = z
 		id,
 		targetId: id,
 		purpose: z.literal(RESTORE_PURPOSE),
-		mode: z.literal('custom'),
+		mode: z.enum(['custom', 'internal']),
+		databaseId: z
+			.string()
+			.regex(/^db_[A-Za-z0-9_-]{1,80}$/)
+			.optional(),
 		ownerToken: z.string().regex(/^[a-f0-9]{48}$/),
 		snapshotId: z.string().regex(/^[a-f0-9]{64}$/),
 		expiresAt: z.number().int().positive(),
@@ -96,15 +104,21 @@ export const persistentAckSchema = z
 	})
 	.strict();
 export const requestSchema = z.discriminatedUnion('operation', [
+	z.object({ version: z.literal(1), operation: z.literal('capabilities') }).strict(),
 	z
 		.object({
 			version: z.literal(1),
 			operation: z.literal('import'),
+			internal: internalContextSchema.optional(),
 			target,
 			testId: id,
-			targetId: id,
+			targetId: recoveryTargetId,
 			entry: z
 				.object({
+					databaseId: z
+						.string()
+						.regex(/^db_[A-Za-z0-9_-]{1,80}$/)
+						.optional(),
 					engine: z.literal('mysql'),
 					database,
 					bytes: z
@@ -120,15 +134,32 @@ export const requestSchema = z.discriminatedUnion('operation', [
 		})
 		.strict(),
 	z
-		.object({ version: z.literal(1), operation: z.literal('cleanup'), target, lease: leaseSchema })
+		.object({
+			version: z.literal(1),
+			operation: z.literal('cleanup'),
+			target,
+			lease: leaseSchema,
+			internal: internalContextSchema.optional(),
+		})
+		.strict(),
+	z
+		.object({
+			version: z.literal(1),
+			operation: z.literal('verify-empty'),
+			target,
+			targetId: recoveryTargetId,
+			testId: id,
+			internal: internalContextSchema,
+		})
 		.strict(),
 	z
 		.object({
 			version: z.literal(1),
 			operation: z.enum(['persistent-import', 'persistent-inspect', 'persistent-cleanup']),
+			internal: internalContextSchema.optional(),
 			approval: persistentApprovalSchema.safeExtend({
 				engine: z.literal('mysql'),
-				mode: z.literal('custom'),
+				mode: z.enum(['custom', 'internal']),
 			}),
 			context: persistentContextSchema,
 			lease: persistentLeaseSchema.nullable(),
@@ -138,15 +169,20 @@ export const requestSchema = z.discriminatedUnion('operation', [
 export type WorkerRequest = z.infer<typeof requestSchema>;
 export const workerConfigSchema = z
 	.object({
-		host: recoveryTargetSchema.shape.host,
-		port: recoveryTargetSchema.shape.port,
-		username: recoveryTargetSchema.shape.username,
-		databases: z.array(database).min(1).max(8),
+		host: recoveryTargetSchema.shape.host.optional(),
+		port: recoveryTargetSchema.shape.port.optional(),
+		username: recoveryTargetSchema.shape.username.optional(),
+		databases: z.array(database).min(1).max(8).optional(),
 		maxArtifactBytes: z
 			.number()
 			.int()
 			.positive()
-			.max(100 * 1024 ** 3),
+			.max(100 * 1024 ** 3)
+			.optional(),
+		internal: z
+			.object({ enabled: z.literal(true), maxArtifactBytes: z.literal(128 * 1024 ** 2) })
+			.strict()
+			.optional(),
 		// Explicit independent operator approval; existing disposable workers remain unchanged.
 		persistent: z
 			.object({
@@ -166,7 +202,25 @@ export const workerConfigSchema = z
 			.strict()
 			.optional(),
 	})
-	.strict();
+	.strict()
+	.superRefine((value, context) => {
+		const fields = [
+			value.host,
+			value.port,
+			value.username,
+			value.databases,
+			value.maxArtifactBytes,
+		];
+		if (
+			(!value.internal && fields.some(v => v === undefined)) ||
+			(fields.some(v => v !== undefined) && fields.some(v => v === undefined)) ||
+			(value.persistent && !value.host) ||
+			(value.internal &&
+				(value.maxArtifactBytes || value.persistent?.maxArtifactBytes || 0) > 128 * 1024 ** 2) ||
+			(value.internal && (value.persistent?.maxArtifactBytes || 0) > 128 * 1024 ** 2)
+		)
+			context.addIssue({ code: 'custom', message: 'Incomplete approved worker policy.' });
+	});
 export type WorkerConfig = z.infer<typeof workerConfigSchema>;
 export const stages = [
 	'database-artifact-validation',
@@ -184,6 +238,10 @@ const recoveryCodes = [
 	'database-target-unavailable',
 	'database-import-failed',
 	'database-import-timeout',
+	'database-out-of-memory',
+	'database-storage-full',
+	'mysql-worker-resource-limit',
+	'internal-resources-insufficient',
 	'database-import-validation-failed',
 	'database-output-limit',
 	'database-already-exists',
@@ -219,6 +277,7 @@ export function workerError(stage: (typeof stages)[number], code: (typeof codes)
 /** A shared cancellation check uses stage "job", which is not a wire stage.
  * Remap ONLY that explicit cancellation, never an unexpected process failure. */
 export function workerFailure(error: unknown, stage: (typeof stages)[number]) {
+	if ((error as NodeJS.ErrnoException)?.code === 'ENOSPC') return { stage, code: 'database-storage-full' as const };
 	if (error instanceof RecoveryTestError && error.code === 'cancelled' && error.stage === 'job')
 		return { stage, code: 'cancelled' as const };
 	if (
@@ -232,6 +291,7 @@ export function workerFailure(error: unknown, stage: (typeof stages)[number]) {
 	return { stage, code: 'mysql-worker-protocol-failed' as const };
 }
 export const responseSchema = z.discriminatedUnion('type', [
+	z.object({ type: z.literal('capabilities'), internal: z.boolean() }).strict(),
 	z.object({ type: z.literal('ready') }).strict(),
 	z.object({ type: z.literal('heartbeat') }).strict(),
 	z.object({ type: z.literal('stage'), stage: z.enum(stages) }).strict(),

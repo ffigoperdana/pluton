@@ -24,19 +24,29 @@ describe('optional Oracle MySQL worker boundary', () => {
 	it('busy refusal drains unread request bytes and closes the connection slot', async () => {
 		let accept: Socket | undefined;
 		let closed!: () => void;
-		const closing = new Promise<void>(resolve => { closed = resolve; });
-		const listener = net.createServer(socket => {
-			accept = socket; socket.on('error',()=>{}); socket.once('close',closed); void refuseBusy(socket);
+		const closing = new Promise<void>(resolve => {
+			closed = resolve;
 		});
-		await new Promise<void>(resolve=>listener.listen(0,'127.0.0.1',resolve));
-		const client=net.connect((listener.address() as net.AddressInfo).port,'127.0.0.1');client.on('error',()=>{});
+		const listener = net.createServer(socket => {
+			accept = socket;
+			socket.on('error', () => {});
+			socket.once('close', closed);
+			void refuseBusy(socket);
+		});
+		await new Promise<void>(resolve => listener.listen(0, '127.0.0.1', resolve));
+		const client = net.connect((listener.address() as net.AddressInfo).port, '127.0.0.1');
+		client.on('error', () => {});
 		try {
-			await new Promise<void>(resolve=>client.once('connect',resolve));
+			await new Promise<void>(resolve => client.once('connect', resolve));
 			client.write(Buffer.alloc(4096));
-			const reply=(await frames(client).next()).value;
-			expect(reply).toMatchObject({type:'error',code:'mysql-worker-busy'});
+			const reply = (await frames(client).next()).value;
+			expect(reply).toMatchObject({ type: 'error', code: 'mysql-worker-busy' });
 			await closing;
-		} finally {client.destroy();accept?.destroy();await new Promise<void>(resolve=>listener.close(()=>resolve()));}
+		} finally {
+			client.destroy();
+			accept?.destroy();
+			await new Promise<void>(resolve => listener.close(() => resolve()));
+		}
 	});
 	it('a closed IPC socket is transport failure, not malformed protocol or successful cancellation', async () => {
 		const socket = new net.Socket();
@@ -105,14 +115,18 @@ describe('optional Oracle MySQL worker boundary', () => {
 		if (server) await new Promise<void>(resolve => server.close(() => resolve()));
 		await fs.rm(scratch, { recursive: true, force: true });
 	});
-	async function fixture(handler: (socket: Socket) => Promise<void>) {
+	async function fixture(handler: (socket: Socket) => Promise<void>, internal = false) {
 		server = net.createServer(socket => {
 			sockets.push(socket);
 			socket.on('error', () => {});
 			void handler(socket).catch(() => socket.destroy());
 		});
 		await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-		const client = new MysqlRecoveryWorkerClient(store, () => true);
+		const client = new MysqlRecoveryWorkerClient(
+			store,
+			() => true,
+			internal ? async id => ({ id, snapshotId: 'e'.repeat(64) }) : undefined
+		);
 		jest.spyOn(client as any, 'socket').mockImplementation(async (signal: AbortSignal) => {
 			const socket = net.connect((server.address() as net.AddressInfo).port, '127.0.0.1');
 			sockets.push(socket);
@@ -214,6 +228,41 @@ describe('optional Oracle MySQL worker boundary', () => {
 		expect(input.entry.importValidation).toBe('passed');
 		expect(leases).toEqual([lease]);
 		expect(input.stage).toHaveBeenCalledWith('database-target-preflight');
+	});
+	it('Internal durable il_ namespacing never mutates the wire ACK and cleanup removes only its original stored ID', async () => {
+		input.targetId = 'irt_' + 'b'.repeat(24);
+		const lease = {
+			id: 'c'.repeat(24),
+			testId: input.testId,
+			targetId: input.targetId,
+			database: input.entry.database,
+			ownerToken: 'd'.repeat(48),
+		};
+		store.addLease.mockImplementation(async (value: any) => {
+			value.id = 'il_' + value.id;
+			leases.push(value);
+		});
+		const client = await fixture(async socket => {
+			const reader = frames(socket),
+				request = requestSchema.parse((await reader.next()).value);
+			expect(request).toHaveProperty('internal.id', input.testId);
+			if (request.operation === 'cleanup') {
+				expect(request.lease.id).toBe(lease.id);
+				await send(socket, { type: 'cleaned' });
+				return;
+			}
+			await send(socket, { type: 'ready' });
+			await reader.next();
+			await reader.next();
+			await send(socket, { type: 'lease', lease });
+			expect((await reader.next()).value).toEqual({ type: 'lease-ack', id: lease.id });
+			expect(leases[0].id).toBe('il_' + lease.id);
+			await send(socket, { type: 'complete', tables: 1, views: 0 });
+		}, true);
+		await client.importDatabase(input);
+		await client.cleanup(leases[0]);
+		expect(store.removeLease).toHaveBeenCalledWith('il_' + lease.id);
+		expect(leases).toEqual([]);
 	});
 	it('a lease for another target/job/database is never acknowledged', async () => {
 		const client = await fixture(async socket => {

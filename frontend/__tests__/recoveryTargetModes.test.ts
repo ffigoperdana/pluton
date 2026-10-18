@@ -3,16 +3,18 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { recoveryTargetChoices, recoveryTargetMode, internalStatus } from '../src/utils/recoveryTargetModes.ts';
-test('Internal/Custom choices never expose MySQL Internal', () => {
+test('legacy choices remain unchanged; MySQL Internal is offered only in automatic mode', () => {
    assert.deepEqual(recoveryTargetChoices('mariadb'), ['internal', 'custom']);
    assert.deepEqual(recoveryTargetChoices('postgresql'), ['internal', 'custom']);
    assert.deepEqual(recoveryTargetChoices('mysql'), ['custom']);
+   assert.deepEqual(recoveryTargetChoices('mysql', true), ['internal', 'custom']);
 });
 test('saved and migrated Custom plans keep their mode; credentials are not part of selection', () => {
    const policy = { enabled: false, databaseImport: 'required' as const };
    for (const engine of ['mariadb', 'postgresql', 'mysql'] as const) assert.equal(recoveryTargetMode(policy, engine), 'custom');
    assert.equal(recoveryTargetMode({ ...policy, targetModes: { mariadb: 'internal' } }, 'mariadb'), 'internal');
    assert.equal(recoveryTargetMode({ ...policy, targetModes: { mariadb: 'internal' } }, 'mysql'), 'custom');
+   assert.equal(recoveryTargetMode({ ...policy, targetModes: { mysql: 'internal' } }, 'mysql'), 'internal');
 });
 test('readiness and results do not disguise mandatory infrastructure cleanup as Passed', () => {
    const view = { engine: 'mariadb' as const, mode: 'operator-managed' as const, status: 'not_provisioned' as const };

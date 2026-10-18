@@ -7,6 +7,7 @@ import {
    canConfirmRecovery,
    recoveryConfirmationBody,
    recoveryDestinationStatus,
+   recoveryResourceSafety,
 } from '../src/utils/recoveryConfirmation.ts';
 import type { RecoveryPreparation } from '../src/@types/recoveryTests.ts';
 const preview: RecoveryPreparation = {
@@ -36,6 +37,26 @@ const preview: RecoveryPreparation = {
    versionCompatibility: 'not-recorded-in-receipt',
    persistentRestore: { status: 'unavailable', reason: 'bounded-persistent-storage-and-ownership-controller-required' },
 };
+const healthy: RecoveryPreparation['resources'] = {
+   status: 'measured',
+   observedAt: 1,
+   sample: {
+      total: 8192 * 1024 ** 2,
+      available: 4096 * 1024 ** 2,
+      swapUsed: 0,
+      pressure: 0,
+      limit: 768 * 1024 ** 2,
+      used: 128 * 1024 ** 2,
+      cgroupSwap: 0,
+      diskAvailable: 10 * 1024 ** 3,
+      cpuAvailable: 1,
+      operatorTotal: 8192 * 1024 ** 2,
+      operatorAvailable: 4096 * 1024 ** 2,
+      operatorCpuAvailable: 4,
+      operatorDiskAvailable: 10 * 1024 ** 3,
+      operatorObservedAt: 1,
+   },
+};
 test('confirmation binds the exact snapshot and metadata without submitting an engine, endpoint, password or automation', () => {
    const selection = initialRecoverySelection(preview);
    assert(!canConfirmRecovery(preview, selection, false));
@@ -51,6 +72,49 @@ test('confirmation binds the exact snapshot and metadata without submitting an e
    selection.targetModes!.mariadb = 'internal';
    assert.equal(preview.policy.targetModes, undefined);
 });
+test('Oracle Internal requires both the independently enabled worker and automatic target admission', () => {
+   const mysql: RecoveryPreparation = {
+      ...preview,
+      lifecycle: 'automatic',
+      resources: healthy,
+      mysqlWorker: 'ready',
+      databases: [{ ...preview.databases[0], engine: 'mysql' }],
+      internalTargets: [{ engine: 'mysql', mode: 'automatic', status: 'ready', admission: { status: 'admitted' } }],
+   };
+   const selection = { databaseImport: 'required' as const, targetModes: { mysql: 'internal' as const } };
+   assert(canConfirmRecovery(mysql, selection, true));
+   assert.equal(recoveryConfirmationBody(mysql, selection).selection.targetModes.mysql, 'internal');
+   assert(!canConfirmRecovery({ ...mysql, mysqlWorker: 'unavailable' }, selection, true));
+   assert(!canConfirmRecovery({ ...mysql, internalTargets: [] }, selection, true));
+   assert(
+      !canConfirmRecovery(
+         { ...mysql, databases: [...mysql.databases, { ...preview.databases[0], engine: 'postgresql' }] },
+         { ...selection, targetModes: { ...selection.targetModes, postgresql: 'internal' } },
+         true,
+      ),
+   );
+});
+
+test('occupied retained lifecycle is blocked, not silently checking; refusal diagnostics retain admission reasons', () => {
+   const mysql: RecoveryPreparation = {
+      ...preview,
+      lifecycle: 'automatic',
+      resources: healthy,
+      mysqlWorker: 'ready',
+      databases: [{ ...preview.databases[0], engine: 'mysql' }],
+      internalTargets: [{ engine: 'mysql', mode: 'automatic', status: 'running' }],
+   };
+   const selection = { databaseImport: 'required' as const, targetModes: { mysql: 'internal' as const } };
+   assert(!canConfirmRecovery(mysql, selection, true));
+   assert.match(recoveryDestinationStatus(mysql, selection, 'mysql'), /Stop retains its slot/);
+   assert.equal(recoveryResourceSafety(mysql, selection)[0].state, 'blocked');
+   assert.match(recoveryResourceSafety(mysql, selection)[0].message, /reservation/);
+   mysql.internalTargets = [{ engine: 'mysql', mode: 'automatic', status: 'ready' }];
+   assert(!canConfirmRecovery(mysql, selection, true), 'missing admission must fail closed');
+   mysql.internalTargets[0].admission = { status: 'refused', reason: 'operator-sql-budget' };
+   assert(!canConfirmRecovery(mysql, selection, true));
+   assert.match(recoveryResourceSafety(mysql, selection)[0].message, /SQL exceeds/);
+});
 test('resource acknowledgement never overrides missing provisioning, unknown admission or a hard refusal', () => {
    const selection = { databaseImport: 'required' as const, targetModes: { mariadb: 'internal' as const } };
    assert(!canConfirmRecovery({ ...preview, workloads: { backup: true, restore: false, recovery: false } }, selection, true));
@@ -64,7 +128,11 @@ test('resource acknowledgement never overrides missing provisioning, unknown adm
    }
    assert(
       canConfirmRecovery(
-         { ...preview, internalTargets: [{ engine: 'mariadb', status: 'ready', mode: 'operator-managed', admission: { status: 'admitted' } }] },
+         {
+            ...preview,
+            resources: healthy,
+            internalTargets: [{ engine: 'mariadb', status: 'ready', mode: 'operator-managed', admission: { status: 'admitted' } }],
+         },
          selection,
          true,
       ),

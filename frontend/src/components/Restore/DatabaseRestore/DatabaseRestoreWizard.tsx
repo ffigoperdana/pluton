@@ -1,9 +1,11 @@
-import { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useId, useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
 import type { RestorePreview, RestoreSelection, DatabaseRestoreView, RestoreChoice } from '../../../@types/databaseRestores';
 import { useRestorePreview, restoreRequest } from '../../../services/databaseRestores';
-import { initialRestoreChoice, restoreRefusal, restoreBody } from '../../../utils/databaseRestores';
+import { initialRestoreChoice, restoreRefusal, restoreBody, restoreResourceSafety } from '../../../utils/databaseRestores';
+import InternalResourceWarning from '../../common/InternalResourceWarning';
+import { RequestActivity } from '../../common/OperationProgress/OperationProgress';
 import { formatBytes } from '../../../utils/helpers';
 import Modal from '../../common/Modal/Modal';
 import classes from './DatabaseRestore.module.scss';
@@ -14,12 +16,14 @@ export function DatabaseRestoreForm({
    error,
    confirm,
    refresh,
+   checking = false,
 }: {
    preview: RestorePreview;
    pending: boolean;
    error?: string;
    confirm: (body: ReturnType<typeof restoreBody>) => void;
    refresh: () => void;
+   checking?: boolean;
 }) {
    const [draft, setDraft] = useState(() => ({ ...initialRestoreChoice(preview), verifiedToken: preview.metadataToken }));
    const choice = {
@@ -33,6 +37,8 @@ export function DatabaseRestoreForm({
    const refusal = restoreRefusal(preview, choice);
    const retention = [...new Set([...preview.retentionSeconds, ...targets.map((target) => target.maxRetentionSeconds)])].sort((a, b) => a - b);
    const sample = preview.resources.sample;
+   const resourceId = useId();
+   const resourceSafety = restoreResourceSafety(preview, choice, checking);
    return (
       <div className={`${classes.panel} ${classes.wizard} styled__scrollbar`}>
          <p>One-time persistent restore. Backup policies and disposable Recovery Testing are unchanged.</p>
@@ -53,8 +59,10 @@ export function DatabaseRestoreForm({
                         setChoice({
                            ...choice,
                            databaseId: event.target.value,
-                           mode:
-                              preview.databases.find((entry) => entry.databaseId === event.target.value)?.engine === 'mysql' ? 'custom' : 'internal',
+                           mode: initialRestoreChoice({
+                              ...preview,
+                              databases: preview.databases.filter((entry) => entry.databaseId === event.target.value),
+                           }).mode,
                            targetId: '',
                         })
                      }
@@ -83,11 +91,7 @@ export function DatabaseRestoreForm({
                      onChange={(event) => setChoice({ ...choice, mode: event.target.value as 'internal' | 'custom', targetId: '' })}
                   >
                      <option value="internal" disabled={!artifact?.engine || !preview.engines[artifact.engine].includes('internal')}>
-                        {artifact?.engine === 'mysql'
-                           ? 'MySQL Internal — Not yet supported'
-                           : preview.lifecycle
-                             ? 'Internal — automatic host lifecycle'
-                             : 'Internal — manual operator provisioning'}
+                        {preview.lifecycle ? 'Internal — automatic host lifecycle' : 'Internal — manual operator provisioning'}
                      </option>
                      <option value="custom" disabled={!artifact?.engine || !preview.engines[artifact.engine].includes('custom')}>
                         Custom — root-approved dedicated target
@@ -162,13 +166,17 @@ export function DatabaseRestoreForm({
                </p>
                {artifact?.engine === 'mysql' && (
                   <p>
-                     Requires the genuine Oracle MySQL worker and an approved MySQL 8.4 Custom target with verified TLS. Connection, purpose,
-                     privileges and empty-database checks run before import. Success retains the owned database until expiry or explicit deletion. SQL
-                     import/catalog validation is not application recovery verification.
+                     Requires the genuine Oracle MySQL worker and an approved MySQL 8.4 target with verified TLS. Internal uses the automatic host
+                     lifecycle; Custom keeps independent operator approval. Connection, purpose, privileges and empty-database checks run before
+                     import. Success retains the owned database until expiry or explicit deletion. SQL import/catalog validation is not application
+                     recovery verification.
                   </p>
                )}
             </div>
          </div>
+         {resourceSafety && (
+            <InternalResourceWarning id={resourceId} safety={resourceSafety} resources={preview.resources} workloadBusy={preview.workloadBusy} />
+         )}
          <label>
             <input type="checkbox" checked={choice.resources} onChange={(event) => setChoice({ ...choice, resources: event.target.checked })} /> I
             acknowledge memory/storage usage and operator cleanup. This cannot override admission limits.
@@ -182,7 +190,11 @@ export function DatabaseRestoreForm({
          <button disabled={pending} onClick={refresh}>
             Refresh verification
          </button>
-         <button disabled={pending || !!refusal} onClick={() => confirm(restoreBody(preview, choice))}>
+         <button
+            aria-describedby={resourceSafety ? resourceId : undefined}
+            disabled={pending || !!refusal || (resourceSafety && !resourceSafety.allowed)}
+            onClick={() => confirm(restoreBody(preview, choice))}
+         >
             {pending ? 'Submitting…' : 'Confirm persistent restore'}
          </button>
       </div>
@@ -191,15 +203,19 @@ export function DatabaseRestoreForm({
 export default function DatabaseRestoreWizard({ selection, close }: { selection: RestoreSelection; close: () => void }) {
    const preview = useRestorePreview(selection),
       navigate = useNavigate();
+   const queries = useQueryClient();
    const action = useMutation({
       mutationFn: (body: ReturnType<typeof restoreBody>) => restoreRequest<DatabaseRestoreView>('', body),
-      onSuccess: (row) => navigate(`/database-restores/${row.id}`),
+      onSuccess: (row) => {
+         // Seed only the authoritative accepted response, never an optimistic Active state.
+         queries.setQueryData(['databaseRestores', row.id], row);
+         void queries.invalidateQueries({ queryKey: ['databaseRestores', undefined] });
+         navigate(`/database-restores/${row.id}`);
+      },
    });
    return (
       <Modal width="920px" title="Restore Database" stableLayout closeDisabled={action.isPending} closeModal={close}>
-         <div role="status" style={{ minHeight: '1.6em' }}>
-            {preview.isFetching ? 'Verifying selected backup and exact snapshot…' : ''}
-         </div>
+         <RequestActivity checking={preview.isFetching} submitting={action.isPending} failed={!!preview.error || !!action.error} />
          {preview.error && (
             <div role="alert">
                {preview.error.message}
@@ -214,6 +230,7 @@ export default function DatabaseRestoreWizard({ selection, close }: { selection:
                error={action.error?.message}
                confirm={(body) => action.mutate(body)}
                refresh={() => void preview.refetch()}
+               checking={preview.isFetching}
             />
          )}
       </Modal>

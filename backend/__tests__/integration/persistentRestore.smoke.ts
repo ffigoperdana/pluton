@@ -42,6 +42,7 @@ const inspection = {
 	observedAt: Date.now(),
 };
 const sample = {
+	cpuAvailable: 1,
 	total: 4096 * 1024 ** 2,
 	available: 3000 * 1024 ** 2,
 	swapUsed: 0,

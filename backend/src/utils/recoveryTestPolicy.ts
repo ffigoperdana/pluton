@@ -11,6 +11,7 @@ export const recoveryPolicySchema = z
 			.object({
 				mariadb: z.enum(['internal', 'custom']).optional(),
 				postgresql: z.enum(['internal', 'custom']).optional(),
+				mysql: z.enum(['internal', 'custom']).optional(),
 			})
 			.strict()
 			.optional(),

@@ -168,18 +168,18 @@ describe('Phase 6 durable recovery orchestration', () => {
 		);
 		expect(JSON.stringify(events)).not.toContain('synthetic-private-provider-detail');
 	});
-	function internalFixture() {
-		backup.completionStats.lifecycle = { databases: [artifact()] };
+	function internalFixture(engine: 'mariadb' | 'mysql' = 'mariadb') {
+		backup.completionStats.lifecycle = { databases: [artifact(engine)] };
 		store.policy.mockResolvedValue({
 			enabled: false,
 			databaseImport: 'required',
-			targetModes: { mariadb: 'internal' },
+			targetModes: { [engine]: 'internal' },
 		});
-		const session: any = { id: `irt_${'1'.repeat(24)}`, engine: 'mariadb', cleanupReady: false };
+		const session: any = { id: `irt_${'1'.repeat(24)}`, engine, cleanupReady: false };
 		const internal: any = {
 			resourceView: jest.fn(async () => ({ status: 'unknown', sample: null })),
 			admission: jest.fn(async () => ({ status: 'admitted', maxSqlBytes: 128 * 1024 ** 2 })),
-			prepare: jest.fn(async () => ({ engine: 'mariadb', target: { engine: 'mariadb' } })),
+			prepare: jest.fn(async () => ({ engine, target: { engine } })),
 			preflight: jest.fn(),
 			requestCleanup: jest.fn(),
 			removed: jest.fn(() => false),
@@ -187,7 +187,7 @@ describe('Phase 6 durable recovery orchestration', () => {
 		};
 		store.beginInternalSession = jest.fn(async ({ testId }) => {
 			session.testId = testId;
-			return { id: session.id, engine: 'mariadb', password: 'synthetic' };
+			return { id: session.id, engine, password: 'synthetic' };
 		});
 		store.pendingInternalSessions.mockImplementation(async () =>
 			session.testId && !session.released ? [session] : []
@@ -325,21 +325,28 @@ describe('Phase 6 durable recovery orchestration', () => {
 			expect(importer.importDatabase).not.toHaveBeenCalled();
 		}
 	);
-	it('internal import remains Cleanup Required until exact operator removal receipt, then Passed', async () => {
-		const { internal, session } = internalFixture();
-		const row = await run();
-		expect(row.status).toBe('failed');
-		expect(row.failureCode).toBe('internal-cleanup-required');
-		expect(row.result.databases[0].importValidation).toBe('passed');
-		expect(row.result.cleanup).toEqual({ workspace: true, databases: true, infrastructure: false });
-		expect(session.cleanupReady).toBe(true);
-		expect(internal.requestCleanup).toHaveBeenCalledWith(session, snapshot);
-		internal.removed.mockReturnValue(true);
-		await service.tick();
-		await service.idle();
-		expect(row.status).toBe('passed');
-		expect(row.result.cleanup.infrastructure).toBe(true);
-	});
+	it.each(['mariadb', 'mysql'] as const)(
+		'%s Internal remains Cleanup Required until exact operator removal receipt, then Passed',
+		async engine => {
+			const { internal, session } = internalFixture(engine);
+			const row = await run();
+			expect(row.status).toBe('failed');
+			expect(row.failureCode).toBe('internal-cleanup-required');
+			expect(row.result.databases[0].importValidation).toBe('passed');
+			expect(row.result.cleanup).toEqual({
+				workspace: true,
+				databases: true,
+				infrastructure: false,
+			});
+			expect(session.cleanupReady).toBe(true);
+			expect(internal.requestCleanup).toHaveBeenCalledWith(session, snapshot);
+			internal.removed.mockReturnValue(true);
+			await service.tick();
+			await service.idle();
+			expect(row.status).toBe('passed');
+			expect(row.result.cleanup.infrastructure).toBe(true);
+		}
+	);
 	it('resource refusal never imports and still requests safe cleanup of the manually activated target', async () => {
 		const { internal } = internalFixture();
 		internal.preflight.mockRejectedValue(

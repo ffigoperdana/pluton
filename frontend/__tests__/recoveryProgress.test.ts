@@ -50,6 +50,7 @@ const preview: any = {
    resources: {
       status: 'measured',
       sample: {
+         cpuAvailable: 1,
          total: 4096 * 1024 ** 2,
          available: 3000 * 1024 ** 2,
          swapUsed: 0,
@@ -339,6 +340,8 @@ test('real wizard keeps edited fields/acknowledgements on polling, resets approv
       });
       const inputs = [...dialog.querySelectorAll('input[type="checkbox"]')] as HTMLInputElement[];
       const refresh = [...dialog.querySelectorAll('button')].find((b: any) => b.textContent.includes('Refresh verification')) as HTMLButtonElement;
+      const warning = dialog.querySelector('[aria-label="Internal database resource safety"]')!;
+      assert.equal(warning.getAttribute('data-resource-state'), 'warning');
       refresh.focus();
       scroll.scrollTop = 200;
       state.isFetching = true;
@@ -347,11 +350,23 @@ test('real wizard keeps edited fields/acknowledgements on polling, resets approv
       assert.equal(dialog.querySelectorAll('select')[selects.length - 1], retention);
       assert.equal(document.activeElement, refresh);
       assert.equal(scroll.scrollTop, 200);
+      assert.equal(dialog.querySelector('[aria-label="Internal database resource safety"]'), warning);
+      assert.equal(warning.getAttribute('data-resource-state'), 'checking');
+      assert(dialog.querySelector('[aria-label="Request activity"] progress'));
       state.isFetching = false;
       state.dataUpdatedAt++;
       await view.render(element());
       assert.equal(retention.value, '21600');
       assert(inputs.every((input) => input.checked));
+      const savedResources = state.data.resources;
+      state.data = { ...state.data, resources: { ...savedResources, sample: { ...savedResources.sample, available: 1024 } } };
+      await view.render(element());
+      assert.equal(warning.getAttribute('data-resource-state'), 'blocked');
+      assert((dialog.querySelector('button[aria-describedby]') as HTMLButtonElement).disabled);
+      assert.equal(document.activeElement, refresh);
+      assert.equal(scroll.scrollTop, 200);
+      assert(inputs.every((input) => input.checked));
+      state.data = { ...state.data, resources: savedResources };
       state.data = { ...state.data, metadataToken: 'changed-token' };
       await view.render(element());
       assert.equal(document.activeElement, refresh);
@@ -369,6 +384,8 @@ test('real wizard keeps edited fields/acknowledgements on polling, resets approv
       assert.equal(submitted.metadataToken, 'changed-token');
       assert.equal(submitted.ttlSeconds, 21600);
       assert.equal(submitted.databaseId, 'db_example');
+      assert(dialog.querySelector('[aria-label="Request activity"] progress'), 'submission immediately shows indeterminate activity');
+      assert.match(dialog.querySelector('[aria-label="Request activity"]')!.textContent!, /awaiting server acceptance/);
       const close = dialog.querySelector('[aria-label="Close dialog"]') as HTMLButtonElement;
       assert(close.disabled);
       await act(async () => {
@@ -380,6 +397,7 @@ test('real wizard keeps edited fields/acknowledgements on polling, resets approv
       await act(async () => {
          resolve({ id: 'c'.repeat(24) });
       });
+      assert.deepEqual(client.getQueryData(['databaseRestores', 'c'.repeat(24)]), { id: 'c'.repeat(24) });
    } finally {
       await view.close();
       client.clear();
@@ -425,13 +443,26 @@ test('recovery confirmation preserves form/focus through refresh and rejects sta
       approval.focus();
       scroll.scrollTop = 180;
       const run = [...dialog.querySelectorAll('button')].find((button: any) => button.textContent.includes('Run Recovery')) as HTMLButtonElement;
+      const warning = dialog.querySelector('[aria-label="Internal database resource safety"]')!;
       assert.equal(run.disabled, false);
       state.isFetching = true;
       await view.render(element());
       assert(run.disabled);
+      assert.equal(warning.getAttribute('data-resource-state'), 'checking');
+      assert.equal(dialog.querySelector('[aria-label="Internal database resource safety"]'), warning);
       state.isFetching = false;
       await view.render(element());
       assert(approval.checked);
+      const healthy = state.data.resources;
+      state.data.resources = { ...healthy, sample: { ...healthy.sample, available: 1024 } };
+      await view.render(element());
+      assert(run.disabled);
+      assert.equal(warning.getAttribute('data-resource-state'), 'blocked');
+      assert.equal(document.activeElement, approval);
+      assert.equal(scroll.scrollTop, 180);
+      assert(approval.checked);
+      state.data.resources = healthy;
+      await view.render(element());
       state.data = { ...state.data, metadataToken: 'rechecked-metadata' };
       await view.render(element());
       assert.equal(document.querySelector('[role="dialog"]'), dialog);
@@ -498,4 +529,23 @@ test('progress does not add query polling or key dialogs by polling timestamps; 
    assert.match(css, /scrollbar-gutter: stable/);
    assert.match(css, /overflow-anchor: none/);
    assert.match(css, /prefers-reduced-motion/);
+});
+
+test('request banner distinguishes checking, sending, idle and failure without fake progress or added timers', async () => {
+   const { RequestActivity } = await component('components/common/OperationProgress/OperationProgress.tsx');
+   const view = await mounted(React.createElement(RequestActivity, { checking: true, submitting: false }));
+   try {
+      const banner = view.node.querySelector('[aria-label="Request activity"]')!;
+      assert.match(banner.textContent!, /Checking snapshot/);
+      assert.equal(banner.querySelector('progress')!.hasAttribute('value'), false);
+      await view.render(React.createElement(RequestActivity, { checking: false, submitting: true }));
+      assert.equal(view.node.querySelector('[aria-label="Request activity"]'), banner);
+      assert.match(banner.textContent!, /awaiting server acceptance/);
+      await view.render(React.createElement(RequestActivity, { checking: false, submitting: false, failed: true }));
+      assert.equal(banner.querySelector('progress'), null);
+      assert.match(banner.textContent!, /failed/);
+      await view.render(React.createElement(RequestActivity, { checking: false, submitting: false }));
+      assert.equal(banner.querySelector('progress'), null);
+      assert.match(banner.textContent!, /Blocked is not a background check/);
+   } finally { await view.close(); }
 });

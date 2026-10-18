@@ -63,7 +63,56 @@ describe('automatic lifecycle durable intent, authentication and non-breaking ow
 		jest.restoreAllMocks();
 		db.sqlite.close();
 	});
+	it('accepts explicit MySQL capabilities while retaining the old two-engine operator contract', async () => {
+		const original = await client.capability();
+		expect(original.available).toBe(true);
+		jest.spyOn(client, 'trusted').mockResolvedValue(
+			Buffer.from(
+				JSON.stringify({
+					...original,
+					available: undefined,
+					engines: ['mariadb', 'postgresql', 'mysql'],
+					observedAt: Date.now(),
+				})
+			)
+		);
+		expect(await client.capability()).toMatchObject({
+			available: true,
+			engines: ['mariadb', 'postgresql', 'mysql'],
+		});
+	});
 	const unavailable = () => new DatabaseRestoreError('lifecycle-unavailable');
+	it('accepts only fresh closed-schema root capacity, not a browser value or timestamp refresh', async () => {
+		const sample = {
+			total: 8192 * 1024 ** 2,
+			available: 4096 * 1024 ** 2,
+			swapUsed: 0,
+			cgroupSwap: 0,
+			pressure: 0,
+			cpuAvailable: 4,
+			diskAvailable: 10 * 1024 ** 3,
+		};
+		files.set(
+			'capacity.json',
+			Buffer.from(JSON.stringify({ version: 1, observedAt: Date.now(), sample }))
+		);
+		expect(await client.capacity()).toMatchObject(sample);
+		for (const value of [
+			null,
+			{ ...sample, available: -1 },
+			{ ...sample, unexpected: 'not-authority' },
+		]) {
+			files.set(
+				'capacity.json',
+				Buffer.from(JSON.stringify({ version: 1, observedAt: Date.now(), sample: value }))
+			);
+			expect(await client.capacity()).toBeNull();
+		}
+		for (const observedAt of [Date.now() - 30001, Date.now() + 6000]) {
+			files.set('capacity.json', Buffer.from(JSON.stringify({ version: 1, observedAt, sample })));
+			expect(await client.capacity()).toBeNull();
+		}
+	});
 	it('commits exact binding BEFORE mailbox access; failures retain durable intent, never re-enroll', async () => {
 		jest.spyOn(client, 'capability').mockResolvedValue({ available: false });
 		await expect(client.persistent(item, 'provision', false)).rejects.toThrow(
@@ -200,16 +249,16 @@ describe('automatic lifecycle durable intent, authentication and non-breaking ow
 		expect(await client.receipt(item.id)).toBeNull();
 	});
 
-	it('durable replay preserves the consumed mailbox revision; explicit Resume publishes a fresh request', async () => {
-		jest.spyOn(client, 'capability').mockResolvedValue({ available: true } as any);
+	it('durable replay preserves authority and mailbox revision; explicit Resume publishes the next sequence', async () => {
 		jest
-			.spyOn(fs, 'lstat')
-			.mockResolvedValue({
-				isDirectory: () => true,
-				isSymbolicLink: () => false,
-				uid: 10001,
-				mode: 0o700,
-			} as any);
+			.spyOn(client, 'capability')
+			.mockResolvedValue({ available: true, engines: ['mariadb', 'postgresql'] } as any);
+		jest.spyOn(fs, 'lstat').mockResolvedValue({
+			isDirectory: () => true,
+			isSymbolicLink: () => false,
+			uid: 10001,
+			mode: 0o700,
+		} as any);
 		let contents = '';
 		const open = jest.spyOn(fs, 'open').mockImplementation(
 			async () =>
@@ -233,10 +282,13 @@ describe('automatic lifecycle durable intent, authentication and non-breaking ow
 		jest.spyOn(fs, 'rm').mockResolvedValue();
 		await client.persistent(item, 'resume', false);
 		expect(rename).toHaveBeenCalledTimes(1);
+		expect(JSON.parse(contents)).toMatchObject({ version: 2, resumeSequence: 1 });
 		await client.persistent(item, 'resume', false, true);
 		expect(rename).toHaveBeenCalledTimes(1);
+		expect(client.record(item.id)?.resume_sequence).toBe(1);
 		await client.persistent(item, 'resume', false);
 		expect(rename).toHaveBeenCalledTimes(2);
+		expect(JSON.parse(contents).resumeSequence).toBe(2);
 		open.mockImplementation(async () => {
 			throw Object.assign(new Error('unsafe'), { code: 'ELOOP' });
 		});

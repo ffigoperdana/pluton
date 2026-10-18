@@ -1,4 +1,20 @@
 import type { RestorePreview, RestoreChoice, DatabaseRestoreView } from '../@types/databaseRestores';
+import { internalResourceSafety } from './internalResourceSafety.ts';
+
+export function restoreResourceSafety(preview: RestorePreview, choice: RestoreChoice, checking = false) {
+   const artifact = preview.databases.find((entry) => entry.databaseId === choice.databaseId);
+   if (choice.mode !== 'internal' || !artifact?.engine) return undefined;
+   return internalResourceSafety({
+      engine: artifact.engine,
+      bytes: artifact.bytes,
+      maxSqlBytes: preview.internalPolicy.maxSqlBytes,
+      resources: preview.resources,
+      automatic: !!preview.lifecycle,
+      available: preview.engines[artifact.engine].includes('internal') && preview.lifecycle?.available !== false,
+      workloadBusy: preview.workloadBusy,
+      checking,
+   });
+}
 
 export function restoreStage(stage: string) {
    return (
@@ -50,7 +66,7 @@ export function initialRestoreChoice(preview: RestorePreview): RestoreChoice {
    const first = preview.databases.find((entry) => entry.databaseId);
    return {
       databaseId: first?.databaseId || '',
-      mode: first?.engine === 'mysql' ? 'custom' : 'internal',
+      mode: first?.engine && preview.engines[first.engine].includes('internal') ? 'internal' : 'custom',
       targetId: '',
       ttlSeconds: 86400,
       resources: false,
@@ -63,7 +79,7 @@ export function restoreRefusal(preview: RestorePreview, choice: RestoreChoice) {
    if (!preview.engines[artifact.engine].includes(choice.mode))
       return artifact.engine === 'mysql'
          ? choice.mode === 'internal'
-            ? 'MySQL Internal restore is not yet supported. Use an approved Custom target.'
+            ? 'MySQL Internal requires the approved automatic operator and Internal-enabled Oracle worker. No manual fallback is assumed.'
             : 'The Oracle MySQL persistent worker is not configured. Ordinary backups are unaffected.'
          : 'This engine/destination is not implemented.';
    const target = preview.targets.find((entry) => entry.id === choice.targetId);
@@ -73,13 +89,18 @@ export function restoreRefusal(preview: RestorePreview, choice: RestoreChoice) {
    if (choice.mode === 'internal' && preview.lifecycle && !preview.lifecycle.available)
       return 'Automatic host operator unavailable. Refresh or ask the operator; no manual fallback is assumed.';
    if (choice.ttlSeconds > policy.maxRetentionSeconds || choice.ttlSeconds < 3600) return 'Retention exceeds the operator-approved contract.';
-   if (artifact.bytes > policy.maxSqlBytes) return 'SQL exceeds the operator-approved size budget.';
+   const mysqlInternal = artifact.engine === 'mysql' && choice.mode === 'internal';
+   if (mysqlInternal && !preview.lifecycle?.available) return 'MySQL Internal requires a ready automatic host operator.';
+   if (artifact.bytes > (mysqlInternal ? Math.min(policy.maxSqlBytes, 128 * 1024 ** 2) : policy.maxSqlBytes))
+      return 'SQL exceeds the operator-approved size budget.';
+   const safety = restoreResourceSafety(preview, choice);
+   if (safety && !safety.allowed) return safety.message;
    const sample = preview.resources.sample;
    if (!sample || preview.resources.status !== 'measured')
       return 'Capacity unknown. Refresh or ask the operator; acknowledgement cannot override admission.';
    if (
       sample.total < 3800 * 1024 ** 2 ||
-      sample.available < 2560 * 1024 ** 2 ||
+      sample.available < (mysqlInternal ? 2944 : 2560) * 1024 ** 2 ||
       sample.swapUsed > 128 * 1024 ** 2 ||
       sample.pressure > 1 ||
       sample.cgroupSwap > 0 ||

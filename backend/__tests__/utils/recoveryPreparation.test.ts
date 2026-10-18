@@ -72,12 +72,12 @@ describe('verified recovery confirmation boundary', () => {
 			)
 		).toThrow('requires native import');
 	});
-	it('rejects guessed engine, arbitrary endpoint, missing acknowledgement and MySQL Internal', () => {
+	it('rejects guessed engine, arbitrary endpoint, missing acknowledgement and invalid target mode', () => {
 		for (const extra of [
 			{ engine: 'postgresql' },
 			{ host: 'source.example.internal' },
 			{ resourcesAcknowledged: false },
-			{ selection: { databaseImport: 'required', targetModes: { mysql: 'internal' } } },
+			{ selection: { databaseImport: 'required', targetModes: { mysql: 'unapproved' } } },
 		])
 			expect(recoveryManualSelection.safeParse({ ...request, ...extra }).success).toBe(false);
 	});

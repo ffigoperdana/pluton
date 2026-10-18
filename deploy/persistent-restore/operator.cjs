@@ -15,7 +15,8 @@ const NETWORK=options.network||'pluton-persistent-restores';
 const LOCK=options.lock||'pluton-internal-recovery-lock';
 const images={
   mariadb:'mariadb:11.8.8@sha256:24e76fcec8c003a0362d0dd53f4806e7e79458d7fdeaf47437760e19496f5a9c',
-  postgresql:'postgres:18.6-bookworm@sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c'
+  postgresql:'postgres:18.6-bookworm@sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c',
+  mysql:'mysql:8.4.11@sha256:24989179f58856db763f418010c1169fecc944e3ec1ea7e921572d83eb070f70'
 };
 const idPattern=/^[a-f0-9]{24}$/;
 function fail(code='operator-safety-refused'){throw Object.assign(new Error('Persistent restore operator refused.'),{code});}
@@ -88,6 +89,7 @@ function policy(){
   return value;
 }
 function validateRequest(request,id,stat){
+  if(request.engine==='mysql'&&!options.automatic)fail('mysql-automatic-profile-required');
   const keys=['version','purpose','mode','action','restoreId','snapshotId','databaseId','engine','database','sha256','bytes','expiresAt','cleanupReady','targetFingerprint'];
   if(!stat.isFile()||stat.uid!==10001||(stat.mode&0o777)!==0o600||stat.size>8192||
     Object.keys(request).some(key=>!keys.includes(key))||request.version!==1||request.purpose!==PURPOSE||
@@ -112,7 +114,7 @@ function bootstrapSql(engine,database,password,activation,storageId,username='re
     !/^[a-f0-9]{64}$/.test(password)||!/^[a-f0-9]{32}$/.test(activation)||!/^[a-f0-9-]{32,36}$/.test(storageId)||
     !/^[a-z][a-z0-9_]{0,62}$/.test(username)||['root','postgres','admin','administrator'].includes(username))fail();
   if(options.bootstrapSql)return options.bootstrapSql(engine,database,password,activation,storageId,username);
-  if(engine==='mariadb')return `CREATE DATABASE pluton_restore_guard;
+  if(engine==='mariadb'||engine==='mysql')return `CREATE DATABASE pluton_restore_guard;
 CREATE TABLE pluton_restore_guard.contract(purpose VARCHAR(64),activation_id VARCHAR(32),storage_id VARCHAR(36));
 INSERT INTO pluton_restore_guard.contract VALUES ('${PURPOSE}','${activation}','${storageId}');
 CREATE USER '${username}'@'%' IDENTIFIED BY '${password}' REQUIRE SSL;
@@ -148,9 +150,10 @@ function approvalFingerprint(approval){
 function ownership(inspect,meta){
   const config=inspect.Config||{},host=inspect.HostConfig||{},labels=config.Labels||{},mounts=inspect.Mounts||[];
   const temporary=host.Tmpfs?.['/tmp']?.split(',')||[];
-  const base=meta.engine==='mariadb'?'/var/lib/mysql':'/var/lib/postgresql';
+  const base=meta.engine==='postgresql'?'/var/lib/postgresql':'/var/lib/mysql';
   const approved=new Map([[base,meta.volume.mountpoint],['/run/pluton-persistent-bootstrap',path.join(ROOT,'private',meta.id)],
     ['/opt/pluton-persistent/bootstrap.sh',path.join(__dirname,'bootstrap.sh')],['/run/pluton-internal-lock',LOCK]]);
+  if(meta.engine==='mysql')approved.set('/opt/pluton-persistent/mysql-lock.py',path.join(__dirname,'mysql-lock.py'));
   if(options.automatic&&(labels['org.pluton.automatic.binding']!==options.bindingHash||
     labels['org.pluton.automatic.mode']!==options.mode||host.RestartPolicy?.Name!=='no'))fail('resource-ownership-mismatch');
   if(inspect.Id!==meta.containerId||!idPattern.test(meta.id)||config.Image!==images[meta.engine]||config.User!=='999:999'||
@@ -159,7 +162,7 @@ function ownership(inspect,meta){
     host.Privileged||!host.ReadonlyRootfs||host.NetworkMode==='host'||Object.keys(host.PortBindings||{}).length||
     host.Memory!==2147483648||host.MemorySwap!==2147483648||host.NanoCpus!==1e9||host.PidsLimit!==128||
     !host.CapDrop?.includes('ALL')||!host.SecurityOpt?.some(v=>v==='no-new-privileges:true'||v==='no-new-privileges')||
-    (host.CapAdd||[]).length||(host.Devices||[]).length||mounts.length!==4||
+    (host.CapAdd||[]).length||(host.Devices||[]).length||mounts.length!==approved.size||
     Object.keys(host.Tmpfs||{}).length!==1||temporary.length!==8||
     ['rw','noexec','nosuid','nodev','uid=999','gid=999','mode=700'].some(option=>!temporary.includes(option))||
     !temporary.some(option=>option==='size=128m'||option==='size=134217728')||
@@ -191,12 +194,56 @@ function bindRequest(meta,req){
     req.targetFingerprint!==(meta.fingerprint||approvalFingerprint(meta.approval)))
     fail('request-binding-mismatch');
 }
-function resourceAdmission(bytes){
+/** Host-only, bounded ancestor traversal. No path/environment/request can select
+ * another cgroup. A constrained parent cannot masquerade as the whole host. */
+function resourceCapacity(){
+  const text=fs.readFileSync('/proc/meminfo','utf8'),field=name=>Number(new RegExp('^'+name+':\\s+(\\d+) kB$','m').exec(text)?.[1])*1024;
+  let pressure=Number(/^some avg10=(\d+(?:\.\d+)?)/m.exec(fs.readFileSync('/proc/pressure/memory','utf8'))?.[1]);
+  const member=/^0::([^\n]+)$/m.exec(fs.readFileSync('/proc/self/cgroup','utf8'))?.[1];
+  if(!member||!member.startsWith('/')||member.includes('..')||/[\0\r\\]/.test(member))fail('resource-admission-refused');
+  const base='/sys/fs/cgroup';let directory=path.resolve(base,'.'+member),depth=0;
+  if(directory!==base&&!directory.startsWith(base+'/'))fail('resource-admission-refused');
+  let total=field('MemTotal'),available=field('MemAvailable'),cpuAvailable=require('node:os').availableParallelism(),cgroupSwap=0;
+  for(;;){
+    if(++depth>32)fail('resource-admission-refused');
+    const read=name=>{try{return fs.readFileSync(path.join(directory,name),'utf8').trim();}catch(error){if(directory===base&&error.code==='ENOENT')return null;throw error;}};
+    const limit=read('memory.max');
+    if(limit!==null){
+      const currentText=read('memory.current'),swapText=read('memory.swap.current');
+      if(!/^\d+$/.test(currentText)||!/^\d+$/.test(swapText))fail('resource-admission-refused');
+      const current=Number(currentText),swap=Number(swapText);
+      if(!Number.isFinite(current)||current<0||!Number.isFinite(swap)||swap<0)fail('resource-admission-refused');
+      cgroupSwap=Math.max(cgroupSwap,swap);
+      const localPressure=Number(/^some avg10=(\d+(?:\.\d+)?)/m.exec(read('memory.pressure'))?.[1]);
+      if(!Number.isFinite(localPressure))fail('resource-admission-refused');pressure=Math.max(pressure,localPressure);
+      if(limit!=='max'){
+        const maximum=Number(limit);if(!/^\d+$/.test(limit)||!Number.isFinite(maximum)||maximum<=0)fail('resource-admission-refused');
+        total=Math.min(total,maximum);available=Math.min(available,Math.max(0,maximum-current));
+      }
+    }
+    const cpu=read('cpu.max');
+    if(cpu!==null){const parts=cpu.split(/\s+/);if(parts.length!==2||!/^\d+$/.test(parts[1])||Number(parts[1])<=0)fail('resource-admission-refused');
+      if(parts[0]!=='max'){if(!/^\d+$/.test(parts[0])||Number(parts[0])<=0)fail('resource-admission-refused');cpuAvailable=Math.min(cpuAvailable,Number(parts[0])/Number(parts[1]));}}
+    if(directory===base)break;directory=path.dirname(directory);
+  }
+  const images=path.join(DATA,'images');storage.rootParent(images);const st=fs.lstatSync(images);
+  if(!st.isDirectory()||st.isSymbolicLink()||st.uid!==0||st.mode&0o022)fail('resource-admission-refused');
+  const disk=fs.statfsSync(images),sample={total,available,swapUsed:field('SwapTotal')-field('SwapFree'),cgroupSwap,pressure,cpuAvailable,diskAvailable:disk.bavail*disk.bsize};
+  if(Object.values(sample).some(value=>!Number.isFinite(value)||value<0))fail('resource-admission-refused');
+  return sample;
+}
+function resourceAdmission(bytes,engine){
   const text=fs.readFileSync('/proc/meminfo','utf8'),field=name=>Number(new RegExp('^'+name+':\\s+(\\d+) kB$','m').exec(text)?.[1])*1024;
   const pressure=Number(/^some avg10=(\d+(?:\.\d+)?)/m.exec(fs.readFileSync('/proc/pressure/memory','utf8'))?.[1]);
   if(!Number.isFinite(field('MemAvailable'))||!Number.isFinite(pressure)||field('MemTotal')<3800*1024**2||
-    field('MemAvailable')<2560*1024**2||field('SwapTotal')-field('SwapFree')>128*1024**2||pressure>1||
+    field('MemAvailable')<(engine==='mysql'?2944:2560)*1024**2||field('SwapTotal')-field('SwapFree')>128*1024**2||pressure>1||
     bytes*4+256*1024**2>2*1024**3)fail('resource-admission-refused');
+  if(engine==='mysql'){
+    const sample=resourceCapacity();
+    if(sample.total<3800*1024**2||sample.available<2944*1024**2||sample.swapUsed>128*1024**2||sample.cgroupSwap>0||sample.pressure>1)fail('resource-admission-refused');
+    if(sample.cpuAvailable<2)fail('resource-cpu-insufficient');
+    if(sample.diskAvailable<1024**3)fail('resource-disk-insufficient');
+  }
 }
 function classifyReadinessFailure(stderr){
   if(/1045|access denied|password authentication failed/i.test(stderr))return 'target-authentication-failed';
@@ -212,7 +259,7 @@ function nativeReady(meta){
   const file=path.join(directory,pg?'ready.pgpass':'ready.cnf');
   write(file,pg?host+':5432:'+(options.disposable?'pluton_recovery_guard':'pluton_restore_guard')+':restore_user:'+password+'\n':
     '[client]\nhost='+host+'\nport=3306\nuser=restore_user\npassword='+password+
-    '\nssl=ON\nssl-verify-server-cert=ON\nssl-ca='+privatePath+'/ca.pem\n',999,0o640);
+    (meta.engine==='mysql'?'\nssl-mode=VERIFY_IDENTITY\n':'\nssl=ON\nssl-verify-server-cert=ON\n')+'ssl-ca='+privatePath+'/ca.pem\n',999,0o640);
   // pgpass must be 0600 and readable as the native UID, not passed via PGPASSWORD.
   if(pg){fs.chownSync(file,999,999);fs.chmodSync(file,0o600);}
   const expected=[PURPOSE,meta.approval.activationId,meta.approval.storage.id].join('|');
@@ -220,7 +267,7 @@ function nativeReady(meta){
   let waitingReported=false;
   try{
     while(Date.now()<end){
-      const current=inspect(meta);if(!current.State.Running)fail('target-process-stopped');
+      const current=inspect(meta);if(!current.State.Running)fail(current.State.OOMKilled?'target-memory-exhausted':'target-process-stopped');
       try{
         const common=['exec','--user','999:999'];
         const guard=options.disposable?'pluton_recovery_guard':'pluton_restore_guard';
@@ -229,7 +276,7 @@ function nativeReady(meta){
           '-e','PGSSLROOTCERT='+privatePath+'/ca.pem','-e','PGCONNECT_TIMEOUT=2','-e','PGOPTIONS=-c statement_timeout=2000',
           meta.containerId,'psql','-X','--no-password','--no-psqlrc','--quiet','--host',host,'--username','restore_user',
           '--dbname',guard,'--tuples-only','--no-align','--set','ON_ERROR_STOP=1','--command',sql]
-          :[...common,meta.containerId,'mariadb','--defaults-file='+privatePath+'/ready.cnf','--batch','--raw',
+          :[...common,meta.containerId,meta.engine==='mysql'?'mysql':'mariadb','--defaults-file='+privatePath+'/ready.cnf','--batch','--raw',
             '--skip-column-names','--connect-timeout=2','--database='+guard,'--execute',sql];
         const output=run('docker',args,5000).split(/[|\t]/).join('|');
         if(output!==expected)fail('target-purpose-mismatch');
@@ -253,7 +300,16 @@ function provision(req){
   const approved=policy();
   if(req.action!=='provision'||req.expiresAt<=Date.now()||req.expiresAt>Date.now()+approved.maxRetentionSeconds*1000)fail('request-expired');
   if(req.bytes>approved.maxSqlBytes)fail('operator-sql-budget');
-  rootCode(path.join(__dirname,'bootstrap.sh'));resourceAdmission(req.bytes);
+  rootCode(path.join(__dirname,'bootstrap.sh'));resourceAdmission(req.bytes,req.engine);
+  if(req.engine==='mysql'){
+    if(!options.automatic)fail('mysql-automatic-profile-required');
+    rootCode(path.join(__dirname,'mysql-lock.py'));
+    const version=run('docker',['run','--rm','--pull','never','--network','none','--read-only','--user','999:999',
+      '--cap-drop','ALL','--security-opt','no-new-privileges:true','--memory','128m','--pids-limit','16',
+      '--tmpfs','/var/lib/mysql:rw,noexec,nosuid,nodev,uid=999,gid=999,mode=700,size=1m',
+      '--entrypoint','mysqld',images.mysql,'--version']);
+    if(!/Ver 8\.4\.11\b.*MySQL Community Server/.test(version)||/MariaDB/i.test(version))fail('target-engine-incompatible');
+  }
   const directory=path.join(ROOT,'private',req.restoreId);
   if(fs.existsSync(directory)){
     const previous=metadata(req.restoreId);
@@ -281,7 +337,7 @@ function provision(req){
   write(path.join(directory,'bootstrap.sql'),bootstrapSql(req.engine,req.database,password,activation,volume.identity.storageId),999,0o640);
   const ca=fs.readFileSync(path.join(directory,'ca.pem'));
   const approval={version:1,id:req.restoreId,purpose:PURPOSE,mode:'internal',activationId:activation,engine:req.engine,database:req.database,
-    target:{engine:req.engine,host,port:req.engine==='mariadb'?3306:5432,username:'restore_user',tls:'verify-identity',enabled:true,dedicated:true,password},
+    target:{engine:req.engine,host,port:req.engine==='postgresql'?5432:3306,username:'restore_user',tls:'verify-identity',enabled:true,dedicated:true,password},
     caSha256:crypto.createHash('sha256').update(ca).digest('hex'),...approved,
     storage:{id:volume.identity.storageId,quotaBytes:volume.identity.quotaBytes,kind:'fixed-ext4'},
     binding:{restoreId:req.restoreId,snapshotId:req.snapshotId,sha256:req.sha256}};
@@ -315,7 +371,7 @@ function provision(req){
     storage.directory(lockInfo.Mountpoint,999,999,0o700);
   }else if(fresh)run('docker',['run','--rm','--network','none','--read-only','--user','0:0','--mount','type=volume,source='+LOCK+',target=/lock',
     '--entrypoint','/bin/sh',images[req.engine],'-ec','chown 999:999 /lock && chmod 700 /lock']);
-  const base=req.engine==='mariadb'?'/var/lib/mysql':'/var/lib/postgresql';
+  const base=req.engine==='postgresql'?'/var/lib/postgresql':'/var/lib/mysql';
   const containerId=run('docker',['create',...(options.automatic?['--pull','never','--restart','no',
     '--label','org.pluton.automatic.binding='+options.bindingHash,'--label','org.pluton.automatic.mode='+options.mode]:[]),
     '--init','--name','pluton-persistent-'+req.restoreId,'--network',NETWORK,'--network-alias',host,
@@ -327,13 +383,18 @@ function provision(req){
     '--mount','type=bind,source='+volume.mountpoint+',target='+base,
     '--mount','type=bind,source='+directory+',target=/run/pluton-persistent-bootstrap,readonly',
     '--mount','type=bind,source='+path.join(__dirname,'bootstrap.sh')+',target=/opt/pluton-persistent/bootstrap.sh,readonly',
+    ...(req.engine==='mysql'?['--mount','type=bind,source='+path.join(__dirname,'mysql-lock.py')+',target=/opt/pluton-persistent/mysql-lock.py,readonly']:[]),
     '--mount','type=volume,source='+LOCK+',target=/run/pluton-internal-lock',
     '--entrypoint','/bin/bash',images[req.engine],'/opt/pluton-persistent/bootstrap.sh',req.engine]);
   if(!/^[a-f0-9]{64}$/.test(containerId))fail();
   approval.containerId=containerId;
   const meta={id:req.restoreId,engine:req.engine,containerId,volume,approval,request:req,fingerprint:approvalFingerprint(approval)};
   write(path.join(directory,'metadata.json'),meta);
-  inspect(meta);options.stage?.('starting-database');run('docker',['start',containerId]);nativeReady(meta);
+  inspect(meta);options.stage?.('starting-database');
+  // Recheck AFTER preallocation/certificates, immediately before initialization.
+  // An interrupted/denied creation keeps its exact metadata for reconciliation.
+  if(req.engine==='mysql')resourceAdmission(req.bytes,req.engine);
+  run('docker',['start',containerId]);nativeReady(meta);
   publish(meta);
 }
 function containerPresent(meta){
@@ -455,7 +516,7 @@ function operate(action,id){
 }
 return {PURPOSE,images,validateRequest,bootstrapSql,ownership,approvalFingerprint,approveCustom,
   init,provision,metadata,inspect,nativeReady,state,publish,bindRequest,deleteOwned,containerPresent,
-  read,write,resourceAdmission,rootCode,verifyNeverProvisioned,policy,ROOT,DATA,NETWORK,operate,fail,classifyReadinessFailure};
+  read,write,resourceAdmission,resourceCapacity,rootCode,verifyNeverProvisioned,policy,ROOT,DATA,NETWORK,operate,fail,classifyReadinessFailure};
 }
 module.exports={...createOperator(),createOperator};
 if(require.main===module){

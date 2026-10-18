@@ -40,6 +40,7 @@ export type RecoveryCode =
 	| 'mysql-worker-unavailable'
 	| 'mysql-worker-busy'
 	| 'mysql-worker-protocol-failed'
+	| 'mysql-worker-resource-limit'
 	| 'snapshot-not-found'
 	| 'snapshot-binding-mismatch'
 	| 'snapshot-metadata-invalid'
@@ -68,6 +69,8 @@ export type RecoveryCode =
 	| 'database-already-exists'
 	| 'database-import-failed'
 	| 'database-import-timeout'
+	| 'database-out-of-memory'
+	| 'database-storage-full'
 	| 'database-output-limit'
 	| 'database-import-validation-failed'
 	| 'database-role-missing'
@@ -104,13 +107,13 @@ export type RecoveryResult = {
 	databases: RecoveryDatabaseResult[];
 	cleanup: { workspace: boolean; databases: boolean; infrastructure?: boolean };
 };
-export type InternalRecoveryEngine = 'mariadb' | 'postgresql';
+export type InternalRecoveryEngine = 'mariadb' | 'postgresql' | 'mysql';
 export type RecoveryTargetMode = 'internal' | 'custom';
 export type RecoveryPolicy = {
 	enabled: boolean;
 	databaseImport: 'disabled' | 'required';
 	enabledAt?: number;
-	/** Missing entries preserve the original Custom behavior. MySQL is always Custom. */
+	/** Missing entries preserve the original Custom behavior. */
 	targetModes?: Partial<Record<InternalRecoveryEngine, RecoveryTargetMode>>;
 	/** Internal per-job fingerprint, never accepted by the saved-policy API. */
 	snapshotMetadataToken?: string;

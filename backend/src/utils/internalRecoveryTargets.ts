@@ -14,6 +14,7 @@ import { recoveryTargetSchema } from './recoveryTestPolicy';
 import { RecoveryTestError } from './recoveryValidation';
 import { assertRecoveryClientPath } from './recoveryDatabaseClients';
 import { AutomaticRecoveryLifecycle } from './automaticRecoveryLifecycle';
+import { MysqlWorkerConnection } from './mysqlRecoveryWorkerClient';
 
 const ROOT = '/run/pluton-internal-recovery';
 const REQUESTS = '/run/pluton-internal-requests';
@@ -59,6 +60,14 @@ export type InternalReadiness = {
 };
 export type ResourceSample = {
 	cpuAvailable?: number;
+	operatorTotal?: number;
+	operatorAvailable?: number;
+	operatorCpuAvailable?: number;
+	operatorDiskAvailable?: number;
+	operatorObservedAt?: number;
+	operatorSwapUsed?: number;
+	operatorCgroupSwap?: number;
+	operatorPressure?: number;
 	total: number;
 	available: number;
 	swapUsed: number;
@@ -71,10 +80,32 @@ export type ResourceSample = {
 export function internalResourceReason(
 	sample: ResourceSample,
 	sqlBytes: number,
-	maxSqlBytes: number
+	maxSqlBytes: number,
+	engine?: InternalRecoveryEngine,
+	phase: 'provision' | 'import' | 'resume' = 'import'
 ) {
+	if (
+		[
+			'total',
+			'available',
+			'swapUsed',
+			'pressure',
+			'limit',
+			'used',
+			'cgroupSwap',
+			'diskAvailable',
+		].some(
+			key =>
+				!Number.isFinite(sample[key as keyof ResourceSample]) ||
+				sample[key as keyof ResourceSample]! < 0
+		)
+	)
+		return 'capacity-unknown';
 	if (Object.values(sample).some(n => !Number.isFinite(n) || n < 0)) return 'capacity-unknown';
-	if (sample.cpuAvailable !== undefined && sample.cpuAvailable < 1) return 'cpu-headroom';
+	if (engine && sample.cpuAvailable === undefined) return 'capacity-unknown';
+	if (engine && sample.cpuAvailable !== undefined && sample.cpuAvailable < 1) return 'cpu-headroom';
+	if (engine && sample.operatorCpuAvailable !== undefined && sample.operatorCpuAvailable < 2)
+		return 'operator-cpu-headroom';
 	if (
 		!Number.isSafeInteger(sqlBytes) ||
 		!Number.isSafeInteger(maxSqlBytes) ||
@@ -86,12 +117,32 @@ export function internalResourceReason(
 		return 'operator-sql-budget';
 	if (sqlBytes * 4 + 256 * MiB > 2 * 1024 * MiB) return 'expanded-data-budget';
 	if (sample.total < 3800 * MiB) return 'host-memory-total';
-	if (sample.available < 2560 * MiB) return 'host-memory-headroom';
+	if (engine && sample.operatorTotal !== undefined && sample.operatorTotal < 3800 * MiB)
+		return 'operator-memory-total';
+	if (sample.available < (engine === 'mysql' ? 2944 : 2560) * MiB) return 'host-memory-headroom';
+	if (
+		engine &&
+		sample.operatorAvailable !== undefined &&
+		sample.operatorAvailable < (engine === 'mysql' ? 2944 : 2560) * MiB
+	)
+		return 'operator-memory-headroom';
 	if (sample.swapUsed > 128 * MiB || sample.cgroupSwap > 0) return 'swap-in-use';
+	if (
+		engine &&
+		((sample.operatorSwapUsed || 0) > 128 * MiB || (sample.operatorCgroupSwap || 0) > 0)
+	)
+		return 'swap-in-use';
 	if (sample.pressure > 1) return 'memory-pressure';
+	if (engine && (sample.operatorPressure || 0) > 1) return 'memory-pressure';
 	if (sample.limit < 768 * MiB || sample.used > sample.limit * 0.85)
 		return 'server-cgroup-headroom';
 	if (sample.diskAvailable < sqlBytes + 2 * 1024 * MiB) return 'staging-capacity';
+	if (
+		engine &&
+		sample.operatorDiskAvailable !== undefined &&
+		sample.operatorDiskAvailable < (phase === 'provision' ? 3 : 1) * 1024 ** 3
+	)
+		return 'operator-disk-reserve';
 	return null;
 }
 
@@ -99,12 +150,14 @@ export function internalResourceReason(
 export function assertInternalResources(
 	sample: ResourceSample,
 	sqlBytes: number,
-	maxSqlBytes: number
+	maxSqlBytes: number,
+	engine?: InternalRecoveryEngine
 ) {
-	if (internalResourceReason(sample, sqlBytes, maxSqlBytes))
+	if (internalResourceReason(sample, sqlBytes, maxSqlBytes, engine))
 		throw new RecoveryTestError('database-target-preflight', 'internal-resources-insufficient');
 }
-async function resources(directory: string): Promise<ResourceSample> {
+
+export async function sampleInternalResources(directory: string): Promise<ResourceSample> {
 	try {
 		const mem = await fs.readFile('/proc/meminfo', 'utf8');
 		const field = (name: string) => {
@@ -120,18 +173,31 @@ async function resources(directory: string): Promise<ResourceSample> {
 		const limit = await read('memory.max');
 		const disk = await fs.statfs(directory);
 		const cpu = (await read('cpu.max')).split(/\s+/);
-		const cpuset = (await read('cpuset.cpus.effective')).split(',').reduce((sum, range) => {
+		const cpusetText = await read('cpuset.cpus.effective');
+		if (
+			!/^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/.test(cpusetText) ||
+			cpu.length !== 2 ||
+			!/^\d+$/.test(cpu[1]) ||
+			Number(cpu[1]) <= 0 ||
+			(cpu[0] !== 'max' && !/^\d+$/.test(cpu[0])) ||
+			(limit !== 'max' && !/^\d+$/.test(limit))
+		)
+			throw new Error();
+		const cpuset = cpusetText.split(',').reduce((sum, range) => {
 			const [start, end = start] = range.split('-').map(Number);
+			if (end < start) throw new Error();
 			return sum + end - start + 1;
 		}, 0);
+		const memory = await Promise.all(['memory.current', 'memory.swap.current'].map(read));
+		if (memory.some(value => !/^\d+$/.test(value))) throw new Error();
 		return {
 			total: field('MemTotal'),
 			available: field('MemAvailable'),
 			swapUsed: field('SwapTotal') - field('SwapFree'),
 			pressure: Number(pressure[1]),
 			limit: limit === 'max' ? 0 : Number(limit),
-			used: Number(await read('memory.current')),
-			cgroupSwap: Number(await read('memory.swap.current')),
+			used: Number(memory[0]),
+			cgroupSwap: Number(memory[1]),
 			diskAvailable: disk.bavail * disk.bsize,
 			cpuAvailable: cpu[0] === 'max' ? cpuset : Math.min(cpuset, Number(cpu[0]) / Number(cpu[1])),
 		};
@@ -162,14 +228,35 @@ const reachable = (host: string, port: number) =>
 /** Trust comes from a root-owned read-only bind, NOT from a request submitted by the web UI. */
 export class InternalRecoveryTargets {
 	constructor(
-		private readonly sample = resources,
+		private readonly sample = sampleInternalResources,
 		private readonly probe = reachable,
 		readonly automatic?: AutomaticRecoveryLifecycle
 	) {}
+	private async measurement(directory: string, engine?: InternalRecoveryEngine) {
+		const sample = await this.sample(directory);
+		if (!this.automatic) return sample;
+		const capacity = await this.automatic.capacity();
+		if (!capacity) {
+			if (engine === 'mysql')
+				throw new RecoveryTestError('database-target-preflight', 'internal-resources-insufficient');
+			return sample;
+		}
+		return {
+			...sample,
+			operatorTotal: capacity.total,
+			operatorAvailable: capacity.available,
+			operatorCpuAvailable: capacity.cpuAvailable,
+			operatorDiskAvailable: capacity.diskAvailable,
+			operatorObservedAt: capacity.observedAt,
+			operatorSwapUsed: capacity.swapUsed,
+			operatorCgroupSwap: capacity.cgroupSwap,
+			operatorPressure: capacity.pressure,
+		};
+	}
 	/** Read-only advisory sample. Unknown is never reported as safe; execution samples again. */
 	async resourceView(directory: string) {
 		try {
-			const sample = await this.sample(directory);
+			const sample = await this.measurement(directory);
 			if (Object.values(sample).some(n => !Number.isFinite(n) || n < 0)) throw new Error();
 			return { status: 'measured' as const, sample, observedAt: Date.now() };
 		} catch {
@@ -185,19 +272,23 @@ export class InternalRecoveryTargets {
 			const config = this.automatic ? await this.automatic.capability() : this.target(engine);
 			if (!('maxSqlBytes' in config))
 				throw new RecoveryTestError('database-target-preflight', 'internal-target-not-provisioned');
+			const maxSqlBytes =
+				engine === 'mysql' ? Math.min(config.maxSqlBytes, 128 * MiB) : config.maxSqlBytes;
 			const reason = internalResourceReason(
-				await this.sample(directory),
+				await this.measurement(directory, engine),
 				entries.reduce((sum, entry) => sum + entry.bytes, 0),
-				config.maxSqlBytes
+				maxSqlBytes,
+				engine,
+				this.automatic ? 'provision' : 'import'
 			);
 			if (reason)
 				return {
 					status: 'refused' as const,
 					code: 'internal-resources-insufficient' as const,
 					reason,
-					maxSqlBytes: config.maxSqlBytes,
+					maxSqlBytes,
 				};
-			return { status: 'admitted' as const, maxSqlBytes: config.maxSqlBytes };
+			return { status: 'admitted' as const, maxSqlBytes };
 		} catch (error) {
 			return {
 				status: 'refused' as const,
@@ -286,12 +377,17 @@ export class InternalRecoveryTargets {
 	}
 	async readiness(pending: InternalRecoverySession[] = []): Promise<InternalReadiness[]> {
 		return Promise.all(
-			(['mariadb', 'postgresql'] as const).map(async engine => {
+			(['mariadb', 'postgresql', 'mysql'] as const).map(async engine => {
 				let status: InternalReadiness['status'] = 'not_provisioned';
 				const active = pending.find(value => value.engine === engine);
 				if (active) status = active.cleanupReady ? 'cleanup_required' : 'running';
 				else if (this.automatic) {
-					if ((await this.automatic.capability()).available) {
+					const capability = await this.automatic.capability();
+					if (
+						capability.available &&
+						(capability.engines as readonly string[]).includes(engine) &&
+						(engine !== 'mysql' || (await new MysqlWorkerConnection().internalReady()))
+					) {
 						try {
 							this.automatic.assertAvailable();
 							status = 'ready';
@@ -299,7 +395,7 @@ export class InternalRecoveryTargets {
 							status = 'running';
 						}
 					}
-				} else
+				} else if (engine !== 'mysql')
 					try {
 						const state = this.state();
 						const config = this.target(engine);
@@ -325,6 +421,7 @@ export class InternalRecoveryTargets {
 		engine: InternalRecoveryEngine,
 		entries: RecoveryDatabaseResult[],
 		context?: {
+			directory: string;
 			testId: string;
 			snapshotId: string;
 			createdAt: number;
@@ -333,8 +430,11 @@ export class InternalRecoveryTargets {
 		}
 	) {
 		if (this.automatic) {
+			if (engine === 'mysql' && !(await new MysqlWorkerConnection().internalReady()))
+				throw new RecoveryTestError('database-target-preflight', 'mysql-worker-unavailable');
 			if (!context)
 				throw new RecoveryTestError('database-target-preflight', 'internal-target-unsafe');
+			await this.preflight(engine, entries, context.directory, 'provision');
 			await this.automatic.testing(context.testId, context.snapshotId, entries, context.createdAt);
 			const target = await this.automatic.waitReady(context.testId, context.signal, context.stage);
 			await this.automatic.verifyStorage(context.testId, target.storage, target.activationId);
@@ -366,16 +466,23 @@ export class InternalRecoveryTargets {
 	async preflight(
 		engine: InternalRecoveryEngine,
 		entries: RecoveryDatabaseResult[],
-		directory: string
+		directory: string,
+		phase: 'provision' | 'import' | 'resume' = 'import'
 	) {
 		const config = this.automatic ? await this.automatic.capability() : this.target(engine);
 		if (!('maxSqlBytes' in config))
 			throw new RecoveryTestError('database-target-preflight', 'internal-target-not-provisioned');
-		assertInternalResources(
-			await this.sample(directory),
-			entries.reduce((n, entry) => n + entry.bytes, 0),
-			config.maxSqlBytes
+		const bytes = entries.reduce((n, entry) => n + entry.bytes, 0);
+		const max = engine === 'mysql' ? Math.min(config.maxSqlBytes, 128 * MiB) : config.maxSqlBytes;
+		const reason = internalResourceReason(
+			await this.measurement(directory, engine),
+			bytes,
+			max,
+			engine,
+			phase
 		);
+		if (reason)
+			throw new RecoveryTestError('database-target-preflight', 'internal-resources-insufficient');
 	}
 	async requestCleanup(session: InternalRecoverySession, snapshotId: string) {
 		if (this.automatic?.record(session.testId)) {

@@ -19,9 +19,30 @@ import {
 
 type ImportInput = Parameters<RecoveryDatabaseImporter['importDatabase']>[0];
 type ImportStore = Pick<RecoveryTestStore, 'addLease' | 'removeLease' | 'leases' | 'leaseTarget'>;
+type InternalContext = { id: string; snapshotId: string };
 /** Optional Unix IPC only. No generic process proxy, executable/argv/path RPC or network API. */
 export class MysqlWorkerConnection {
 	constructor(protected readonly enabled = () => process.env.PLUTON_MYSQL_WORKER === 'enabled') {}
+	async internalReady() {
+		let socket: Socket | undefined;
+		const controller = new AbortController(),
+			timer = setTimeout(() => controller.abort(), 1000);
+		try {
+			socket = await this.socket(controller.signal);
+			await send(socket, { version: 1, operation: 'capabilities' });
+			for await (const raw of frames(socket)) {
+				const response = responseSchema.parse(raw);
+				if (response.type === 'heartbeat') continue;
+				return response.type === 'capabilities' && response.internal;
+			}
+		} catch {
+			/* Old or Custom-only workers are not Internal approval. */
+		} finally {
+			clearTimeout(timer);
+			socket?.destroy();
+		}
+		return false;
+	}
 	protected async socket(signal: AbortSignal) {
 		if (!this.enabled())
 			throw new RecoveryTestError('database-target-preflight', 'mysql-worker-not-configured');
@@ -70,9 +91,18 @@ export class MysqlWorkerConnection {
 export class MysqlRecoveryWorkerClient extends MysqlWorkerConnection {
 	constructor(
 		private readonly store: ImportStore,
-		enabled?: () => boolean
+		enabled?: () => boolean,
+		private readonly internal?: (testId: string) => Promise<InternalContext>
 	) {
 		super(enabled);
+	}
+	private wireLease(lease: RecoveryImportLease) {
+		// Internal storage namespaces IDs as il_<wire-id>. Keep the established
+		// 24-hex wire contract and never allow store mutation to alter its ACK.
+		return {
+			...lease,
+			id: this.internal && /^il_[a-f0-9]{24}$/.test(lease.id) ? lease.id.slice(3) : lease.id,
+		};
 	}
 	async importDatabase(input: ImportInput) {
 		let socket: Socket | undefined;
@@ -85,19 +115,21 @@ export class MysqlRecoveryWorkerClient extends MysqlWorkerConnection {
 			const request = requestSchema.safeParse({
 				version: 1,
 				operation: 'import',
+				...(this.internal ? { internal: await this.internal(input.testId) } : {}),
 				target: input.target,
 				testId: input.testId,
 				targetId: input.targetId,
 				entry: {
+					...(this.internal ? { databaseId: input.entry.databaseId } : {}),
 					engine: input.entry.engine,
 					database: input.entry.database,
 					bytes: input.entry.bytes,
 					sha256: input.entry.sha256,
 				},
 				allowedDatabases: input.allowedDatabases,
-				leases: (await this.store.leases(input.testId)).filter(
-					lease => lease.targetId === input.targetId
-				),
+				leases: (await this.store.leases(input.testId))
+					.filter(lease => lease.targetId === input.targetId)
+					.map(lease => this.wireLease(lease)),
 			});
 			if (!request.success || input.entry.artifactValidation !== 'passed')
 				throw new RecoveryTestError('database-target-preflight', 'recovery-target-unsafe');
@@ -139,7 +171,7 @@ export class MysqlRecoveryWorkerClient extends MysqlWorkerConnection {
 						lease.database !== input.entry.database
 					)
 						throw protocolError();
-					await this.store.addLease(lease); // committed BEFORE authorizing worker CREATE
+					await this.store.addLease({ ...lease }); // committed BEFORE authorizing worker CREATE; store may namespace its clone
 					leased = true;
 					await send(socket, { type: 'lease-ack', id: lease.id });
 				} else if (response.type === 'complete' && leased) {
@@ -169,7 +201,13 @@ export class MysqlRecoveryWorkerClient extends MysqlWorkerConnection {
 	}
 	async cleanup(lease: RecoveryImportLease) {
 		const target = await this.store.leaseTarget(lease.targetId);
-		const request = requestSchema.safeParse({ version: 1, operation: 'cleanup', target, lease });
+		const request = requestSchema.safeParse({
+			version: 1,
+			operation: 'cleanup',
+			target,
+			lease: this.wireLease(lease),
+			...(this.internal ? { internal: await this.internal(lease.testId) } : {}),
+		});
 		if (!request.success)
 			throw new RecoveryTestError('database-cleanup', 'database-cleanup-failed');
 		// A cancelled import is killed first. Bound retries for the worker's local file cleanup.
@@ -200,6 +238,35 @@ export class MysqlRecoveryWorkerClient extends MysqlWorkerConnection {
 				socket?.destroy();
 			}
 			await new Promise(resolve => setTimeout(resolve, 250));
+		}
+	}
+	async verifyEmptyTarget(
+		target: Parameters<RecoveryDatabaseImporter['verifyEmptyTarget']>[0],
+		testId: string
+	) {
+		if (!this.internal) throw protocolError();
+		const { id: targetId, ...config } = target;
+		const request = requestSchema.parse({
+			version: 1,
+			operation: 'verify-empty',
+			target: config,
+			targetId,
+			testId,
+			internal: await this.internal(testId),
+		});
+		const socket = await this.socket(new AbortController().signal);
+		try {
+			await send(socket, request);
+			for await (const raw of frames(socket)) {
+				const response = responseSchema.parse(raw);
+				if (response.type === 'heartbeat') continue;
+				if (response.type === 'error') throw workerError(response.stage, response.code);
+				if (response.type !== 'cleaned') throw protocolError();
+				return;
+			}
+			throw protocolError();
+		} finally {
+			socket.destroy();
 		}
 	}
 }

@@ -18,13 +18,14 @@ export const PERSISTENT_REQUESTS = '/run/pluton-persistent-restore-requests';
 export const PERSISTENT_STORAGE = '/run/pluton-persistent-storage';
 /** Root approvals are never UI-controlled connection settings or a Docker API. */
 export class PersistentRestoreTargets {
+	private readonly resources: InternalRecoveryTargets;
 	constructor(
 		private readonly root = PERSISTENT_PUBLIC,
 		private readonly requests = PERSISTENT_REQUESTS,
 		private readonly storage = PERSISTENT_STORAGE,
-		private readonly resources = new InternalRecoveryTargets(),
+		resources?: InternalRecoveryTargets,
 		readonly automatic?: AutomaticRecoveryLifecycle
-	) {}
+	) { this.resources = resources || new InternalRecoveryTargets(undefined, undefined, automatic); }
 	async policy() {
 		try {
 			const value = JSON.parse(
@@ -155,8 +156,17 @@ export class PersistentRestoreTargets {
 	}
 	async admission(approval: PersistentTargetApproval, row: DatabaseRestore, directory: string) {
 		const measured = await this.resources.resourceView(directory);
+		if (row.mode === 'internal' && row.artifact.engine === 'mysql' && !measured.sample?.operatorObservedAt)
+			throw new DatabaseRestoreError('resource-capacity-unknown');
 		const reason = measured.sample
-			? internalResourceReason(measured.sample, row.artifact.bytes, approval.maxSqlBytes)
+			? internalResourceReason(
+					measured.sample,
+					row.artifact.bytes,
+					row.mode === 'internal' && approval.engine === 'mysql'
+						? Math.min(approval.maxSqlBytes, 128 * 1024 ** 2)
+						: approval.maxSqlBytes,
+					row.mode === 'internal' ? approval.engine : undefined
+				)
 			: 'capacity-unknown';
 		if (reason) throw new DatabaseRestoreError(`resource-${reason}`);
 		if (row.ttlSeconds > approval.maxRetentionSeconds)

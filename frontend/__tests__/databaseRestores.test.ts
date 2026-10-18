@@ -38,6 +38,12 @@ const preview: RestorePreview = {
       status: 'measured',
       observedAt: 1,
       sample: {
+         cpuAvailable: 1,
+         operatorObservedAt: 1,
+         operatorTotal: 4096 * 1024 ** 2,
+         operatorAvailable: 3000 * 1024 ** 2,
+         operatorCpuAvailable: 4,
+         operatorDiskAvailable: 10 * 1024 ** 3,
          total: 4096 * 1024 ** 2,
          available: 3000 * 1024 ** 2,
          swapUsed: 0,
@@ -49,7 +55,7 @@ const preview: RestorePreview = {
       },
    },
 };
-test('automatic lifecycle displays measured stages, remains opt-in, and never enables MySQL Internal', () => {
+test('automatic lifecycle displays measured stages and requires independent MySQL Internal approval', () => {
    for (const stage of [
       'checking-resources',
       'provisioning-container',
@@ -65,7 +71,38 @@ test('automatic lifecycle displays measured stages, remains opt-in, and never en
    assert.match(restoreRefusal({ ...preview, lifecycle: { available: false } }, choice)!, /operator unavailable/);
    assert.equal(restoreRefusal({ ...preview, lifecycle: { available: true } }, choice), null);
    const mysql = { ...preview, lifecycle: { available: true }, databases: [{ ...preview.databases[0], engine: 'mysql' as const }] };
-   assert.match(restoreRefusal(mysql, choice)!, /not yet supported/);
+   assert.match(restoreRefusal(mysql, choice)!, /approved automatic operator/);
+});
+test('approved MySQL Internal is selectable, with its own budget/headroom and unchanged snapshot identity', () => {
+   const mysql: RestorePreview = {
+      ...preview,
+      databases: [{ ...preview.databases[0], engine: 'mysql' }],
+      engines: { ...preview.engines, mysql: ['internal', 'custom'] },
+      lifecycle: { available: true },
+   };
+   const choice = { ...initialRestoreChoice(mysql), resources: true, security: true };
+   assert.equal(choice.mode, 'internal');
+   assert.equal(restoreRefusal(mysql, choice), null);
+   const body = restoreBody(mysql, choice);
+   assert.equal(body.databaseId, preview.databases[0].databaseId);
+   assert.equal(body.snapshotId, preview.snapshotId);
+   assert.equal(body.mode, 'internal');
+   assert(!Object.hasOwn(body, 'targetId'));
+   assert(!Object.hasOwn(body, 'host'));
+   assert(restoreRefusal({ ...mysql, lifecycle: undefined }, choice));
+   assert(
+      restoreRefusal({ ...mysql, resources: { ...mysql.resources, sample: { ...mysql.resources.sample!, available: 2800 * 1024 ** 2 } } }, choice),
+   );
+   assert(
+      restoreRefusal(
+         {
+            ...mysql,
+            internalPolicy: { ...mysql.internalPolicy, maxSqlBytes: 384 * 1024 ** 2 },
+            databases: [{ ...mysql.databases[0], bytes: 128 * 1024 ** 2 + 1 }],
+         },
+         choice,
+      ),
+   );
 });
 test('wizard submits stable snapshot/database IDs, not a guessed engine, SQL, credentials or endpoint', () => {
    const choice = { ...initialRestoreChoice(preview), resources: true, security: true };
@@ -100,7 +137,7 @@ test('queued, expired and uncertain cleanup states are never shown as successful
    assert(needsRestoreRefresh(base));
    assert(!needsRestoreRefresh({ ...base, status: 'deleted' }));
 });
-test('MySQL defaults to Custom but requires an explicit approved matching target; Internal stays unavailable', () => {
+test('legacy MySQL defaults to Custom; unapproved Internal remains unavailable', () => {
    const target = {
       id: 'd'.repeat(24),
       engine: 'mysql' as const,
@@ -124,7 +161,7 @@ test('MySQL defaults to Custom but requires an explicit approved matching target
    assert.equal(restoreRefusal(mysql, selected), null);
    assert.equal(restoreBody(mysql, selected).targetId, target.id);
    assert.equal(restoreBody(mysql, selected).databaseId, 'db_example');
-   assert.match(restoreRefusal(mysql, { ...selected, mode: 'internal' })!, /not yet supported/);
+   assert.match(restoreRefusal(mysql, { ...selected, mode: 'internal' })!, /approved automatic operator/);
    assert.match(restoreRefusal({ ...mysql, engines: { ...mysql.engines, mysql: [] } }, selected)!, /not configured/);
    assert(restoreRefusal({ ...mysql, targets: [{ ...target, engine: 'mariadb' }] }, selected));
    assert(restoreRefusal({ ...mysql, targets: [{ ...target, database: 'another_db' }] }, selected));
@@ -203,7 +240,7 @@ test('real wizard and management components render metadata-only controls with e
       assert(!markup.includes('Restore — Not Available'));
    }
 });
-test('real MySQL wizard and management show Custom-only mode, durable validation and safe deletion semantics', async () => {
+test('legacy MySQL wizard and management retain Custom-only mode, validation and safe deletion', async () => {
    const require = createRequire(new URL('../../backend/package.json', import.meta.url)),
       frontend = createRequire(new URL('../package.json', import.meta.url));
    const { build } = require('esbuild'),
@@ -276,7 +313,7 @@ test('real MySQL wizard and management show Custom-only mode, durable validation
       assert(markup.includes(preview.snapshotId));
       assert(!markup.includes('type="password"'));
       if (exported === 'DatabaseRestoreForm') {
-         assert.match(markup, /<option value="internal" disabled="">MySQL Internal — Not yet supported/);
+         assert.match(markup, /<option value="internal" disabled="">Internal — manual operator provisioning/);
          assert.match(markup, /<option value="custom" selected="">/);
          assert.match(markup, /Oracle MySQL worker/);
       } else {

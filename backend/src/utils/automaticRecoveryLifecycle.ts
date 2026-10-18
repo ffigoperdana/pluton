@@ -18,7 +18,7 @@ export const lifecycleBindingSchema = z
 	.object({
 		id: hex(24),
 		mode: z.enum(['persistent', 'disposable']),
-		engine: z.enum(['mariadb', 'postgresql']),
+		engine: z.enum(['mariadb', 'postgresql', 'mysql']),
 		snapshotId: hex(64),
 		artifacts: z
 			.array(
@@ -77,6 +77,7 @@ type RecordRow = {
 	state: string;
 	code: string | null;
 	observed_sequence: number;
+	resume_sequence: number;
 };
 export function lifecycleHash(binding: LifecycleBinding, token: string) {
 	return crypto.createHash('sha256').update(JSON.stringify(binding)).update(token).digest('hex');
@@ -109,7 +110,7 @@ export class AutomaticRecoveryLifecycle {
 	) {}
 	async trusted(name: string, max = 65536): Promise<Buffer> {
 		if (
-			!/^(?:capabilities\.json|[a-f0-9]{24}(?:\.receipt\.json|\.target\.json|-ca\.pem))$/.test(
+			!/^(?:capabilities\.json|capacity\.json|[a-f0-9]{24}(?:\.receipt\.json|\.target\.json|-ca\.pem))$/.test(
 				name
 			) ||
 			process.platform !== 'linux' ||
@@ -144,7 +145,10 @@ export class AutomaticRecoveryLifecycle {
 			const data = z
 				.object({
 					version: z.literal(1),
-					engines: z.tuple([z.literal('mariadb'), z.literal('postgresql')]),
+					engines: z.union([
+						z.tuple([z.literal('mariadb'), z.literal('postgresql')]),
+						z.tuple([z.literal('mariadb'), z.literal('postgresql'), z.literal('mysql')]),
+					]),
 					maxSqlBytes: z
 						.number()
 						.int()
@@ -165,6 +169,37 @@ export class AutomaticRecoveryLifecycle {
 			return { available: true as const, ...data };
 		} catch {
 			return { available: false as const };
+		}
+	}
+	/** Separate, read-only capacity file: old capability/receipt schemas and
+	 * rollback readers stay unchanged. Root reports its real ancestor cgroups. */
+	async capacity() {
+		try {
+			const number = z.number().finite().nonnegative();
+			const value = z
+				.object({
+					version: z.literal(1),
+					observedAt: z.number().int().positive(),
+					sample: z
+						.object({
+							total: number,
+							available: number,
+							swapUsed: number,
+							cgroupSwap: number,
+							pressure: number,
+							cpuAvailable: number,
+							diskAvailable: number,
+						})
+						.strict()
+						.nullable(),
+				})
+				.strict()
+				.parse(JSON.parse((await this.trusted('capacity.json', 2048)).toString()));
+			if (value.observedAt > this.clock() + 5000 || value.observedAt < this.clock() - 30000)
+				return null;
+			return value.sample ? { ...value.sample, observedAt: value.observedAt } : null;
+		} catch {
+			return null;
 		}
 	}
 	record(id: string) {
@@ -248,7 +283,7 @@ export class AutomaticRecoveryLifecycle {
 			{
 				id: row.id,
 				mode: 'persistent',
-				engine: row.artifact.engine as 'mariadb' | 'postgresql',
+				engine: row.artifact.engine as LifecycleBinding['engine'],
 				snapshotId: row.snapshotId,
 				artifacts: [
 					{
@@ -273,14 +308,14 @@ export class AutomaticRecoveryLifecycle {
 	) {
 		const engine = entries[0]?.engine;
 		if (
-			!['mariadb', 'postgresql'].includes(engine || '') ||
+			!['mariadb', 'postgresql', 'mysql'].includes(engine || '') ||
 			entries.some(entry => entry.engine !== engine)
 		)
 			throw new DatabaseRestoreError('lifecycle-binding-mismatch');
 		const record = this.ensure({
 			id,
 			mode: 'disposable',
-			engine: engine as 'mariadb' | 'postgresql',
+			engine: engine as LifecycleBinding['engine'],
 			snapshotId,
 			artifacts: entries.map(e => ({
 				databaseId: e.databaseId!,
@@ -294,6 +329,8 @@ export class AutomaticRecoveryLifecycle {
 		await this.publish(record, 'provision', false);
 	}
 	async action(id: string, action: LifecycleAction, cleanupReady = false) {
+		// Only the authenticated persistent-restore action path may allocate Resume authority.
+		if (action === 'resume') throw new DatabaseRestoreError('lifecycle-resume-explicit-required');
 		const record = this.record(id);
 		if (!record) throw new DatabaseRestoreError('lifecycle-binding-mismatch');
 		await this.publish(record, action, cleanupReady);
@@ -304,22 +341,70 @@ export class AutomaticRecoveryLifecycle {
 		cleanupReady: boolean,
 		replay = false
 	) {
-		if (record.state === 'removed') return;
-		// Never resurrect a cancelled intent via an old queued provision/resume request.
-		if (record.action === 'delete' && action !== 'delete')
-			throw new DatabaseRestoreError('lifecycle-deletion-in-progress');
-		this.sqlite
-			.prepare('UPDATE automatic_recovery_lifecycle SET action=?,updated_at=? WHERE id=?')
-			.run(action, this.clock(), record.id);
+		if (action === 'resume' && !replay) {
+			// WAL's NORMAL default does not durably commit each intent at power loss.
+			// Set this connection to FULL before the explicit-action transaction.
+			try {
+				this.sqlite.pragma('synchronous = FULL');
+				if (![2, 3].includes(Number(this.sqlite.pragma('synchronous', { simple: true }))))
+					throw new Error();
+			} catch {
+				throw new DatabaseRestoreError('lifecycle-durability-unavailable');
+			}
+		}
+		const intent = this.sqlite
+			.transaction(() => {
+				const current = this.record(record.id);
+				if (!current || current.state === 'removed') return;
+				// Re-read under the write lock: a stale caller cannot overwrite durable Delete.
+				if (current.action === 'delete' && action !== 'delete')
+					throw new DatabaseRestoreError('lifecycle-deletion-in-progress');
+				if (replay && current.action !== action) return;
+				let sequence = current.resume_sequence;
+				if (action === 'resume') {
+					if (
+						current.mode !== 'persistent' ||
+						!Number.isSafeInteger(sequence) ||
+						sequence < 0 ||
+						(!replay && sequence === Number.MAX_SAFE_INTEGER)
+					)
+						throw new DatabaseRestoreError('lifecycle-resume-sequence-invalid');
+					if (!replay) sequence++;
+					if (sequence === 0) throw new DatabaseRestoreError('lifecycle-resume-explicit-required');
+				}
+				this.sqlite
+					.prepare(
+						'UPDATE automatic_recovery_lifecycle SET action=?,updated_at=?,resume_sequence=? WHERE id=?'
+					)
+					.run(action, this.clock(), sequence, record.id);
+				return { ...current, action, resume_sequence: sequence };
+			})
+			.immediate();
+		if (!intent) return;
 		const previous = this.publishing.get(record.id) || Promise.resolve();
 		const operation = previous
 			.catch(() => {})
-			.then(() => this.writeRequest(record, action, cleanupReady, replay));
+			.then(() => this.writeRequest(intent, action, cleanupReady, replay));
 		this.publishing.set(record.id, operation);
 		try {
 			await operation;
 		} finally {
 			if (this.publishing.get(record.id) === operation) this.publishing.delete(record.id);
+		}
+	}
+	private async syncRequests() {
+		try {
+			const directory = await fs.open(
+				this.requests,
+				constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW
+			);
+			try {
+				await directory.sync();
+			} finally {
+				await directory.close();
+			}
+		} catch {
+			throw new DatabaseRestoreError('lifecycle-durability-unavailable');
 		}
 	}
 	private async writeRequest(
@@ -328,9 +413,17 @@ export class AutomaticRecoveryLifecycle {
 		cleanupReady: boolean,
 		replay: boolean
 	) {
-		if (this.record(record.id)?.action !== action || this.record(record.id)?.state === 'removed')
-			return;
-		if (!(await this.capability()).available)
+		const currentIntent = () => {
+			const current = this.record(record.id);
+			return (
+				current?.action === action &&
+				current.state !== 'removed' &&
+				current.resume_sequence === record.resume_sequence
+			);
+		};
+		if (!currentIntent()) return;
+		const capability = await this.capability();
+		if (!capability.available || !capability.engines.includes(JSON.parse(record.binding).engine))
 			throw new DatabaseRestoreError('lifecycle-unavailable');
 		const stat = await fs.lstat(this.requests);
 		if (
@@ -341,15 +434,16 @@ export class AutomaticRecoveryLifecycle {
 		)
 			throw new DatabaseRestoreError('lifecycle-unsafe');
 		const contents = JSON.stringify({
-			version: 1,
+			version: action === 'resume' ? 2 : 1,
 			binding: JSON.parse(record.binding),
 			ownerToken: record.owner_token,
 			action,
 			cleanupReady,
+			...(action === 'resume' ? { resumeSequence: record.resume_sequence } : {}),
 		});
 		if (replay) {
-			// Periodic reconciliation must not turn a consumed Resume into a new
-			// control request. Explicit authenticated actions still replace the file.
+			// A reconstructed file retains the SAME durable explicit Resume sequence.
+			// Filesystem identity is diagnostic only, never renewed control authority.
 			let existing;
 			try {
 				existing = await fs.open(
@@ -365,7 +459,11 @@ export class AutomaticRecoveryLifecycle {
 					value.size > 8192
 				)
 					throw new DatabaseRestoreError('lifecycle-unsafe');
-				if ((await existing.readFile('utf8')) === contents) return;
+				if ((await existing.readFile('utf8')) === contents) {
+					// A previous rename may have succeeded before its directory fsync failed.
+					await this.syncRequests();
+					return;
+				}
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
 			} finally {
@@ -381,9 +479,9 @@ export class AutomaticRecoveryLifecycle {
 			} finally {
 				await fd.close();
 			}
-			if (this.record(record.id)?.action !== action || this.record(record.id)?.state === 'removed')
-				return;
+			if (!currentIntent()) return;
 			await fs.rename(temporary, path.join(this.requests, record.id + '.json'));
+			await this.syncRequests();
 		} finally {
 			await fs.rm(temporary, { force: true });
 		}
@@ -446,7 +544,7 @@ export class AutomaticRecoveryLifecycle {
 			.object({
 				version: z.literal(1),
 				id: hex(24),
-				engine: z.enum(['mariadb', 'postgresql']),
+				engine: z.enum(['mariadb', 'postgresql', 'mysql']),
 				target: recoveryTargetSchema,
 				installationId: hex(32),
 				activationId: hex(32),
@@ -469,7 +567,7 @@ export class AutomaticRecoveryLifecycle {
 			value.engine !== binding.engine ||
 			value.target.engine !== binding.engine ||
 			value.target.host !== 'persistent-db-' + id ||
-			value.target.port !== (binding.engine === 'mariadb' ? 3306 : 5432) ||
+			value.target.port !== (binding.engine === 'postgresql' ? 5432 : 3306) ||
 			value.target.tls !== 'verify-identity' ||
 			value.target.username !== 'restore_user' ||
 			!value.target.enabled ||

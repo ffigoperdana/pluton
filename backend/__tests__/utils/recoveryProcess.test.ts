@@ -48,6 +48,16 @@ describe('Recovery native process bounds and sanitized errors', () => {
 			expect.objectContaining({ shell: false, env: { LANG: 'C' }, windowsHide: true })
 		);
 	});
+	it('classifies a proven native allocation failure without guessing that every killed process was OOM', async () => {
+		const running = runRecoveryProcess(input());
+		child.emit(
+			'error',
+			Object.assign(new Error('private allocation diagnostic'), { code: 'ENOMEM' })
+		);
+		child.emit('close', -1);
+		await expect(running).rejects.toMatchObject({ code: 'database-out-of-memory' });
+		await running.catch(error => expect(error.message).not.toContain('private'));
+	});
 	it.each([
 		['Access denied synthetic-password', 'database-authentication-failed'],
 		['connection refused private-host', 'database-target-unavailable'],
@@ -55,6 +65,11 @@ describe('Recovery native process bounds and sanitized errors', () => {
 		['ERROR 2026 (HY000): TLS/SSL error: Failed to verify peer certificate', 'database-tls-failed'],
 		['role "synthetic_role" does not exist', 'database-role-missing'],
 		['corrupt SQL secret', 'database-import-failed'],
+		[
+			'ERROR 1021 (HY000): Disk is full; No space left on device; private canary',
+			'database-storage-full',
+		],
+		['ERROR 1037 (HY001): Out of memory; private canary', 'database-out-of-memory'],
 	])('classifies provider output without exposing it', async (stderr, code) => {
 		const running = runRecoveryProcess(input());
 		child.stderr.write(stderr);

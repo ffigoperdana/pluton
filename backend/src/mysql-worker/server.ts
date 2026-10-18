@@ -9,6 +9,16 @@ import { detectRecoveryClient } from '../utils/recoveryDatabaseClients';
 import { runRecoveryProcess } from '../utils/recoveryProcess';
 import { executePersistentMysql } from './persistent';
 import {
+	authorizeInternalMysql,
+	InternalMysqlRecoveryImporter,
+	internalMysqlDirectoryReady,
+	assertInternalMysqlCapacity,
+} from './internal';
+import {
+	assertMysqlWorkerResources,
+	withRecoveryResourceGuard,
+} from '../utils/recoveryResourceGuard';
+import {
 	CHUNK_BYTES,
 	DEADLINE_MS,
 	SOCKET,
@@ -144,15 +154,30 @@ export async function startMysqlWorker(config: WorkerConfig, trust: () => string
 			const request = requestSchema.safeParse((await read(5000)).value);
 			if (!request.success) throw protocolError();
 			const input = request.data;
-			if (input.operation !== 'import' && input.operation !== 'cleanup') {
+			if (input.operation === 'capabilities') {
+				terminal = {
+					type: 'capabilities',
+					internal: config.internal?.enabled === true && (await internalMysqlDirectoryReady()),
+				};
+				return;
+			}
+			const internal = input.internal ? await authorizeInternalMysql(input, config) : undefined;
+			const approved = internal?.config || config;
+			const approvedTrust = internal ? () => internal.ca : trust;
+			if (
+				input.operation !== 'import' &&
+				input.operation !== 'cleanup' &&
+				input.operation !== 'verify-empty'
+			) {
+				if (input.context.mode === 'internal' && !internal) throw protocolError();
 				directory = await fs.mkdtemp('/tmp/pluton-mysql-');
 				await fs.chmod(directory, 0o700);
-				await executePersistentMysql(input, config, {
+				await executePersistentMysql(input, approved, {
 					socket,
 					directory,
 					signal: controller.signal,
 					binary,
-					ca: trust(),
+					ca: approvedTrust(),
 					read,
 					finish: result => {
 						terminal = result;
@@ -164,53 +189,76 @@ export async function startMysqlWorker(config: WorkerConfig, trust: () => string
 				});
 				return;
 			}
+			const databases = approved.databases || [];
 			if (
-				input.target.host.toLowerCase() !== config.host.toLowerCase() ||
-				input.target.port !== config.port ||
-				input.target.username !== config.username ||
+				!approved.host ||
+				!approved.databases ||
+				!approved.maxArtifactBytes ||
+				input.target.host.toLowerCase() !== approved.host.toLowerCase() ||
+				input.target.port !== approved.port ||
+				input.target.username !== approved.username ||
+				(('lease' in input ? input.lease.targetId : input.targetId).startsWith('irt_') &&
+					!internal) ||
 				!input.target.password ||
 				!input.target.enabled ||
 				(input.operation === 'import'
-					? input.allowedDatabases.some(name => !config.databases.includes(name)) ||
+					? input.allowedDatabases.some(name => !databases.includes(name)) ||
 						!input.allowedDatabases.includes(input.entry.database) ||
 						input.leases.some(
 							lease =>
 								lease.testId !== input.testId ||
 								lease.targetId !== input.targetId ||
-								!config.databases.includes(lease.database)
+								!databases.includes(lease.database)
 						)
-					: !config.databases.includes(input.lease.database))
+					: input.operation === 'cleanup' && !approved.databases.includes(input.lease.database))
 			)
 				throw new RecoveryTestError(stage, 'recovery-target-unsafe');
 			directory = await fs.mkdtemp('/tmp/pluton-mysql-');
 			await fs.chmod(directory, 0o700);
 			let leases: RecoveryImportLease[] =
-				input.operation === 'import' ? [...input.leases] : [input.lease];
-			const importer = new RecoveryDatabaseImporter(
-				{
-					leases: async () => leases,
-					leaseTarget: async () => input.target,
-					removeLease: async id => {
-						leases = leases.filter(value => value.id !== id);
-					},
-					addLease: async lease => {
-						await send(socket, { type: 'lease', lease });
-						const ack = ackSchema.safeParse((await read(15_000)).value);
-						if (!ack.success || ack.data.id !== lease.id) throw protocolError();
-						leases.push(lease); // server durable acknowledgement required before CREATE
-					},
+				input.operation === 'import'
+					? [...input.leases]
+					: input.operation === 'cleanup'
+						? [input.lease]
+						: [];
+			const importStore = {
+				leases: async () => leases,
+				leaseTarget: async () => input.target,
+				removeLease: async (id: string) => {
+					leases = leases.filter(value => value.id !== id);
 				},
-				input => runRecoveryProcess({ ...input, args: [...input.args, '--commands=OFF'] }),
-				() => binary,
-				trust
-			);
+				addLease: async (lease: RecoveryImportLease) => {
+					await send(socket, { type: 'lease', lease });
+					const ack = ackSchema.safeParse((await read(15_000)).value);
+					if (!ack.success || ack.data.id !== lease.id) throw protocolError();
+					leases.push(lease); // server durable acknowledgement required before CREATE
+				},
+			};
+			const nativeRun: ConstructorParameters<typeof RecoveryDatabaseImporter>[1] = input =>
+				runRecoveryProcess({ ...input, args: [...input.args, '--commands=OFF'] });
+			const importer = internal
+				? new InternalMysqlRecoveryImporter(
+						importStore,
+						nativeRun,
+						() => binary,
+						approvedTrust,
+						internal.approval
+					)
+				: new RecoveryDatabaseImporter(importStore, nativeRun, () => binary, approvedTrust);
+			if (input.operation === 'verify-empty') {
+				if (!internal) throw protocolError();
+				stage = 'database-cleanup';
+				await importer.verifyEmptyTarget({ ...input.target, id: input.targetId }, directory);
+				terminal = { type: 'cleaned' };
+				return;
+			}
 			if (input.operation === 'cleanup') {
 				stage = 'database-cleanup';
 				await importer.cleanup(input.lease, directory);
 				terminal = { type: 'cleaned' };
 				return;
 			}
-			if (input.entry.bytes > config.maxArtifactBytes)
+			if (input.entry.bytes > approved.maxArtifactBytes)
 				throw new RecoveryTestError(
 					'database-artifact-validation',
 					'database-artifact-size-mismatch'
@@ -263,20 +311,31 @@ export async function startMysqlWorker(config: WorkerConfig, trust: () => string
 				artifactValidation: 'passed',
 				importValidation: 'pending',
 			};
-			await importer.importDatabase({
-				testId: input.testId,
-				targetId: input.targetId,
-				target: input.target,
-				entry,
-				file,
-				directory,
-				signal: controller.signal,
-				allowedDatabases: input.allowedDatabases,
-				stage: value => {
-					stage = value;
-					void send(socket, { type: 'stage', stage: value }).catch(cancel);
-				},
-			});
+			const run = (signal: AbortSignal) =>
+				importer.importDatabase({
+					testId: input.testId,
+					targetId: input.targetId,
+					target: input.target,
+					entry,
+					file,
+					directory: directory!,
+					signal,
+					allowedDatabases: input.allowedDatabases,
+					stage: value => {
+						stage = value;
+						void send(socket, { type: 'stage', stage: value }).catch(cancel);
+					},
+				});
+			if (internal)
+				await withRecoveryResourceGuard(
+					controller.signal,
+					async () => {
+						await assertMysqlWorkerResources(directory!);
+						await assertInternalMysqlCapacity();
+					},
+					run
+				);
+			else await run(controller.signal);
 			terminal = { type: 'complete', tables: entry.tables, views: entry.views };
 		} catch (error) {
 			terminal = undefined;
@@ -287,6 +346,12 @@ export async function startMysqlWorker(config: WorkerConfig, trust: () => string
 					event: 'mysql_recovery_worker_failed',
 					stage: safe.stage,
 					code: safe.code,
+					category:
+						error instanceof TypeError
+							? 'type-error'
+							: error instanceof ReferenceError
+								? 'reference-error'
+								: 'operation-refused',
 				}) + '\n'
 			);
 			await send(socket, { type: 'error', stage: safe.stage, code: safe.code }).catch(() => {});

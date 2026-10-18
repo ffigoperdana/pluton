@@ -97,7 +97,7 @@ describe('Recovery API authentication, ownership and safe input', () => {
 		for (const changes of [
 			{ resourcesAcknowledged: false },
 			{ engine: 'mysql' },
-			{ selection: { databaseImport: 'required', targetModes: { mysql: 'internal' } } },
+			{ selection: { databaseImport: 'required', targetModes: { mysql: 'unapproved' } } },
 		]) {
 			expect(
 				(
@@ -107,6 +107,14 @@ describe('Recovery API authentication, ownership and safe input', () => {
 				).status
 			).toBe(400);
 		}
+		const mysql = {
+			...body,
+			selection: { databaseImport: 'required', targetModes: { mysql: 'internal' } },
+		};
+		expect(
+			(await request(app).post('/api/recovery-testing/plan-01/tests').send(mysql)).status
+		).toBe(202);
+		expect(service.enqueueManual).toHaveBeenCalledWith('plan-01', mysql);
 	});
 	it('persistent restore has no executable bypass and exposes only the closed unavailable message', async () => {
 		service.databaseRestoreUnavailable.mockRejectedValue(

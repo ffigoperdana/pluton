@@ -3,6 +3,29 @@ import { elapsedLabel, elapsedSeconds, timestamp } from '../../../utils/recovery
 import type { OperationProgressState } from '../../../utils/recoveryProgress';
 import classes from './OperationProgress.module.scss';
 
+/** Request activity is not backend job progress or a successful admission. */
+export function RequestActivity({ checking, submitting, failed = false }: { checking: boolean; submitting: boolean; failed?: boolean }) {
+   const busy = checking || submitting;
+   const label = submitting
+      ? 'Sending request — awaiting server acceptance…'
+      : checking
+        ? 'Checking snapshot, operator and resource availability…'
+        : failed
+          ? 'Request/check failed — review the error before retrying.'
+          : 'Checks finished — review admission below. No new operation is running from this dialog.';
+   return (
+      <section className={classes.requestActivity} aria-label="Request activity" aria-busy={busy}>
+         <div role="status" aria-live="polite" aria-atomic="true">
+            {label}
+         </div>
+         <div className={classes.track}>{busy && <progress aria-label={label} />}</div>
+         <small>
+            {busy ? 'Activity indicator only; percentage is not measurable.' : 'Blocked is not a background check; a refusal needs attention.'}
+         </small>
+      </section>
+   );
+}
+
 export function ElapsedTime({
    start,
    end,

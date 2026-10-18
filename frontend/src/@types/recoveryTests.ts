@@ -16,6 +16,15 @@ export type RecoveryPreparation = {
       status: 'measured' | 'unknown';
       observedAt: number;
       sample: null | {
+         cpuAvailable?: number;
+         operatorTotal?: number;
+         operatorAvailable?: number;
+         operatorCpuAvailable?: number;
+         operatorDiskAvailable?: number;
+         operatorObservedAt?: number;
+         operatorSwapUsed?: number;
+         operatorCgroupSwap?: number;
+         operatorPressure?: number;
          total: number;
          available: number;
          swapUsed: number;
@@ -34,10 +43,10 @@ export type RecoveryPreparation = {
 export type RecoveryPolicy = {
    enabled: boolean;
    databaseImport: 'disabled' | 'required';
-   targetModes?: Partial<Record<'mariadb' | 'postgresql', 'internal' | 'custom'>>;
+   targetModes?: Partial<Record<RecoveryEngine, 'internal' | 'custom'>>;
 };
 export type InternalTargetView = {
-   engine: 'mariadb' | 'postgresql';
+   engine: RecoveryEngine;
    status: 'not_provisioned' | 'ready' | 'running' | 'cleanup_required';
    mode: 'operator-managed' | 'automatic';
 };
@@ -66,7 +75,7 @@ export type RecoveryTest = {
    failureCode?: string;
    warnings: { stage: string; code: string }[];
    result?: {
-      internalEngine?: 'mariadb' | 'postgresql';
+      internalEngine?: RecoveryEngine;
       filesystem?: { files: number; bytes: number; sourceTrees: number; integrity: string };
       databases: {
          databaseId?: string;

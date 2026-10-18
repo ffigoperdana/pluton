@@ -94,6 +94,7 @@ export default function RecoverySettings({ planId }: { planId?: string }) {
    useEffect(() => {
       if (configuration.data) setPolicy(configuration.data.policy);
    }, [configuration.data]);
+   const automatic = configuration.data?.internalTargets?.some((target) => target.mode === 'automatic') === true;
    if (!planId) return <p>Save the managed plan first, then configure Recovery Testing here.</p>;
    return (
       <div className={classes.panel}>
@@ -142,14 +143,16 @@ export default function RecoverySettings({ planId }: { planId?: string }) {
                </p>
                {Object.values(policy.targetModes || {}).includes('internal') && (
                   <p role="status">
-                     Internal targets require manual operator activation/deactivation. Turn off after-backup automation and save the policy. Only one
-                     internal engine/test can run. A mixed MariaDB + PostgreSQL snapshot must keep one engine Custom.
+                     {automatic
+                        ? 'Internal targets use the automatic host operator.'
+                        : 'Internal targets require manual operator activation/deactivation.'}{' '}
+                     Turn off after-backup automation and save the policy. Only one Internal engine/test can run; other engines must remain Custom.
                   </p>
                )}
                {(['mariadb', 'mysql', 'postgresql'] as const).map((engine) => (
                   <div key={engine} className={classes.card}>
                      <h4>{engine} Recovery Target</h4>
-                     {engine === 'mysql' ? (
+                     {engine === 'mysql' && !automatic ? (
                         <p>
                            Custom only · Oracle MySQL worker:{' '}
                            {configuration.data?.mysqlWorker === 'ready' ? 'Ready (target preflight required)' : 'Unavailable'}
@@ -163,7 +166,7 @@ export default function RecoverySettings({ planId }: { planId?: string }) {
                                  setPolicy({ ...policy, targetModes: { ...policy.targetModes, [engine]: e.target.value as 'internal' | 'custom' } })
                               }
                            >
-                              {recoveryTargetChoices(engine).map((mode) => (
+                              {recoveryTargetChoices(engine, automatic).map((mode) => (
                                  <option key={mode} value={mode}>
                                     {mode === 'internal' ? 'Internal' : 'Custom'}
                                  </option>
@@ -193,10 +196,11 @@ export default function RecoverySettings({ planId }: { planId?: string }) {
                               </p>
                            )}
                            <p>
-                              Operator-managed Compose, not automatic container startup/shutdown. Activate the approved {engine} target before Run
-                              Recovery Test. SQL integrity, verified TLS, dedicated marker, restricted permissions and resource preflight are
-                              mandatory. After the test, the operator must deactivate the owned container. The result cannot be Passed until cleanup
-                              is confirmed.
+                              {automatic
+                                 ? 'The host operator provisions a disposable target after admission and removes it after owned SQL cleanup.'
+                                 : `Operator-managed Compose, not automatic container startup/shutdown. Activate the approved ${engine} target before Run Recovery Test; deactivate it after testing.`}{' '}
+                              SQL integrity, verified TLS, dedicated marker, restricted permissions and resource preflight are mandatory. The result
+                              cannot be Passed until cleanup is confirmed.
                            </p>
                            <p>
                               Provisioning: <code>docs/MANAGED_INTERNAL_RECOVERY_TESTING_REPORT.md</code>. No administrator credentials are stored in

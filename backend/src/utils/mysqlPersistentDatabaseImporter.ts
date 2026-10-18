@@ -43,18 +43,21 @@ export class MysqlPersistentDatabaseImporter extends MysqlWorkerConnection {
 		let socket: Socket | undefined;
 		let ready = false,
 			transitions = 0;
-		let terminal = false, result: DatabaseRestoreInspection | undefined;
+		let terminal = false,
+			result: DatabaseRestoreInspection | undefined;
 		const lease = this.store.lease(row.id);
 		const { engine, database, bytes, sha256, artifactValidation } = row.artifact;
 		const request = requestSchema.safeParse({
 			version: 1,
 			operation,
+			...(row.mode === 'internal' ? { internal: { id: row.id, snapshotId: row.snapshotId } } : {}),
 			approval: this.approval,
 			context: {
 				id: row.id,
 				targetId: row.targetId,
 				purpose: row.purpose,
 				mode: row.mode,
+				...(row.mode === 'internal' ? { databaseId: row.databaseId } : {}),
 				ownerToken: row.ownerToken,
 				snapshotId: row.snapshotId,
 				expiresAt: row.expiresAt,

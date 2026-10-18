@@ -25,9 +25,12 @@ const results=[];
 function native(args){try{return execFileSync('/usr/local/bin/restic',args,{encoding:'utf8',timeout:120000,maxBuffer:1048576,
   env:{PATH:'/usr/local/bin:/usr/bin:/bin',HOME:'/tmp',LANG:'C'},stdio:['ignore','pipe','pipe']});}
   catch{throw new Error('Synthetic Restic fixture creation failed.');}}
-for(const engine of ['mariadb','postgresql']){
+assert([undefined,'mysql'].includes(process.argv[2]));
+for(const engine of process.argv[2]==='mysql'?['mysql']:['mariadb','postgresql']){
   const plan='plan-'+engine,backup='backup-'+engine,repository='repo-'+engine;
-  const database='fixture_'+engine,sql="CREATE TABLE fixture_entries(value VARCHAR(100));\nINSERT INTO fixture_entries VALUES ('synthetic API recovery content');\n";
+  const database='fixture_'+engine,sql=(engine==='mysql'?'-- Server version 8.4.11\n':'')+
+    "CREATE TABLE fixture_entries(value VARCHAR(100));\nINSERT INTO fixture_entries VALUES ('synthetic API recovery content');\n"+
+    (engine==='mysql'?"CREATE TEMPORARY TABLE fixture_assertion(passed INT CHECK(passed=1)); INSERT INTO fixture_assertion SELECT IF(COUNT(*)=1 AND MAX(value)='synthetic API recovery content',1,0) FROM fixture_entries; DROP TEMPORARY TABLE fixture_assertion;\n":'');
   fs.writeFileSync('/pluton/database/db_example.sql',sql,{mode:0o600});
   const passwordFile='/fixture/repository-password';
   fs.writeFileSync(passwordFile,crypto.randomBytes(32).toString('base64url'),{mode:0o600,flag:'wx'});

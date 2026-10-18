@@ -13,6 +13,11 @@ import { DatabaseRestoreError } from '../utils/persistentRestorePolicy';
 import { checkRecoveryCancellation, RecoveryTestError } from '../utils/recoveryValidation';
 import { runRecoveryProcess } from '../utils/recoveryProcess';
 import {
+	assertMysqlWorkerResources,
+	withRecoveryResourceGuard,
+} from '../utils/recoveryResourceGuard';
+import { assertInternalMysqlCapacity } from './internal';
+import {
 	CHUNK_BYTES,
 	persistentAckSchema,
 	persistentInspectionSchema,
@@ -170,9 +175,21 @@ export async function executePersistentMysql(
 		throw new RecoveryTestError('database-artifact-validation', 'database-artifact-size-mismatch');
 	if (hash.digest('hex') !== context.artifact.sha256)
 		throw new RecoveryTestError('database-artifact-validation', 'database-artifact-hash-mismatch');
-	const inspection = await importer.restore(row, file, io.directory, io.signal, stage =>
-		io.stage(stage as Parameters<typeof io.stage>[0])
-	);
+	const restore = (signal: AbortSignal) =>
+		importer.restore(row, file, io.directory, signal, stage =>
+			io.stage(stage as Parameters<typeof io.stage>[0])
+		);
+	const inspection =
+		context.mode === 'internal'
+			? await withRecoveryResourceGuard(
+					io.signal,
+					async () => {
+						await assertMysqlWorkerResources(io.directory);
+						await assertInternalMysqlCapacity();
+					},
+					restore
+				)
+			: await restore(io.signal);
 	checkRecoveryCancellation(io.signal);
 	io.finish({
 		type: 'persistent-complete',

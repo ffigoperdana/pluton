@@ -4,7 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useDatabaseRestores, restoreRequest } from '../../services/databaseRestores';
 import { restoreStatus, restoreStage, restoreActionNotice } from '../../utils/databaseRestores';
 import { restoreProgress, stageLabel } from '../../utils/recoveryProgress';
-import OperationProgress from '../../components/common/OperationProgress/OperationProgress';
+import OperationProgress, { RequestActivity } from '../../components/common/OperationProgress/OperationProgress';
 import type { DatabaseRestoreView } from '../../@types/databaseRestores';
 import PageHeader from '../../components/common/PageHeader/PageHeader';
 import { formatBytes } from '../../utils/helpers';
@@ -201,7 +201,7 @@ export default function DatabaseRestores() {
             <button disabled={query.isFetching} onClick={() => void query.refetch()}>
                Refresh
             </button>
-            {query.isLoading && <p>Loading restores…</p>}
+            {(query.isLoading || action.isPending) && <RequestActivity checking={query.isLoading} submitting={action.isPending} />}
             {query.error && <p role="alert">{query.error.message}</p>}
             {action.error && <p role="alert">{action.error.message}</p>}
             {notice && <p role="status">{notice}</p>}

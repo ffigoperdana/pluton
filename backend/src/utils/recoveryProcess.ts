@@ -47,7 +47,8 @@ export async function runRecoveryProcess(input: RecoveryProcessInput): Promise<s
 			() => stop(new RecoveryTestError(input.stage, 'database-import-timeout')),
 			input.timeoutMs
 		);
-		child.once('error', () => stop(new RecoveryTestError(input.stage, 'database-client-missing')));
+		child.once('error', (error: NodeJS.ErrnoException) => stop(new RecoveryTestError(input.stage,
+			error.code === 'ENOMEM' ? 'database-out-of-memory' : 'database-client-missing')));
 		child.stdout.on('data', (chunk: Buffer) => {
 			stdoutBytes += chunk.length;
 			if (stdoutBytes > 64 * 1024)
@@ -130,7 +131,11 @@ export async function runRecoveryProcess(input: RecoveryProcessInput): Promise<s
 					reject(
 						new RecoveryTestError(
 							input.stage,
-							/(?:\b1045\b|Access denied|password authentication failed|no password supplied|no pg_hba.conf entry)/i.test(
+							/(?:ENOSPC|No space left on device|Disk is full|\bERROR\s+(?:1021|1114)\b)/i.test(stderr)
+								? 'database-storage-full'
+								: /(?:out of memory|cannot allocate memory|memory allocation fail|\bERROR\s+(?:1037|1038|1041)\b)/i.test(stderr)
+									? 'database-out-of-memory'
+									: /(?:\b1045\b|Access denied|password authentication failed|no password supplied|no pg_hba.conf entry)/i.test(
 								stderr
 							)
 								? 'database-authentication-failed'

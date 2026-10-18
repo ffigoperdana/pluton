@@ -32,6 +32,7 @@ const storage=systemdStorage.createSystemdStorage([
   {images:DATA+'/disposable/images',view:DATA+'/disposable/view',readonlyView:DATA+'/disposable/app-view',readonlyStage:DATA+'/disposable/readonly-stage'}
 ],{dockerUnit:options.dockerUnit||'docker.service'});
 const PUBLIC = ROOT+'/public';
+const MYSQL_PUBLIC = ROOT+'/mysql-public';
 const PURPOSE = 'pluton-phase6-recovery-only';
 const env = {PATH:'/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',LANG:'C',LC_ALL:'C',
   DOCKER_HOST:options.dockerSocket?'unix://'+options.dockerSocket:'unix:///var/run/docker.sock',DOCKER_CONFIG:ROOT+'/docker-cli'};
@@ -44,7 +45,9 @@ function assertMountNamespace(self,host){
   if(!/^mnt:\[\d+\]$/.test(self)||self!==host)fail('operator-mount-namespace-unapproved');
 }
 function validate(value, now=Date.now()){
-  if(!keys(value,'version,binding,ownerToken,action,cleanupReady') || value.version!==1 ||
+  const sequenced=value?.version===2&&value.action==='resume';
+  if(!keys(value,sequenced?'version,binding,ownerToken,action,cleanupReady,resumeSequence':'version,binding,ownerToken,action,cleanupReady') ||
+    (sequenced?(!Number.isSafeInteger(value.resumeSequence)||value.resumeSequence<=0):value.version!==1) ||
     !hex(value.ownerToken,48)||!['provision','inspect','stop','resume','delete'].includes(value.action)||typeof value.cleanupReady!=='boolean')fail('request-unsafe');
   const b=value.binding;
   if(!keys(b,'id,mode,engine,snapshotId,artifacts,createdAt,expiresAt') || !hex(b.id,24)||!hex(b.snapshotId,64)||
@@ -98,8 +101,28 @@ function policy(){
     !Number.isSafeInteger(p.maxRetentionSeconds)||p.maxRetentionSeconds<86400||p.maxRetentionSeconds>30*86400)fail('operator-policy-unsafe');
   return p;
 }
+function mysqlApproved(){
+  try{
+    const value=rootRead(ROOT+'/mysql.json',2048);
+    if(!keys(value,'version,enabled,image')||value.version!==1||value.enabled!==true||value.image!==persistent.images.mysql)return false;
+    const stat=fs.lstatSync(MYSQL_PUBLIC);
+    return stat.isDirectory()&&!stat.isSymbolicLink()&&stat.uid===0&&stat.gid===10001&&(stat.mode&0o777)===0o750;
+  }catch{return false;}
+}
+function approveMysql(){
+  const install=rootRead(ROOT+'/installation.json');
+  if(install.version!==1||!hex(install.installationId,32))fail('operator-state-unsafe');
+  if(mysqlApproved())return; // Idempotent; no identity or credential changes.
+  if(fs.existsSync(ROOT+'/mysql.json')||fs.existsSync(MYSQL_PUBLIC))fail('mysql-approval-unsafe');
+  persistent.rootCode(path.join(__dirname,'../persistent-restore/mysql-lock.py'));
+  persistent.rootCode(path.join(__dirname,'../persistent-restore/bootstrap.sh'));
+  run('docker',['image','inspect',persistent.images.mysql]); // Explicit preloaded digest only.
+  storage.rootParent(MYSQL_PUBLIC);fs.mkdirSync(MYSQL_PUBLIC,{mode:0o750});
+  fs.chownSync(MYSQL_PUBLIC,0,10001);fs.chmodSync(MYSQL_PUBLIC,0o750);
+  persistent.write(ROOT+'/mysql.json',{version:1,enabled:true,image:persistent.images.mysql});
+}
 function disposableSql(names,engine,_database,password,activation,storageId,username){
-  if(engine==='mariadb')return 'CREATE DATABASE pluton_recovery_guard;\n'+
+  if(engine==='mariadb'||engine==='mysql')return 'CREATE DATABASE pluton_recovery_guard;\n'+
     'CREATE TABLE pluton_recovery_guard.pluton_recovery_guard(purpose VARCHAR(64),activation_id VARCHAR(32),storage_id VARCHAR(36));\n'+
     "INSERT INTO pluton_recovery_guard.pluton_recovery_guard VALUES ('"+PURPOSE+"','"+activation+"','"+storageId+"');\n"+
     "CREATE USER '"+username+"'@'%' IDENTIFIED BY '"+password+"' REQUIRE SSL;\n"+
@@ -140,7 +163,7 @@ function driver(req,stage){
   return {
     exists,
     admit:()=>{
-      op.resourceAdmission(req.binding.artifacts.reduce((n,a)=>n+a.bytes,0));
+      op.resourceAdmission(req.binding.artifacts.reduce((n,a)=>n+a.bytes,0),req.binding.engine);
       const cpus=os.availableParallelism();
       if(cpus<2||os.loadavg()[0]>cpus*1.5)fail('resource-cpu-insufficient');
       const capacity=fs.statfsSync(op.DATA+'/images');
@@ -165,20 +188,29 @@ function driver(req,stage){
     stop:meta=>{run('docker',['stop','--time','30',meta.containerId]);if(op.inspect(meta).State.Running)fail('container-stop-unverified');op.state(meta,'stopped');},
     resume:meta=>{
       noManual();
-      op.resourceAdmission(req.binding.artifacts.reduce((sum,a)=>sum+a.bytes,0));
+      op.resourceAdmission(req.binding.artifacts.reduce((sum,a)=>sum+a.bytes,0),req.binding.engine);
       storage.resume(meta.volume);run('docker',['start',meta.containerId]);op.nativeReady(meta);op.state(meta,'active');
     },
     remove:(meta=op.metadata(id))=>{
       op.deleteOwned(meta,{...legacyRequest(req,meta),action:'delete',cleanupReady:true});
-      const file=PUBLIC+'/'+id+'.target.json';
-      if(fs.existsSync(file)){
-        if(rootRead(file).bindingHash!==hash(req))fail('credential-cleanup-uncertain');
-        fs.unlinkSync(file);
+      for(const file of [PUBLIC+'/'+id+'.target.json',MYSQL_PUBLIC+'/'+id+'.mysql.json']){
+        if(fs.existsSync(file)){
+          if(rootRead(file).bindingHash!==hash(req))fail('credential-cleanup-uncertain');
+          fs.unlinkSync(file);
+        }
       }
     },
     absent:()=>op.verifyNeverProvisioned({...legacyRequest(req),action:'delete',cleanupReady:false}),
     publish:meta=>{
       op.publish(meta);
+      if(req.binding.engine==='mysql'){
+        // Worker independently reads this ROOT-owned proof. No caller-selected
+        // endpoint, image, command or mount is authorization to contact a DB.
+        if(!mysqlApproved())fail('mysql-approval-unsafe');
+        persistent.write(MYSQL_PUBLIC+'/'+id+'-ca.pem',fs.readFileSync(op.ROOT+'/public/'+id+'-ca.pem','utf8'),10001,0o640);
+        persistent.write(MYSQL_PUBLIC+'/'+id+'.mysql.json',{version:1,binding:req.binding,bindingHash:hash(req),
+          approval:meta.approval},10001,0o640);
+      }
       if(req.binding.mode==='disposable'){
         const target={version:1,id,engine:req.binding.engine,target:meta.approval.target,installationId:rootRead(ROOT+'/installation.json').installationId,
           activationId:meta.approval.activationId,caSha256:meta.approval.caSha256,storage:meta.approval.storage,containerId:meta.containerId,bindingHash:hash(req)};
@@ -196,13 +228,15 @@ function reconcile(req, journal, io, emit, now=Date.now(), revision=requestRevis
   if(journal?.deleting && req.action!=='delete')fail('deletion-in-progress');
   if(journal?.cancelled && req.action!=='delete')fail('deletion-in-progress');
   if(io.exists()&&!journal?.attempted)fail('resource-name-collision');
+  const consumed=journal&&Object.hasOwn(journal,'consumedResumeSequence')?journal.consumedResumeSequence:0;
+  if(['provision','resume'].includes(req.action)&&(!Number.isSafeInteger(consumed)||consumed<0))fail('operator-state-unsafe');
   const ready=()=>emit('ready',{readyOnce:true});
   if(req.action==='provision'){
     if(req.binding.expiresAt<=now)fail('request-expired');
     if(io.busy())fail('internal-lifecycle-busy');
     if(io.exists()){
       const {meta,running}=io.inspect();
-      if(!running && journal?.readyOnce){emit('stopped');return;}
+      if(!running && (journal?.readyOnce||consumed>0)){emit('stopped');return;}
       if(!running)io.resume(meta); // Exact created-but-never-ready identity, not a replay of SQL.
       io.publish(meta);ready();return;
     }
@@ -229,16 +263,28 @@ function reconcile(req, journal, io, emit, now=Date.now(), revision=requestRevis
   else if(req.action==='resume'){
     if(req.binding.expiresAt<=now)fail('request-expired');
     if(io.busy())fail('internal-lifecycle-busy');
-    // Resume is a one-shot control request, not a container restart policy.
-    // A durable consumed revision prevents the still-present mailbox from
-    // re-starting a retained DB after a later daemon/guest restart. An explicit
-    // new API action atomically publishes a new inode/ctime revision.
-    if(!running&&revision&&(journal.resumeRevision===revision||journal.state==='ready')){
-      emit('stopped',{resumeRevision:revision});return;
+    // Legacy Resume can observe an exact owned target but never start it. Keep
+    // Stopped usable so a fresh authenticated v2 action can recover safely.
+    if(req.version===1||req.resumeSequence<=consumed){
+      if(running)io.publish(meta);
+      emit(running?'ready':'stopped');return;
     }
-    if(!running){emit('starting-database',revision?{resumeRevision:revision}:{});io.resume(meta);}
-    io.publish(meta);emit('ready',{readyOnce:true,...(revision?{resumeRevision:revision}:{})});
+    // emit fsyncs journal + parent BEFORE Start. A crash in this gap burns the
+    // intent: reconciliation cannot retry Start; recovery needs explicit seq+1.
+    // Consume even when already running, or the same intent could start later.
+    emit('starting-database',{consumedResumeSequence:req.resumeSequence,...(revision?{resumeRevision:revision}:{})});
+    if(!running)io.resume(meta);
+    io.publish(meta);ready();
   }else {if(running)io.publish(meta);emit(running?'ready':'stopped');}
+}
+function publishCapacity(){
+  let sample=null;
+  try{sample=engineDriver({binding:{mode:'persistent',artifacts:[]}}).resourceCapacity();
+    const disk=fs.statfsSync(DATA+'/disposable/images');sample.diskAvailable=Math.min(sample.diskAvailable,disk.bavail*disk.bsize);
+  }catch{/* Unknown is not admission; never retain a stale healthy sample. */}
+  const capacity={version:1,observedAt:Date.now(),sample};
+  persistent.write(PUBLIC+'/capacity.json',capacity,10001,0o640);
+  persistent.write(MYSQL_PUBLIC+'/capacity.json',capacity,10001,0o640);
 }
 function tick(){
   storage.assertEnvironment();
@@ -246,15 +292,18 @@ function tick(){
   if(install.version!==1||!hex(install.installationId,32))fail('operator-state-unsafe');
   const files=fs.readdirSync(REQUESTS).filter(n=>/^[a-f0-9]{24}\.json$/.test(n));
   if(files.length>64)fail('request-count-limit');
-  persistent.write(PUBLIC+'/capabilities.json',{version:1,engines:['mariadb','postgresql'],maxSqlBytes:p.maxSqlBytes,
+  const mysql=mysqlApproved();
+  persistent.write(PUBLIC+'/capabilities.json',{version:1,engines:['mariadb','postgresql',...(mysql?['mysql']:[])],maxSqlBytes:p.maxSqlBytes,
     quotaBytes:2147483648,maxRetentionSeconds:p.maxRetentionSeconds,observedAt:Date.now()},10001,0o640);
+  if(mysql)publishCapacity();
   for(const file of files.slice(0,64)){
     const id=file.slice(0,24),journalFile=ROOT+'/journal/'+file;
     let req,journal;
     try{
       req=readRequest(id);journal=fs.existsSync(journalFile)?rootRead(journalFile):null;
+      if(req.binding.engine==='mysql'&&!mysql)fail('mysql-approval-unsafe');
       const b=req.binding,bytes=b.artifacts.reduce((n,a)=>n+a.bytes,0);
-      if(['provision','resume'].includes(req.action) && (bytes>p.maxSqlBytes||bytes*4+256*1024**2>2147483648||b.expiresAt-b.createdAt>
+      if(['provision','resume'].includes(req.action) && (bytes>(b.engine==='mysql'?Math.min(p.maxSqlBytes,128*1024**2):p.maxSqlBytes)||bytes*4+256*1024**2>2147483648||b.expiresAt-b.createdAt>
         (b.mode==='disposable'?7200:p.maxRetentionSeconds)*1000))fail('operator-budget-refused');
       if(!journal){
         if(fs.readdirSync(ROOT+'/journal').length>=4096)fail('operator-audit-capacity');
@@ -263,24 +312,29 @@ function tick(){
       }
       const emit=(state,patch={})=>{
         journal={...journal,...patch,state,sequence:(journal.sequence||0)+1};persistent.write(journalFile,journal);
-        persistent.write(PUBLIC+'/'+id+'.receipt.json',{version:1,id,bindingHash:journal.bindingHash,state,code:null,
-          observedAt:Date.now(),sequence:journal.sequence},10001,0o640);
+        const receipt={version:1,id,bindingHash:journal.bindingHash,state,code:null,observedAt:Date.now(),sequence:journal.sequence};
+        if(b.engine==='mysql')persistent.write(MYSQL_PUBLIC+'/'+id+'.receipt.json',receipt,10001,0o640);
+        persistent.write(PUBLIC+'/'+id+'.receipt.json',receipt,10001,0o640);
       };
       reconcile(req,journal,driver(req,stage=>emit(stage)),emit);
     }catch(error){
       const allowed=['request-expired','operator-budget-refused','internal-lifecycle-busy','ownership-token-mismatch','partial-provisioning-uncertain',
         'resource-admission-refused','resource-cpu-insufficient','resource-disk-insufficient','resource-name-collision',
-        'target-authentication-failed','target-tls-failed','target-readiness-failed','target-readiness-timeout','target-purpose-mismatch',
-        'target-process-stopped','operator-mount-unverified'];
+        'target-authentication-failed','target-tls-failed','target-readiness-failed','target-readiness-timeout','target-purpose-mismatch','target-engine-incompatible',
+        'target-process-stopped','target-memory-exhausted','operator-mount-unverified'];
       const code=allowed.includes(error.code)?error.code:'operator-resource-uncertain';
       if(req && journal?.bindingHash===hash(req)){
         journal={...journal,state:'cleanup-required',sequence:(journal.sequence||0)+1};
         persistent.write(journalFile,journal);
-        persistent.write(PUBLIC+'/'+id+'.receipt.json',{version:1,id,bindingHash:journal.bindingHash,
-          state:'cleanup-required',code,observedAt:Date.now(),sequence:journal.sequence},10001,0o640);
+        const receipt={version:1,id,bindingHash:journal.bindingHash,state:'cleanup-required',code,observedAt:Date.now(),sequence:journal.sequence};
+        if(req.binding.engine==='mysql'&&mysql)persistent.write(MYSQL_PUBLIC+'/'+id+'.receipt.json',receipt,10001,0o640);
+        persistent.write(PUBLIC+'/'+id+'.receipt.json',receipt,10001,0o640);
       }
       process.stderr.write(JSON.stringify({event:'automatic_recovery_refused',id,code})+'\n');
     }
+    // Initial native bootstrap may take longer than the observation TTL. Publish
+    // a NEW measurement after it settles; never renew timestamps on old numbers.
+    if(mysql)publishCapacity();
   }
 }
 function init(){
@@ -303,7 +357,7 @@ function main(){
     persistent.rootCode(__filename);persistent.rootCode(path.join(__dirname,'../persistent-restore/operator.cjs'));
     persistent.rootCode(path.join(__dirname,'../persistent-restore/storage.cjs'));
     persistent.rootCode(path.join(__dirname,'systemdStorage.cjs'));
-    const action=process.argv[2];if(process.argv.length!==3||!['init','tick','anchors'].includes(action))fail('operation-not-supported');
+    const action=process.argv[2];if(process.argv.length!==3||!['init','tick','anchors','approve-mysql'].includes(action))fail('operation-not-supported');
     // Installation creates the view bind anchors in the host namespace only.
     // Tick uses PID-1-managed mount units and retains PrivateTmp/ProtectHome.
     if(action==='init'){
@@ -311,9 +365,9 @@ function main(){
     }
     else if(action==='anchors')storage.assertAnchors();
     else if(process.env.PLUTON_AUTOMATIC_OPERATOR_LOCK!=='held'){
-      execFileSync('/usr/bin/flock',['--exclusive','--nonblock','/run/pluton-automatic-recovery.lock',process.execPath,__filename,'tick'],
+      execFileSync('/usr/bin/flock',['--exclusive','--nonblock','/run/pluton-automatic-recovery.lock',process.execPath,__filename,action],
         {env:{...env,PLUTON_AUTOMATIC_OPERATOR_LOCK:'held'},timeout:240000,stdio:['ignore','pipe','pipe'],maxBuffer:65536});
-    }else tick();
+    }else if(action==='approve-mysql')approveMysql();else tick();
   }catch(error){
     process.stderr.write(error.code==='operator-mount-namespace-unapproved'?
       'Automatic recovery refused: operator-mount-namespace-unapproved. Separate host security approval is required.\n':
@@ -321,7 +375,7 @@ function main(){
   }
 }
 return {validate,hash,reconcile,disposableSql,driver,legacyRequest,assertMountNamespace,readRequest,init,tick,main,
-  ROOT,DATA,REQUESTS,PUBLIC,engineDriver,assertAnchors:storage.assertAnchors,initializeViews:storage.initializeViews};
+  ROOT,DATA,REQUESTS,PUBLIC,MYSQL_PUBLIC,approveMysql,mysqlApproved,engineDriver,assertAnchors:storage.assertAnchors,initializeViews:storage.initializeViews};
 }
 module.exports={...createLifecycleOperator(),createLifecycleOperator,observeContainer};
 if(require.main===module)module.exports.main();

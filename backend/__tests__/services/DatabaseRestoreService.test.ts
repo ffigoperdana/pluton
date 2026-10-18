@@ -5,6 +5,7 @@ import { DatabaseRestoreService } from '../../src/services/DatabaseRestoreServic
 import { recoveryMetadataToken } from '../../src/utils/recoveryPreparation';
 import { RecoveryTestError } from '../../src/utils/recoveryValidation';
 import { DatabaseRestoreError } from '../../src/utils/persistentRestorePolicy';
+import { MysqlWorkerConnection } from '../../src/utils/mysqlRecoveryWorkerClient';
 import { fixture, approval, row, sql } from '../integration/persistentRestore.fixture';
 
 describe('Persistent MySQL service lifecycle and immutable binding', () => {
@@ -96,6 +97,7 @@ describe('Persistent MySQL service lifecycle and immutable binding', () => {
 		);
 	});
 	afterEach(async () => {
+		jest.restoreAllMocks();
 		await service.shutdown();
 		db.sqlite.close();
 		await fs.rm(root, { recursive: true, force: true });
@@ -145,9 +147,10 @@ describe('Persistent MySQL service lifecycle and immutable binding', () => {
 		await service.tick();
 		expect(db.store.get(item.id)?.status).toBe('deleted');
 	});
-	it.each(['mariadb', 'postgresql'] as const)(
+	it.each(['mariadb', 'postgresql', 'mysql'] as const)(
 		'%s automatic Internal waits for host readiness, then retains a validated restore',
 		async engine => {
+			jest.spyOn(MysqlWorkerConnection.prototype, 'internalReady').mockResolvedValue(true);
 			target.engine = target.target.engine = item.artifact.engine = engine;
 			target.mode = 'internal';
 			item.metadataToken = recoveryMetadataToken(await recovery.testMetadata());
@@ -164,13 +167,23 @@ describe('Persistent MySQL service lifecycle and immutable binding', () => {
 					cgroupSwap: 0,
 					diskAvailable: 10 * 1024 ** 3,
 					cpuAvailable: 2,
+					operatorObservedAt: Date.now(),
+					operatorAvailable: 4096 * 1024 ** 2,
+					operatorTotal: 8192 * 1024 ** 2,
+					operatorCpuAvailable: 4,
+					operatorDiskAvailable: 10 * 1024 ** 3,
 				},
 			});
 			let ready = false,
 				unsafe = false;
+			// Internal targets expose an owned Active/Stopped host state, never Custom's external state.
+			targets.state = async () => ({ state: ready ? 'active' : 'stopped', observedAt: Date.now() });
 			const host = {
 				assertAvailable: jest.fn(),
-				capability: async () => ({ available: true }),
+				capability: async () => ({
+					available: true,
+					engines: ['mariadb', 'postgresql', ...(engine === 'mysql' ? ['mysql'] : [])],
+				}),
 				record: () => ({
 					state: unsafe ? 'cleanup-required' : ready ? 'ready' : 'provisioning-container',
 					action: 'provision',
@@ -258,6 +271,229 @@ describe('Persistent MySQL service lifecycle and immutable binding', () => {
 		await service.idle();
 		expect(service.get(id, 'administrator').status).toBe('active');
 	});
+	it('fresh Internal refusal commits no restore or provisioning request even after acknowledgement', async () => {
+		jest.spyOn(MysqlWorkerConnection.prototype, 'internalReady').mockResolvedValue(true);
+		targets.automatic = {
+			capability: async () => ({ available: true, engines: ['mariadb', 'postgresql', 'mysql'] }),
+			assertAvailable: jest.fn(),
+		};
+		targets.request = jest.fn();
+		targets.resourceView = async () => ({
+			status: 'measured',
+			sample: {
+				operatorObservedAt: Date.now(),
+				cpuAvailable: 1,
+				total: 8192 * 1024 ** 2,
+				available: 2800 * 1024 ** 2,
+				swapUsed: 0,
+				pressure: 0,
+				limit: 1024 * 1024 ** 2,
+				used: 128 * 1024 ** 2,
+				cgroupSwap: 0,
+				diskAvailable: 10 * 1024 ** 3,
+			},
+			observedAt: Date.now(),
+		});
+		await expect(
+			service.create({ ...request(), mode: 'internal', targetId: undefined }, 'administrator')
+		).rejects.toThrow('resource-host-memory-headroom');
+		expect(db.store.list()).toHaveLength(0);
+		expect(targets.request).not.toHaveBeenCalled();
+		expect(native.restore).not.toHaveBeenCalled();
+	});
+	it('resource-refused Resume preserves a validated stopped database, lease and owner without cleanup', async () => {
+		target.mode = item.mode = 'internal';
+		item.status = 'importing';
+		db.store.create(item);
+		db.store.bind(item.id, target);
+		db.store.addLease({
+			restoreId: item.id,
+			targetId: target.id,
+			database: 'example_db',
+			ownerToken: item.ownerToken,
+			state: 'validated',
+		});
+		db.store.update(item.id, { status: 'stopped' });
+		targets.request = jest.fn();
+		targets.resourceView = async () => ({
+			status: 'unknown',
+			sample: null,
+			observedAt: Date.now(),
+		});
+		await expect(service.operator(item.id, 'administrator', 'resume')).rejects.toThrow(
+			'resource-capacity-unknown'
+		);
+		expect(db.store.get(item.id)).toMatchObject({
+			status: 'stopped',
+			ownerToken: item.ownerToken,
+			cancelRequested: false,
+		});
+		expect(db.store.lease(item.id)?.state).toBe('validated');
+		expect(targets.request).not.toHaveBeenCalled();
+		expect(native.removeOwned).not.toHaveBeenCalled();
+	});
+	it.each(['mariadb', 'postgresql', 'mysql'] as const)(
+		'%s verified Stopped after a consumed-before-Start failure permits only a fresh explicit Resume',
+		async engine => {
+			target.engine = target.target.engine = item.artifact.engine = engine;
+			target.mode = item.mode = 'internal';
+			target.id = item.targetId = item.id;
+			item.status = 'importing';
+			db.store.create(item);
+			db.store.bind(item.id, target);
+			db.store.addLease({
+				restoreId: item.id,
+				targetId: item.id,
+				database: 'example_db',
+				ownerToken: item.ownerToken,
+				state: 'validated',
+			});
+			db.store.update(item.id, { status: 'stopped', completedAt: Date.now() });
+			let state = 'cleanup-required';
+			targets.automatic = {
+				record: () => ({ state, action: 'resume' }),
+				persistent: jest.fn(),
+				receipt: async () => ({
+					state,
+					code: state === 'cleanup-required' ? 'resource-admission-refused' : null,
+					observedAt: Date.now(),
+				}),
+			};
+			targets.state = async () => ({ state: 'stopped', observedAt: Date.now() });
+			targets.request = jest.fn();
+			targets.resourceView = async () => ({
+				status: 'measured',
+				sample: {
+					total: 8192 * 1024 ** 2,
+					available: 4096 * 1024 ** 2,
+					swapUsed: 0,
+					pressure: 0,
+					limit: 1536 * 1024 ** 2,
+					used: 128 * 1024 ** 2,
+					cgroupSwap: 0,
+					diskAvailable: 10 * 1024 ** 3,
+					cpuAvailable: 2,
+					operatorObservedAt: Date.now(),
+					operatorAvailable: 4096 * 1024 ** 2,
+					operatorTotal: 8192 * 1024 ** 2,
+					operatorCpuAvailable: 4,
+					operatorDiskAvailable: 10 * 1024 ** 3,
+				},
+			});
+			await service.tick();
+			expect(db.store.get(item.id)?.status).toBe('cleanup_required');
+			state = 'stopped';
+			await service.tick();
+			await service.idle();
+			expect(db.store.get(item.id)).toMatchObject({
+				status: 'stopped',
+				cleanup: 'none',
+				cancelRequested: false,
+			});
+			expect(targets.request).not.toHaveBeenCalled();
+			expect(native.restore).not.toHaveBeenCalled();
+			expect(native.removeOwned).not.toHaveBeenCalled();
+			await service.operator(item.id, 'administrator', 'resume');
+			expect(targets.request).toHaveBeenCalledWith(
+				expect.objectContaining({ id: item.id }),
+				'resume'
+			);
+			expect(db.store.lease(item.id)?.state).toBe('validated');
+		}
+	);
+	it.each([
+		'missing-lease',
+		'unvalidated-lease',
+		'wrong-owner',
+		'stale-receipt',
+		'wrong-state',
+		'bad-binding',
+	])('host recovery remains fail-closed for %s', async fault => {
+		target.mode = item.mode = 'internal';
+		target.id = item.targetId = item.id;
+		item.status = 'importing';
+		db.store.create(item);
+		db.store.bind(item.id, target);
+		db.store.addLease({
+			restoreId: item.id,
+			targetId: item.id,
+			database: 'example_db',
+			ownerToken: item.ownerToken,
+			state: 'validated',
+		});
+		db.store.update(item.id, {
+			status: 'cleanup_required',
+			stage: 'host-ownership-unverified',
+			cleanup: 'uncertain',
+			completedAt: Date.now(),
+		});
+		if (fault === 'missing-lease') db.store.removeLease(item.id);
+		if (fault === 'unvalidated-lease') db.store.leaseState(item.id, 'created');
+		if (fault === 'wrong-owner')
+			db.sqlite
+				.prepare(
+					"UPDATE persistent_restore_import_leases SET owner_token='different-synthetic-owner'"
+				)
+				.run();
+		targets.automatic = {
+			record: () => ({ state: 'stopped', action: 'resume' }),
+			persistent: jest.fn(),
+			receipt: async () => ({
+				state: 'stopped',
+				observedAt: Date.now() - (fault === 'stale-receipt' ? 31000 : 0),
+			}),
+		};
+		targets.state = async () => ({ state: fault === 'wrong-state' ? 'active' : 'stopped' });
+		if (fault === 'bad-binding')
+			targets.assertBinding = async () => {
+				throw new DatabaseRestoreError('target-binding-mismatch');
+			};
+		await service.tick();
+		await service.idle();
+		expect(db.store.get(item.id)?.status).toBe('cleanup_required');
+		await expect(service.operator(item.id, 'administrator', 'resume')).rejects.toThrow(
+			'operator-action-not-allowed'
+		);
+		expect(native.restore).not.toHaveBeenCalled();
+		expect(native.removeOwned).not.toHaveBeenCalled();
+	});
+	it('Delete requested while binding recovery awaits host state cannot be overwritten with Stopped', async () => {
+		target.mode = item.mode = 'internal';
+		target.id = item.targetId = item.id;
+		item.status = 'importing';
+		db.store.create(item);
+		db.store.bind(item.id, target);
+		db.store.addLease({
+			restoreId: item.id,
+			targetId: item.id,
+			database: 'example_db',
+			ownerToken: item.ownerToken,
+			state: 'validated',
+		});
+		db.store.update(item.id, {
+			status: 'cleanup_required',
+			stage: 'host-ownership-unverified',
+			cleanup: 'uncertain',
+			completedAt: Date.now(),
+		});
+		targets.automatic = {
+			record: () => ({ state: 'stopped', action: 'resume' }),
+			persistent: jest.fn(),
+			receipt: async () => ({ state: 'stopped', observedAt: Date.now() }),
+		};
+		targets.state = async () => {
+			db.store.requestDelete(item.id);
+			return { state: 'stopped' };
+		};
+		await service.tick();
+		expect(db.store.get(item.id)).toMatchObject({
+			status: 'cleanup_required',
+			cancelRequested: true,
+			cleanup: 'requested',
+		});
+		expect(native.restore).not.toHaveBeenCalled();
+		expect(native.removeOwned).not.toHaveBeenCalled();
+	});
 	it('0014 preserves pre-existing encrypted approvals, source bindings, leases and 0013 index', async () => {
 		db.store.create(item);
 		db.store.bind(item.id, target);
@@ -298,7 +534,7 @@ describe('Persistent MySQL service lifecycle and immutable binding', () => {
 		).toEqual(['custom']);
 		await expect(
 			service.create({ ...request(), mode: 'internal' }, 'administrator')
-		).rejects.toMatchObject({ code: 'mysql-internal-not-supported' });
+		).rejects.toMatchObject({ code: 'mysql-internal-unavailable' });
 		delete process.env.PLUTON_MYSQL_WORKER;
 		await expect(service.create(request(), 'administrator')).rejects.toMatchObject({
 			code: 'mysql-worker-not-configured',

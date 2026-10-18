@@ -25,6 +25,8 @@ import { appPaths } from '../utils/AppPaths';
 import { AppError } from '../utils/AppError';
 import { planLogger } from '../utils/logger';
 import { internalResourceReason } from '../utils/internalRecoveryTargets';
+import { MysqlWorkerConnection } from '../utils/mysqlRecoveryWorkerClient';
+import { withRecoveryResourceGuard } from '../utils/recoveryResourceGuard';
 
 type Recovery = Pick<RemoteRepositoryRecoveryService, 'testMetadata' | 'databaseRestoreArtifact'>;
 type Importer = Pick<PersistentDatabaseImporter, 'restore' | 'inspect' | 'removeOwned'>;
@@ -128,6 +130,13 @@ export class DatabaseRestoreService {
 				selection.snapshotId
 			);
 			const policy = await this.targets.policy();
+			const lifecycle = this.targets.automatic
+				? await this.targets.automatic.capability()
+				: undefined;
+			const mysqlInternal =
+				lifecycle?.available &&
+				(lifecycle.engines as readonly string[]).includes('mysql') &&
+				(await new MysqlWorkerConnection().internalReady());
 			return {
 				...metadata,
 				planTitle: plan.title,
@@ -138,10 +147,13 @@ export class DatabaseRestoreService {
 				engines: {
 					mariadb: ['internal', 'custom'],
 					postgresql: ['internal', 'custom'],
-					mysql: process.env.PLUTON_MYSQL_WORKER === 'enabled' ? ['custom'] : [],
+					mysql:
+						process.env.PLUTON_MYSQL_WORKER === 'enabled'
+							? [...(mysqlInternal ? ['internal'] : []), 'custom']
+							: [],
 				},
 				internalPolicy: policy,
-				lifecycle: this.targets.automatic ? await this.targets.automatic.capability() : undefined,
+				lifecycle,
 				retentionSeconds: [
 					3600,
 					21600,
@@ -151,7 +163,7 @@ export class DatabaseRestoreService {
 				warnings: [
 					'SQL integrity is verified after private staging, before import.',
 					'Operator-managed Internal targets use separate bounded persistent storage.',
-					'No source overwrite. MySQL supports only explicitly approved Custom targets through the optional Oracle worker; Internal is not supported.',
+					'No source overwrite. Oracle MySQL requires the optional genuine worker; Internal additionally requires its root-bound automatic profile.',
 				],
 			};
 		} finally {
@@ -170,8 +182,12 @@ export class DatabaseRestoreService {
 		const artifact = preview.databases.find(entry => entry.databaseId === request.databaseId);
 		if (!artifact?.database || !artifact.engine)
 			throw new DatabaseRestoreError('database-metadata-incomplete');
-		if (artifact.engine === 'mysql' && request.mode !== 'custom')
-			throw new DatabaseRestoreError('mysql-internal-not-supported');
+		if (
+			artifact.engine === 'mysql' &&
+			request.mode === 'internal' &&
+			!preview.engines.mysql.includes('internal')
+		)
+			throw new DatabaseRestoreError('mysql-internal-unavailable');
 		if (artifact.engine === 'mysql' && process.env.PLUTON_MYSQL_WORKER !== 'enabled')
 			throw new DatabaseRestoreError('mysql-worker-not-configured');
 		if (artifact.bytes > preview.internalPolicy.maxSqlBytes && request.mode === 'internal')
@@ -214,11 +230,20 @@ export class DatabaseRestoreService {
 			throw new DatabaseRestoreError('retention-not-approved');
 		if (row.mode === 'internal') {
 			if (this.store.busy()) throw new DatabaseRestoreError('database-workload-busy');
-			const reason = preview.resources.sample
+			// Fresh measurement immediately before durable reservation, not only the
+			// earlier metadata preview. Root independently rechecks before creation.
+			const measured = await this.targets.resourceView(path.dirname(this.workspace.root));
+			if (row.artifact.engine === 'mysql' && !measured.sample?.operatorObservedAt)
+				throw new DatabaseRestoreError('resource-capacity-unknown');
+			const reason = measured.sample
 				? internalResourceReason(
-						preview.resources.sample,
+						measured.sample,
 						artifact.bytes,
-						preview.internalPolicy.maxSqlBytes
+						artifact.engine === 'mysql'
+							? Math.min(preview.internalPolicy.maxSqlBytes, 128 * 1024 ** 2)
+							: preview.internalPolicy.maxSqlBytes,
+						artifact.engine,
+						'provision'
 					)
 				: 'capacity-unknown';
 			if (reason) throw new DatabaseRestoreError(`resource-${reason}`);
@@ -329,6 +354,23 @@ export class DatabaseRestoreService {
 				))
 		)
 			throw new DatabaseRestoreError('operator-action-not-allowed');
+		if (action === 'resume') {
+			const measured = await this.targets.resourceView(path.dirname(this.workspace.root));
+			const policy = await this.targets.policy();
+			const reason = measured.sample
+				? internalResourceReason(
+						measured.sample,
+						row.artifact.bytes,
+						row.artifact.engine === 'mysql'
+							? Math.min(policy.maxSqlBytes, 128 * 1024 ** 2)
+							: policy.maxSqlBytes,
+						row.artifact.engine,
+						'resume'
+					)
+				: 'capacity-unknown';
+			if (reason || (row.artifact.engine === 'mysql' && !measured.sample?.operatorObservedAt))
+				throw new DatabaseRestoreError(`resource-${reason || 'capacity-unknown'}`);
+		}
 		await this.targets.request(row, action);
 		return { requested: true, automatic: !!this.targets.automatic };
 	}
@@ -401,17 +443,46 @@ export class DatabaseRestoreService {
 					continue; // No import, inspection approval or native SQL deletion on uncertain infrastructure.
 				}
 				if (
-					receipt?.state === 'ready' &&
+					(receipt?.state === 'ready' || receipt?.state === 'stopped') &&
 					row.stage === 'host-ownership-unverified' &&
 					row.completedAt &&
 					!row.cancelRequested
-				)
-					row = this.store.update(row.id, {
-						status: 'active',
-						stage: 'active',
-						cleanup: 'none',
-						errorCode: null,
-					});
+				) {
+					// A consumed-before-Start failure must recover to Stopped for a NEW
+					// explicit Resume, never to automatic Start or SQL replay. Recheck
+					// exact binding, fresh host observation, validated lease and cancellation.
+					try {
+						const approval = await this.targets.assertBinding(row, this.store.approval(row.id));
+						const state = await this.targets.state(approval);
+						const latest = this.store.get(row.id),
+							lease = this.store.lease(row.id);
+						const status = receipt.state === 'stopped' ? 'stopped' : 'active';
+						if (
+							!latest ||
+							latest.cancelRequested ||
+							latest.expiresAt <= Date.now() ||
+							latest.stage !== 'host-ownership-unverified' ||
+							!latest.completedAt ||
+							receipt.observedAt < Date.now() - 30000 ||
+							state.state !== status ||
+							!lease ||
+							lease.state !== 'validated' ||
+							lease.restoreId !== latest.id ||
+							lease.targetId !== latest.targetId ||
+							lease.ownerToken !== latest.ownerToken ||
+							lease.database !== latest.database
+						)
+							continue;
+						row = this.store.update(row.id, {
+							status,
+							stage: status,
+							cleanup: 'none',
+							errorCode: null,
+						});
+					} catch {
+						continue;
+					} // Unknown ownership cannot authorize recovery or cleanup.
+				}
 				if (row.status === 'provisioning_required' && receipt) {
 					row = this.store.update(row.id, { stage: receipt.state, errorCode: receipt.code });
 				}
@@ -543,15 +614,24 @@ export class DatabaseRestoreService {
 			await this.targets.admission(approval, row, path.dirname(this.workspace.root));
 			if (this.store.busy(row.id)) throw new DatabaseRestoreError('database-workload-busy');
 			if (row.expiresAt <= Date.now()) throw new DatabaseRestoreError('restore-expired');
-			const inspection = await client.restore(
-				{ ...row, artifact },
-				file,
-				directory,
-				signal,
-				stage => {
+			const restore = (current: AbortSignal) =>
+				client.restore({ ...row, artifact }, file, directory!, current, stage => {
 					this.store.update(row.id, { stage });
-				}
-			);
+				});
+			const inspection =
+				row.mode === 'internal'
+					? await withRecoveryResourceGuard(
+							signal,
+							async () => {
+								try {
+									await this.targets.admission(approval, row, path.dirname(this.workspace.root));
+								} catch {
+									throw new RecoveryTestError('database-import', 'internal-resources-insufficient');
+								}
+							},
+							restore
+						)
+					: await restore(signal);
 			if (signal.aborted || this.store.get(row.id)?.cancelRequested)
 				throw new DatabaseRestoreError('cancelled');
 			if (row.expiresAt <= Date.now()) throw new DatabaseRestoreError('restore-expired');

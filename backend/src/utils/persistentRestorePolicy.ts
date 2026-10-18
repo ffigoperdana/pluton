@@ -44,7 +44,7 @@ export const restoreRequest = restoreSelection
 	})
 	.strict()
 	.refine(input => input.mode !== 'custom' || !!input.targetId);
-export const persistentApprovalSchema = z
+export const persistentApprovalBase = z
 	.object({
 		version: z.literal(1),
 		id: restoreId,
@@ -94,24 +94,21 @@ export const persistentApprovalSchema = z
 			.regex(/^[a-f0-9]{64}$/)
 			.optional(),
 	})
-	.strict()
-	.superRefine((value, ctx) => {
-		if (
-			value.engine !== value.target.engine ||
-			(value.engine === 'mysql' && value.mode !== 'custom') ||
-			(value.mode === 'internal' &&
-				(!value.binding || !value.containerId || value.storage.kind !== 'fixed-ext4')) ||
-			(value.mode === 'custom' && value.storage.kind !== 'operator-approved-external')
-		)
-			ctx.addIssue({ code: 'custom', message: 'Invalid persistent target contract.' });
-		if (
-			['root', 'postgres', 'admin', 'administrator'].includes(value.target.username.toLowerCase())
-		)
-			ctx.addIssue({
-				code: 'custom',
-				message: 'An administrator database account is not a restore account.',
-			});
-	});
+	.strict();
+export const persistentApprovalSchema = persistentApprovalBase.superRefine((value, ctx) => {
+	if (
+		value.engine !== value.target.engine ||
+		(value.mode === 'internal' &&
+			(!value.binding || !value.containerId || value.storage.kind !== 'fixed-ext4')) ||
+		(value.mode === 'custom' && value.storage.kind !== 'operator-approved-external')
+	)
+		ctx.addIssue({ code: 'custom', message: 'Invalid persistent target contract.' });
+	if (['root', 'postgres', 'admin', 'administrator'].includes(value.target.username.toLowerCase()))
+		ctx.addIssue({
+			code: 'custom',
+			message: 'An administrator database account is not a restore account.',
+		});
+});
 export function restoreInput<T>(schema: z.ZodType<T>, input: unknown): T {
 	const result = schema.safeParse(input);
 	if (!result.success) throw new AppError(400, 'Invalid persistent database restore request.');

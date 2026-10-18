@@ -15,6 +15,11 @@ regressions cover these refinements, not a second user visual acceptance claim.
 
 ## Acceptance status
 
+The table below preserves the original MariaDB/PostgreSQL acceptance interval.
+The later RC-01 source correction requires migration0016 and matching app/root
+code; its deterministic tests are not a new human visual or physical boot pass.
+See the RC-01 follow-up at the end before preparing a current release candidate.
+
 | Gate | Result |
 | --- | --- |
 | Implementation / deterministic regressions | Passed: durable lifecycle, ownership, cancellation and native import boundaries retained. |
@@ -862,3 +867,62 @@ authentication/CSRF and immutable deploy/rollback checks. Existing Oracle worker
 and MySQL Custom regression checks remain mandatory for compatibility; their
 implementation is unchanged. Privileged guest cold-boot/ext4/ENOSPC acceptance
 is separately recorded evidence, not something this unprivileged CI can claim.
+
+## RC-01 follow-up — durable explicit Resume — 2026-10-18
+
+The earlier review/boot results above are historical evidence for their original
+code. A later source audit found that an automatically reconstructed mailbox
+could renew inode-based Resume authority. The separately authorized correction
+adds migration0016 and a versioned Resume request. It does not rewrite applied
+0015, installation identity, native leases or the historical acceptance record.
+
+`automatic_recovery_lifecycle.resume_sequence` starts at0 for old rows. Only a
+new authenticated explicit persistent Resume increments it, atomically with its
+action under SQLite synchronous FULL. Background replay reconstructs the same
+sequence. Values are bounded safe integers and cannot decrease. Existing Delete
+precedence and immutable owner/snapshot/artifact binding remain enforced.
+
+Legacy v1 provision/inspect/stop/delete retain their existing contract. A legacy
+v1 Resume can only observe exact owned Ready/Stopped, never Start. New v2 Resume
+requires a positive sequence. Root durably stores its maximum
+`consumedResumeSequence` before Start, including when a target is already running;
+equal/older requests never Start regardless of inode changes. A consumed Resume
+also prevents an older Provision from restarting a created-but-never-ready target.
+Native cleanup Start during normal authorized Delete remains separate and still
+requires exact ownership before physical removal.
+
+The root journal writer already fsyncs file and parent. Application publication
+now fsyncs its private temporary file, renames and fsyncs the no-follow request
+directory. A sync failure retains the durable intent and reports uncertainty;
+it cannot allocate another sequence. Identical-byte replay retries directory
+sync. Root may have observed a renamed intent already, so a failed response is
+not proof that it never executed. Never retry uncertain SQL or infer consumption
+from a physical Start or the old inode revision.
+
+Crash after consumption but before Start intentionally leaves a burned sequence
+and stopped target. After fresh host-state/binding and exact validated retained
+lease verification, uncancelled/unexpired completed operations can return from
+host-only uncertainty to Stopped. Recovery is a new human explicit Resume with
+normal authentication and resource admission, allocating sequence+1. Recovery
+does not auto-increment, Start, reimport, reset counters or erase journals. Any
+unknown identity, lease, host state, cancellation or expiry remains fail-closed.
+
+Deploy matching corrected app/root code and migration0016; old root rejects v2,
+while new root refuses v1 Start. Receipts/worker SQL RPC stay unchanged. Existing
+sealed host bundles/digests must be reviewed again; these mixed versions are not
+a usable deployment even though they refuse safely. The VM evidence helper now
+asserts exact requested/consumed sequence equality and preservation across boot;
+the helper was not executed against a VM for this source correction.
+
+Rollback remains drain-first. Keep cleanup-capable app/worker/root/timer active
+until native leases and exact target removals or approved ownership handoffs are
+resolved. Never drop0016, rewrite0015, restore old ownership SQLite or downgrade
+to inode-only Resume while retained resources remain. The migration is additive
+for older non-Resume SQL, which is not permission to bypass this rollback gate.
+
+Deterministic unit/regression evidence covers all three engines, missing/replaced
+mailbox, older-sequence replay, consumption/start crash models, concurrent Delete,
+migration preservation and fsync failure. It is not a physical power-loss, new
+human UAT or new cold-boot acceptance claim. No Docker, VM, sudo, real TTL hour,
+reboot, source publication or production operation was performed. The historical
+Docker discrepancy and hosted CI/reviewer/production blockers remain unchanged.

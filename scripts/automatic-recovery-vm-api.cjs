@@ -78,7 +78,7 @@ async function request(path,body,expected=200,headers={}){
     event('real_api_auth_origin_json_boundaries_verified',{noAuthRefused:true,crossOriginRefused:true,forgedHostRefused:true,forgedForwardedRefused:true});
     return;
   }
-  assert(['mariadb','postgresql'].includes(engine));
+  assert(['mariadb','postgresql','mysql'].includes(engine));
   const selection=JSON.parse(fs.readFileSync(api+'/snapshots.json')).find(row=>row.engine===engine);
   const {planId,backupId,snapshotId,databaseId}=selection;
   const record=api+'/'+engine+'-restore.json',recovery=api+'/'+engine+'-recovery.json';

@@ -9,8 +9,15 @@ try {
 			readFileSync(assertRecoveryClientPath('/run/pluton-mysql-config/target.json', false), 'utf8')
 		)
 	);
-	const ca = assertRecoveryClientPath('/run/pluton-mysql-config/ca.pem', false);
-	const worker = await startMysqlWorker(config, () => ca);
+	// Internal-only workers have no static Custom target or CA; authority is
+	// independently read from per-operation root proof, never from caller paths.
+	const ca = config.host
+		? assertRecoveryClientPath('/run/pluton-mysql-config/ca.pem', false)
+		: undefined;
+	const worker = await startMysqlWorker(config, () => {
+		if (!ca) throw new Error('Custom trust not configured.');
+		return ca;
+	});
 	for (const event of ['SIGTERM', 'SIGINT'] as const)
 		process.once(event, () => {
 			void worker.stop().finally(() => process.exit(0));

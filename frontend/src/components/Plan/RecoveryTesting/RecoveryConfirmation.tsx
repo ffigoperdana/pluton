@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import type { RecoveryPreparation, RecoverySelection } from '../../../@types/recoveryTests';
 import { useRecoveryPreparation } from '../../../services/recoveryTests';
 import {
@@ -6,7 +6,10 @@ import {
    initialRecoverySelection,
    recoveryConfirmationBody,
    recoveryDestinationStatus,
+   recoveryResourceSafety,
 } from '../../../utils/recoveryConfirmation';
+import InternalResourceWarning from '../../common/InternalResourceWarning';
+import { RequestActivity } from '../../common/OperationProgress/OperationProgress';
 import { formatBytes } from '../../../utils/helpers';
 import Modal from '../../common/Modal/Modal';
 import classes from './RecoveryTesting.module.scss';
@@ -18,12 +21,14 @@ export function RecoveryConfirmationContent({
    pending,
    confirm,
    refresh,
+   checking = false,
 }: {
    preview: RecoveryPreparation;
    operation: 'test' | 'restore';
    pending: boolean;
    confirm: Confirm;
    refresh: () => void;
+   checking?: boolean;
 }) {
    const [selection, setSelection] = useState<RecoverySelection>(() => initialRecoverySelection(preview));
    const [acknowledgedToken, setAcknowledgedToken] = useState<string>();
@@ -33,6 +38,8 @@ export function RecoveryConfirmationContent({
    const restore = operation === 'restore';
    const sample = preview.resources.sample;
    const databases = restore ? preview.databases.filter((entry) => entry.path === databaseId) : preview.databases;
+   const resourceId = useId();
+   const resourceSafety = recoveryResourceSafety(preview, selection, checking);
    return (
       <div className={`${classes.panel} styled__scrollbar`}>
          <div className={classes.detail}>
@@ -112,24 +119,38 @@ export function RecoveryConfirmationContent({
                <div>
                   {entry.databaseId || 'Historical artifact'} · {formatBytes(entry.bytes)} · <code>{entry.path}</code>
                </div>
-               {!restore && selection.databaseImport === 'required' && entry.engine && entry.engine !== 'mysql' && (
-                  <label>
-                     <input
-                        type="checkbox"
-                        checked={selection.targetModes?.[entry.engine] === 'internal'}
-                        onChange={(event) =>
-                           setSelection({
-                              ...selection,
-                              targetModes: { ...selection.targetModes, [entry.engine!]: event.target.checked ? 'internal' : 'custom' },
-                           })
-                        }
-                     />{' '}
-                     Use Internal Recovery Container ({entry.engine})
-                  </label>
+               {!restore &&
+                  selection.databaseImport === 'required' &&
+                  entry.engine &&
+                  (entry.engine !== 'mysql' || preview.lifecycle === 'automatic') && (
+                     <label>
+                        <input
+                           type="checkbox"
+                           checked={selection.targetModes?.[entry.engine] === 'internal'}
+                           onChange={(event) =>
+                              setSelection({
+                                 ...selection,
+                                 targetModes: { ...selection.targetModes, [entry.engine!]: event.target.checked ? 'internal' : 'custom' },
+                              })
+                           }
+                        />{' '}
+                        Use Internal Recovery Container ({entry.engine})
+                     </label>
+                  )}
+               {entry.engine === 'mysql' && (
+                  <p>Oracle MySQL requires the genuine worker. Internal additionally requires the approved automatic host operator.</p>
                )}
-               {entry.engine === 'mysql' && <p>Oracle MySQL: Custom through the genuine worker. Internal: Not Available.</p>}
                {!restore && <p role="status">{recoveryDestinationStatus(preview, selection, entry.engine)}</p>}
             </div>
+         ))}
+         {resourceSafety.map((safety) => (
+            <InternalResourceWarning
+               key={safety.engine}
+               id={`${resourceId}-${safety.engine}`}
+               safety={safety}
+               resources={preview.resources}
+               workloadBusy={Object.values(preview.workloads).some(Boolean) || preview.internalTargets.some((target) => target.engine === safety.engine && target.status === 'running')}
+            />
          ))}
          <h4>Measured server resources</h4>
          <p>
@@ -183,6 +204,7 @@ export function RecoveryConfirmationContent({
          )}
          <button
             type="button"
+            aria-describedby={resourceSafety.map((safety) => `${resourceId}-${safety.engine}`).join(' ') || undefined}
             disabled={restore || pending || !canConfirmRecovery(preview, selection, acknowledged)}
             onClick={() => confirm(recoveryConfirmationBody(preview, selection))}
          >
@@ -223,9 +245,7 @@ export default function RecoveryConfirmation({
          title={operation === 'test' ? 'Confirm Recovery Test' : 'Restore Database — availability'}
          closeModal={close}
       >
-         <div role="status" style={{ minHeight: '1.6em' }}>
-            {preview.isFetching ? 'Verifying exact snapshot metadata and current capacity…' : ''}
-         </div>
+         <RequestActivity checking={preview.isFetching} submitting={pending} failed={!!preview.error} />
          {preview.error && (
             <div role="alert">
                {preview.error.message}
@@ -240,6 +260,7 @@ export default function RecoveryConfirmation({
                pending={pending || preview.isFetching || !!preview.error}
                confirm={confirm}
                refresh={() => void preview.refetch()}
+               checking={preview.isFetching}
             />
          )}
       </Modal>

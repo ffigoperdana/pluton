@@ -139,11 +139,10 @@ export class RecoveryTestService {
 			throw new RecoveryTestError('database-target-preflight', 'recovery-workload-busy');
 		if (policy.databaseImport === 'required')
 			for (const entry of preview.databases) {
-				const internal =
-					entry.engine &&
-					entry.engine !== 'mysql' &&
-					policy.targetModes?.[entry.engine] === 'internal';
+				const internal = entry.engine && policy.targetModes?.[entry.engine] === 'internal';
 				if (internal) {
+					if (entry.engine === 'mysql' && preview.mysqlWorker !== 'ready')
+						throw new RecoveryTestError('database-target-preflight', 'mysql-worker-unavailable');
 					const target = preview.internalTargets.find(view => view.engine === entry.engine);
 					if (target?.status !== 'ready')
 						throw new RecoveryTestError(
@@ -366,10 +365,7 @@ export class RecoveryTestService {
 				this.internal.automatic &&
 				row.policy.databaseImport === 'required' &&
 				recoveryArtifacts(backup.completionStats?.lifecycle).some(
-					entry =>
-						entry.engine &&
-						entry.engine !== 'mysql' &&
-						row.policy.targetModes?.[entry.engine] === 'internal'
+					entry => entry.engine && row.policy.targetModes?.[entry.engine] === 'internal'
 				)
 			) {
 				try {
@@ -416,7 +412,6 @@ export class RecoveryTestService {
 						.filter(
 							entry =>
 								row.policy.databaseImport === 'required' &&
-								entry.engine !== 'mysql' &&
 								entry.engine &&
 								row.policy.targetModes?.[entry.engine] === 'internal'
 						)
@@ -427,7 +422,7 @@ export class RecoveryTestService {
 				throw new RecoveryTestError('database-target-preflight', 'internal-target-unsafe');
 			if (internalEngines.length) {
 				setStage('database-target-preflight');
-				const engine = internalEngines[0] as 'mariadb' | 'postgresql';
+				const engine = internalEngines[0] as 'mariadb' | 'postgresql' | 'mysql';
 				result.internalEngine = engine;
 				const entries = result.databases.filter(entry => entry.engine === engine);
 				// Admission precedes host provisioning and is repeated before native import.
@@ -435,13 +430,14 @@ export class RecoveryTestService {
 					const activity = await this.store.activity();
 					if (activity.backup || activity.restore)
 						throw new RecoveryTestError('database-target-preflight', 'recovery-workload-busy');
-					await this.internal.preflight(engine, entries, directory);
+					await this.internal.preflight(engine, entries, directory, 'provision');
 				}
 				const activation = await this.internal.prepare(
 					engine,
 					entries,
 					this.internal.automatic
 						? {
+								directory,
 								testId: row.id,
 								snapshotId: row.snapshotId,
 								createdAt: row.createdAt.getTime(),
@@ -525,13 +521,17 @@ export class RecoveryTestService {
 				: error instanceof DatabaseRestoreError
 					? new RecoveryTestError(
 							stage,
-							error.code === 'lifecycle-unavailable'
-								? 'internal-operator-unavailable'
-								: error.code === 'lifecycle-readiness-timeout'
-									? 'internal-provisioning-timeout'
-									: error.code === 'internal-lifecycle-busy'
-										? 'recovery-workload-busy'
-										: 'internal-target-unsafe'
+							error.code === 'target-memory-exhausted'
+								? 'database-out-of-memory'
+								: error.code.startsWith('resource-') || error.code === 'operator-budget-refused'
+									? 'internal-resources-insufficient'
+									: error.code === 'lifecycle-unavailable'
+										? 'internal-operator-unavailable'
+										: error.code === 'lifecycle-readiness-timeout'
+											? 'internal-provisioning-timeout'
+											: error.code === 'internal-lifecycle-busy'
+												? 'recovery-workload-busy'
+												: 'internal-target-unsafe'
 						)
 					: error instanceof RecoveryTestError
 						? error

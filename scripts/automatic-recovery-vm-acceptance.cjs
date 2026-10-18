@@ -177,11 +177,14 @@ try{
     const driver=op.engineDriver(req),meta=driver.metadata(selection.id);
     assert(driver.inspect(meta).State.Running);
     const journal=JSON.parse(fs.readFileSync(op.ROOT+'/journal/'+selection.id+'.json','utf8'));
+    assert.equal(req.version,2);assert(Number.isSafeInteger(req.resumeSequence)&&req.resumeSequence>0);
+    assert.equal(journal.consumedResumeSequence,req.resumeSequence);
     assert.match(journal.resumeRevision,/^[a-f0-9]{64}$/);
     run('docker',['stop','--time','30',meta.containerId]);
     run('/usr/bin/systemctl',['start',prefix+'-lifecycle.service'],240000);
     assert.equal(driver.inspect(meta).State.Running,false);assert.equal(fs.readFileSync(file,'utf8'),raw);
-    assert.equal(JSON.parse(fs.readFileSync(op.ROOT+'/journal/'+selection.id+'.json','utf8')).state,'stopped');
+    const stopped=JSON.parse(fs.readFileSync(op.ROOT+'/journal/'+selection.id+'.json','utf8'));
+    assert.equal(stopped.state,'stopped');assert.equal(stopped.consumedResumeSequence,req.resumeSequence);
     event('consumed_resume_not_replayed',{engine,mailboxUnchanged:true,sameContainer:true,explicitResumeRequired:true});
   }else if(['content','checkpoint','verify-checkpoint'].includes(action)){
     const engine=process.argv[4];assert(['mariadb','postgresql'].includes(engine));
@@ -197,17 +200,20 @@ try{
     assert.equal(fs.lstatSync(meta.volume.file).size,2147483648);
     const protectedValue={containerId:meta.containerId,storageId:meta.volume.identity.storageId,
       identity:meta.volume.identity,snapshotId:req.binding.snapshotId,bindingHash:journal.bindingHash,
-      resumeRevision:journal.resumeRevision,
+      resumeRevision:journal.resumeRevision,consumedResumeSequence:journal.consumedResumeSequence,
+      resumeSequence:req.resumeSequence,
       requestHash:crypto.createHash('sha256').update(fs.readFileSync(op.REQUESTS+'/'+selection.id+'.json')).digest('hex'),
       bootId:fs.readFileSync('/proc/sys/kernel/random/boot_id','utf8').trim()};
     if(action==='checkpoint'){
       assert.equal(req.action,'resume');assert.match(protectedValue.resumeRevision,/^[a-f0-9]{64}$/);
+      assert.equal(req.version,2);assert(Number.isSafeInteger(req.resumeSequence)&&req.resumeSequence>0);
+      assert.equal(protectedValue.consumedResumeSequence,req.resumeSequence);
       write(api+'/'+engine+'-checkpoint.json',protectedValue);
       event('preboot_retained_checkpoint_created',{engine,quotaBytes:2147483648,ownership:true});
     }else if(action==='verify-checkpoint'){
       const before=JSON.parse(fs.readFileSync(api+'/'+engine+'-checkpoint.json','utf8'));
       assert.notEqual(before.bootId,protectedValue.bootId);
-      for(const name of ['containerId','storageId','identity','snapshotId','bindingHash','resumeRevision','requestHash'])assert.deepEqual(protectedValue[name],before[name]);
+      for(const name of ['containerId','storageId','identity','snapshotId','bindingHash','resumeRevision','resumeSequence','consumedResumeSequence','requestHash'])assert.deepEqual(protectedValue[name],before[name]);
       assert.equal(current.State.Running,false);op.assertAnchors();
       event('cold_boot_retained_identity_verified',{engine,sameContainer:true,sameFilesystem:true,sameBinding:true,
         consumedResumeUnchanged:true,mailboxUnchanged:true,explicitResumeRequired:true});

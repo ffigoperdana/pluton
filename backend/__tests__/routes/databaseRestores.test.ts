@@ -107,4 +107,16 @@ describe('Retained restore API administrator, CSRF and input boundary', () => {
 			expect(service.create).not.toHaveBeenCalled();
 		}
 	});
+	it.each([{ resumeSequence: 99 }, { sequence: 99 }, { version: 2 }, { nonce: 'synthetic' }])(
+		'never accepts caller-supplied Resume authority: %j',
+		async body => {
+			const result = await request(app)
+				.post('/api/database-restores/a/resume')
+				.set('Host', 'backup.example.invalid')
+				.set('Origin', 'https://backup.example.invalid')
+				.send(body);
+			expect(result.status).toBe(400);
+			expect(service.operator).not.toHaveBeenCalled();
+		}
+	);
 });

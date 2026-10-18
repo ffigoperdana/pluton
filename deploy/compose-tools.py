@@ -137,6 +137,56 @@ def probe_source(path):
                      if not line.startswith("//")).strip() + "\n"
 
 
+def validate_internal_mysql_worker(config):
+    """Only the new opt-in root-proof worker; existing Custom overlays unchanged.
+    Never print expanded configuration (it may contain private deployment data).
+    """
+    worker = config.get("services", {}).get("mysql-recovery-worker", {})
+    volumes = worker.get("volumes", [])
+    if not any(item.get("target") == "/run/pluton-mysql-internal" for item in volumes):
+        return
+    require(re.fullmatch(r"(?:ghcr\.io/[a-z0-9._/-]+@)?sha256:[a-f0-9]{64}", worker.get("image", "")) is not None,
+            "mysql-worker-image-not-immutable")
+    require(worker.get("user") == "10001:10001" and worker.get("read_only") is True and
+            worker.get("cap_drop") == ["ALL"] and "no-new-privileges:true" in worker.get("security_opt", []),
+            "mysql-worker-sandbox-required")
+    require(not any(worker.get(key) for key in ("privileged", "ports", "expose", "cap_add", "devices", "volumes_from",
+            "use_api_socket", "pid", "ipc", "uts", "userns_mode", "build", "entrypoint", "command", "environment")),
+            "mysql-worker-override-not-allowed")
+    require(worker.get("network_mode") is None and set(worker.get("networks", {})) <=
+            {"persistent-restores", "automatic-tests", "mysql-recovery-egress"} and
+            {"persistent-restores", "automatic-tests"} <= set(worker.get("networks", {})), "mysql-worker-network-unapproved")
+    require(str(worker.get("mem_limit")) == str(384 * 1024 ** 2) and str(worker.get("memswap_limit")) == str(384 * 1024 ** 2) and
+            str(worker.get("cpus")) == "0.5" and worker.get("pids_limit") == 64, "mysql-worker-resource-contract")
+    temporary = worker.get("tmpfs", [])
+    require(len(temporary) == 1 and isinstance(temporary[0], str) and temporary[0].startswith("/tmp:"),
+            "mysql-worker-temporary-storage-unapproved")
+    require(set(temporary[0].split(":", 1)[1].split(",")) in (
+            {"rw", "noexec", "nosuid", "nodev", "uid=10001", "gid=10001", "mode=700", "size=160m"},
+            {"rw", "noexec", "nosuid", "nodev", "uid=10001", "gid=10001", "mode=700", "size=167772160"}),
+            "mysql-worker-temporary-storage-unapproved")
+    allowed = {"/run/pluton-mysql-worker", "/run/pluton-mysql-config/target.json", "/run/pluton-mysql-config/ca.pem",
+               "/run/pluton-mysql-internal"}
+    require(len({item.get("target") for item in volumes}) == len(volumes) and
+            all(item.get("target") in allowed for item in volumes), "mysql-worker-mount-unapproved")
+    for item in volumes:
+        target = item["target"]
+        if target == "/run/pluton-mysql-worker":
+            require(item.get("type") == "volume" and not item.get("read_only"), "mysql-worker-ipc-required")
+            require(any(m.get("type") == "volume" and m.get("source") == item.get("source") and m.get("read_only") is True and
+                        m.get("target") == target for m in config.get("services", {}).get("pluton", {}).get("volumes", [])),
+                    "mysql-worker-ipc-binding-mismatch")
+        else:
+            require(item.get("type") == "bind" and item.get("read_only") is True and
+                    # Compose's normalized JSON omits the explicit false value.
+                    (target == "/run/pluton-mysql-config/ca.pem" or item.get("bind", {}).get("create_host_path", False) is False),
+                    "mysql-worker-proof-mount-unsafe")
+            if target == "/run/pluton-mysql-internal":
+                require(item.get("source") == "/etc/pluton-automatic-recovery/mysql-public", "mysql-worker-proof-root-unapproved")
+    require({"/run/pluton-mysql-worker", "/run/pluton-mysql-config/target.json", "/run/pluton-mysql-internal"} <=
+            {item.get("target") for item in volumes}, "mysql-worker-required-mount-missing")
+
+
 def validate_config(path, ref, health_file, directory):
     config = load(path)
     service = config.get("services", {}).get("pluton", {})
@@ -154,6 +204,7 @@ def validate_config(path, ref, health_file, directory):
         require(key in environment, "supported-environment-setting-missing")
     require(service.get("healthcheck", {}).get("test") == ["CMD", "node", "-e", probe_source(health_file)],
             "reviewed-get-healthcheck-required")
+    validate_internal_mysql_worker(config)
     value = contract(config)
     for item in value["mounts"]:
         require(not re.search(r"(?:docker|podman)\.sock", item["source"] + item["target"]),

@@ -1,9 +1,9 @@
 import type { RecoveryEngine, RecoveryPolicy, RecoveryTest, InternalTargetView } from '../@types/recoveryTests';
-export function recoveryTargetChoices(engine: RecoveryEngine): readonly ('internal' | 'custom')[] {
-   return engine === 'mysql' ? ['custom'] : ['internal', 'custom'];
+export function recoveryTargetChoices(engine: RecoveryEngine, automatic = false): readonly ('internal' | 'custom')[] {
+   return engine === 'mysql' && !automatic ? ['custom'] : ['internal', 'custom'];
 }
 export function recoveryTargetMode(policy: RecoveryPolicy, engine: RecoveryEngine): 'internal' | 'custom' {
-   return engine === 'mysql' ? 'custom' : policy.targetModes?.[engine] || 'custom';
+   return policy.targetModes?.[engine] || 'custom';
 }
 export function internalStatus(view?: InternalTargetView, latest?: RecoveryTest): string {
    if (view?.status === 'cleanup_required' || latest?.result?.cleanup.infrastructure === false) return 'Cleanup Required';

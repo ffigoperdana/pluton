@@ -69,6 +69,9 @@ jobs:
           node --test scripts/__tests__/automaticRecoveryLifecycle.test.cjs scripts/__tests__/automaticRecoveryNamespace.test.cjs scripts/__tests__/automaticRecoveryPublication.test.cjs scripts/__tests__/automaticRecoveryBoot.test.cjs scripts/__tests__/automaticRecoveryVisual.test.cjs scripts/__tests__/automaticRecoveryRequests.test.cjs scripts/__tests__/persistentRestore.test.cjs
           python3 scripts/__tests__/automaticRecoveryBoot.test.py
           node --test scripts/__tests__/runtimeReleaseBoundaries.test.cjs
+          node --test scripts/__tests__/mysqlAutomaticRecovery.test.cjs
+          python3 -c "import ast,pathlib; ast.parse(pathlib.Path('deploy/persistent-restore/mysql-lock.py').read_text())"
+          bash -n deploy/persistent-restore/bootstrap.sh
 
       - name: Type-check backend
         run: pnpm --filter @plutonhq/core-backend exec tsc --noEmit -p tsconfig.json
@@ -164,6 +167,14 @@ jobs:
       - name: Verify retained MySQL Custom restores and repeated real cancellation
         shell: pwsh
         run: ./scripts/validate-mysql-persistent-restore.ps1 -WorkerImage pluton-mysql-worker:local -RuntimeImage pluton-recovery-ci:local
+
+      - name: Verify Oracle MySQL Internal disposable recovery and refusal boundaries
+        shell: pwsh
+        run: ./scripts/validate-mysql-automatic-recovery.ps1 -Mode disposable -WorkerImage pluton-mysql-worker:local -RuntimeImage pluton-recovery-ci:local
+
+      - name: Verify Oracle MySQL Internal retained restore, Stop Resume and cleanup
+        shell: pwsh
+        run: ./scripts/validate-mysql-automatic-recovery.ps1 -Mode persistent -WorkerImage pluton-mysql-worker:local -RuntimeImage pluton-recovery-ci:local
 
       - name: Check Internal recovery profiles and operator permission boundaries
         # Test-only native assertions; no dependency installation or application startup.
