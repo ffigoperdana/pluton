@@ -8,6 +8,7 @@ import { BackupStore } from '../../src/stores/BackupStore';
 import { RemoteManagedRepositoryStore } from '../../src/stores/RemoteManagedRepositoryStore';
 import { AgentStore } from '../../src/stores/AgentStore';
 import { StorageStore } from '../../src/stores/StorageStore';
+import { PlanService } from '../../src/services/PlanService';
 import * as planSchema from '../../src/db/schema/plans';
 import * as backupSchema from '../../src/db/schema/backups';
 import * as storageSchema from '../../src/db/schema/storages';
@@ -53,10 +54,24 @@ describe('managed replication service with actual migrated SQLite stores', () =>
 			store.detach('plan-01', 'replica-01');
 			const plans = new PlanStore(db);
 			await plans.update('plan-01', { settings: { ...settings, replication: { enabled: false, concurrent: false, storages: [] } } });
+			const mirror = (await backups.getById('backup-01'))!.mirrors![0];
+			await backups.update('backup-01', { mirrors: [
+				mirror,
+				{ ...mirror, replicationId: 'unbound-replica' },
+				{ ...mirror, storageId: 'unbound-storage' },
+				{ ...mirror, storagePath: 'bucket-01/managed/other' },
+			] });
+			context.sqlite.exec(`INSERT INTO backups(id,plan_id,source_id,source_type,method,status,mirrors)
+				SELECT 'backup-02',plan_id,source_id,source_type,method,status,mirrors FROM backups WHERE id='backup-01'`);
 			const retained = await plans.getById('plan-01', true);
-			expect(retained?.backups[0].mirrors).toEqual([expect.objectContaining({
+			expect(retained?.backups.find(backup => backup.id === 'backup-01')?.mirrors).toEqual([expect.objectContaining({
 				replicationId: 'replica-01', status: 'completed', snapshotId: 'f'.repeat(64),
 			})]);
+			expect(retained?.backups.find(backup => backup.id === 'backup-02')?.mirrors).toEqual([]);
+			const history = await new PlanService({} as any, plans, backups, {} as any, {} as any, {} as any)
+				.getBackupHistory('plan-01', {});
+			expect(history.items.find(backup => backup.id === 'backup-01')?.mirrors).toEqual([mirror]);
+			expect(history.items.find(backup => backup.id === 'backup-02')?.mirrors).toEqual([]);
 		} finally { context.sqlite.close(); }
 	});
 });

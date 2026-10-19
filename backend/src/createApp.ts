@@ -90,7 +90,8 @@ import { parseWebOrigins } from './utils/webOrigins';
 import { webAccess, originAwareSession, sameOriginCors } from './middlewares/webAccess';
 import { ManagedReplicationStore } from './stores/ManagedReplicationStore';
 import { ManagedReplicationService } from './services/ManagedReplicationService';
-import { configureProtectedStorageDatabase } from './utils/storageSecurity';
+import { configureProtectedStorageDatabase, s3RepositoryScope } from './utils/storageSecurity';
+import { configureReplicaScopeResolver } from './utils/managedReplicationPolicy';
 
 const MemoryStore = createMemoryStore(session);
 
@@ -99,6 +100,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	initializeLogger();
 	// Explicit startup ownership, including compiled ESM: no lazy CommonJS DB loading.
 	configureProtectedStorageDatabase(sqlite);
+	configureReplicaScopeResolver(s3RepositoryScope);
 
 	// Stores
 	const planStore = new PlanStore(db);

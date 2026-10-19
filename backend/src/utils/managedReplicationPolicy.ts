@@ -4,13 +4,16 @@ import { AppError } from './AppError';
 import type Database from 'better-sqlite3';
 import type { NewPlan, Plan } from '../db/schema/plans';
 import type { Storage } from '../db/schema/storages';
-import {
-	canonicalS3RepositoryIdentity,
-	decryptStorageCredentials,
-	isS3Storage,
-} from './storageSecurity';
+import { providers } from './providers';
 
 type ReplicaScope = { authority: string; prefix: string };
+type ReplicaScopeResolver = (storage: Storage, repositoryPath?: string | null) => ReplicaScope;
+let replicaScopeResolver: ReplicaScopeResolver | undefined;
+
+/** Startup owns credential access; importing a store must not bootstrap the application. */
+export function configureReplicaScopeResolver(resolver: ReplicaScopeResolver | undefined): void {
+	replicaScopeResolver = resolver;
+}
 type PlanReference = {
 	storageId?: string | null;
 	storagePath?: string | null;
@@ -51,23 +54,16 @@ function storedScope(
 			: (sqlite.prepare('SELECT * FROM storages WHERE id=?').get(reference.storageId) as
 					| Storage
 					| undefined);
-	if (!row || !isS3Storage(row.type)) return null;
+	if (!row || (row.type !== 's3' && providers[row.type || '']?.type !== 's3')) return null;
+	if (!replicaScopeResolver)
+		throw new AppError(503, 'Managed replica scope verification is not configured.');
 	const storage = {
 		...row,
 		credentials:
 			typeof row.credentials === 'string' ? JSON.parse(row.credentials) : row.credentials,
 		settings: typeof row.settings === 'string' ? JSON.parse(row.settings) : row.settings,
 	};
-	const repositoryPath =
-		(reference.storagePath || '').replace(/^\/+|\/+$/g, '') ||
-		decryptStorageCredentials(storage).bucket;
-	// Standard plans may historically use a bucket root; it overlaps every child.
-	const root = !repositoryPath?.includes('/');
-	const identity = canonicalS3RepositoryIdentity(
-		storage,
-		root ? `${repositoryPath}/scope-placeholder` : repositoryPath
-	);
-	return { authority: identity.authority, prefix: root ? '' : identity.prefix };
+	return replicaScopeResolver(storage, reference.storagePath);
 }
 
 function references(plan: PlanScope): PlanReference[] {

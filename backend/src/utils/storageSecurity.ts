@@ -208,6 +208,21 @@ export function storageRcloneOptions(
 	return { ...options, endpoint: endpoint.origin, env_auth: 'false', no_check_bucket: 'true' };
 }
 
+/** Standard bucket-root repositories overlap every child of the same authority. */
+export function s3RepositoryScope(
+	storage: StorageConfiguration,
+	repositoryPath?: string | null
+): { authority: string; prefix: string } {
+	const scopePath =
+		(repositoryPath || '').replace(/^\/+|\/+$/g, '') || decryptStorageCredentials(storage).bucket;
+	const root = !scopePath?.includes('/');
+	const identity = canonicalS3RepositoryIdentity(
+		storage,
+		root ? `${scopePath}/scope-placeholder` : scopePath
+	);
+	return { authority: identity.authority, prefix: root ? '' : identity.prefix };
+}
+
 export function canonicalS3RepositoryIdentity(
 	storage: StorageConfiguration,
 	repositoryPath: string

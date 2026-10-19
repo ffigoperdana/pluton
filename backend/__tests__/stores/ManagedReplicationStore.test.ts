@@ -13,7 +13,11 @@ import {
 	ManagedReplicationStore,
 	type ManagedReplicationEnqueue,
 } from '../../src/stores/ManagedReplicationStore';
-import { validateReplicationSettings } from '../../src/utils/managedReplicationPolicy';
+import {
+	configureReplicaScopeResolver,
+	validateReplicationSettings,
+} from '../../src/utils/managedReplicationPolicy';
+import { s3RepositoryScope } from '../../src/utils/storageSecurity';
 
 describe('managed replication durable source, destination and execution fences', () => {
 	let context: ReturnType<typeof fixture>, store: ManagedReplicationStore;
@@ -48,6 +52,7 @@ describe('managed replication durable source, destination and execution fences',
 		...patch,
 	});
 	beforeEach(() => {
+		configureReplicaScopeResolver(s3RepositoryScope);
 		context = fixture();
 		context.sqlite.exec(
 			"UPDATE plans SET storage_path='managed/fixture'; UPDATE remote_managed_repositories SET initialized_at=1;"
@@ -55,7 +60,10 @@ describe('managed replication durable source, destination and execution fences',
 		store = new ManagedReplicationStore(context.sqlite);
 		store.reserveDestination(destination());
 	});
-	afterEach(() => context.sqlite.close());
+	afterEach(() => {
+		configureReplicaScopeResolver(undefined);
+		context.sqlite.close();
+	});
 	it('enqueues idempotently with immutable full binding; no credential payload', () => {
 		const original = store.enqueue(input());
 		expect(store.enqueue(input({ id: 'other-id', createdAt: 2 }))).toEqual(original);
@@ -108,7 +116,8 @@ describe('managed replication durable source, destination and execution fences',
 		context.sqlite.exec("INSERT INTO devices(id,name) VALUES('main','Synthetic server')");
 		const plans = new PlanStore(drizzle(context.sqlite) as any);
 		const base: any = { id: 'standard-01', title: 'Synthetic standard plan', sourceId: 'main', sourceType: 'device', method: 'backup', sourceConfig: { includes: ['/srv/example-app'] }, storageId: 'alias-01', storagePath: 'synthetic-bucket/pluton/fixture/child', settings: {} };
-		await expect(plans.create(base)).rejects.toMatchObject({ statusCode: 409 });
+		for (const storagePath of [base.storagePath, 'synthetic-bucket', ''])
+			await expect(plans.create({ ...base, storagePath })).rejects.toMatchObject({ statusCode: 409 });
 		expect(context.sqlite.prepare("SELECT 1 FROM plans WHERE id='standard-01'").get()).toBeUndefined();
 		await plans.create({ ...base, storagePath: 'synthetic-bucket/unrelated' });
 		await expect(plans.update(base.id, { settings: { replication: { enabled: true, storages: [{ replicationId: 'legacy-01', storageId: 'alias-01', storagePath: 'synthetic-bucket/pluton/fixture' }] } } } as any)).rejects.toMatchObject({ statusCode: 409 });
@@ -126,6 +135,18 @@ describe('managed replication durable source, destination and execution fences',
 		const storages = new StorageStore(drizzle(context.sqlite) as any);
 		await expect(storages.update('alias-01', { credentials: credentials('https://s3.example.internal') })).rejects.toMatchObject({ statusCode: 409 });
 		expect((context.sqlite.prepare("SELECT credentials FROM storages WHERE id='alias-01'").get() as any).credentials).toBe(original);
+	});
+	it('fails closed before writing a plan when protected scope verification is unavailable', async () => {
+		context.sqlite.exec("INSERT INTO storages(id,name,type) VALUES('alias-01','Synthetic S3','s3compatible')");
+		configureReplicaScopeResolver(undefined);
+		const plans = new PlanStore(drizzle(context.sqlite) as any);
+		await expect(plans.create({
+			id: 'standard-01', title: 'Synthetic plan', sourceId: 'app-01',
+			method: 'backup', sourceType: 'device', sourceConfig: {}, settings: {},
+			storageId: 'alias-01', storagePath: 'synthetic-bucket/pluton/fixture',
+		} as any)).rejects.toMatchObject({ statusCode: 503 });
+		expect(context.sqlite.prepare("SELECT 1 FROM plans WHERE id='standard-01'").get()).toBeUndefined();
+		expect(store.getDestination('f'.repeat(64))?.initState).toBe('uninitialized');
 	});
 	it('persists initialization intent before side effects and requires claim ownership', () => {
 		store.enqueue(input());

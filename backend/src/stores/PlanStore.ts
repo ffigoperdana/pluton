@@ -293,18 +293,44 @@ export class PlanStore {
 	}
 
 	handleBackupMirrors(plan: PlanFull, backups: PlanFull['backups']) {
-		// Managed replicas are durable history. Detaching a destination must not
-		// hide its verified snapshot or failure from an existing backup.
-		if (plan.method === 'backup' && plan.sourceType === 'device' && plan.sourceId !== 'main')
-			return backups;
-		// remove backup mirrors that are missing from the plan's replication settings
-		// (e.g. if the storage was removed after the backup was taken)
 		const replicationSettings = plan.settings.replication as PlanBackupSettings['replication'];
 		const availableMirrorStorages = replicationSettings?.storages.map(s => s.storageId) || [];
+		const retainedMirrors = new Set<string>();
+		if (plan.method === 'backup' && plan.sourceType === 'device' && plan.sourceId !== 'main') {
+			const candidates = backups.filter(backup =>
+				backup.mirrors?.some(
+					mirror => mirror.replicationId && !availableMirrorStorages.includes(mirror.storageId)
+				)
+			);
+			if (
+				candidates.length && this.db.get(
+					sql`SELECT 1 FROM sqlite_master WHERE type='table' AND name='managed_replication_jobs'`
+				)
+			) {
+				// Only durable jobs for this plan and this bounded history batch retain
+				// detached mirrors. Legacy/unbound stale metadata keeps its old filtering.
+				const jobs = this.db.all<{
+					backup_id: string;
+					replication_id: string;
+					destination_storage_id: string;
+					destination_storage_path: string;
+				}>(sql`SELECT backup_id,replication_id,destination_storage_id,destination_storage_path
+					FROM managed_replication_jobs WHERE plan_id=${plan.id}
+					AND backup_id IN (${sql.join(candidates.map(backup => sql`${backup.id}`), sql`, `)})`);
+				for (const job of jobs) {
+					retainedMirrors.add(JSON.stringify([
+						job.backup_id, job.replication_id, job.destination_storage_id, job.destination_storage_path,
+					]));
+				}
+			}
+		}
 		return backups.map(backup => {
 			if (backup.mirrors) {
-				backup.mirrors = backup.mirrors.filter(mirror =>
-					availableMirrorStorages.includes(mirror.storageId)
+				backup.mirrors = backup.mirrors.filter(
+					mirror => availableMirrorStorages.includes(mirror.storageId) ||
+						retainedMirrors.has(JSON.stringify([
+							backup.id, mirror.replicationId, mirror.storageId, mirror.storagePath,
+						]))
 				);
 			}
 			return backup;
