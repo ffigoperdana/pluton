@@ -18,6 +18,7 @@ import type { StorageRemovalReference } from '../utils/storageRemovalScope';
 import { remoteManagedRepositories } from '../db/schema/remoteManagedRepositories';
 import { retainedManagedRepositories } from '../db/schema/retainedManagedRepositories';
 import { AppError } from '../utils/AppError';
+import { assertManagedReplicationIdle, assertPlanReplicaIsolation, assertPlanUpdateReplicaIsolation } from '../utils/managedReplicationPolicy';
 import {
 	assertNoRetainedRestoreDependency,
 	beginSourceRemoval,
@@ -292,14 +293,44 @@ export class PlanStore {
 	}
 
 	handleBackupMirrors(plan: PlanFull, backups: PlanFull['backups']) {
-		// remove backup mirrors that are missing from the plan's replication settings
-		// (e.g. if the storage was removed after the backup was taken)
 		const replicationSettings = plan.settings.replication as PlanBackupSettings['replication'];
 		const availableMirrorStorages = replicationSettings?.storages.map(s => s.storageId) || [];
+		const retainedMirrors = new Set<string>();
+		if (plan.method === 'backup' && plan.sourceType === 'device' && plan.sourceId !== 'main') {
+			const candidates = backups.filter(backup =>
+				backup.mirrors?.some(
+					mirror => mirror.replicationId && !availableMirrorStorages.includes(mirror.storageId)
+				)
+			);
+			if (
+				candidates.length && this.db.get(
+					sql`SELECT 1 FROM sqlite_master WHERE type='table' AND name='managed_replication_jobs'`
+				)
+			) {
+				// Only durable jobs for this plan and this bounded history batch retain
+				// detached mirrors. Legacy/unbound stale metadata keeps its old filtering.
+				const jobs = this.db.all<{
+					backup_id: string;
+					replication_id: string;
+					destination_storage_id: string;
+					destination_storage_path: string;
+				}>(sql`SELECT backup_id,replication_id,destination_storage_id,destination_storage_path
+					FROM managed_replication_jobs WHERE plan_id=${plan.id}
+					AND backup_id IN (${sql.join(candidates.map(backup => sql`${backup.id}`), sql`, `)})`);
+				for (const job of jobs) {
+					retainedMirrors.add(JSON.stringify([
+						job.backup_id, job.replication_id, job.destination_storage_id, job.destination_storage_path,
+					]));
+				}
+			}
+		}
 		return backups.map(backup => {
 			if (backup.mirrors) {
-				backup.mirrors = backup.mirrors.filter(mirror =>
-					availableMirrorStorages.includes(mirror.storageId)
+				backup.mirrors = backup.mirrors.filter(
+					mirror => availableMirrorStorages.includes(mirror.storageId) ||
+						retainedMirrors.has(JSON.stringify([
+							backup.id, mirror.replicationId, mirror.storageId, mirror.storagePath,
+						]))
 				);
 			}
 			return backup;
@@ -410,36 +441,25 @@ export class PlanStore {
 		planData: NewPlan,
 		databaseCredential?: string | null | DatabaseCredential[]
 	): Promise<Plan | null> {
-		if (databaseCredential !== undefined) {
-			return this.db.transaction(tx => {
-				const [plan] = tx
-					.insert(plans)
-					.values({
-						...planData,
-						createdAt: sql`(unixepoch())`,
-						isActive: true,
-						stats: { size: 0, snapshots: [] },
-					})
-					.returning()
-					.all();
-				if (plan) {
-					if (Array.isArray(databaseCredential))
-						this.writeDatabaseCredentials(tx, plan.id, databaseCredential);
-					else this.writeDatabaseCredential(tx, plan.id, databaseCredential);
-				}
-				return plan || null;
-			});
-		}
-		const result = await this.db
-			.insert(plans)
-			.values({
-				...planData,
-				createdAt: sql`(unixepoch())`,
-				isActive: true,
-				stats: { size: 0, snapshots: [] },
-			})
-			.returning();
-		return result[0] || null;
+		return this.db.transaction(tx => {
+			assertPlanReplicaIsolation(this.db.$client, planData);
+			const [plan] = tx
+				.insert(plans)
+				.values({
+					...planData,
+					createdAt: sql`(unixepoch())`,
+					isActive: true,
+					stats: { size: 0, snapshots: [] },
+				})
+				.returning()
+				.all();
+			if (plan && databaseCredential !== undefined) {
+				if (Array.isArray(databaseCredential))
+					this.writeDatabaseCredentials(tx, plan.id, databaseCredential);
+				else this.writeDatabaseCredential(tx, plan.id, databaseCredential);
+			}
+			return plan || null;
+		}, { behavior: 'immediate' });
 	}
 
 	async update(
@@ -471,38 +491,27 @@ export class PlanStore {
 		if (Object.keys(updatedPlan).length === 0) {
 			return null;
 		}
-		if (databaseCredential !== undefined) {
-			return this.db.transaction(tx => {
-				const [plan] = tx
-					.update(plans)
-					.set({ ...updatedPlan, updatedAt: sql`(unixepoch())` })
-					.where(eq(plans.id, id))
-					.returning()
-					.all();
-				if (plan) {
-					if (Array.isArray(databaseCredential))
-						this.writeDatabaseCredentials(tx, id, databaseCredential);
-					else this.writeDatabaseCredential(tx, id, databaseCredential);
-				}
-				return plan || null;
-			});
-		}
-
-		const result = await this.db
-			.update(plans)
-			.set({
-				...updatedPlan,
-				updatedAt: sql`(unixepoch())`,
-			})
-			.where(eq(plans.id, id))
-			.returning();
-
-		return result[0] || null;
+		return this.db.transaction(tx => {
+			assertPlanUpdateReplicaIsolation(this.db.$client, id, updatedPlan);
+			const [plan] = tx
+				.update(plans)
+				.set({ ...updatedPlan, updatedAt: sql`(unixepoch())` })
+				.where(eq(plans.id, id))
+				.returning()
+				.all();
+			if (plan && databaseCredential !== undefined) {
+				if (Array.isArray(databaseCredential))
+					this.writeDatabaseCredentials(tx, id, databaseCredential);
+				else this.writeDatabaseCredential(tx, id, databaseCredential);
+			}
+			return plan || null;
+		}, { behavior: 'immediate' });
 	}
 
 	async delete(id: string, removeHistory = false): Promise<boolean> {
 		return this.db.transaction(tx => {
 			assertNoRetainedRestoreDependency(tx, { planId: id });
+			assertManagedReplicationIdle(tx, { planId: id });
 			// Preserve the original ciphertext and binding BEFORE removing its live record.
 			// Failure (including an archive-ID conflict) aborts the whole metadata transaction.
 			const repository = tx
@@ -552,6 +561,7 @@ export class PlanStore {
 
 	assertNoRetainedDatabaseRestores(source: RemovalSource) {
 		assertNoRetainedRestoreDependency(this.db, source);
+		assertManagedReplicationIdle(this.db, source);
 	}
 
 	beginSourceRemoval(source: RemovalSource) {

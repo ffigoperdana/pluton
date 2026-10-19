@@ -263,24 +263,21 @@ export function useBrowseSnapshot() {
 // Retry Failed Replications
 export async function retryFailedReplications({ backupId, replicationId }: { backupId: string; planId: string; replicationId: string }) {
    const header = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
-   const res = await fetch(`${API_URL}/backups/${backupId}/action/replication-retry?replicationId=${replicationId}`, {
+   const url = new URL(`${API_URL}/backups/${encodeURIComponent(backupId)}/action/replication-retry`);
+   url.searchParams.set('replicationId', replicationId);
+   return mutationResponse<{ success: boolean; result?: string }>(url, {
       method: 'POST',
       credentials: 'include',
       headers: header,
    });
-   const data = await res.json();
-   if (!data.success) {
-      throw new Error(data.error);
-   }
-   return data;
 }
 
 export function useRetryFailedReplications() {
    const queryClient = useQueryClient();
    return useMutation({
       mutationFn: retryFailedReplications,
-      onSuccess: (res, payload) => {
-         console.log('res :', payload, res);
+      retry: false,
+      onSuccess: (_res, payload) => {
          queryClient.invalidateQueries({ queryKey: ['plan', payload.planId] });
       },
    });

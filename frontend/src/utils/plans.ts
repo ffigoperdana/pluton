@@ -2,6 +2,7 @@ import { toast } from 'react-toastify';
 import { NewPlanSettings, PlanInterval } from '../@types/plans';
 import { isValidEmail } from './helpers';
 import { remoteLifecycleValidation } from './remoteLifecycle';
+import { replicationSettingsError } from './replication';
 
 export function planIntervalName(interval: PlanInterval): string {
    switch (interval.type) {
@@ -61,6 +62,15 @@ export function isPlanSettingsValid(newPlan: NewPlanSettings, step: number | fal
       return false;
    }
    if (step === 2 || step === false) {
+      const replicationError = replicationSettingsError(
+         newPlan.settings.replication,
+         { storageId: newPlan.storage.id, storagePath: newPlan.storagePath },
+         newPlan.sourceType === 'device' && newPlan.sourceId !== 'main',
+      );
+      if (replicationError) {
+         toast.error(replicationError);
+         return false;
+      }
       if (newPlan.sourceType === 'storage') {
          if (!newPlan.sourceId) {
             toast.error(`Source Storage is required`);

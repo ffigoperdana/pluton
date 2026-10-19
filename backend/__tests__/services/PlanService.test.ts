@@ -199,6 +199,7 @@ describe('PlanService', () => {
 			} as any);
 			mockDeviceStore.getById.mockResolvedValue({ id: 'main', name: 'Main Server' } as any);
 			mockStrategy.createBackup.mockResolvedValue({ success: false, result: 'Cron job failed' });
+			mockPlanStore.create.mockResolvedValue({ id: 'plan-xyz', ...planData } as any);
 
 			// Act & Assert
 			await expect(planService.createPlan(planData)).rejects.toThrow('Cron job failed');

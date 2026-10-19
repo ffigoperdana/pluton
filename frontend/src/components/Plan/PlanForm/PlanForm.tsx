@@ -251,26 +251,26 @@ const PlanForm = ({
                      <div className={classes.field}>
                         <p className={classes.fieldNotice}>
                            Remote managed backups use SFTP. Database dumps and constrained hooks can be configured under Advanced → Database & Hooks.
-                           Replication, prune, arbitrary scripts, and remote repository maintenance remain unavailable.
+                           Optional replicas are copied by the Pluton server after snapshot verification. Storage credentials stay on the server.
+                           Native database recovery continues to use the trusted primary repository. Agent prune and arbitrary scripts remain unavailable.
                         </p>
                      </div>
                   )}
-                  {!isRemoteFilesystemSource && (
-                     <PlanReplicationSettings
-                        replication={planSettings.settings.replication}
-                        primaryStorageId={planSettings.storage.id}
-                        primaryStoragePath={planSettings.storagePath}
-                        deviceId={planSettings.sourceId || 'main'}
-                        isEditing={type === 'edit' ? true : false}
-                        planID={planId}
-                        onUpdate={(replication) =>
-                           onPlanSettingsChange({
-                              ...planSettings,
-                              settings: { ...planSettings.settings, replication: replication },
-                           })
-                        }
-                     />
-                  )}
+                  <PlanReplicationSettings
+                     replication={planSettings.settings.replication}
+                     primaryStorageId={planSettings.storage.id}
+                     primaryStoragePath={planSettings.storagePath}
+                     deviceId={isRemoteFilesystemSource ? 'main' : planSettings.sourceId || 'main'}
+                     managedAgent={isRemoteFilesystemSource}
+                     isEditing={type === 'edit'}
+                     planID={planId}
+                     onUpdate={(replication) =>
+                        onPlanSettingsChange({
+                           ...planSettings,
+                           settings: { ...planSettings.settings, replication },
+                        })
+                     }
+                  />
                </div>
             )}
             {step === 3 && (

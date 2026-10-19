@@ -109,6 +109,11 @@ export interface BackupMirror {
 	ended?: number;
 	error?: string;
 	size?: number;
+	sourceSnapshotId?: string;
+	snapshotId?: string | null;
+	attempts?: number;
+	lastErrorCode?: string | null;
+	verifiedAt?: number | null;
 }
 
 export type BackupRunConfig = {

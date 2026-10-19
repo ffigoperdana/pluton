@@ -113,8 +113,7 @@ export function useAddStorage() {
    const queryClient = useQueryClient();
    return useMutation({
       mutationFn: addStorage,
-      onSuccess: (res) => {
-         console.log('# Storage Added! :', res);
+      onSuccess: () => {
          queryClient.invalidateQueries({ queryKey: ['storages'] });
       },
    });
@@ -140,10 +139,10 @@ export function useUpdateStorage() {
    const queryClient = useQueryClient();
    return useMutation({
       mutationFn: updateStorage,
-      onSuccess: (res) => {
+      onSuccess: () => {
          // TODO: Should Display a Nofitication Bubble.
-         console.log('# Storage Updated! :', res);
          queryClient.invalidateQueries({ queryKey: ['storages'] });
+         queryClient.invalidateQueries({ queryKey: ['storage'] });
       },
    });
 }

@@ -187,6 +187,23 @@ describe('RemoteBackupService', () => {
 		expect(persistedPayload).not.toContain(repositoryPassword);
 		expect(persistedPayload).not.toContain(encryptionSecret);
 	});
+	it('requires the server replication lifecycle and never sends mirror credentials to the Agent', async () => {
+		const replicated = { ...plan, settings: { ...plan.settings, replication: { enabled: true, concurrent: false, storages: [{ replicationId: 'replica-01', storageId: 'mirror-01', storagePath: 'bucket-01/owned', storageType: 's3compatible', storageName: 'Mirror', addedAt: 1 }] } } };
+		await expect(service.validatePlanCreation(replicated)).rejects.toMatchObject({ statusCode: 503 });
+		const replication = { validatePlan: jest.fn(async () => undefined), enqueueBackup: jest.fn(async () => undefined) };
+		service.setReplicationService(replication);
+		planStore.getById.mockResolvedValue(replicated);
+		await expect(service.validatePlanCreation(replicated)).resolves.toBeUndefined();
+		const command = backupCommand();
+		const payload = await service.materializeCommand(capableAgent.agentId, command);
+		expect(replication.validatePlan).toHaveBeenCalledWith(replicated);
+		expect(JSON.stringify(payload)).not.toContain('mirror-01');
+		expect(payload).not.toHaveProperty('replication');
+		replication.validatePlan.mockRejectedValue(new Error('synthetic mirror credentials unavailable'));
+		await expect(service.materializeCommand(capableAgent.agentId, command)).resolves.toHaveProperty('repository');
+		await expect(service.queuePlanBackup(replicated.id)).resolves.toContain('queued');
+		await expect(service.validatePlanCreation(replicated)).rejects.toThrow('mirror credentials unavailable');
+	});
 
 	it('does not cancel a completed remote backup record', async () => {
 		backupStore.getById.mockResolvedValue({

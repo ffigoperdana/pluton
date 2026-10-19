@@ -41,9 +41,8 @@ const PlanSourceSettings = ({ plan, onUpdate, error, isEditing }: PlanSourceSett
             ? {
                  settings: {
                     ...plan.settings,
-                    // This MVP never executes scripts or replication on an agent.
+                    // Replication runs on the server; arbitrary scripts never run on an agent.
                     scripts: undefined,
-                    replication: plan.settings.replication ? { ...plan.settings.replication, enabled: false, storages: [] } : undefined,
                  },
               }
             : {}),
