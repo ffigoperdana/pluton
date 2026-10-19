@@ -72,6 +72,7 @@ describe('PlanStore', () => {
 		};
 
 		mockDb = {
+			$client: { prepare: jest.fn(() => ({ get: () => undefined })) },
 			get: jest.fn(),
 			query: {
 				plans: {
@@ -353,7 +354,7 @@ describe('PlanStore', () => {
 					},
 				},
 			};
-			mockDb.insert().returning.mockResolvedValue([newPlanData]);
+			mockDb.insert().returning.mockReturnValue({ all: () => [newPlanData] });
 
 			// Act
 			await planStore.create(newPlanData);
@@ -373,7 +374,7 @@ describe('PlanStore', () => {
 		it('should update only allowed fields', async () => {
 			// Arrange
 			const updates = { title: 'New Title', isActive: false, id: 'should-not-be-updated' };
-			mockDb.update().returning.mockResolvedValue([{}]);
+			mockDb.update().returning.mockReturnValue({ all: () => [{}] });
 
 			// Act
 			await planStore.update('plan-1', updates);
@@ -390,7 +391,7 @@ describe('PlanStore', () => {
 			const updates = {
 				settings: { scripts: { onBackupStart: [{ id: 's1', scriptPath: '/scripts/backup.sh' }] } },
 			};
-			mockDb.update().returning.mockResolvedValue([{}]);
+			mockDb.update().returning.mockReturnValue({ all: () => [{}] });
 
 			// Act
 			await planStore.update('plan-1', updates as any);

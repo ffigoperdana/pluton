@@ -23,6 +23,7 @@ import { PlanStats } from '../types/plans';
 import { AppError, NotFoundError } from '../utils/AppError';
 import { RemoteBackupService } from './RemoteBackupService';
 import { RemoteRepositoryRecoveryService } from './RemoteRepositoryRecoveryService';
+import type { ManagedReplicationService } from './ManagedReplicationService';
 
 export class BackupService {
 	constructor(
@@ -33,7 +34,8 @@ export class BackupService {
 		protected restoreStore: RestoreStore,
 		protected storageStore: StorageStore,
 		private readonly remoteBackupService?: RemoteBackupService,
-		private readonly remoteRecovery?: RemoteRepositoryRecoveryService
+		private readonly remoteRecovery?: RemoteRepositoryRecoveryService,
+		private readonly managedReplications?: ManagedReplicationService
 	) {}
 
 	getSnapshotStrategy(deviceId: string, method?: string): SnapshotStrategy {
@@ -312,6 +314,12 @@ export class BackupService {
 		const backup = await this.backupStore.getById(backupId);
 		if (!backup) {
 			throw new Error('Backup not found');
+		}
+		if (RemoteBackupService.isRemoteFilesystemPlan(backup)) {
+			if (!this.managedReplications)
+				throw new AppError(503, 'Managed replication executor is unavailable.');
+			await this.managedReplications.retryFailed(backupId, replicationId);
+			return 'Managed replica retry queued; primary backup result is unchanged.';
 		}
 
 		const currentMirrors = (backup.mirrors || []) as BackupMirror[];

@@ -23,6 +23,32 @@ async function client(name: string) {
 const clients = Object.fromEntries(await Promise.all(['plans', 'backups', 'restores', 'storage', 'databaseRestores', 'legacyRepositories', 'notifications', 'devices', 'recoveryTests'].map(async name => [name, await client(name)])));
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
 
+test('replication retry preserves exact identities, session and rejected/unknown outcomes without automatic retry', async () => {
+   const previous = globalThis.fetch;
+   let response = json({ success: true, result: 'Replication retry queued' }, 202);
+   let calls = 0;
+   globalThis.fetch = async (input, init) => {
+      calls++;
+      const url = new URL(String(input));
+      assert.equal(url.pathname, '/api/backups/backup%2F01/action/replication-retry');
+      assert.equal(url.searchParams.get('replicationId'), 'replica&01');
+      assert.equal(init?.method, 'POST');
+      assert.equal(init?.credentials, 'include');
+      assert.equal(init?.redirect, 'error');
+      return response;
+   };
+   try {
+      const payload = { backupId: 'backup/01', planId: 'plan-01', replicationId: 'replica&01' };
+      assert.equal((await clients.backups.retryFailedReplications(payload)).success, true);
+      response = json({ success: false, code: 'REPLICATION_RESULT_UNCERTAIN', error: 'Review the replica state.' }, 409);
+      await assert.rejects(clients.backups.retryFailedReplications(payload), (error: any) => error.status === 409 && error.code === 'REPLICATION_RESULT_UNCERTAIN');
+      response = new Response('<html>gateway</html>', { status: 520, headers: { 'Content-Type': 'text/html' } });
+      await assert.rejects(clients.backups.retryFailedReplications(payload), (error: any) => error.outcome === 'unknown' && !error.message.includes('gateway'));
+      assert.equal(calls, 3);
+      assert.equal(clients.backups.useRetryFailedReplications().retry, false);
+   } finally { globalThis.fetch = previous; }
+});
+
 test('backup and restore progress GETs encode identities and classify HTML429 without retry', async () => {
    const original = globalThis.fetch;
    let calls = 0;

@@ -266,8 +266,8 @@ const Backups = ({
                                  <Icon type="bolt" size={14} />
                               </span>
                            )}
-                           {replicationSettings?.enabled && snapshot.mirrors && snapshot.mirrors.length > 0 && (
-                              <MirrorStatusBadge mirrors={snapshot.mirrors} planId={planId} backupId={id} replicationSettings={replicationSettings} />
+                           {(snapshot.mirrors?.length || (replicationSettings?.enabled && replicationSettings.storages.length > 0)) && (
+                              <MirrorStatusBadge mirrors={snapshot.mirrors || []} planId={planId} backupId={id} replicationSettings={replicationSettings} managedAgent={isRemoteManaged} />
                            )}
                            {!isRemoteManaged && download && (
                               <DownloadLabel download={download} downloadBackup={() => getDownloadMutation.mutate(id)} />

@@ -26,6 +26,7 @@ import {
 } from '../utils/remoteLifecycle';
 import type { DatabaseArtifact, LifecycleWarning } from '../types/remoteLifecycle';
 import { serverLogger } from '../utils/logger';
+import type { ManagedReplicationCompletionHook } from './ManagedReplicationService';
 import {
 	RemoteCommandPreparationError,
 	type RemoteCommandPreparationFailure,
@@ -168,6 +169,7 @@ function isSafeSnapshotId(value: unknown): value is string {
 export class RemoteBackupService {
 	private readonly cronManager: CronManager<any>;
 	private readonly eventService: BackupEventService;
+	private replicationService?: ManagedReplicationCompletionHook;
 
 	constructor(
 		private readonly repositories: RemoteManagedRepositoryStore,
@@ -185,6 +187,10 @@ export class RemoteBackupService {
 
 	static isRemoteFilesystemPlan(plan: Pick<Plan | NewPlan, 'sourceId' | 'sourceType'>): boolean {
 		return plan.sourceType === 'device' && plan.sourceId !== 'main';
+	}
+
+	setReplicationService(service: ManagedReplicationCompletionHook): void {
+		this.replicationService = service;
 	}
 
 	/** Internal server recovery shares the same narrow SFTP allowlist/decryption. */
@@ -265,7 +271,7 @@ export class RemoteBackupService {
 	async queuePlanBackup(planId: string): Promise<string> {
 		const plan = await this.planStore.getById(planId);
 		if (!plan) throw new NotFoundError('Plan not found.');
-		await this.assertSupportedPlan(plan);
+		await this.assertSupportedPlan(plan, undefined, false);
 		if (!plan.isActive) return 'Remote backup plan is paused.';
 		if (await this.planStore.hasActiveBackups(planId)) {
 			throw new AppError(409, 'A backup is already in progress for this plan.');
@@ -384,7 +390,7 @@ export class RemoteBackupService {
 				setStage('repository-metadata');
 				throw new AppError(409, 'Managed repository metadata no longer matches the plan.');
 			}
-			await this.assertSupportedPlan(plan, setStage);
+			await this.assertSupportedPlan(plan, setStage, false);
 			setStage('repository-path');
 			validateRepositoryPath(repository.storagePath);
 			const storage = await this.materializeSftpStorage(repository.storageId, setStage);
@@ -606,6 +612,13 @@ export class RemoteBackupService {
 				lastBackupTime: new Date(),
 			});
 		}
+		if (plan?.settings.replication?.enabled) {
+			// The primary result stays independent from replica admission/execution.
+			// Startup reconciliation also scans completed rows if this process exits here.
+			void this.replicationService?.enqueueBackup(reference.backupId).catch(() => {
+				serverLogger?.warn({ event: 'managed_replication_admission_interrupted', code: 'admission-interrupted' }, 'Replica admission needs reconciliation.');
+			});
+		}
 	}
 
 	async reconcileSchedules(): Promise<void> {
@@ -658,7 +671,8 @@ export class RemoteBackupService {
 
 	private async assertSupportedPlan(
 		plan: Plan | NewPlan,
-		setPreparationStage?: SetPreparationStage
+		setPreparationStage?: SetPreparationStage,
+		validateReplicaConfiguration = true
 	): Promise<void> {
 		setPreparationStage?.('plan-shape');
 		if (!RemoteBackupService.isRemoteFilesystemPlan(plan) || plan.method !== 'backup') {
@@ -670,11 +684,20 @@ export class RemoteBackupService {
 				'Remote filesystem backups require their managed repository password.'
 			);
 		}
-		if (plan.settings.replication?.enabled || hasEnabledScripts(plan)) {
+		if (hasEnabledScripts(plan)) {
 			throw new AppError(
 				400,
-				'Replication and scripts are not available for remote filesystem backups.'
+				'Scripts are not available for remote filesystem backups.'
 			);
+		}
+		if (plan.settings.replication?.enabled) {
+			if (!this.replicationService) throw new AppError(503, 'Managed replication executor is not configured.');
+			// Existing primary backups remain available when a mirror loses access.
+			// Creation/settings changes still validate destination credentials and scope.
+			if (validateReplicaConfiguration) await this.replicationService.validatePlan(plan);
+		}
+		if ((plan.settings.replication?.storages?.length || 0) > 2) {
+			throw new AppError(400, 'Managed Agent plans support at most two replica destinations.');
 		}
 		setPreparationStage?.('source-validation');
 		this.getSingleSource(plan.sourceConfig);

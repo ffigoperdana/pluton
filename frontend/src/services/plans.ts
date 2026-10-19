@@ -5,6 +5,7 @@ import { API_URL } from '../utils/constants';
 import { NewPlanSettings, Plan, PlanAddRunSettings, PlanNotification } from '../@types/plans';
 import { historyApiQuery } from '../utils/backupHistory';
 import type { HistoryPage, HistoryState } from '../utils/backupHistory';
+import { hasPendingMirrors } from '../utils/replication';
 
 type BackupRunConfig = {
    skipDryRun?: boolean;
@@ -83,6 +84,10 @@ export function useBackupHistory(id: string, state: HistoryState, enabled = true
       enabled,
       retry: false,
       placeholderData: (previous) => previous,
+      refetchInterval(query) {
+         if (query.state.error) return false;
+         return hasPendingMirrors(query.state.data?.items || []) ? 5000 : false;
+      },
    });
 }
 

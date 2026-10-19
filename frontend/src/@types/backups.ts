@@ -50,6 +50,11 @@ export interface BackupMirror {
    ended?: number;
    error?: string;
    size?: number;
+   sourceSnapshotId?: string;
+   snapshotId?: string;
+   attempts?: number;
+   lastErrorCode?: string;
+   verifiedAt?: number;
 }
 
 export type Backup = {

@@ -88,12 +88,17 @@ import { InternalRecoveryTargets } from './utils/internalRecoveryTargets';
 import { createDatabaseRestoreRouter, databaseRestoreInputError } from './routes/databaseRestores';
 import { parseWebOrigins } from './utils/webOrigins';
 import { webAccess, originAwareSession, sameOriginCors } from './middlewares/webAccess';
+import { ManagedReplicationStore } from './stores/ManagedReplicationStore';
+import { ManagedReplicationService } from './services/ManagedReplicationService';
+import { configureProtectedStorageDatabase } from './utils/storageSecurity';
 
 const MemoryStore = createMemoryStore(session);
 
 export async function createApp(): Promise<{ app: Express; shutdown: () => Promise<void> }> {
 	// Initialize Logger
 	initializeLogger();
+	// Explicit startup ownership, including compiled ESM: no lazy CommonJS DB loading.
+	configureProtectedStorageDatabase(sqlite);
 
 	// Stores
 	const planStore = new PlanStore(db);
@@ -122,6 +127,17 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		backupStore,
 		storageStore
 	);
+	const managedReplicationStore = new ManagedReplicationStore(sqlite);
+	const managedReplicationService = new ManagedReplicationService(
+		managedReplicationStore,
+		backupStore,
+		planStore,
+		remoteManagedRepositoryStore,
+		agentStore,
+		storageStore,
+		remoteBackupService
+	);
+	remoteBackupService.setReplicationService(managedReplicationService);
 	const remoteRecoveryService = new RemoteRepositoryRecoveryService(
 		remoteManagedRepositoryStore,
 		backupStore,
@@ -167,7 +183,8 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		deviceStore,
 		restoreStore,
 		remoteBackupService,
-		recoveryTestStore
+		recoveryTestStore,
+		managedReplicationStore
 	);
 	const backupService = new BackupService(
 		localBackupAgent,
@@ -177,7 +194,8 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		restoreStore,
 		storageStore,
 		remoteBackupService,
-		remoteRecoveryService
+		remoteRecoveryService,
+		managedReplicationService
 	);
 	const restoreService = new RestoreService(
 		localRestoreAgent,
@@ -358,6 +376,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	await legacyRepositoryService.recoverInterruptedRestores();
 	await recoveryTestService.recoverInterrupted();
 	await databaseRestoreService.recoverInterrupted();
+	await managedReplicationService.recoverInterrupted();
 
 	// Reconcile CronManager schedules with the database (fixes drift on restart)
 	try {
@@ -386,8 +405,22 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		void databaseRestoreService.tick().catch(() => {
 			// Durable executor/cleanup intent remains in SQLite. No raw provider error logging.
 		});
+		void managedReplicationService.tick().catch(() => {});
 	}, 5000);
 	recoveryTick.unref();
+	// Reconcile missed dispatch from durable primary completion in bounded batches.
+	let replicationReconcileRunning = false;
+	const replicationReconcile = setInterval(() => {
+		if (replicationReconcileRunning) return;
+		replicationReconcileRunning = true;
+		void managedReplicationService
+			.rescanCompleted()
+			.catch(() => {})
+			.finally(() => {
+				replicationReconcileRunning = false;
+			});
+	}, 30000);
+	replicationReconcile.unref();
 	jobQueue.add('RecoveryTest', undefined, 1);
 
 	jobProcessor.start();
@@ -398,6 +431,8 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		shutdown: async () => {
 			await notificationManager.shutdown();
 			clearInterval(recoveryTick);
+			clearInterval(replicationReconcile);
+			await managedReplicationService.shutdown();
 			await recoveryTestService.shutdown();
 			await databaseRestoreService.shutdown();
 		},
