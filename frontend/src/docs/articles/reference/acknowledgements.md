@@ -1,19 +1,25 @@
 # About dan Open Source Acknowledgements
 
+Pluton pada repository ini adalah fork independen dari proyek open-source `plutonhq/pluton`. Nama aplikasi dan attribution upstream tetap dipertahankan. Fork ini tidak mengklaim layanan resmi maupun endorsement upstream.
+
 ## Fork independen
 
-Produk tetap bernama Pluton. Public fork ini berasal dari open-source `plutonhq/pluton` dan dipelihara independen. Tidak mengklaim official upstream service, endorsement, atau ownership terhadap karya upstream. Original authorship/Git history dan copyright/license notices tidak dihapus.
+Panduan operasional ini ditulis untuk perilaku public source yang tersedia. Riwayat authorship, copyright, dan license notices existing tetap menjadi bagian distribusi; pengembangan fork tidak mengalihkan kepemilikan karya upstream.
 
 ## Lisensi
 
-Repository LICENSE memuat Apache License, Version 2.0. Ketentuan copyright, attribution, redistribution, dan NOTICE yang berlaku harus dipertahankan pada distribusi. Audit task ini tidak menemukan file NOTICE terpisah tracked; absence tersebut bukan izin menghapus notices dependency atau legal headers existing.
+File `LICENSE` repository memuat Apache License, Version 2.0. Pertahankan attribution, copyright, license, dan NOTICE yang berlaku ketika mendistribusikan source atau artefak. Panduan ini tidak menggantikan teks lisensi yang disertakan bersama source.
 
-Lihat [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) untuk teks lisensi. Package names/internal imports yang memuat upstream namespace tetap dipertahankan demi compatibility, bukan paid licensing dependency.
+Nama package/import yang memakai namespace upstream dipertahankan untuk kompatibilitas, bukan sebagai klaim integrasi komersial.
 
 ## Komponen open-source
 
-Restic, Rclone, Node.js, React, SQLite/better-sqlite3, Express, Drizzle, marked, Nodemailer, dan dependencies lain mempunyai lisensi masing-masing. Lockfile/package license records tetap dipakai; hardening docs ini tidak menambah dependency baru.
+Pluton memakai komponen seperti Restic, Rclone, Node.js, React, SQLite/better-sqlite3, Express, Drizzle, marked, dan Nodemailer. Dokumentasi memakai Fumadocs serta dependency open-source dengan license notices yang dibundel pada hasil build.
+
+Tidak ada dependency baru yang dipasang oleh penulisan ulang panduan ini. Runtime docs tetap terpisah dari runtime React aplikasi.
 
 ## Batas proprietary
 
-Tidak memakai/copy/reverse-engineer source atau binary proprietary PRO/Business. Extension fork dibuat dari public code dan interfaces Restic/Rclone. Upstream historical changelog/package metadata bisa dipertahankan sebagai attribution, bukan active commercial navigation.
+Fork dan panduan tidak memakai, menyalin, mereproduksi, atau bergantung pada source/binary proprietary Pluton PRO/Business. Ekstensi dikembangkan dari public code serta interface publik Restic/Rclone. Referensi upstream historis bukan tombol aktivasi produk berbayar.
+
+Lihat [cakupan fitur](/docs/reference), [identitas build](/docs/reference/version), dan [cara memelihara dokumentasi](/docs/reference/contributing).

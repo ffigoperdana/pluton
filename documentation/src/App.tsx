@@ -156,20 +156,43 @@ export default function Docs() {
         >
           <DocsTitle>Pluton Documentation</DocsTitle>
           <DocsDescription>
-            Panduan operasional Bahasa Indonesia untuk platform backup
-            self-hosted Anda.
+            Mulai dari backup pertama, periksa hasilnya, lalu pelajari pemulihan
+            dan operasi yang aman.
           </DocsDescription>
           <DocsBody>
             <p>
-              Backup, Remote Agent, Database Lifecycle, staged Restore, Recovery
-              Testing, serta Webhook &amp; Email—dalam deployment Pluton yang
-              sama. Cari topik dengan Ctrl+K / Cmd+K.
+              Pluton membantu Anda menjadwalkan backup, menemukan snapshot, dan
+              memeriksa hasil pemulihan. Siapkan Storage lebih dahulu, lalu
+              source dan Backup Plan. Gunakan Ctrl+K / Cmd+K untuk mencari tugas
+              atau pesan error.
             </p>
-            <Callout title="Mulai dengan aman" type="info">
-              Gunakan contoh sintetis dan staging. Backup Complete bukan bukti
-              Recovery Passed; panduan keamanan dan batas dukungan tetap
-              berlaku.
+            <h2>Mulai di sini</h2>
+            <ol>
+              <li><a href="/docs/getting-started">Kenali Pluton dan pilih jenis backup</a>.</li>
+              <li><a href="/docs/storage">Tambahkan Primary Storage</a>, lalu <a href="/docs/remote-agent">siapkan source atau Agent</a>.</li>
+              <li><a href="/docs/getting-started/quick-start">Buat Backup Plan dan jalankan backup pertama</a>.</li>
+              <li><a href="/docs/restore/browse">Browse snapshot</a>, kemudian <a href="/docs/restore/staging">verifikasi hasil Restore di staging</a>.</li>
+            </ol>
+            <Callout title="Verifikasi sebelum mengandalkan backup" type="info">
+              Complete pada backup primer belum membuktikan replica atau
+              database recovery berhasil. Mulai dengan data latihan dan periksa
+              hasil setiap tahap sebelum cutover.
             </Callout>
+            <Cards>
+              <Card title="Buat backup pertama" href="/docs/getting-started/quick-start">
+                Prasyarat, langkah pengaturan, dan hasil yang perlu diperiksa.
+              </Card>
+              <Card title="Pulihkan file" href="/docs/restore">
+                Temukan backup, pilih file, lalu periksa hasil di staging.
+              </Card>
+              <Card title="Uji pemulihan backup" href="/docs/recovery-testing">
+                Periksa file dan SQL pada lingkungan pengujian sementara.
+              </Card>
+              <Card title="Kelola database hasil Restore" href="/docs/database-restores">
+                Buat Persistent Restore, Inspect, Stop, Resume, dan Delete.
+              </Card>
+            </Cards>
+            <h2>Panduan berdasarkan tugas</h2>
             <Cards>
               {docCategories.map((category) => (
                 <Card

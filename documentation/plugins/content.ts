@@ -24,7 +24,7 @@ export function readArticles() {
     ),
   );
   const errors = validateDocLinks(index);
-  if (errors.length || index.length !== 77)
+  if (errors.length || index.length !== docArticles.length)
     throw new Error(
       "Documentation inventory/link validation failed: " + errors.join(", "),
     );

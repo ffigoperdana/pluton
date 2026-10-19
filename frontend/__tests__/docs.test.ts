@@ -12,7 +12,7 @@ const index = createDocsIndex(
 );
 test('all required categories and representative routes have original Bahasa Indonesia articles', () => {
    assert.equal(docCategories.length, 15);
-   assert.equal(index.length, 77);
+   assert.equal(index.length, 96);
    assert.equal(new Set(index.map((a) => a.slug)).size, index.length);
    // Source-built images need no Git metadata; a checkout must not silently omit
    // a public article because a credential-file ignore pattern matches its name.
@@ -35,6 +35,16 @@ test('all required categories and representative routes have original Bahasa Ind
       'notifications',
       'troubleshooting',
       'changelog',
+      'storage/local',
+      'storage/hcp',
+      'backup-plans/managed-agent',
+      'backup-plans/delete',
+      'database-restores',
+      'database-restores/stop-resume',
+      'replication/managed-agent',
+      'replication/retention-restore',
+      'migration/shadow',
+      'migration/cutover',
    ])
       assert(resolveDoc('/docs/' + route));
    for (const article of index) {
@@ -42,6 +52,36 @@ test('all required categories and representative routes have original Bahasa Ind
       assert.equal(article.headings[0].text, article.title);
       assert(article.markdown.length > 600, article.slug);
    }
+});
+
+test('redesigned journeys preserve every existing article URL and expose retained database management', () => {
+   const originalRoutes = [
+      'getting-started', 'getting-started/requirements', 'getting-started/quick-start', 'getting-started/dashboard', 'getting-started/terms',
+      'deployment', 'deployment/docker', 'deployment/configuration', 'deployment/persistence', 'deployment/updates', 'deployment/rollback', 'deployment/vm-logs',
+      'architecture', 'architecture/workflow', 'architecture/states', 'storage', 'storage/sftp', 'storage/s3', 'storage/security',
+      'backup-plans', 'backup-plans/schedule-retention', 'backup-plans/advanced', 'backup-plans/history', 'backup-plans/incremental',
+      'remote-agent', 'remote-agent/enrollment', 'remote-agent/permissions', 'remote-agent/updates', 'remote-agent/troubleshooting',
+      'database-backup', 'database-backup/engines', 'database-backup/connections', 'database-backup/dump-options', 'database-backup/hooks', 'database-backup/artifacts',
+      'restore', 'restore/browse', 'restore/selection', 'restore/staging',
+      'recovery-testing', 'recovery-testing/validation', 'recovery-testing/import', 'recovery-testing/results',
+      'legacy-repositories', 'legacy-repositories/registration', 'legacy-repositories/restore', 'legacy-repositories/migration',
+      'notifications', 'notifications/webhook', 'notifications/smtp', 'notifications/subscriptions', 'notifications/history',
+      'security', 'security/https', 'security/credentials', 'security/boundaries',
+      'operations', 'operations/monitoring', 'operations/disaster-recovery', 'operations/cutover',
+      'troubleshooting', 'troubleshooting/source', 'troubleshooting/database', 'troubleshooting/incremental', 'troubleshooting/sftp', 'troubleshooting/recovery', 'troubleshooting/notifications',
+      'reference', 'reference/configuration', 'reference/api', 'reference/status-codes', 'reference/version', 'reference/limitations', 'reference/faq', 'reference/acknowledgements', 'reference/contributing', 'changelog',
+   ];
+   assert.equal(originalRoutes.length, 77);
+   for (const slug of originalRoutes) assert(resolveDoc('/docs/' + slug), slug);
+   for (const category of ['database-restores', 'replication', 'migration'])
+      assert(docCategories.some((item) => item.id === category), category);
+   assert.equal(docCategories[0].articles[0].slug, 'getting-started');
+   assert(docCategories[0].articles.some((article) => article.slug === 'getting-started/quick-start'));
+   for (const [query, slug] of [
+      ['Persistent Restore', 'database-restores'],
+      ['HCP', 'storage/hcp'],
+      ['SHADOW', 'migration/shadow'],
+   ]) assert(searchDocs(index, query).some((item) => item.article.slug === slug), query);
 });
 test('all sidebar paths, internal links and heading anchors resolve', () => {
    assert.deepEqual(validateDocLinks(index), []);

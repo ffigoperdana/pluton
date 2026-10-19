@@ -1,29 +1,39 @@
-# Docker dan source-built image
+# Image Docker dan artefak rilis
+
+Gunakan image yang dapat ditelusuri ke source yang direview. Nama tag seperti `main` dapat berubah; digest menunjuk artefak tertentu dan diperlukan oleh alat deployment host.
 
 ## Build dari source
+
+`Dockerfile.source` memakai lockfile repository dan membangun aplikasi beserta dokumentasi. `Dockerfile` adalah jalur berbeda yang menerima executable hasil pipeline. Jangan mencampur artefak dari kedua jalur tanpa memverifikasi inputnya.
+
+Contoh berikut hanya untuk build yang disetujui di lingkungan disposable, bukan instruksi deployment produksi:
 
 ```sh
 docker build -f Dockerfile.source -t pluton:reviewed .
 ```
 
-Build memakai dependency lockfile dan menyalin frontend/docs ke backend public assets. Runtime menjalankan user `pluton`, bukan root, dengan Restic/Rclone pinned. Docker Compose menambahkan read-only root filesystem, tmpfs, dropped capabilities, dan persistent `/data`.
+Image runtime berjalan sebagai pengguna `pluton`. Compose standar menambahkan filesystem root read-only, tmpfs, penghapusan capabilities, dan volume `/data`.
+
+## Sebelum menggunakan image
+
+1. Catat source commit dan hasil CI yang berlaku untuk commit itu.
+2. Ambil digest dari keluaran build/publikasi registry, lalu verifikasi bahwa manifest dan provenance menunjuk source yang sama.
+3. Periksa platform image yang sesuai host. Label revision membantu penelusuran, tetapi label sendiri tidak membuktikan provenance.
+4. Simpan digest image lama yang sehat dan bundle host yang kompatibel untuk rollback.
+5. Jika MySQL dipakai, verifikasi app, worker, dan image database sebagai artefak terpisah. Tag yang sama tidak menjamin ketiganya cocok.
+
+Contoh identitas yang harus dicatat adalah `ghcr.io/example-owner/pluton@sha256:<verified-digest>`. Placeholder bukan digest yang dapat dijalankan dan harus diganti melalui prosedur privat operator.
 
 ## Deployment release
 
-Host membutuhkan Docker/Compose v2 dan Python 3.8+ stdlib, tanpa mengganti Node global. `deploy/install.sh` hanya menerima SHA-256 digest immutable; semua tag ditolak. Untuk instalasi existing, upgrade bundle host satu kali dari checkout yang direview memakai `deploy/upgrade-host.sh` dan approval hash. Pull image tidak memperbarui script host. Prosedur lengkap ada di file repository `docs/DEPLOYMENT_OVERLAY_AND_HEALTHCHECK_FIX.md`.
+Alat `deploy/install.sh` dan `deploy/deploy.sh` hanya menerima digest SHA-256 yang valid. Instalasi yang sudah ada juga memerlukan bundle host terbaru yang telah direview; menarik image tidak memperbarui script host.
 
-```sh
-cd /opt/pluton
-sh ./install.sh 'sha256:<verified-image-digest>'
-sh ./status.sh
-```
+Overlay yang disetujui harus terdaftar dalam kontrak deployment. Jalur tersebut mempertahankan mount dan hanya membuat ulang layanan aplikasi yang dimaksud. Jangan menambahkan perintah Compose ad-hoc yang mengabaikan overlay atau memulai ulang layanan lain.
 
-Placeholder sengaja tidak executable tanpa penggantian. Set `PLUTON_IMAGE` ke registry milik fork serta konfigurasi privat sebelum deployment. Script tidak membuat atau merotasi key. Direktori yang benar-benar baru hanya menerima salinan bundle/template lalu berhenti untuk konfigurasi offline; jangan memakai jalur new-install untuk data existing.
+## Verifikasi hasil
 
-`compose.lab.yml` yang disetujui otomatis mengikuti base; overlay lain harus tercantum dalam `compose.overlays`. Deploy dan rollback memakai stack yang sama, hanya recreate `pluton`, dan memverifikasi semua mount/volume serta GET readiness. Tidak perlu Compose up tambahan. Dual-origin eksplisit tidak memerlukan `TRUST_PROXY=1`; localhost tidak perlu ditambahkan sebagai origin browser untuk healthcheck.
+Operator membandingkan digest container berjalan, pengguna runtime, volume/mount, dan respons GET health dengan catatan persetujuan. UI yang tampil normal belum membuktikan worker database atau Agent sudah memakai versi yang benar.
 
-## Jangan lakukan
+Jika digest, platform, kontrak mount, atau identitas tidak cocok, hentikan perubahan dan tinjau penyebabnya. Jangan mengganti digest dengan tag mutable untuk melanjutkan.
 
-Jangan mount Docker socket, repository production, atau `/` host untuk smoke test. Jangan menghapus persistent volume untuk mengatasi startup failure. Pembaruan yang melibatkan migration fase sebelumnya membutuhkan backup DB dan keys konsisten; automatic health rollback bukan jaminan down-migration.
-
-Setelah startup, lakukan [smoke validation](/docs/deployment/updates#validasi-setelah-startup).
+Lihat [konfigurasi deployment](/docs/deployment/configuration), [pembaruan](/docs/deployment/updates), dan [rollback](/docs/deployment/rollback).

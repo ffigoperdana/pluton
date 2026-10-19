@@ -1,21 +1,27 @@
-# Changelog fork yang terverifikasi
+# Perubahan fitur pada source fork
 
-## Sumber history
+Halaman ini merangkum fitur yang ada pada source saat panduan ditulis. Halaman ini bukan feed rilis live atau bukti bahwa source tersebut sudah terpasang di suatu server.
 
-Halaman ini adalah ringkasan current public source, bukan daftar GitHub releases live yang di-fetch upstream. Package version checked-in `0.18.0-alpha.1` tidak sendirinya membuktikan tag telah published atau code production-ready. Footer memakai installed build metadata.
+## Managed Agent replication
 
-## Phase 7
+Merge PR #34 pada `e2575cc` memasukkan server-side replication dari primer Managed Agent SFTP ke nol, satu, atau dua tujuan S3/S3-compatible. Ada state durable untuk job/tujuan, status replica tersendiri, dan setup HCP existing-bucket.
 
-Reviewed baseline merge `bd9373d` memasukkan PR #25: Webhook/SMTP channels, durable outbox, per-plan subscriptions, safe payload/HMAC/TLS/network policy, retries, Delivery History, serta private secret handling. Live receiver/relay acceptance tetap deferred sampai infrastructure siap.
+Direct managed mirror Restore, native database recovery dari mirror, dan physical cleanup/prune managed replica belum tersedia. Interoperabilitas HCP nyata tetap perlu pengujian terpisah; merge source tidak menutup gate tersebut.
 
-## Operational Hardening
+## Delete, Remove, dan tabel
 
-Baseline merge `600381e` memasukkan PR #24: canonical source preflight, MariaDB privilege classifications, real remote progress, file/directory restore semantics, recovery result clarity, installer cache/rollback/identity preservation, dan fail-closed persistent key handling.
+PR #32 dan PR #33 mencakup penguatan penghapusan, pemeriksaan retained database dependency, penanganan respons error, serta perbaikan history/progress dan pengalaman tabel. Penghapusan plan tidak menjadi izin menghapus database retained atau resource yang tidak terkait.
 
-## Implementasi sebelumnya
+## Database dan recovery
 
-Public fork mencakup Legacy read-only adapter, container packaging, snapshot browser/staged restore, outbound Agent, multi-DB lifecycle/hooks, dan Automated Recovery Testing. Historical phase numbers bukan fase baru yang dibuat task ini.
+Source mencakup managed MariaDB/MySQL/PostgreSQL backup, Recovery Testing, Database Restore Management, serta jalur MySQL Internal/Custom dengan prasyarat masing-masing. Migration additive `0016` menambahkan explicit Resume sequence; ini bukan persetujuan menjalankan recovery pada host yang belum memenuhi kapasitas/policy.
 
-## Working-tree product hardening
+## Notifikasi dan operasional
 
-Parent selection verified successful metadata, precise statistics labels, truthful local build footer, commercial updater/navigation removal, serta local docs/search sedang ditinjau sebagai perubahan source. Tidak ada commit/release/deploy yang dibuat task coding ini. Update halaman setelah maintainer benar-benar merilis reviewed version; jangan mengarang release date atau version.
+Source juga mencakup Legacy Repository read-only, outbound Agent, multi-database/hooks, staged Restore, Webhooks & Email dengan riwayat delivery, configuration backup, dan deployment berbasis digest/kontrak mount.
+
+Dokumentasi `/docs` menggunakan artikel lokal dan pencarian statis, terpisah dari runtime aplikasi. Penulisan ulang panduan ini tidak menambahkan fitur bisnis atau menjalankan deployment.
+
+## Memastikan yang terpasang
+
+Package version checked-in tidak membuktikan publikasi rilis atau kesiapan produksi. Bandingkan informasi footer, source commit, digest image, Agent, worker, dan host operator melalui [identifikasi build](/docs/reference/version). Gunakan [batasan fitur](/docs/reference/limitations) serta [pembaruan aman](/docs/deployment/updates) sebelum merencanakan perubahan.

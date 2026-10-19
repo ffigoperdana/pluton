@@ -1,26 +1,43 @@
-# Pembaruan dan identity preservation
+# Memperbarui agent sambil mempertahankan identity
+
+Gunakan pemasangan ulang dari revision fork yang telah ditinjau untuk memperbarui agent atau mengubah allowed roots. Pertahankan identity dan state agar mesin yang sama tetap terkait dengan plan yang ada. Contoh di halaman ini memakai source `/srv/example-app`.
+
+Sebelum mulai, catat **Agent ID**, **Agent version**, versi Restic/Rclone, dan **Last seen** pada panel **Remote Agent**. Catat pula revision/build yang sedang terpasang secara privat. Hindari pembaruan ketika backup aktif; pilih jendela pemeliharaan setelah pekerjaan selesai.
 
 ## Configuration-only reinstall
 
-Jalankan installer dari reviewed revision dengan semua allowed roots yang diinginkan. `--allowed-root` dapat diulang:
+1. Periksa revision target dan kompatibilitas server/agent.
+2. Tinjau seluruh allowed roots yang masih dibutuhkan plan. Instalasi ulang harus menyertakan kumpulan root yang memang ingin dipertahankan.
+3. Jalankan installer dari checkout yang ditinjau dengan server origin yang sama dan konfigurasi CA yang sesuai.
+4. Bila identity existing sehat, gunakan kembali identity itu; pembaruan biasa tidak memerlukan token baru.
+5. Periksa service dan inventory sesudah pemasangan, lalu lakukan backup serta restore contoh.
 
 ```sh
 sudo bash installers/install-agent.sh \
   --server https://pluton.example.internal \
-  --allowed-root /srv/example-app \
-  --allowed-root /srv/example-logs
+  --allowed-root /srv/example-app
 ```
 
-Ini tidak meminta enrollment baru bila identity healthy. Jangan menghilangkan root lama yang masih dibutuhkan plan. Installer menormalisasi runtime/app root-owned, directory traversable, binary executable, dan memvalidasi sebagai service account sebelum install diterima.
+Opsi `--allowed-root` dapat diulang bila ada beberapa root yang disetujui. Jangan menghilangkan root yang masih dipakai plan atau memperluasnya ke seluruh filesystem untuk memudahkan konfigurasi.
+
+Mengganti server origin atau memakai `--re-enroll` adalah keputusan identity terpisah. Jangan melakukannya hanya karena UI menunjukkan OFFLINE atau versi lama. Gunakan [diagnostik agent](/docs/remote-agent/troubleshooting) dahulu.
 
 ## Cache dan pinning
 
-Private Node, Restic, dan Rclone dapat direuse hanya bila manifest SHA-256/version/mode/ownership sesuai pin installer. Cache tidak berarti memakai executable arbitrary dari PATH. Corrupt/writable binaries bukan candidate trusted. Tidak ada auto-upgrade Node global.
+Installer dapat memakai kembali private Node, Restic, dan Rclone hanya bila manifest, checksum, versi, mode, serta ownership memenuhi pemeriksaan. Runtime privat tidak mengganti Node.js global host. Executable arbitrary dari PATH atau binary yang dapat ditulis service account bukan pengganti yang aman.
+
+Jika validasi toolchain gagal, tinjau error dan paket yang dipakai. Jangan melewati checksum atau membuat direktori runtime dapat ditulis agent. Installer memeriksa eksekusi sebagai pengguna service untuk menghindari instalasi yang hanya bekerja sebagai root.
 
 ## Rollback
 
-Transaction menyimpan aplikasi working sebelumnya; validasi gagal memulihkan instalasi lama. Existing identity dan allowed roots perlu tetap konsisten. Jangan menghapus `/var/lib/pluton-agent` untuk memperbaiki version/capability mismatch.
+Installer mempunyai transaksi untuk menyimpan instalasi kerja sebelumnya dan memulihkannya bila validasi gagal. Setelah kegagalan, tetap periksa status service, inventory, dan konfigurasi root. Jangan berasumsi semua perubahan operasional di luar installer ikut dibatalkan.
+
+Jangan menghapus `/var/lib/pluton-agent` sebagai cara rollback. Direktori itu menyimpan identity dan state pekerjaan. Gunakan revision sebelumnya melalui prosedur pembaruan yang ditinjau apabila rollback aplikasi diperlukan, dengan origin dan roots yang konsisten.
 
 ## Patch parent
 
-Server-only deploy memperbaiki labels/docs, tetapi incremental optimization terjadi pada agent execution. Simpan source/build revision patch; inventory v0.4.1 tidak membedakan patch revision. Setelah update, jalankan dua backup disposable dan periksa parent/counters sebelum acceptance workload existing.
+Optimasi incremental dikerjakan pada agent. Memperbarui server saja tidak memasang patch eksekusi agent. Label **Agent version** dapat tetap sama pada build yang berbeda; catatan revision/build diperlukan untuk membuktikan patch mana yang terpasang.
+
+Setelah pembaruan, jalankan dua backup disposable berurutan pada source yang sama tanpa perubahan, lalu ubah satu file dan ulangi. Periksa **New Files**, **Modified Files**, **Unmodified Files**, dan jumlah data baru sesuai [panduan incremental](/docs/backup-plans/incremental). Tidak perlu membuat ulang plan atau storage hanya untuk pengujian ini.
+
+Hasil yang diharapkan adalah **Agent ID** tetap, heartbeat kembali **ONLINE**, backup mencapai **Complete**, dan file contoh dapat dipulihkan. Jika capability atau source berubah, tinjau [izin source](/docs/remote-agent/permissions) sebelum meneruskan workload penting.
