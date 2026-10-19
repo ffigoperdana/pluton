@@ -305,3 +305,8 @@ export type PlanLogItem = {
 export interface PlanAddRunSettings {
 	runNow: boolean;
 }
+
+export type PlanStorageDisposition = {
+	status: 'retained_intentionally' | 'cleanup_failed' | 'retained_by_request' | 'removed';
+	paths: PlanStoragePath[];
+};

@@ -232,6 +232,10 @@ export type DeletePlanResult = {
    message: string;
    unremovedPaths?: UnremovedStoragePath[];
    unremovedReason?: string;
+   storageDisposition?: {
+      status: 'retained_intentionally' | 'cleanup_failed' | 'retained_by_request' | 'removed';
+      paths: UnremovedStoragePath[];
+   };
 };
 
 export async function deletePlan({ id, removeRemoteData }: { id: string; removeRemoteData: boolean }): Promise<DeletePlanResult> {

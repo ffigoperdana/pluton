@@ -120,6 +120,13 @@
       "when": 1792303200000,
       "tag": "0016_automatic_recovery_resume_intent",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1792390000000,
+      "tag": "0017_retained_managed_repositories",
+      "breakpoints": true
     }
   ]
 }

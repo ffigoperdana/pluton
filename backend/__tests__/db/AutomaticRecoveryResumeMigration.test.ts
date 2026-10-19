@@ -13,7 +13,8 @@ describe('0016 additive explicit Resume migration and rollback compatibility', (
 		sqlite.pragma('foreign_keys=ON');
 		try {
 			const migrations = readMigrationFiles({ migrationsFolder: path.resolve('drizzle') });
-			expect(migrations).toHaveLength(17);
+			// This historical checkpoint ends at 0016; later additive migrations are permitted.
+			expect(migrations.slice(0, 17)).toHaveLength(17);
 			// Apply the actual historical migration SQL, not a parallel hand-written schema.
 			for (const migration of migrations.slice(0, 16))
 				for (const sql of migration.sql) sqlite.exec(sql);
@@ -130,11 +131,11 @@ describe('0016 additive explicit Resume migration and rollback compatibility', (
 		// BEFORE UPDATE is the monotonic guard, not a historical-data rewrite.
 		expect(sql).not.toMatch(/^\s*(?:DROP|UPDATE|DELETE|INSERT)\b|SECRET|ENCRYPTION_KEY/im);
 		const journal = JSON.parse(readFileSync(path.resolve('drizzle/meta/_journal.json'), 'utf8'));
-		expect(journal.entries.at(-2).tag).toBe('0015_automatic_recovery_lifecycle');
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries[15].tag).toBe('0015_automatic_recovery_lifecycle');
+		expect(journal.entries[16]).toMatchObject({
 			idx: 16,
 			tag: '0016_automatic_recovery_resume_intent',
 		});
-		expect(journal.entries.at(-1).when).toBeGreaterThan(journal.entries.at(-2).when);
+		expect(journal.entries[16].when).toBeGreaterThan(journal.entries[15].when);
 	});
 });

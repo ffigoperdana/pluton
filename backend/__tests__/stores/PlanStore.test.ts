@@ -67,6 +67,7 @@ describe('PlanStore', () => {
 		const selectQueryBuilder = {
 			from: jest.fn().mockReturnThis(),
 			where: jest.fn().mockReturnThis(),
+			get: jest.fn(),
 			limit: jest.fn(),
 		};
 

@@ -248,7 +248,8 @@ export class RemoteBackupService {
 			await this.eventService.onBackupCancelled({ planId: plan.id, backupId: backup.id });
 		}
 		await this.cronManager.removeSchedulesByType(plan.id, 'remote-backup');
-		await this.repositories.deleteByPlanId(plan.id);
+		// PlanStore atomically escrows ciphertext and removes live repository/plan metadata.
+		// Do not erase the only password before that transaction can commit.
 		// This phase intentionally never deletes a remote Restic repository.
 		return { storagePath: repository.storagePath };
 	}

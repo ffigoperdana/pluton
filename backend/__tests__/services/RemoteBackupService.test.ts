@@ -142,6 +142,13 @@ describe('RemoteBackupService', () => {
 			'Remote agent does not yet support filesystem backup'
 		);
 	});
+	it('does not erase repository credentials before PlanStore archival commits', async () => {
+		repositories.deleteByPlanId = jest.fn();
+		backupStore.getAll = jest.fn().mockResolvedValue([]);
+		(service as any).cronManager.removeSchedulesByType = jest.fn();
+		await expect(service.removeManagedPlan(plan)).resolves.toEqual({ storagePath: plan.storagePath });
+		expect(repositories.deleteByPlanId).not.toHaveBeenCalled();
+	});
 
 	it('rejects an offline agent before creating or queueing a plan', async () => {
 		agentStore.getAgentByDeviceId.mockResolvedValue({

@@ -35,7 +35,7 @@ const BackupProgress = ({ item, sourceId, sourceType, planId, type = 'backup' }:
    const cancelBackupMutation = useCancelBackup();
 
    const { id, started } = item;
-   const { data: progressData } =
+   const { data: progressData, error: progressError, retryProgress, isFetching: checkingProgress } =
       type === 'backup' ? useGetBackupProgress({ id, sourceId, sourceType, planId }) : useGetRestoreProgress({ id, sourceId, sourceType, planId });
 
    const resticData = extractResticData(progressData);
@@ -137,6 +137,10 @@ const BackupProgress = ({ item, sourceId, sourceType, planId, type = 'backup' }:
 
    return (
       <div key={item.id} className={classes.backup}>
+         {progressError && <div role="status">
+            <p>{progressError.message} Automatic checks pause after repeated errors. This does not stop the actual operation.</p>
+            <button type="button" disabled={checkingProgress} onClick={retryProgress}>Retry progress checks (server cooldown still applies)</button>
+         </div>}
          <div key={item.id} className={classes.backupProgress}>
             <div className={classes.backupIcon}>
                <Icon type="loading" size={24} />

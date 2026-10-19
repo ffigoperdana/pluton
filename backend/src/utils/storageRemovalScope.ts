@@ -6,7 +6,7 @@ export type StorageRemovalReference = {
 	storagePath: string;
 	planId: string | null;
 	replicationId?: string;
-	kind: 'primary' | 'replica' | 'legacy';
+	kind: 'primary' | 'replica' | 'legacy' | 'retained';
 };
 
 function normalized(value: string): string {

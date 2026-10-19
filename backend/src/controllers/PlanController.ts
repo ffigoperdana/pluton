@@ -160,7 +160,7 @@ export class PlanController {
 				return;
 			}
 			const removeRemoteData = req.query.removeData === 'true';
-			const { unremovedPaths, unremovedReason } = await this.planService.deletePlan(
+			const { unremovedPaths, unremovedReason, storageDisposition } = await this.planService.deletePlan(
 				req.params.id,
 				removeRemoteData
 			);
@@ -169,6 +169,7 @@ export class PlanController {
 				message: 'Plan deleted successfully',
 				unremovedPaths,
 				unremovedReason,
+				storageDisposition,
 			});
 		} catch (error: unknown) {
 			const appError = error as AppError;

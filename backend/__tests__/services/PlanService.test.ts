@@ -555,7 +555,7 @@ describe('PlanService', () => {
 				replicationStorages: [],
 			});
 			expect(mockPlanStore.delete).toHaveBeenCalledWith(planId, true);
-			expect(result).toEqual({ deleted: true, unremovedPaths: [], unremovedReason: '' });
+			expect(result).toEqual({ deleted: true, unremovedPaths: [], unremovedReason: '', storageDisposition: { status: 'removed', paths: [] } });
 		});
 
 		it('should still delete the plan when storage data could not be removed', async () => {
@@ -579,6 +579,7 @@ describe('PlanService', () => {
 				deleted: true,
 				unremovedPaths: [{ storageName: 'Test Storage', storagePath: '/backups/delete' }],
 				unremovedReason: 'The device could not be reached.',
+				storageDisposition: { status: 'cleanup_failed', paths: [{ storageName: 'Test Storage', storagePath: '/backups/delete' }] },
 			});
 		});
 
