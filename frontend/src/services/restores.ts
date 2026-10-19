@@ -2,6 +2,8 @@ import { mutationResponse } from '../utils/httpResponse';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-toastify';
 import { API_URL } from '../utils/constants';
+import { useMemo } from 'react';
+import { progressPollingFor, fetchProgress, progressFinished } from '../utils/progressPolling';
 
 const notifiedRestoreProgress = new Set<string>();
 
@@ -222,51 +224,41 @@ export function useCancelRestore() {
 }
 
 // Get Backup Progress
-export async function getRestoreProgress({ id, sourceId, sourceType, planId }: { id: string; sourceId: string; sourceType: string; planId: string }) {
-   const url = new URL(`${API_URL}/restores/${id}/progress?sourceId=${sourceId}&sourceType=${sourceType}&planId=${planId}`);
-
-   const res = await fetch(url.toString(), {
-      method: 'GET',
-      credentials: 'include',
-   });
-   const data = await res.json();
-   return data;
+export async function getRestoreProgress({ id, sourceId, sourceType, planId }: { id: string; sourceId: string; sourceType: string; planId: string }, signal?: AbortSignal) {
+   const url = new URL(`${API_URL}/restores/${encodeURIComponent(id)}/progress`);
+   url.search = new URLSearchParams({ sourceId, sourceType, planId }).toString();
+   return fetchProgress(url, signal);
 }
 
 export function useGetRestoreProgress(payload: { id: string; sourceId: string; sourceType: string; planId: string }) {
    const queryClient = useQueryClient();
-   return useQuery({
+   const { id, sourceId, sourceType, planId } = payload;
+   const polling = useMemo(() => progressPollingFor(queryClient, ['progress-restore', id], (signal) => getRestoreProgress({ id, sourceId, sourceType, planId }, signal)), [queryClient, id, sourceId, sourceType, planId]);
+   const query = useQuery({
       queryKey: ['progress-restore', payload.id],
-      queryFn: () => getRestoreProgress(payload),
-      refetchOnMount: true,
-      retry: false,
+      ...polling,
       refetchInterval(query) {
-         // Only refetch if the browser tab is active
-         // if (document.hidden) return false;
-
          const progressData = query.state?.data;
-
-         // Check if backup is finished by looking for a "finished" phase event
-         const isFinished = progressData?.events?.some((event: any) => event.phase === 'finished' && event.completed === true);
+         const isFinished = progressFinished(progressData);
 
          if (isFinished) {
             const planId = progressData?.planId || payload.planId;
             if (!notifiedRestoreProgress.has(payload.id)) {
                notifiedRestoreProgress.add(payload.id);
                if (planId) {
-                  console.log('Invalidate Plan and Reload It :', planId);
                   queryClient.invalidateQueries({ queryKey: ['plan', planId] });
                }
                if (progressData.status === 'cancelled') toast.info('Restoration Cancelled.');
-               else if (progressData.success === false) toast.error('Restoration Failed. See the restore record for details.');
+               else if (progressData.status === 'failed' || progressData.success === false) toast.error('Restoration Failed. See the restore record for details.');
                else toast.success('Restoration Complete!');
             }
             return false;
          }
 
-         return 1000;
+         return polling.refetchInterval();
       },
    });
+   return { ...query, retryProgress: () => { if (polling.resume()) void query.refetch(); } };
 }
 export function useGetRestoreProgressOnce(payload: { id: string; sourceId: string; sourceType: string; planId: string }) {
    return useQuery({

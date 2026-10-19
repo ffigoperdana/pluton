@@ -32,7 +32,7 @@ const output = await backendRequire('esbuild').build({
       builder.onResolve({ filter: /^react-toastify$/ }, () => ({ path: 'toast', namespace: 'stub' }));
       builder.onLoad({ filter: /.*/, namespace: 'stub' }, () => ({ contents: `
          export const useNavigate=()=>path=>globalThis.__deleteDialog.navigation.push(path);
-         export const toast={error:value=>globalThis.__deleteDialog.errors.push(value),success:value=>globalThis.__deleteDialog.success.push(value),warning:value=>globalThis.__deleteDialog.warnings.push(value)};`, loader: 'js' }));
+         export const toast={error:value=>globalThis.__deleteDialog.errors.push(value),success:value=>globalThis.__deleteDialog.success.push(value),warning:value=>globalThis.__deleteDialog.warnings.push(value),info:value=>globalThis.__deleteDialog.warnings.push(value)};`, loader: 'js' }));
    } }],
 });
 const module = { exports: {} as any };
@@ -142,5 +142,30 @@ test('active backup/restore and existing pending task guard never enqueue deleti
       const view = await render(props);
       try { await act(async () => view.button().click());assert.equal(view.state.submissions.length, 0); }
       finally { await view.cleanup(); }
+   }
+});
+
+test('typed intentional retention and cleanup failure are not classified by error-message strings', async () => {
+   for (const status of ['retained_intentionally', 'cleanup_failed']) {
+      const view = await render();
+      try {
+         await act(async () => view.button().click());
+         await act(async () => view.state.finish(null, { success: true,
+            storageDisposition: { status, paths: [{ storageName: 'Example', storagePath: '/example/retained' }] },
+            unremovedReason: 'ambiguous legacy message',
+         }));
+         const html = require('react-dom/server').renderToStaticMarkup(view.state.warnings[0]);
+         assert.match(html, /Plan Removed/);
+         assert.doesNotMatch(html, /ambiguous legacy message/);
+         if (status === 'retained_intentionally') {
+            assert.match(html, /Repository intentionally retained/);
+            assert.match(html, /encrypted recovery credential was archived/);
+            assert.doesNotMatch(html, /Storage cleanup failed/);
+         } else {
+            assert.match(html, /Storage cleanup failed/);
+            assert.match(html, /other paths may already have been removed/);
+            assert.doesNotMatch(html, /credential was archived/);
+         }
+      } finally { await view.cleanup(); }
    }
 });

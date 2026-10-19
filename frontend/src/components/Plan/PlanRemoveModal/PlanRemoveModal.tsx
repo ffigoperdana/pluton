@@ -40,13 +40,17 @@ const PlanRemoveModal = ({ planId, taskPending, actionInProgress, close }: PlanR
                toast.error(error.message || `Error Removing Plan!`);
             },
             onSuccess: (data) => {
-               console.log('Success :', data);
-               if (data.unremovedPaths?.length) {
-                  toast.warning(<UnremovedPathsNotice paths={data.unremovedPaths} reason={data.unremovedReason} />, {
+               const disposition = data.storageDisposition;
+               const paths = disposition?.paths || data.unremovedPaths || [];
+               if (paths.length) {
+                  const notify = disposition?.status === 'retained_intentionally' ? toast.info : toast.warning;
+                  notify(<UnremovedPathsNotice paths={paths} reason={data.unremovedReason} disposition={disposition?.status} />, {
                      autoClose: false,
                      closeOnClick: false,
                      style: { minWidth: '360px' },
                   });
+               } else if (disposition?.status === 'retained_by_request') {
+                  toast.info('Plan removed. Storage data was retained as requested.');
                } else {
                   toast.success(`Removed Backup Plan Successfully!`, { autoClose: 5000 });
                }

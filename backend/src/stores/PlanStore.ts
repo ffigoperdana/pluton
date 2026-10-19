@@ -15,6 +15,9 @@ import { desc } from 'drizzle-orm';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 import { legacyRepositories } from '../db/schema/legacyRepositories';
 import type { StorageRemovalReference } from '../utils/storageRemovalScope';
+import { remoteManagedRepositories } from '../db/schema/remoteManagedRepositories';
+import { retainedManagedRepositories } from '../db/schema/retainedManagedRepositories';
+import { AppError } from '../utils/AppError';
 import {
 	assertNoRetainedRestoreDependency,
 	beginSourceRemoval,
@@ -500,10 +503,41 @@ export class PlanStore {
 	async delete(id: string, removeHistory = false): Promise<boolean> {
 		return this.db.transaction(tx => {
 			assertNoRetainedRestoreDependency(tx, { planId: id });
+			// Preserve the original ciphertext and binding BEFORE removing its live record.
+			// Failure (including an archive-ID conflict) aborts the whole metadata transaction.
+			const repository = tx
+				.select()
+				.from(remoteManagedRepositories)
+				.where(eq(remoteManagedRepositories.planId, id))
+				.get();
+			if (repository) {
+				try {
+					tx.insert(retainedManagedRepositories)
+						.values({
+							id: repository.id,
+							formerPlanId: id,
+							agentId: repository.agentId,
+							storageId: repository.storageId,
+							storagePath: repository.storagePath,
+							encryptedPassword: repository.encryptedPassword,
+							initializedAt: repository.initializedAt,
+							repositoryCreatedAt: repository.createdAt,
+						})
+						.run();
+				} catch {
+					// Drizzle errors can include bound ciphertext. Never expose that diagnostic.
+					throw new AppError(500, 'Retained repository access could not be archived safely. Plan removal was not completed.');
+				}
+			}
 			if (removeHistory) {
 				tx.delete(restores).where(eq(restores.planId, id)).run();
 				tx.delete(backups).where(eq(backups.planId, id)).run();
 			}
+			// Completed recovery history cascades with its backup before the repository FK is removed.
+			if (repository)
+				tx.delete(remoteManagedRepositories)
+					.where(eq(remoteManagedRepositories.id, repository.id))
+					.run();
 			// Existing migrations can leave FK checks disabled; erase the owned
 			// credential explicitly as well as using ON DELETE CASCADE.
 			tx.delete(remotePlanDatabaseEntryCredentials)
@@ -597,6 +631,14 @@ export class PlanStore {
 				storagePath: legacy.repositoryPath,
 				kind: 'legacy',
 			});
+		for (const retained of this.db
+			.select({
+				storageId: retainedManagedRepositories.storageId,
+				storagePath: retainedManagedRepositories.storagePath,
+			})
+			.from(retainedManagedRepositories)
+			.all())
+			references.push({ ...retained, planId: null, kind: 'retained' });
 		return references;
 	}
 

@@ -18,6 +18,7 @@ import {
 	PlanNotification,
 	PlanNotificationType,
 	PlanStoragePath,
+	PlanStorageDisposition,
 } from '../types/plans';
 import { planLogger } from '../utils/logger';
 import { generateUID, normalizeStorageName } from '../utils/helpers';
@@ -476,6 +477,7 @@ export class PlanService {
 		deleted: boolean;
 		unremovedPaths: PlanStoragePath[];
 		unremovedReason: string;
+		storageDisposition: PlanStorageDisposition;
 	}> {
 		if (this.removingPlans.has(planId))
 			throw new AppError(409, 'Plan removal is already in progress.');
@@ -516,6 +518,10 @@ export class PlanService {
 				],
 				unremovedReason:
 					'Managed remote repository data was retained; this phase never deletes remote repositories.',
+				storageDisposition: {
+					status: 'retained_intentionally' as const,
+					paths: [{ storageName: storageName || 'remote', storagePath: retained.storagePath }],
+				},
 			};
 		}
 		// Resolve replication storage names so removeBackup can purge them too
@@ -554,6 +560,11 @@ export class PlanService {
 			deleted: deleteRes,
 			unremovedPaths: deleteResult.unremovedPaths || [],
 			unremovedReason: deleteResult.unremovedReason || '',
+			storageDisposition: {
+				status: !removeRemoteData ? 'retained_by_request' as const :
+					deleteResult.unremovedPaths?.length ? 'cleanup_failed' as const : 'removed' as const,
+				paths: deleteResult.unremovedPaths || [],
+			},
 		};
 	}
 

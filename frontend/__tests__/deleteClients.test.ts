@@ -23,6 +23,31 @@ async function client(name: string) {
 const clients = Object.fromEntries(await Promise.all(['plans', 'backups', 'restores', 'storage', 'databaseRestores', 'legacyRepositories', 'notifications', 'devices', 'recoveryTests'].map(async name => [name, await client(name)])));
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
 
+test('backup and restore progress GETs encode identities and classify HTML429 without retry', async () => {
+   const original = globalThis.fetch;
+   let calls = 0;
+   let response = json({ events: [], status: 'running' });
+   globalThis.fetch = async (input, options) => {
+      calls++;
+      const url = new URL(String(input));
+      assert.match(url.pathname, /\/(backup|restore)s\/operation%2F01\/progress$/);
+      assert.equal(url.searchParams.get('planId'), 'plan&01');
+      assert.equal(options?.method, 'GET');
+      assert.equal(options?.credentials, 'include');
+      return response;
+   };
+   try {
+      for (const get of [clients.backups.getBackupProgress, clients.restores.getRestoreProgress]) {
+         const payload = { id: 'operation/01', sourceId: 'device-01', sourceType: 'device', planId: 'plan&01' };
+         assert.equal((await get(payload)).status, 'running');
+         response = new Response('<html>edge</html>', { status: 429, headers: { 'Retry-After': '60' } });
+         await assert.rejects(get(payload), (error: any) => error.status === 429 && error.retryAt > Date.now());
+         response = json({ events: [], status: 'running' });
+      }
+      assert.equal(calls, 4);
+   } finally { globalThis.fetch = original; }
+});
+
 test('actual destructive clients preserve endpoint, method, credentials, selected IDs and storage toggle', async () => {
    const previous = globalThis.fetch;
    const calls: { path: string; init: RequestInit }[] = [];
