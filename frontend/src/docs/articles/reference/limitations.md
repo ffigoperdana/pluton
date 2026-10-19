@@ -1,21 +1,38 @@
-# Batasan yang diketahui
+# Batasan fitur dan validasi yang masih diperlukan
+
+Halaman ini membantu Anda memilih workflow yang benar dan menghindari asumsi bahwa fitur yang tersedia sudah memenuhi semua kebutuhan operasional.
 
 ## Implementasi versus acceptance
 
-Automated tests/disposable native fixtures bukan production certification. Live webhook/SMTP acceptance ditunda sampai domain, receiver, relay, dan trusted certificates siap. S3 DRC/vendor-specific acceptance dan genuine MySQL native recovery integration belum dibuktikan oleh task ini.
+Test otomatis, build, dan fixture sintetis memberi bukti dalam scope-nya. Hasil tersebut tidak menggantikan pengukuran host, uji vendor, review operator, atau persetujuan produksi. Dokumentasi ini tidak mengubah acceptance ledger maupun historical failure menjadi PASS.
 
-## Agent dan storage
+| Kebutuhan | Batas saat ini | Tindakan operator |
+| --- | --- | --- |
+| Managed Agent primary | Subset SFTP terkontrol; bukan Agent-local primary baru | Siapkan SFTP dan mapping path yang benar |
+| Managed Agent replica | 0–2 S3/S3-compatible, eksekusi mutasi server Linux, copy serialized | Verifikasi per-replica result dan kapasitas |
+| Restore file dari managed S3 mirror | Belum didukung | Pertahankan akses Primary Storage |
+| Native database recovery dari mirror | Belum didukung | Gunakan primer dan metadata database yang valid |
+| Physical cleanup/prune managed replica | Belum diimplementasikan; detach/retain saja | Siapkan kebijakan retensi vendor/operator terpisah tanpa blind deletion |
+| Hitachi HCP nyata | Interoperabilitas vendor belum dibuktikan oleh implementasi umum S3 | Uji namespace/prefix disposable setelah persetujuan terpisah |
+| Legacy Repository | Read-only, repository lokal dalam scope adapter saat ini | Tidak ada init, forget, prune, atau unlock |
+| Managed dan Legacy file Restore | Staging terpisah | Verifikasi dan pindahkan hasil melalui perubahan aplikasi yang disetujui |
+| Recovery Testing | Structural/file/SQL checks dan optional native import sesuai mode | Import Disabled tetap NOT TESTED |
+| Persistent Restore | Resource retained sementara, TTL dan authorized Delete | Bukan penggantian database produksi secara otomatis |
 
-Linux Debian-family x86_64/systemd agent installer adalah jalur yang diuji. Windows/macOS/arm64 agent belum equivalent supported target. Outbound managed remote backup hanya SFTP allowlisted password-auth subset, bukan semua Rclone advanced options/providers.
+## Kapasitas MySQL Internal
 
-## Recovery
+Guard memory available 2.944 MiB, SQL 128 MiB, CPU/disk, TLS, serta host-operator policy tetap berlaku. Host 4 GiB dapat menjalankan aplikasi tetapi belum tentu lolos admission recovery nyata. Aktivasi fitur dan kecukupan kapasitas adalah dua penilaian terpisah.
 
-Managed remote dan Legacy restore staging-only. Tidak ada restore-to-original, application failover/startup, production SQL auto-import, PITR, DB cluster role backup, atau guaranteed business-semantic recovery. Structural pass dan artifact hash tidak menggantikan SQL import/application test.
+## Agent dan platform
 
-## Statistik
+Jalur installer Agent berfokus pada Linux Debian-family x86_64/systemd. Jangan menganggap Windows, macOS, atau arm64 mempunyai validasi operasional yang setara. Source dan policy membatasi path, tool, hook, serta transport yang boleh digunakan.
 
-Restic summary tidak menyediakan deleted-file count atau total physical disk usage. Parent optimization memerlukan successful local receipt/metadata kompatibel; hilangnya receipt/state atau perubahan source/host/artifacts dapat menimbulkan baseline baru. Historical snapshots tidak di-rewrite.
+## Statistik dan konsistensi
+
+Ukuran logical snapshot bukan pemakaian disk fisik. Restic summary tidak menyediakan seluruh metrik file terhapus atau kapasitas repository. Snapshot file+SQL tidak otomatis menjamin transaksi konsisten lintas aplikasi dan banyak database; operator tetap menentukan strategi konsistensi.
 
 ## Operasional
 
-Tidak ada multi-server shared-volume cluster mode/distributed scheduling yang ditambahkan. Tidak ada upstream commercial auto-updater, helper-dependent historical native installer, premium unlock, docs SaaS, atau fase baru. Production cutover/ACL/key rotation tetap manual authorized work.
+Tidak ada automatic production SQL cutover, PITR, database cluster failover, atau shared-volume multi-server scheduling yang ditambahkan oleh panduan ini. Penerima webhook/SMTP dan endpoint S3 nyata perlu acceptance lingkungannya sendiri.
+
+Lihat [replica](/docs/replication/retention-restore), [database resources](/docs/database-restores/resources), dan [cutover](/docs/migration/cutover).

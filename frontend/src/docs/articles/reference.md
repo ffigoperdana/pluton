@@ -1,19 +1,30 @@
-# Cakupan dan tingkat dukungan
+# Cakupan fitur dan cara membaca panduan
+
+Gunakan halaman ini ketika menentukan apakah sebuah fitur sesuai kebutuhan Anda. Ketersediaan tombol, implementasi source, hasil pengujian, dan persetujuan penggunaan produksi merupakan hal yang berbeda.
 
 ## Membaca badge
 
-Diimplementasikan berarti code path ada dan punya batas/test yang dijelaskan, bukan production certification. Memerlukan setup operator berarti infrastructure/CA/client/account/receiver wajib disiapkan terpisah. Validasi pilot terbatas bukan dukungan universal vendor/version. Belum divalidasi operasional berarti jangan mengklaim acceptance workload tersebut.
+| Penanda | Cara menggunakannya |
+| --- | --- |
+| Diimplementasikan | Jalur fitur ada pada source; tetap periksa prasyarat dan batasannya |
+| Memerlukan setup operator | Host, worker, CA, account, atau policy perlu disiapkan terpisah |
+| Validasi pilot terbatas | Bukti hanya mencakup scope pilot yang disebutkan |
+| Belum divalidasi operasional | Jangan menyimpulkan vendor atau lingkungan Anda sudah diterima |
+| Tidak didukung | Workflow tersebut tidak tersedia; jangan mencari jalan memintas guard |
+
+## Pilih panduan sesuai tujuan
+
+1. Belum pernah memakai Pluton: ikuti [backup pertama](/docs/getting-started/quick-start).
+2. Menyiapkan server sumber: ikuti [Managed Agent](/docs/remote-agent).
+3. Perlu mengambil file: mulai dari [Browse dan Restore](/docs/restore).
+4. Perlu menguji database: baca [Recovery Testing](/docs/recovery-testing) atau [Persistent Restore](/docs/database-restores).
+5. Menambah salinan: baca [Replication](/docs/replication), termasuk batas restore dari mirror.
+6. Beralih dari sistem lama: gunakan [migrasi SYS MON](/docs/migration).
 
 ## Source of truth
 
-Artikel ditulis dari public fork implementation, bukan proprietary PRO/Business source atau copy docs upstream. Phase reports adalah historical evidence; runtime code, schemas, validators, tests, dan current UI menentukan supported behavior.
+Panduan ini mengikuti UI dan source public fork. Dokumen engineering dan laporan fase lama tetap menjadi bukti historis; roadmap bukan daftar fitur yang otomatis sudah selesai. Contoh memakai infrastruktur fiktif, bukan konfigurasi organisasi yang siap disalin ke produksi.
 
-## Referensi
+## Referensi lanjutan
 
-[Configuration](/docs/reference/configuration), [API](/docs/reference/api), [status codes](/docs/reference/status-codes), [build identity](/docs/reference/version), [limitations](/docs/reference/limitations), dan [FAQ](/docs/reference/faq) merangkum kontrak praktis.
-
-## Legal dan contributor
-
-[About/Acknowledgements](/docs/reference/acknowledgements) menjaga attribution Apache-2.0. [Contributing](/docs/reference/contributing) menjelaskan format Markdown, manifest, screenshot sanitization, local validation, dan build docs.
-
-Tidak ada fase roadmap tambahan, auto-updater, mandatory cloud docs, licensing gate, atau production cutover otomatis yang diintroduksi hardening ini. Existing phases sampai Phase 7 tetap dipertahankan.
+Gunakan [configuration](/docs/reference/configuration), [API](/docs/reference/api), [kode error](/docs/reference/status-codes), [identitas build](/docs/reference/version), [batasan](/docs/reference/limitations), dan [FAQ](/docs/reference/faq) setelah memahami workflow utama. Attribution dan lisensi tersedia di [About](/docs/reference/acknowledgements).

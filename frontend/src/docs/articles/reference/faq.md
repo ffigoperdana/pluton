@@ -1,25 +1,41 @@
-# FAQ operator
+# Pertanyaan umum operator
+
+## Apa yang harus dibuat lebih dahulu?
+
+Konfigurasikan Storage, siapkan source/Agent, lalu buat Backup Plan. Jalankan backup latihan, Browse snapshot, dan uji Restore sebelum mengandalkan jadwal. Mulai dari [Quick Start](/docs/getting-started/quick-start).
 
 ## Mengapa snapshot besar tetapi repository kecil?
 
-Logical snapshot merepresentasikan semua file. Compression dan content reuse membuat physical repository jauh berbeda. Ukur physical storage langsung; jangan infer ratio dari New Files atau menjumlahkan logical snapshots.
+Snapshot merepresentasikan isi logis file pada titik waktu tertentu. Kompresi dan penggunaan ulang data membuat pemakaian fisik berbeda. Ukur disk pada storage; jangan menjumlahkan ukuran logis snapshot sebagai kapasitas fisik.
 
-## Perlu recreate plan setelah fix?
+## Apakah backup Complete berarti replica dan recovery sudah berhasil?
 
-Tidak untuk hardening ini. Existing plan, storage, identity, repository/password, snapshot IDs, recovery records, dan Phase 7 subscriptions/outbox dipertahankan. Agent code update diperlukan untuk parent execution fix.
+Tidak. Periksa hasil primer, tiap replica, Recovery Testing, dan cleanup secara terpisah. SQL import yang tidak dijalankan tetap NOT TESTED, walaupun pemeriksaan artifact lolos.
 
-## Apakah docs perlu Internet atau login?
+## Apakah semua file SQL dapat dipakai Restore Database?
 
-Tidak. Static article/search bundle tersedia di instance `/docs` sebelum login tanpa inventory/API data. External reference links hanya dibuka bila operator memilihnya. Refresh nested path memakai SPA fallback yang sama.
+File SQL yang ikut backup filesystem dapat diambil sebagai file biasa. Native database recovery memerlukan metadata tepercaya dari managed database backup, snapshot yang sesuai, serta target yang lolos policy. Lihat [SQL artifact](/docs/database-backup/artifacts).
 
-## Mengapa backup Complete tapi Recovery warning?
+## Apa bedanya Stop plan dengan Stop database?
 
-Backup dan Recovery independent. Artifact bytes/hash passed dengan SQL import Disabled berarti SQL NOT TESTED. Cleanup incomplete juga warning yang perlu review.
+Pause/Resume Backup Plan mengatur pelaksanaan backup berikutnya. Stop/Resume pada Database Restores mengelola target retained tertentu, tetap tunduk pada TTL, kapasitas, dan otorisasi. Keduanya tidak saling menggantikan.
 
-## Apakah bisa upgrade ke paid edition?
+## Apakah menghapus plan ikut menghapus database retained?
 
-Fork ini tidak menyediakan commercial activation/checkout. Unsupported actions dijelaskan sebagai capability limitation, bukan subscription offer. Attribution upstream tetap di About.
+Tidak boleh diasumsikan demikian. Dependency database yang belum selesai cleanup dapat menolak penghapusan dengan HTTP 409. Gunakan Delete khusus pada Database Restore Management jika memang telah disetujui. Lihat [Delete aman](/docs/backup-plans/delete).
 
-## Rujukan Restic
+## Mengapa S3 mirror belum dapat dipakai restore Managed Agent?
 
-Semantics publik dapat diverifikasi pada [Restic backup documentation](https://restic.readthedocs.io/en/stable/040_backup.html) dan [JSON scripting reference](https://restic.readthedocs.io/en/stable/075_scripting.html). Semantics versi 0.19.1 diverifikasi melalui native fixture serta source bertag; stable docs dapat bergerak saat release baru. Artikel portal ini ditulis independen, bukan salinan manual upstream.
+Implementasi copy dan receipt replica tidak otomatis menyediakan jalur Restore yang menjaga seluruh otorisasi dan identitas sumber. Workflow managed saat ini masih memerlukan primer. Lihat [batas mirror](/docs/replication/retention-restore).
+
+## Apakah dokumentasi memerlukan Internet atau login?
+
+Artikel dan indeks pencarian dibundel secara lokal di `/docs`. Membaca dokumentasi tidak memberi akses API atau inventory. Tautan referensi eksternal hanya berguna bila operator memilih membukanya; fitur runtime tetap memerlukan izin masing-masing.
+
+## Apakah mengganti image memperbarui semuanya?
+
+Tidak. Agent, worker MySQL, root host operator, schema, dan konfigurasi deployment perlu dicocokkan tersendiri. Ikuti [pembaruan aman](/docs/deployment/updates).
+
+## Kapan sistem backup lama boleh dihentikan?
+
+Setelah beberapa backup terjadwal representatif, verifikasi SQL, rehearsal file/database recovery, kapasitas/replica, dan rencana rollback diterima melalui persetujuan cutover. Satu Complete belum cukup; gunakan [checklist migrasi](/docs/migration/cutover).

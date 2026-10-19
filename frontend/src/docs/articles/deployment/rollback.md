@@ -1,14 +1,24 @@
-# Prosedur rollback
+# Rollback tanpa kehilangan identitas dan data
+
+Rollback bertujuan memulihkan layanan setelah perubahan gagal. Mengganti image tidak mengembalikan schema SQLite, kepemilikan resource, atau versi Agent secara otomatis. Siapkan rencana sebelum upgrade dilakukan.
 
 ## Sebelum perubahan
 
-Catat image reference/digest yang healthy, migration journal, agent source revision, volume name, dan backup control-plane konsisten. Jangan menyimpan keys dalam ticket atau public report. Pastikan tidak ada backup, restore, SQL import, atau delivery yang masih in-flight sebelum stop terencana.
+Catat digest sehat sebelumnya, journal migration, volume, key/config, kontrak overlay, dan status semua resource persisten. Tentukan siapa yang menyetujui rollback dan kondisi pemicunya, misalnya gagal health, mount berbeda, dekripsi gagal, atau worker/operator tidak kompatibel.
+
+## Hentikan operasi baru lebih dahulu
+
+1. Hentikan penerimaan pekerjaan yang terdampak melalui pengaturan dan prosedur normal.
+2. Tunggu backup, copy replica, dan SQL import selesai; jangan memulai ulang import dengan hasil yang tidak pasti.
+3. Tinjau database retained di **Database Restores**. **Stop** mempertahankan data dan resource; **Delete** adalah tindakan berizin yang berbeda.
+4. Pertahankan operator baru sampai target dan pekerjaan lifecycle benar-benar ditangani. Jangan menurunkan controller saat masih memiliki resource yang memerlukan kontrak baru.
+5. Verifikasi bahwa image rollback dapat membaca schema yang ada dan tidak akan menghilangkan otorisasi atau cleanup.
 
 ## Rollback container
 
-`deploy/rollback.sh` memakai state image sebelumnya dan mempertahankan `.env` serta volume. Operator harus memeriksa schema compatibility terlebih dahulu: image rollback tidak otomatis mengembalikan migration database. Task ini sendiri tidak menambah migration.
+Untuk instalasi yang memang memakai bundle `deploy/` dan mempunyai `.deploy-state` valid, `rollback.sh` memilih digest sebelumnya dan menggunakan kontrak overlay/mount yang sama. Script tidak memulihkan file SQLite lama secara otomatis.
 
-Setelah bundle host direview dan di-upgrade, rollback memakai digest immutable dan stack overlay lengkap yang sama, termasuk `compose.lab.yml`. Keberhasilan memerlukan Docker healthy, respons GET health valid, image benar, UID/GID, dan mount yang tidak berubah. Backup SQLite tidak pernah ditimpa otomatis; lease/ownership records tetap dipertahankan. Kegagalan deploy tetap exit nonzero meskipun automatic rollback berhasil.
+Contoh berikut hanya dijalankan operator setelah kompatibilitas dan izin perubahan diperiksa:
 
 ```sh
 cd /opt/pluton
@@ -16,12 +26,16 @@ sh rollback.sh
 sh status.sh
 ```
 
-Gunakan hanya pada deployment yang memakai script tersebut dan telah mempunyai `.deploy-state` valid. Jangan menebak tag/image lama atau mengganti volume dengan volume kosong.
+Jangan menebak image lama, membuat volume kosong, atau menimpa SQLite dengan salinan sebelum migration. Counter Resume, lease, identitas, dan jurnal kepemilikan harus tetap konsisten.
 
-## Rollback agent
+## Rollback Agent
 
-Installer menjaga aplikasi/runtime sebelumnya jika validasi install gagal. Untuk rollback terencana, gunakan reviewed source/binary lama dengan config roots dan identity yang sama. Jangan menyalin state dari agent lain. Server tetap menerima agent v0.4.1; agent lama belum membawa fix parent selection ini.
+Gunakan artefak Agent yang direview dengan config, allowed roots, dan identitas mesin yang sama. Installer mempunyai mekanisme pemulihan untuk kegagalan instalasi, tetapi perubahan source Agent yang terencana tetap perlu diverifikasi terpisah dari image server.
 
 ## Verifikasi
 
-Periksa heartbeat-only `check`, backup/history yang existing, decryption credential, dan exact snapshot access. Snapshot tidak ditulis ulang oleh rollback code. Delivery HTTP/SMTP adalah at-least-once: receiver tetap perlu deduplicate event ID bila terjadi response loss/restart.
+Cocokkan image, mount, pengguna runtime, GET health, login, dekripsi konfigurasi, dan akses snapshot lama. Periksa pekerjaan yang belum selesai dan cleanup required sebelum membuka dispatch lagi.
+
+Jika rollback otomatis berhasil setelah deployment gagal, perintah deployment tetap dapat berakhir nonzero. Catat kegagalan awal dan hasil pemulihannya; jangan mengubahnya menjadi bukti deployment sukses.
+
+Lihat [pembaruan](/docs/deployment/updates), [persistence](/docs/deployment/persistence), dan [disaster recovery](/docs/operations/disaster-recovery).

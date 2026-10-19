@@ -1,19 +1,34 @@
-# Volume, SQLite, dan configuration backup
+# Menjaga data Pluton dan configuration backup
+
+Backup aplikasi sumber dan backup konfigurasi Pluton melindungi hal berbeda. Agar layanan dapat dipulihkan, Anda memerlukan repository backup serta konfigurasi, riwayat, dan key Pluton yang cocok.
 
 ## Data yang wajib bertahan
 
-`/data` menyimpan control database, config, keys, job history, cache, downloads, restore, dan recovery workspace. Repository Restic adalah data plane terpisah. Backup volume Pluton saja belum mencakup repository; backup repository saja tidak mencakup plan, subscriptions, dan encrypted credential metadata.
+Volume `/data` menyimpan control database SQLite, konfigurasi, key, riwayat pekerjaan, dan workspace aplikasi. Repository Restic berada pada penyimpanan yang dipilih plan. Menyalin salah satunya saja tidak membuktikan keseluruhan sistem dapat dipulihkan.
 
-SQLite memakai WAL. Copy file `.db` saat penulisan masih berjalan tanpa WAL/consistency procedure bukan backup yang dapat dipercaya. Deployment script menghentikan service sebelum menyalin control DB. Pertahankan key material dan konfigurasi dari titik waktu yang kompatibel.
+SQLite menggunakan WAL. Menyalin file `.db` yang sedang ditulis tanpa prosedur konsistensi dapat menghasilkan backup yang tidak lengkap. Jalur deployment menghentikan aplikasi sebelum membuat salinan control database yang diperlukan.
 
 ## Self-backup
 
-Settings menyediakan self-backup control plane dan CLI self-restore. Pakai runbook yang ditinjau untuk installation mode terkait; restore control plane memerlukan key lama dan schema/code compatible. Jangan menganggap self-backup melakukan recovery aplikasi source atau rotasi credential.
+Gunakan **Settings → Backup Pluton** untuk membuat backup konfigurasi terenkripsi. Prasyaratnya adalah Storage yang dapat ditulis, ruang yang cukup, serta salinan key pemulihan melalui saluran privat yang terpisah.
 
-## Perlindungan
+1. Aktifkan **Back up Pluton's configuration**.
+2. Pilih **Where to store backups** dan gunakan lokasi khusus. Contoh fiktif: `pluton-state/latihan` pada storage yang disetujui.
+3. Tentukan **Back up every (hours)** dan **Number of backups to keep** sesuai kebijakan.
+4. Klik **Update** untuk menyimpan pengaturan.
+5. Gunakan **Backup now**, lalu tunggu status selesai dan periksa daftar melalui **View backups**.
+6. Jadwalkan rehearsal self-restore pada instalasi disposable dengan versi/schema dan key yang sesuai.
 
-Simpan copy terenkripsi off-host dengan akses terbatas, verifikasi restore pada instance disposable, dan catat image digest serta migration journal. Jangan mempublikasikan dump SQLite: ciphertext, identities, inventory, dan key references tetap sensitif walaupun bukan plaintext password.
+Service dapat melewati upload ketika tidak ada perubahan. Periksa waktu keberhasilan dan status, bukan hanya apakah nama blob baru muncul setiap interval.
+
+## Yang tidak dicakup
+
+Self-backup bukan backup otomatis seluruh repository, filesystem aplikasi sumber, database produksi, maupun instalasi host operator. Inventory dan kredensial yang tersimpan dalam control plane tetap sensitif walaupun blob terenkripsi.
+
+Retensi configuration backup dapat menghapus blob lama melebihi jumlah yang dipilih. Gunakan direktori tujuan khusus, kebijakan off-host, dan verifikasi akses sebelum mengaktifkannya.
 
 ## Saat gagal startup
 
-Missing/conflicting/corrupt key adalah error fail-closed. Pulihkan pasangan config/key yang asli; jangan menghapus config agar generator membuat key baru. Lanjutkan ke [disaster recovery](/docs/operations/disaster-recovery).
+Missing, conflicting, atau corrupt key harus ditangani dengan memulihkan pasangan key/config yang asli. Jangan menghapus config supaya aplikasi membuat key baru. Self-restore harus mengikuti runbook dengan server dihentikan dan pemeriksaan versi/schema; jangan menggunakan opsi paksa sebagai diagnosis awal.
+
+Lihat [disaster recovery](/docs/operations/disaster-recovery), [key dan kredensial](/docs/security/credentials), serta [rollback](/docs/deployment/rollback).

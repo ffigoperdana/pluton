@@ -1,17 +1,33 @@
-# Persyaratan sistem
+# Menyiapkan kebutuhan sebelum backup pertama
+
+Sebelum membuka formulir backup, tentukan mesin sumber, tempat penyimpanan, dan tempat pemulihan uji. Ketiganya membutuhkan akses serta ruang yang berbeda. Contoh di halaman ini adalah folder `/srv/example-app` pada `app-01` dan tujuan backup yang disediakan khusus untuk latihan.
 
 ## Pluton Server
 
-Jalur deployment yang diverifikasi di repository adalah Docker source-built image, Linux amd64. Build menggunakan Node.js 24 dan pnpm 10.20.0, SQLite, Restic 0.19.1, dan Rclone 1.75.1. Gunakan engine Docker dengan Compose plugin dan penyimpanan persistent untuk `/data`. Container berjalan non-root.
+Jalur deployment server yang dicakup repository adalah image Docker yang dibangun dari source untuk Linux amd64, dengan Compose plugin dan volume persisten `/data`. Container berjalan sebagai pengguna non-root. Ikuti [deployment Docker](/docs/deployment/docker) untuk langkah pemasangan; jangan menyalin konfigurasi pengembangan ke produksi tanpa meninjaunya.
 
-Tidak ada angka kapasitas universal: sediakan CPU, RAM, dan disk berdasarkan jumlah pekerjaan concurrent, ukuran staging/download, cache, dan Recovery Test. Restore serta recovery dapat membutuhkan ruang mendekati ukuran logical snapshot; ukuran repository terkompresi bukan estimasi workspace yang aman.
+Build repository menggunakan Node.js 24 dan pnpm 10.20.0. Restic dan Rclone disertakan pada jalur instalasi yang didukung. Pengguna Web UI tidak perlu memasang Node.js pada komputernya sendiri hanya untuk mengelola backup.
+
+Siapkan ruang bagi database kontrol, cache, log, unduhan, staging restore, dan recovery. Tidak ada ukuran RAM atau disk tunggal yang cocok untuk semua workload. Pemulihan dapat membutuhkan ruang mendekati ukuran logis snapshot; ukuran repository terkompresi tidak cukup untuk memperkirakan kebutuhan staging.
 
 ## Source agent
 
-Installer agent mendukung Linux Debian/Ubuntu x86_64 dan systemd. Private Node/runtime tidak mengganti Node global host. Database client dipasang terpisah oleh administrator; agent hanya mengiklankan engine yang client-nya valid. Windows/macOS agent tidak mempunyai acceptance yang setara.
+Untuk folder yang berada pada mesin Linux lain, siapkan Remote Agent pada Linux Debian/Ubuntu x86_64 dengan systemd. Administrator membutuhkan hak pemasangan service. Service kemudian berjalan non-root dan hanya membaca folder dalam allowed roots yang dikonfigurasi. Jalur Windows/macOS belum memiliki pengujian penerimaan yang setara.
+
+Sediakan satu folder contoh yang memang boleh dibaca agent, bukan seluruh disk. Database client dipasang terpisah jika nanti diperlukan untuk dump. Installer tidak otomatis memasang semua client database atau mengubah izin file aplikasi.
 
 ## Infrastruktur
 
-Source harus terbaca service account non-root. SFTP memerlukan directory writable hanya pada tujuan managed repository. DNS, firewall outbound agent ke server, serta server ke storage/recovery/notification targets adalah tanggung jawab operator. HTTPS production membutuhkan certificate yang valid bagi setiap client, bukan hanya browser administrator.
+1. Pastikan browser administrator dapat mengakses Pluton melalui alamat HTTPS yang benar.
+2. Pastikan agent dapat menghubungi Pluton secara outbound. Port inbound pada agent tidak diperlukan untuk protokol agent.
+3. Untuk Managed Agent, pastikan agent dan server dapat menjangkau SFTP primer. Akun SFTP perlu menulis pada lokasi repository baru yang terisolasi.
+4. Jika memakai replika S3, pastikan server dapat mengakses endpoint serta bucket. Kredensial S3 replika disimpan dan digunakan server; agent tidak menerimanya.
+5. Sediakan staging pemulihan yang terpisah dari source dan repository, dengan kapasitas serta izin yang sesuai.
 
-Lanjutkan ke [deployment](/docs/deployment) dan [permission source](/docs/remote-agent/permissions).
+## Pemeriksaan sebelum melanjutkan
+
+Sesudah login, buka **Sources**. Mesin remote yang siap dipakai seharusnya menunjukkan **ONLINE**, versi Restic/Rclone, dan **Allowed roots configured: Yes** pada panel **Remote Agent**. Verifikasi [izin source](/docs/remote-agent/permissions) karena ONLINE hanya membuktikan heartbeat.
+
+Pada **Storages**, buat atau pilih tujuan yang sesuai. Keberhasilan menambahkan storage membuktikan konfigurasi/koneksi tertentu; backup dan restore tetap harus diuji. Untuk HCP, gunakan namespace yang sudah ada dan ikuti [persyaratan HCP](/docs/storage/hcp).
+
+Bila folder tidak terlihat, periksa mount dan akses non-root. Bila koneksi gagal, periksa DNS, firewall, waktu host, serta CA yang dipercaya proses terkait. Jangan mengatasi error dengan izin `777`, menonaktifkan TLS, atau memakai repository lama sebagai tujuan percobaan. Setelah siap, lanjutkan ke [Quick Start](/docs/getting-started/quick-start).

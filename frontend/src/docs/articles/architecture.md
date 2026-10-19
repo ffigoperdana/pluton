@@ -1,19 +1,40 @@
-# Komponen arsitektur
+# Cara kerja Pluton
 
-## Control plane
+Pluton menghubungkan sumber data, tempat penyimpanan backup, dan alat verifikasi pemulihan. Memahami peran setiap komponen membantu Anda menentukan mesin mana yang perlu diberi akses, tempat SQL dump dibuat, dan lokasi hasil Restore.
 
-React Web UI memanggil backend Express. SQLite menyimpan plans, backups, storages, remote commands, recovery tests, dan notification outbox. Secrets disimpan terenkripsi dengan key lokal yang dipertahankan. Dokumentasi adalah static bundle yang tidak membaca control plane.
+## Komponen arsitektur
 
-## Data plane
+| Komponen | Pekerjaan | Yang perlu disiapkan operator |
+| --- | --- | --- |
+| Pluton Server dan Web UI | Menyimpan konfigurasi, menjadwalkan pekerjaan, menampilkan hasil | Volume data persisten, origin HTTPS, akses administrator |
+| Agent | Membaca file dan menjalankan backup pada mesin sumber yang dikelola | Identitas Agent, direktori yang diizinkan, akses SFTP primer |
+| Primary Storage | Menyimpan repository utama dan snapshot | Ruang, kredensial, prefix yang tidak berbagi dengan plan lain |
+| Replication Destination | Menyimpan salinan tambahan sesuai jenis plan | Kredensial dan kapasitas tujuan yang terpisah |
+| Target recovery dan host operator | Menyiapkan lingkungan database yang diizinkan | Setup operator, resource, TLS, dan aturan kepemilikan |
 
-Agent Linux melakukan poll outbound ke Pluton Server, memverifikasi signature/HMAC dan lease, lalu menjalankan Restic/Rclone privat sebagai service account non-root. Source canonical harus berada di allowed roots. SQL dump dan credential file dibuat dalam workspace job privat, bukan live source.
+Server, Agent, worker MySQL, dan host operator mempunyai peran berbeda. Memperbarui image aplikasi tidak otomatis memasang operator atau memperbarui Agent.
 
-Restic menangani enkripsi, compression, content deduplication, snapshot, dan restore. Rclone menghubungkan repository ke storage. Repository bukan direktori staging atau SQLite database. Server melakukan managed remote Browse/Restore/Recovery memakai repository session exact snapshot tanpa menghubungi source agent.
+## Contoh penempatan
 
-## Perbedaan lifecycle
+Contoh fiktif: Agent pada `app-01` membaca `/srv/example-app`, lalu menulis ke repository SFTP primer. Server dapat menyalin snapshot selesai ke S3 jika replikasi dikonfigurasi. Browse dan staged Restore Managed Agent membaca primer melalui server; hasil Restore berada pada staging privat server, bukan langsung menimpa aplikasi di `app-01`.
 
-Local managed backup, outbound Remote Agent, dan Legacy Adapter mempunyai boundary berbeda. Legacy tidak diarahkan melalui scheduler/retention managed. Remote recovery staging tidak berarti local historical restore behavior otomatis berubah menjadi staging-only.
+```text
+Sumber aplikasi → Agent → Primary Storage
+                              ↓
+                         Pluton Server → Replication Destination opsional
+                              ↓
+                         Staging / target recovery terpisah
+```
 
-## Notifikasi
+## Memeriksa penempatan yang benar
 
-Terminal state menjadi source durable untuk worker outbox independen. Backup selesai tidak menunggu HTTP receiver atau SMTP relay. Receiver failure tidak mengubah snapshot menjadi gagal. Lihat [workflow](/docs/architecture/workflow) dan [status](/docs/architecture/states).
+1. Buka **Sources** dan pastikan Agent yang dipilih adalah mesin sumber yang dimaksud.
+2. Buka **Storages** dan periksa jenis penyimpanan serta lokasi repository.
+3. Buka **Backup Plans**, pilih plan, lalu cocokkan source dan destination.
+4. Lakukan verifikasi snapshot dan Restore pada data latihan sebelum menyusun cutover.
+
+Jangan menggunakan direktori repository sebagai source atau staging. Repository lama melalui Legacy Repository tetap berada pada jalur read-only yang terpisah.
+
+## Pelajari berikutnya
+
+Ikuti [alur backup sampai recovery](/docs/architecture/workflow), [backup pertama](/docs/getting-started/quick-start), dan [perbedaan Standard dengan Managed Agent](/docs/backup-plans/managed-agent).

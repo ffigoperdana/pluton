@@ -153,7 +153,7 @@ test("clipboard failure cleans up and surfaces only safe fallback message", asyn
 });
 
 test(
-  "actual Fumadocs compilation preserves all 77 titles/routes/TOCs and renders official layout safely",
+  "actual Fumadocs compilation preserves all registered titles/routes/TOCs and renders official layout safely",
   { timeout: 120000 },
   async () => {
     const server = await createServer({
@@ -223,6 +223,10 @@ test(
         "/docs",
         "/docs/getting-started",
         "/docs/notifications/webhook",
+        "/docs/database-restores",
+        "/docs/replication/managed-agent",
+        "/docs/storage/hcp",
+        "/docs/migration/cutover",
         "/docs/not-a-page",
       ]) {
         const router = createMemoryRouter(

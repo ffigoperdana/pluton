@@ -1,24 +1,51 @@
-# OFFLINE, inventory, dan pencabutan
+# Memperbaiki agent OFFLINE dan capability yang tidak sesuai
+
+Mulai dari gejala pada **Sources**, lalu periksa mesin agent. Hindari menghapus state atau membuat identity baru sebelum mengetahui penyebabnya. Mesin contoh pada panduan ini adalah `app-01` yang menghubungi `https://pluton.example.internal`.
 
 ## OFFLINE
 
-Periksa systemd status, DNS dan routing dari host agent, server origin, CA trust, firewall outbound, serta waktu host. HTTPS yang valid di browser belum tentu trusted oleh private Node agent. Gunakan private CA file yang didukung, bukan disable certificate verification.
+1. Buka mesin pada **Sources** dan periksa **Last seen** pada panel **Remote Agent**.
+2. Pada host agent, periksa `systemctl status pluton-agent` dan journal service pada rentang waktu kegagalan.
+3. Periksa DNS, rute, firewall outbound, serta waktu host. Agent harus menjangkau origin Pluton yang dikonfigurasi.
+4. Pastikan certificate HTTPS cocok dengan hostname dan CA dipercaya runtime agent. Keberhasilan browser membuka Pluton tidak membuktikan private Node pada agent memiliki trust yang sama.
+5. Jika memakai private CA, gunakan konfigurasi CA yang didukung installer. Jangan menonaktifkan pemeriksaan certificate atau berpindah ke HTTP untuk melewati error.
+
+Sesudah masalah diperbaiki, tunggu heartbeat baru lalu pastikan status **ONLINE** dan **Last seen** berubah. Jika status tetap OFFLINE, gunakan pemeriksaan koneksi berikut dengan identity yang sama.
 
 ## Heartbeat-only check
 
+Perintah `check` melakukan heartbeat terautentikasi tanpa mengambil atau menjalankan pekerjaan. Contoh untuk layout instalasi default:
+
 ```sh
 sudo -u pluton-agent /opt/pluton-agent/runtime/bin/node \
-  /opt/pluton-agent/app/dist/index.js check
+  /opt/pluton-agent/app/dist/index.js check \
+  --server https://pluton.example.internal \
+  --data-dir /var/lib/pluton-agent \
+  --bin-dir /opt/pluton-agent/bin \
+  --allowed-roots /srv/example-app
 ```
 
-Gunakan environment/config service yang sama; menjalankan CLI tanpa environment service tidak otomatis membaca seluruh systemd EnvironmentFile. `check` tidak poll atau menjalankan queued backup. Jangan gunakan `run --once` sebagai pengganti connection check pada agent yang mempunyai pekerjaan queued.
+Sesuaikan origin, roots, CA, dan konfigurasi lain dengan service yang sebenarnya. Menjalankan CLI dari terminal tidak otomatis membaca seluruh systemd EnvironmentFile. Perbedaan environment dapat menghasilkan hasil koneksi atau inventory yang berbeda.
+
+Hasil yang diharapkan adalah pesan bahwa authenticated heartbeat berhasil dan tidak ada command yang dipoll atau dieksekusi. Jangan memakai `run --once` untuk tes koneksi pada mesin yang mempunyai pekerjaan dalam antrean, karena perintah itu dapat menjalankan pekerjaan.
 
 ## Capabilities
 
-Missing BACKUP_FILESYSTEM berarti roots/tools belum memenuhi validation. Missing engine berarti DB client belum dikenali/root-owned. Update inventory setelah client/permission ditinjau; jangan memalsukan capabilities di database.
+| Gejala | Langkah berikutnya |
+| --- | --- |
+| ONLINE tetapi source gagal | Jalankan [preflight read-only](/docs/remote-agent/permissions) sebagai pengguna service |
+| **Allowed roots configured: No** | Tinjau root yang dipasang dan akses ke lokasi sebenarnya |
+| `BACKUP_FILESYSTEM` tidak ada | Periksa roots serta instalasi Restic/Rclone yang dipercaya |
+| Engine database tidak tersedia | Pasang client yang didukung dan periksa ownership/izin sesuai [persiapan database](/docs/database-backup/engines) |
+| Hooks ditolak | Tinjau konfigurasi hook executable yang disiapkan administrator |
+| Versi tampak benar tetapi fitur gagal | Cocokkan revision/build server dan agent, bukan label versi saja |
+
+Jangan memalsukan capability di database. Setelah perbaikan lokal, perbarui heartbeat/inventory dan jalankan satu backup contoh. Periksa hasil **Browse** serta restore sebelum menganggap masalah selesai.
 
 ## Revoke/remove
 
-Pencabutan dari control plane memblokir agent/command sesuai state. Review active jobs dan plan association sebelum remove. Installer uninstall tanpa purge tidak sama dengan destructive state removal; `--purge` atau `--re-enroll` memerlukan keputusan eksplisit, bukan langkah default untuk OFFLINE.
+**Revoke remote machine** langsung menghentikan penggunaan kredensial agent. Gunakan untuk pencabutan yang memang disengaja, bukan untuk me-refresh status. Tinjau pekerjaan aktif serta plan terkait dahulu. Bila UI melaporkan pencabutan gagal, kredensial mungkin masih aktif.
 
-Lihat [troubleshooting source](/docs/troubleshooting/source) untuk ONLINE tetapi backup source gagal.
+Uninstall tanpa purge berbeda dari menghapus identity dan state. `--purge` atau `--re-enroll` bukan langkah default untuk OFFLINE. Ikuti [pembaruan yang menjaga identity](/docs/remote-agent/updates).
+
+Untuk meminta bantuan, catat waktu, agent/plan/backup ID yang relevan, tahap, dan kode error yang aman. Samarkan path, hostname, dan isi log; jangan menyertakan token, identity file, password, atau temporary config.
