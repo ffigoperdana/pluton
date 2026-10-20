@@ -1,0 +1,43 @@
+name: Agent upgrade safety
+
+on:
+  push:
+    paths:
+      - 'agent/**'
+      - 'installers/upgrade-agent.sh'
+      - 'installers/lib/upgrade-agent.cjs'
+      - 'installers/install-agent.sh'
+      - 'installers/tests/upgrade-agent.*'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/test-agent-upgrade.yml'
+  pull_request:
+    paths:
+      - 'agent/**'
+      - 'installers/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/test-agent-upgrade.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  linux-upgrade-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18.0'
+          cache: pnpm
+      - name: Install Agent build dependencies without lifecycle hooks
+        run: pnpm install --frozen-lockfile --ignore-scripts --filter @plutonhq/pluton-agent...
+      - name: Isolated upgrade transaction and Linux filesystem tests
+        run: bash installers/tests/upgrade-agent.test.sh
+      - name: Compile and test unprivileged Agent including upgrade hold
+        run: pnpm --filter @plutonhq/pluton-agent test

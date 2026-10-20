@@ -6,6 +6,32 @@ Sebelum mulai, catat **Agent ID**, **Agent version**, versi Restic/Rclone, dan *
 
 ## Urutan pembaruan Source Access
 
+Untuk instalasi standar existing, gunakan upgrader khusus dari checkout yang telah
+ditinjau. Contoh path ini fiktif:
+
+```sh
+cd /srv/pluton
+git pull --ff-only origin main
+sudo bash installers/upgrade-agent.sh --check
+sudo bash installers/upgrade-agent.sh
+systemctl is-active pluton-agent
+```
+
+Pause plan dan selesaikan pekerjaan/request Source Access terlebih dahulu.
+`--check` hanya membaca preflight lokal, tanpa heartbeat, build atau restart.
+Agent 0.6.1 mendukung hold agar update berikutnya dapat memeriksa drain sebelum
+menghentikan service. Agent lama yang masih berjalan ditolak: operator harus
+memastikan drain lalu menghentikannya secara aman untuk update pertama.
+
+Upgrader hanya mengganti aplikasi; EnvironmentFile, unit, state/identity, TLS,
+roots, Database & Hooks serta Restic/Rclone tetap dipertahankan. Build memakai
+Node/Corepack privat dan pnpm yang dipin; pnpm global tidak diperlukan. Instalasi
+custom atau tanpa provenance cocok ditolak. Backup root-private dan receipt
+disimpan; rollback memakai `--rollback <exact-upgrade-id>` dan tidak pernah
+menimpa identity/receipt lama. Ikuti `docs/AGENT_UPGRADE.md` untuk syarat platform,
+kapasitas, kegagalan, dan batas rollback. Validasi systemd/Linux nyata tetap wajib
+sebelum rollout; hasil tes Windows bukan bukti production.
+
 Pasang server yang mendukung migration additive 0019 terlebih dahulu. Server baru tetap menerima Agent lama dan konfigurasi statisnya. Agent 0.6.0 tidak boleh dipasang lebih dahulu pada server lama yang belum memahami kontraknya.
 
 Pause jadwal terkait dan drain semua pekerjaan sebelum mengganti binary. Simpan backup root-private atas aplikasi, EnvironmentFile, unit, identity/state, dan host policy. Pertahankan seluruh konfigurasi CA/mTLS, Database & Hooks, SFTP serta roots lama. Bandingkan Agent ID, device, dan secret secara lokal tanpa mencetak secret. Setelah pembaruan, periksa ONLINE, versi/capability, root efektif, lalu validasi source sintetis yang disetujui sebelum workload nyata.

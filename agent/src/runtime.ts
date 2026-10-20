@@ -16,6 +16,7 @@ import type { AgentConfig, StoredAgentIdentity } from "./types.js";
 import { ProgressDelivery, backupProgressStage } from "./progressDelivery.js";
 import { successfulSnapshotIds } from "./resticParent.js";
 import { SourceAccessPolicy, SourcePolicyError } from "./sourceAccessPolicy.js";
+import { upgradeHeld } from "./upgradeGuard.js";
 
 /** Installer validation must not lease or execute queued work. Identity is only read. */
 export async function checkConnection(config: AgentConfig): Promise<void> {
@@ -73,6 +74,7 @@ export async function runOnce(
   signal?: AbortSignal,
 ): Promise<void> {
   if (process.platform !== "linux") return runOnceWork(config, signal);
+  if (await upgradeHeld(config)) return;
   const identity = await loadIdentity(config.dataDir);
   return new SourceAccessPolicy({
     config,
