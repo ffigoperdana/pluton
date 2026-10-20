@@ -5,7 +5,7 @@ on:
     paths:
       - 'agent/**'
       - 'installers/upgrade-agent.sh'
-      - 'installers/lib/upgrade-agent.cjs'
+      - 'installers/lib/upgrade-*.cjs'
       - 'installers/install-agent.sh'
       - 'installers/tests/upgrade-agent.*'
       - 'package.json'
