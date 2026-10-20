@@ -50,6 +50,8 @@ export interface AgentInfo {
    rcloneVersion: string | null;
    capabilities: {
       filesystemRootsConfigured?: boolean;
+      sourceAccessVersion?: 1;
+      sourceAccessModesVersion?: 1;
       commandTypes?: string[];
    };
    lastSeen: string | null;

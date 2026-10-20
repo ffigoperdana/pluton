@@ -10,5 +10,11 @@ export function createAgentAdminRouter(
 	router.post('/enrollments', authMiddleware, controller.createEnrollment.bind(controller));
 	router.post('/enrollments/:id/revoke', authMiddleware, controller.revokeEnrollment.bind(controller));
 	router.post('/devices/:id/revoke', authMiddleware, controller.revokeDevice.bind(controller));
+	router.get('/devices/:id/source-access', authMiddleware, controller.getSourceAccess.bind(controller));
+	router.post('/devices/:id/source-access/validate', authMiddleware, controller.validateSourceAccess.bind(controller));
+	router.post('/devices/:id/source-access/requests', authMiddleware, controller.requestSourceAccess.bind(controller));
+	router.post('/devices/:id/source-access/refresh', authMiddleware, controller.refreshSourceAccess.bind(controller));
+	router.post('/devices/:id/source-access/mode-setup', authMiddleware, controller.setupSourceAccessMode.bind(controller));
+	router.post('/devices/:id/source-access/requests/:requestId/cancel', authMiddleware, controller.cancelSourceAccess.bind(controller));
 	return router;
 }

@@ -15,15 +15,25 @@ import { collectInventory } from "./inventory.js";
 import type { AgentConfig, StoredAgentIdentity } from "./types.js";
 import { ProgressDelivery, backupProgressStage } from "./progressDelivery.js";
 import { successfulSnapshotIds } from "./resticParent.js";
+import { SourceAccessPolicy, SourcePolicyError } from "./sourceAccessPolicy.js";
 
 /** Installer validation must not lease or execute queued work. Identity is only read. */
 export async function checkConnection(config: AgentConfig): Promise<void> {
   const identity = await atAgentStage("load-identity", () =>
     loadIdentity(config.dataDir),
   );
-  const roots = await atAgentStage("resolve-allowed-roots", () =>
-    resolveAllowedRoots(config.allowedRoots),
-  );
+  const sourceAccess =
+    process.platform === "linux"
+      ? await new SourceAccessPolicy({
+          config,
+          agentId: identity.agentId,
+        }).report()
+      : undefined;
+  const roots =
+    sourceAccess?.effectiveRoots ||
+    (await atAgentStage("resolve-allowed-roots", () =>
+      resolveAllowedRoots(config.allowedRoots),
+    ));
   await atAgentStage("heartbeat", () =>
     new AgentClient(config, identity).heartbeat(
       collectInventory({
@@ -31,6 +41,7 @@ export async function checkConnection(config: AgentConfig): Promise<void> {
         binDir: config.binDir,
         hookRoot: config.hookRoot,
         databaseBinDirs: config.databaseBinDirs,
+        sourceAccess,
       }),
     ),
   );
@@ -40,6 +51,9 @@ const SAFE_COMMANDS = new Set([
   "PING",
   "INVENTORY_REFRESH",
   "BACKUP_FILESYSTEM",
+  "SOURCE_ACCESS_VALIDATE",
+  "SOURCE_ACCESS_APPLY",
+  "SOURCE_ACCESS_MODE_SETUP",
 ]);
 
 function rememberCompletion(
@@ -58,19 +72,37 @@ export async function runOnce(
   config: AgentConfig,
   signal?: AbortSignal,
 ): Promise<void> {
+  if (process.platform !== "linux") return runOnceWork(config, signal);
+  const identity = await loadIdentity(config.dataDir);
+  return new SourceAccessPolicy({
+    config,
+    agentId: identity.agentId,
+  }).withActivity(() => runOnceWork(config, signal));
+}
+
+async function runOnceWork(
+  config: AgentConfig,
+  signal?: AbortSignal,
+): Promise<void> {
   const identity = await atAgentStage("load-identity", () =>
     loadIdentity(config.dataDir),
   );
   // Availability of a source is validated within the backup, so losing source
   // access does not silence heartbeat or prevent a safe actionable job failure.
   // Configuration roots are re-resolved/contained by preflightSource, never trusted as canonical here.
-  const roots = config.allowedRoots;
+  const sourcePolicy =
+    process.platform === "linux"
+      ? new SourceAccessPolicy({ config, agentId: identity.agentId })
+      : undefined;
+  const sourceAccess = await sourcePolicy?.report();
+  const roots = sourceAccess?.effectiveRoots || config.allowedRoots;
   const client = new AgentClient(config, identity);
   const inventory = collectInventory({
     filesystemRootsConfigured: roots.length > 0,
     binDir: config.binDir,
     hookRoot: config.hookRoot,
     databaseBinDirs: config.databaseBinDirs,
+    sourceAccess,
   });
 
   await atAgentStage("heartbeat", () => client.heartbeat(inventory));
@@ -113,10 +145,20 @@ export async function runOnce(
   let completion: StoredAgentIdentity["completedCommands"][number];
   try {
     if (command.type === "BACKUP_FILESYSTEM") {
+      // Re-read policy at execution, after leasing. A heartbeat cannot authorize
+      // a source, and a pending/uncertain durable write cannot run a backup.
+      const currentPolicy = await sourcePolicy?.report();
+      if (currentPolicy?.policyError)
+        throw new BackupFilesystemError(
+          "source-validation",
+          "source-policy-violation",
+        );
       const result = await executeFilesystemBackup({
         payload: command.payload,
         config,
-        allowedRoots: roots,
+        allowedRoots: currentPolicy?.effectiveRoots || roots,
+        serverManagedSource:
+          currentPolicy?.authorizationMode === "server-managed",
         successfulSnapshotIds: successfulSnapshotIds(
           identity.completedCommands,
         ),
@@ -146,6 +188,51 @@ export async function runOnce(
         success: true,
         result: result as unknown as Record<string, unknown>,
       };
+    } else if (command.type === "SOURCE_ACCESS_MODE_SETUP") {
+      if (!sourcePolicy || process.getuid?.() === 0)
+        throw new SourcePolicyError(
+          "source-policy-linux-unprivileged-required",
+        );
+      completion = {
+        commandId: command.id,
+        sequence: sequence + 1,
+        success: true,
+        result: await sourcePolicy.prepareModeSetup(command, identity.secret),
+      };
+    } else if (
+      command.type === "SOURCE_ACCESS_VALIDATE" ||
+      command.type === "SOURCE_ACCESS_APPLY"
+    ) {
+      if (!sourcePolicy || process.getuid?.() === 0)
+        throw new SourcePolicyError(
+          "source-policy-linux-unprivileged-required",
+        );
+      const authorizationStillValid = () =>
+        !signal?.aborted &&
+        !!command.leaseExpiresAt &&
+        Date.parse(command.leaseExpiresAt) > Date.now();
+      if (!authorizationStillValid())
+        throw new SourcePolicyError("source-command-lease-expired");
+      if (command.type === "SOURCE_ACCESS_VALIDATE") {
+        completion = {
+          commandId: command.id,
+          sequence: sequence + 1,
+          success: true,
+          result: await sourcePolicy.validate(command.payload),
+        };
+      } else {
+        const { success, error, ...result } = await sourcePolicy.apply(
+          command.payload,
+          authorizationStillValid,
+        );
+        completion = {
+          commandId: command.id,
+          sequence: sequence + 1,
+          success,
+          result,
+          ...(error ? { error: `Source access refused (${error}).` } : {}),
+        };
+      }
     } else {
       // PING and INVENTORY_REFRESH remain deliberate no-ops.
       completion = {
@@ -176,7 +263,9 @@ export async function runOnce(
       // Process output and storage details never leave the machine through command errors.
       error: cancelled
         ? "Backup was cancelled."
-        : "Remote filesystem backup failed.",
+        : command.type.startsWith("SOURCE_ACCESS_")
+          ? `Source access refused (${error instanceof SourcePolicyError ? error.code : "source-policy-unavailable"}).`
+          : "Remote filesystem backup failed.",
       ...(backupFailure
         ? {
             failureStage: backupFailure.stage,

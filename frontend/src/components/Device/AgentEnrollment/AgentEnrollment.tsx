@@ -4,6 +4,9 @@ import Input from '../../common/form/Input/Input';
 import Button from '../../common/Button/Button';
 import { useCreateAgentEnrollment, useRevokeAgentEnrollment, type AgentEnrollment } from '../../../services/devices';
 import classes from './AgentEnrollment.module.scss';
+import { buildAgentInstallCommand, parseSourceRoots } from '../../../utils/agentSourceAccess';
+import { copyToClipboard } from '../../../utils/clipboard';
+import type { SourceAuthorizationMode } from '../../../@types/agentSourceAccess';
 
 type AgentEnrollmentProps = {
    close: () => void;
@@ -13,44 +16,12 @@ type InstallVariant = 'quick' | 'secure';
 
 const communityForkUrl = 'https://github.com/ffigoperdana/pluton.git';
 
-const shellQuote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'";
-
-const buildInstallCommand = (serverUrl: string, allowedRoot: string, insecureHttp: boolean, token?: string) => {
-   const lines = [
-      'sudo ./installers/install-agent.sh \\',
-      '  --server ' + shellQuote(serverUrl) + ' \\',
-      ...(token ? ['  --token ' + shellQuote(token) + ' \\'] : []),
-      '  --allowed-root ' + shellQuote(allowedRoot) + (insecureHttp ? ' \\' : ''),
-      ...(insecureHttp ? ['  --allow-insecure-http'] : []),
-   ];
-   return lines.join('\n');
-};
-
-const copyToClipboard = async (value: string) => {
-   try {
-      if (navigator.clipboard?.writeText) {
-         await navigator.clipboard.writeText(value);
-         return;
-      }
-   } catch {
-      // Trusted-LAN HTTP pages often cannot use the modern Clipboard API.
-   }
-
-   const textArea = document.createElement('textarea');
-   textArea.value = value;
-   textArea.setAttribute('readonly', '');
-   textArea.style.position = 'fixed';
-   textArea.style.opacity = '0';
-   document.body.appendChild(textArea);
-   textArea.select();
-   const copied = document.execCommand('copy');
-   textArea.remove();
-   if (!copied) throw new Error('Clipboard access was denied.');
-};
-
 const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
    const [name, setName] = useState('');
-   const [allowedRoot, setAllowedRoot] = useState('');
+   const [allowedRoots, setAllowedRoots] = useState('');
+   const [authorizationMode, setAuthorizationMode] = useState<SourceAuthorizationMode>('host-approved');
+   const [delegationScope, setDelegationScope] = useState('');
+   const [delegationReviewed, setDelegationReviewed] = useState(false);
    const [enrollment, setEnrollment] = useState<AgentEnrollment | null>(null);
    const [revokeError, setRevokeError] = useState('');
    const [copyError, setCopyError] = useState('');
@@ -60,11 +31,14 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
    const serverUrl = enrollment?.serverUrl || (typeof window === 'undefined' ? '' : window.location.origin);
    const requiresInsecureHttp = serverUrl.startsWith('http:') && enrollment?.insecureHttpAllowed === true;
    const insecureHttpBlocked = serverUrl.startsWith('http:') && enrollment?.insecureHttpAllowed !== true;
-   const sourceRoot = allowedRoot.trim();
-   const hasValidSourceRoot = sourceRoot.startsWith('/');
-   const canGenerateCommands = enrollment && hasValidSourceRoot && !insecureHttpBlocked;
-   const quickInstallCommand = canGenerateCommands ? buildInstallCommand(serverUrl, sourceRoot, requiresInsecureHttp, enrollment.token) : '';
-   const secureInstallCommand = canGenerateCommands ? buildInstallCommand(serverUrl, sourceRoot, requiresInsecureHttp) : '';
+   const parsedRoots = parseSourceRoots(allowedRoots);
+   const hasValidSourceRoots = !parsedRoots.error;
+   const canGenerateCommands = enrollment && hasValidSourceRoots && !insecureHttpBlocked;
+   const delegated = parseSourceRoots(delegationScope);
+   const quickInstallCommand = canGenerateCommands
+      ? buildAgentInstallCommand(serverUrl, parsedRoots.roots, requiresInsecureHttp, enrollment.token)
+      : '';
+   const secureInstallCommand = canGenerateCommands ? buildAgentInstallCommand(serverUrl, parsedRoots.roots, requiresInsecureHttp) : '';
 
    const create = async () => {
       try {
@@ -113,12 +87,77 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
                   onUpdate={setName}
                   error={createEnrollment.isError ? 'Could not create enrollment token.' : ''}
                />
+               <fieldset className={classes.modes}>
+                  <legend>Authorization Mode</legend>
+                  <label>
+                     <input
+                        type="radio"
+                        name="enrollment-authorization-mode"
+                        checked={authorizationMode === 'server-managed'}
+                        onChange={() => {
+                           setAuthorizationMode('server-managed');
+                           setDelegationReviewed(false);
+                        }}
+                     />
+                     <strong>Server-Managed</strong>
+                     <span>Manage backup source directories directly from Pluton after the host administrator delegates the allowed scope.</span>
+                  </label>
+                  <label>
+                     <input
+                        type="radio"
+                        name="enrollment-authorization-mode"
+                        checked={authorizationMode === 'host-approved'}
+                        onChange={() => {
+                           setAuthorizationMode('host-approved');
+                           setDelegationReviewed(false);
+                        }}
+                     />
+                     <strong>Host-Approved</strong>
+                     <span>Require local host administrator approval whenever a source extends beyond the currently approved directories.</span>
+                  </label>
+               </fieldset>
+               {authorizationMode === 'server-managed' && (
+                  <div className={classes.setup}>
+                     <label className={classes.label} htmlFor="enrollment-delegation-scope">
+                        Planned canonical delegated prefixes — one per line
+                     </label>
+                     <textarea
+                        id="enrollment-delegation-scope"
+                        className={classes.roots}
+                        value={delegationScope}
+                        placeholder={'/srv/example-apps\n/srv/example-workers'}
+                        spellCheck={false}
+                        onChange={(event) => {
+                           setDelegationScope(event.target.value);
+                           setDelegationReviewed(false);
+                        }}
+                     />
+                     {delegationScope && delegated.error && (
+                        <p className={classes.error} role="alert">
+                           {delegated.error}
+                        </p>
+                     )}
+                     <p>
+                        Every Pluton administrator can enable readable directories within the host's delegated scope. Start with narrow prefixes.
+                        Installation starts in Host-Approved mode; after the agent is online, request and copy the one-time host setup from Source
+                        Access. This choice alone grants no access.
+                     </p>
+                     <label>
+                        <input type="checkbox" checked={delegationReviewed} onChange={(event) => setDelegationReviewed(event.target.checked)} />I
+                        reviewed this trust boundary and will have the host administrator authorize the scope once after enrollment.
+                     </label>
+                  </div>
+               )}
                <div className={classes.actions}>
                   <Button text="Cancel" variant="tertiary" onClick={close} />
                   <Button
                      text={createEnrollment.isPending ? 'Creating…' : 'Create enrollment token'}
                      variant="primary"
-                     disabled={!name.trim() || createEnrollment.isPending}
+                     disabled={
+                        !name.trim() ||
+                        createEnrollment.isPending ||
+                        (authorizationMode === 'server-managed' && (!delegationReviewed || Boolean(delegated.error)))
+                     }
                      onClick={create}
                   />
                </div>
@@ -126,24 +165,40 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
          ) : (
             <div className={classes.content}>
                <p className={classes.warning}>Copy this token now. It is not stored in the browser after this dialog closes.</p>
+               <p>
+                  Requested authorization mode:{' '}
+                  <strong>{authorizationMode === 'server-managed' ? 'Server-Managed — pending one-time host setup' : 'Host-Approved'}</strong>
+               </p>
                <label className={classes.label}>One-time enrollment token</label>
                <code className={classes.token}>{enrollment.token}</code>
                <label className={classes.label}>Step 1 — Clone your Pluton community fork</label>
                <pre className={classes.command}>{`git clone ${communityForkUrl} pluton\ncd pluton`}</pre>
-               <Input
-                  label="Allowed source root"
-                  required={true}
-                  full={true}
-                  fieldValue={allowedRoot}
-                  placeholder="/srv/example-app"
-                  onUpdate={(value) => {
-                     setAllowedRoot(value);
+               <label className={classes.label} htmlFor="enrollment-source-roots">
+                  Allowed source roots — one application directory per line
+               </label>
+               <textarea
+                  id="enrollment-source-roots"
+                  className={classes.roots}
+                  required
+                  value={allowedRoots}
+                  placeholder={'/srv/example-app\n/srv/example-worker'}
+                  spellCheck={false}
+                  onChange={(event) => {
+                     setAllowedRoots(event.target.value);
                      setCopiedVariant(null);
                      setCopyError('');
                   }}
-                  error={allowedRoot && !hasValidSourceRoot ? 'Enter an absolute Linux path.' : ''}
                />
-               <p className={classes.help}>This path is included in the generated command and validated again on the remote host.</p>
+               {allowedRoots && parsedRoots.error && (
+                  <p className={classes.error} role="alert">
+                     {parsedRoots.error}
+                  </p>
+               )}
+               <p className={classes.help}>
+                  Each path produces a separate --allowed-root option and is validated on the host. A single agent can serve multiple application
+                  plans. Choose specific directories and provision read/traverse permissions for pluton-agent; the installer does not broaden
+                  permissions.
+               </p>
                {canGenerateCommands ? (
                   <div className={classes.installOptions}>
                      <section className={classes.installOption} aria-labelledby="quick-install-title">
@@ -185,8 +240,8 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
                         </div>
                      </section>
                   </div>
-               ) : hasValidSourceRoot ? null : (
-                  <p className={classes.help}>Enter the absolute source root to generate complete copy-paste installation commands.</p>
+               ) : hasValidSourceRoots ? null : (
+                  <p className={classes.help}>Enter absolute application source roots to generate complete copy-paste installation commands.</p>
                )}
                {insecureHttpBlocked && (
                   <p className={classes.error}>
@@ -196,6 +251,25 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
                )}
                {copyError && <p className={classes.error}>{copyError}</p>}
                <label className={classes.label}>Agent service commands</label>
+               <p className={classes.help}>
+                  After enrollment, open the machine's Source Access section to validate paths and manage enabled roots. Additional directories
+                  require host approval followed by an explicit enable action in Pluton. A pending request cannot be used for backup.
+               </p>
+               {authorizationMode === 'server-managed' && (
+                  <div className={classes.setup} role="status">
+                     <h4>Finish Server-Managed setup after the agent is online</h4>
+                     <p>
+                        Open Sources → this remote machine → Source Access → Authorization Mode. Select Server-Managed, review these planned canonical
+                        prefixes, pause any plans, and request the one-time host setup. Copy the exact receipt-bound command and have the host
+                        administrator run it. Refresh the agent report to confirm Server-Managed mode.
+                     </p>
+                     <pre className={classes.command}>{delegated.roots.join('\n')}</pre>
+                     <p>
+                        The install command below uses the reviewed initial static roots. It does not silently delegate this scope. Once host setup is
+                        confirmed, future readable directories inside the scope can be validated and applied entirely in Pluton.
+                     </p>
+                  </div>
+               )}
                <pre className={classes.command}>
                   systemctl status pluton-agent{`\n`}sudo ./installers/install-agent.sh uninstall{`\n`}sudo ./installers/install-agent.sh uninstall
                   --purge

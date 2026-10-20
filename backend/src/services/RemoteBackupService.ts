@@ -27,6 +27,7 @@ import {
 import type { DatabaseArtifact, LifecycleWarning } from '../types/remoteLifecycle';
 import { serverLogger } from '../utils/logger';
 import type { ManagedReplicationCompletionHook } from './ManagedReplicationService';
+import type { AgentSourceAccessService } from './AgentSourceAccessService';
 import {
 	RemoteCommandPreparationError,
 	type RemoteCommandPreparationFailure,
@@ -170,6 +171,7 @@ export class RemoteBackupService {
 	private readonly cronManager: CronManager<any>;
 	private readonly eventService: BackupEventService;
 	private replicationService?: ManagedReplicationCompletionHook;
+	private sourceAccessService?: AgentSourceAccessService;
 
 	constructor(
 		private readonly repositories: RemoteManagedRepositoryStore,
@@ -192,6 +194,8 @@ export class RemoteBackupService {
 	setReplicationService(service: ManagedReplicationCompletionHook): void {
 		this.replicationService = service;
 	}
+
+	setSourceAccessService(service: AgentSourceAccessService): void { this.sourceAccessService = service; }
 
 	/** Internal server recovery shares the same narrow SFTP allowlist/decryption. */
 	async getSftpRecoveryOptions(storageId: string): Promise<Record<string, string>> {
@@ -265,6 +269,13 @@ export class RemoteBackupService {
 	}
 
 	async resumePlan(planId: string): Promise<boolean> {
+		const plan = await this.planStore.getById(planId);
+		const agent = plan ? await this.agentStore.getAgentByDeviceId(plan.sourceId) : null;
+		if (agent && this.sourceAccessService) {
+			await this.sourceAccessService.assertModeChangeIdle(agent.agentId);
+		} else if (agent?.capabilities.sourceAccessModesVersion === 1) {
+			throw new AppError(409, 'Source Access mode validation is unavailable.');
+		}
 		return this.cronManager.resumeSchedule(planId, 'remote-backup');
 	}
 
@@ -700,12 +711,18 @@ export class RemoteBackupService {
 			throw new AppError(400, 'Managed Agent plans support at most two replica destinations.');
 		}
 		setPreparationStage?.('source-validation');
-		this.getSingleSource(plan.sourceConfig);
+		const sourcePath = this.getSingleSource(plan.sourceConfig);
 		this.getSafeExcludes(plan.sourceConfig);
 		setPreparationStage?.('repository-path');
 		validateRepositoryPath(plan.storagePath || '');
 		setPreparationStage?.('agent-capability');
-		await this.getCapableAgent(plan.sourceId);
+		const sourceAgent = await this.getCapableAgent(plan.sourceId);
+		await this.sourceAccessService?.assertModeChangeIdle(sourceAgent.agentId);
+		if (sourceAgent.capabilities.sourceAccessVersion === 1) {
+			setPreparationStage?.('source-validation');
+			if (!this.sourceAccessService) throw new AppError(409, 'Source Access validation is unavailable.');
+			await this.sourceAccessService.assertPlanSource(sourceAgent, sourcePath);
+		}
 		if (plan.settings.remoteLifecycle !== undefined) {
 			setPreparationStage?.('lifecycle-configuration');
 			const lifecycle = parseRemoteLifecycle(plan.settings.remoteLifecycle);

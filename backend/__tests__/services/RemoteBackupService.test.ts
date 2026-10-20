@@ -160,6 +160,36 @@ describe('RemoteBackupService', () => {
 		);
 	});
 
+	it('enforces opt-in Source Access at plan validation and queue time while preserving old-agent behavior', async () => {
+		const sourceAccess = { assertPlanSource: jest.fn().mockResolvedValue(undefined), assertModeChangeIdle: jest.fn().mockResolvedValue(undefined) };
+		service.setSourceAccessService(sourceAccess as any);
+		await service.validatePlanCreation(plan);
+		expect(sourceAccess.assertPlanSource).not.toHaveBeenCalled();
+		agentStore.getAgentByDeviceId.mockResolvedValue({ ...capableAgent, lastSeen: new Date(), capabilities: { ...capableAgent.capabilities, sourceAccessVersion: 1 } });
+		await service.validatePlanCreation(plan);
+		expect(sourceAccess.assertPlanSource).toHaveBeenCalledWith(expect.objectContaining({ agentId: capableAgent.agentId }), '/srv/example-app');
+		sourceAccess.assertPlanSource.mockRejectedValue(new Error('Source Access needs a fresh healthy report.'));
+		await expect(service.queuePlanBackup(plan.id)).rejects.toThrow('fresh healthy');
+		expect(repositories.createBackupAndCommand).not.toHaveBeenCalled();
+	});
+
+	it('refuses normal plan Resume while a guarded authorization mode setup is pending', async () => {
+		const sourceAccess = { assertModeChangeIdle: jest.fn().mockRejectedValue(new Error('Keep this agent backup plans paused.')) };
+		service.setSourceAccessService(sourceAccess as any);
+		agentStore.getAgentByDeviceId.mockResolvedValue({ ...capableAgent, capabilities: { ...capableAgent.capabilities, sourceAccessModesVersion: 1 } });
+		await expect(service.resumePlan(plan.id)).rejects.toThrow('Keep this agent');
+		expect(sourceAccess.assertModeChangeIdle).toHaveBeenCalledWith(capableAgent.agentId);
+	});
+
+	it('rechecks Source Access before materializing a queued command, including database lifecycle plans', async () => {
+		const sourceAccess = { assertPlanSource: jest.fn().mockRejectedValue(new Error('Source Access changed.')), assertModeChangeIdle: jest.fn().mockResolvedValue(undefined) };
+		service.setSourceAccessService(sourceAccess as any);
+		agentStore.getAgentByDeviceId.mockResolvedValue({ ...capableAgent, lastSeen: new Date(), capabilities: { ...capableAgent.capabilities, sourceAccessVersion: 1, backupLifecycleVersion: 2, databaseEngines: ['mysql'] } });
+		const command = { id: 'remote-backup-example-01', agentId: capableAgent.agentId, type: 'BACKUP_FILESYSTEM', payload: { backupId: 'backup-example-01', planId: plan.id, repositoryId: 'remote-repo-example-01' } } as AgentCommand;
+		await expect(service.materializeCommand(capableAgent.agentId, command)).rejects.toMatchObject({ stage: 'source-validation' });
+		expect(sourceAccess.assertPlanSource).toHaveBeenCalledTimes(1);
+	});
+
 	it('rejects malformed remote excludes with a client-safe validation error', async () => {
 		await expect(
 			service.validatePlanCreation({

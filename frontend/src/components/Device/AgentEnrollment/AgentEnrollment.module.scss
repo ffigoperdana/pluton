@@ -40,6 +40,22 @@
 .help {
    font-size: 0.72rem;
 }
+.roots {
+   box-sizing: border-box;
+   width: 100%;
+   min-height: 96px;
+   padding: 12px;
+   resize: vertical;
+   color: var(--content-text-color);
+   background: var(--field-bg);
+   border: 1px solid var(--field-line-color);
+   border-radius: 6px;
+   font: 0.78rem monospace;
+}
+.roots:focus-visible {
+   outline: 2px solid var(--primary-color);
+   outline-offset: 2px;
+}
 .copyAction {
    display: flex;
    justify-content: flex-end;
@@ -72,6 +88,37 @@
    margin: 0;
    color: var(--content-title-color);
    font-size: 0.75rem;
+}
+.modes {
+   display: grid;
+   gap: 12px;
+   border: 1px solid var(--line-color);
+   border-radius: 6px;
+   padding: 12px;
+}
+.modes legend {
+   font-weight: 600;
+   color: var(--content-title-color);
+}
+.modes label {
+   display: grid;
+   grid-template-columns: auto 1fr;
+   gap: 6px 8px;
+}
+.modes span {
+   grid-column: 2;
+   line-height: 1.5;
+}
+.setup {
+   display: grid;
+   gap: 12px;
+   padding: 12px;
+   background: var(--field-bg);
+   border: 1px solid var(--field-line-color);
+   border-radius: 6px;
+}
+.setup label {
+   line-height: 1.5;
 }
 
 @media only screen and (max-width: 760px) {

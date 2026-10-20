@@ -24,6 +24,8 @@ function expectAgentTables(sqlite: Database.Database): void {
 		'agent_enrollment_tokens',
 		'agent_identities',
 		'agent_request_nonces',
+		'agent_source_access_requests',
+		'agent_source_access_state',
 	]);
 	expect(
 		sqlite
@@ -90,5 +92,33 @@ describe('agent database migration', () => {
 		} finally {
 			await fs.rm(temporary, { recursive: true, force: true });
 		}
+	});
+
+	it('adds Source Access after 0018 while preserving enrolled agents, queued commands and plan retention settings', async () => {
+		const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'pluton-source-access-migrations-'));
+		await fs.mkdir(path.join(temporary, 'meta'));
+		const journal = JSON.parse(await fs.readFile(path.join(migrationsFolder, 'meta', '_journal.json'), 'utf8'));
+		const existingEntries = journal.entries.filter((entry: { idx: number }) => entry.idx <= 18);
+		try {
+			for (const entry of existingEntries) await fs.copyFile(path.join(migrationsFolder, `${entry.tag}.sql`), path.join(temporary, `${entry.tag}.sql`));
+			await fs.writeFile(path.join(temporary, 'meta', '_journal.json'), JSON.stringify({ ...journal, entries: existingEntries }));
+			const sqlite = migrationDatabase();
+			try {
+				migrate(drizzle(sqlite), { migrationsFolder: temporary });
+				sqlite.prepare("INSERT INTO devices(id,name,type,agent_id) VALUES('remote-example','app-01','remote-agent','agent-example')").run();
+				sqlite.prepare("INSERT INTO agent_identities(agent_id,device_id,encrypted_secret,hostname,os,architecture,agent_version,capabilities) VALUES('agent-example','remote-example','synthetic-ciphertext','app-01','Example Linux','x64','0.4.1','{}')").run();
+				sqlite.prepare("INSERT INTO agent_commands(id,agent_id,type,payload,idempotency_key) VALUES('command-example','agent-example','INVENTORY_REFRESH','{}','example-idempotency')").run();
+				const settings = JSON.stringify({ retention: { last: 5 }, encryption: true });
+				sqlite.prepare("INSERT INTO plans(id,title,source_id,source_type,source_config,settings) VALUES('plan-example','Example backup','remote-example','device',?,?)")
+					.run(JSON.stringify({ includes: ['/srv/example-app'], excludes: [] }), settings);
+				migrate(drizzle(sqlite), { migrationsFolder });
+				expectAgentTables(sqlite);
+				expect(sqlite.prepare("SELECT agent_version FROM agent_identities WHERE agent_id='agent-example'").get()).toEqual({ agent_version: '0.4.1' });
+				expect(sqlite.prepare("SELECT state FROM agent_commands WHERE id='command-example'").get()).toEqual({ state: 'queued' });
+				expect(sqlite.prepare("SELECT settings FROM plans WHERE id='plan-example'").get()).toEqual({ settings });
+				expect(sqlite.prepare('SELECT count(*) AS count FROM agent_source_access_state').get()).toEqual({ count: 0 });
+				expect(sqlite.prepare('SELECT count(*) AS count FROM agent_source_access_requests').get()).toEqual({ count: 0 });
+			} finally { sqlite.close(); }
+		} finally { await fs.rm(temporary, { recursive: true, force: true }); }
 	});
 });

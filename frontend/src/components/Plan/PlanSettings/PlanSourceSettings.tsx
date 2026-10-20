@@ -1,4 +1,3 @@
-import { useEffect, useRef } from 'react';
 import classes from './PlanSettings.module.scss';
 import PathPicker from '../../common/PathPicker/PathPicker';
 import { NewPlanSettings } from '../../../@types/plans';
@@ -6,17 +5,21 @@ import { useGetDevices } from '../../../services/devices';
 import { useGetStorages } from '../../../services/storage';
 import Select from '../../common/form/Select/Select';
 import StoragePicker from '../../common/form/StoragePicker/StoragePicker';
-import Input from '../../common/form/Input/Input';
 import { Device } from '../../../@types/devices';
+import type { SourceAccessView } from '../../../@types/agentSourceAccess';
+import RemoteSourcePicker from './RemoteSourcePicker';
 
 interface PlanSourceSettingsProps {
    plan: NewPlanSettings;
    isEditing: boolean;
    onUpdate: (plan: NewPlanSettings) => void;
    error: string;
+   sourceAccess?: SourceAccessView;
+   sourceAccessError?: boolean;
+   onDraftBlocked: (blocked: boolean) => void;
 }
 
-const PlanSourceSettings = ({ plan, onUpdate, error, isEditing }: PlanSourceSettingsProps) => {
+const PlanSourceSettings = ({ plan, onUpdate, error, isEditing, sourceAccess, sourceAccessError, onDraftBlocked }: PlanSourceSettingsProps) => {
    const { data } = useGetDevices();
    const { data: storageData } = useGetStorages();
    const isStorageSource = plan.sourceType === 'storage';
@@ -26,7 +29,7 @@ const PlanSourceSettings = ({ plan, onUpdate, error, isEditing }: PlanSourceSett
    const canUseRemoteFilesystem = (device: Device) =>
       device.isRemote === true &&
       device.agent?.status !== 'revoked' &&
-      device.agent?.capabilities?.filesystemRootsConfigured === true &&
+      (device.agent?.capabilities?.filesystemRootsConfigured === true || device.agent?.capabilities?.sourceAccessVersion === 1) &&
       device.agent?.capabilities?.commandTypes?.includes('BACKUP_FILESYSTEM') === true &&
       Boolean(device.agent?.resticVersion && device.agent?.rcloneVersion);
    const deviceList = [];
@@ -34,9 +37,11 @@ const PlanSourceSettings = ({ plan, onUpdate, error, isEditing }: PlanSourceSett
    const selectDevice = (nextDeviceId: string) => {
       const nextDevice = devices.find((device) => device.id === nextDeviceId);
       const nextIsRemoteFilesystem = nextDevice?.isRemote === true;
+      if (nextDeviceId !== deviceId) onDraftBlocked(false);
       onUpdate({
          ...plan,
          sourceId: nextDeviceId,
+         ...(nextDeviceId !== deviceId ? { sourceConfig: { ...plan.sourceConfig, includes: [], excludes: [] } } : {}),
          ...(nextIsRemoteFilesystem
             ? {
                  settings: {
@@ -58,27 +63,6 @@ const PlanSourceSettings = ({ plan, onUpdate, error, isEditing }: PlanSourceSett
          })),
       );
    }
-
-   // When the device changes, reset the sourceConfig paths to prevent invalid paths from being submitted.
-   // Use a ref to track the previous deviceId so we only reset on an actual change (not on mount/remount,
-   // e.g. when navigating between steps in the Add Plan form).
-   const prevDeviceIdRef = useRef<string | null>(null);
-   useEffect(() => {
-      if (isEditing || isStorageSource) {
-         prevDeviceIdRef.current = deviceId;
-         return;
-      }
-      if (prevDeviceIdRef.current !== null && prevDeviceIdRef.current !== deviceId) {
-         onUpdate({
-            ...plan,
-            sourceConfig: {
-               includes: [],
-               excludes: [],
-            },
-         });
-      }
-      prevDeviceIdRef.current = deviceId;
-   }, [isEditing, deviceId]);
 
    if (isStorageSource) {
       const storages = (storageData?.result as { id: string; name: string }[]) || [];
@@ -118,25 +102,22 @@ const PlanSourceSettings = ({ plan, onUpdate, error, isEditing }: PlanSourceSett
          </div>
          {isRemoteFilesystemSource ? (
             <div className={classes.field}>
-               <label className={classes.label}>Remote Backup Source*</label>
                {error && <span className={classes.fieldErrorLabel}>{error}</span>}
-               <Input
-                  fieldValue={plan.sourceConfig.includes[0] || ''}
+               <RemoteSourcePicker
+                  key={deviceId}
+                  deviceId={deviceId}
+                  sourcePath={plan.sourceConfig.includes[0] || ''}
+                  isEditing={isEditing}
+                  access={sourceAccess}
+                  accessError={sourceAccessError}
+                  onDraftBlocked={onDraftBlocked}
                   onUpdate={(sourcePath) =>
                      onUpdate({
                         ...plan,
                         sourceConfig: { ...plan.sourceConfig, includes: sourcePath ? [sourcePath] : [] },
                      })
                   }
-                  placeholder="/srv/example-app"
-                  full={true}
-                  disabled={isEditing}
-                  required={true}
                />
-               <p className={classes.fieldNotice}>
-                  Enter one absolute Linux path inside an allowed source root. The agent validates its real path again and does not expose a remote
-                  file browser.
-               </p>
             </div>
          ) : (
             <div className={classes.field}>
