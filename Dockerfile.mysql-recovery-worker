@@ -36,9 +36,12 @@ RUN apt-get update --error-on=any && apt-get install -y --no-install-recommends 
     && test "$(dpkg-deb -f /tmp/mysql-community-client-plugins_8.4.11-1debian12_amd64.deb Package)" = mysql-community-client-plugins \
     && test "$(dpkg-deb -f /tmp/mysql-community-client-plugins_8.4.11-1debian12_amd64.deb Version)" = 8.4.11-1debian12 \
     && test "$(dpkg-deb -f /tmp/mysql-community-client-plugins_8.4.11-1debian12_amd64.deb Architecture)" = amd64 \
-    && apt-get install -y --download-only --no-install-recommends /tmp/mysql-community-client-core_8.4.11-1debian12_amd64.deb /tmp/mysql-community-client-plugins_8.4.11-1debian12_amd64.deb \
-    && apt-get install -y --no-download --no-install-recommends /tmp/mysql-community-client-core_8.4.11-1debian12_amd64.deb /tmp/mysql-community-client-plugins_8.4.11-1debian12_amd64.deb \
-    && apt-get purge -y curl gnupg && apt-get autoremove -y \
+    && printf '%s\n' '[mysql-worker] stage=APT_LOCAL_INSTALL' \
+    && apt-get install -y --no-install-recommends /tmp/mysql-community-client-core_8.4.11-1debian12_amd64.deb /tmp/mysql-community-client-plugins_8.4.11-1debian12_amd64.deb \
+    && printf '%s\n' '[mysql-worker] stage=APT_TOOL_PURGE' \
+    && apt-get purge -y curl gnupg \
+    && printf '%s\n' '[mysql-worker] stage=APT_AUTOREMOVE' \
+    && apt-get autoremove -y \
     && rm -f /tmp/mysql-key.asc /tmp/mysql-community-client-core_8.4.11-1debian12_amd64.deb /tmp/mysql-community-client-plugins_8.4.11-1debian12_amd64.deb && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
     && groupadd -g 10001 pluton && useradd -u 10001 -g 10001 -M -s /usr/sbin/nologin pluton \
     && mkdir -p /run/pluton-mysql-worker && chown 10001:10001 /run/pluton-mysql-worker && chmod 0700 /run/pluton-mysql-worker

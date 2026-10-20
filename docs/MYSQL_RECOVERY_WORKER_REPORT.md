@@ -97,9 +97,10 @@ The Dockerfile verifies Oracle's signing certificate fingerprint
 `--error-on=any` so even a transient metadata-fetch failure stops the build. The two exact release
 artifacts are fetched separately from Oracle's official HTTPS pool, verified
 against the reviewed SHA-256 values above **before** package inspection/install,
-then checked for exact package name, version and amd64 architecture. APT resolves
-and downloads their declared dependencies, followed by an offline install using
-the explicit local `.deb` paths. No expired-signature bypass,
+then checked for exact package name, version and amd64 architecture. One APT
+installation using the explicit local `.deb` paths resolves and validates their
+declared dependencies, downloading missing libraries from signed repositories.
+No expired-signature bypass,
 `trusted=yes`, unauthenticated APT, floating MySQL version or MariaDB substitution.
 Debian runtime libraries use Debian's signed stable/security repositories.
 
@@ -135,6 +136,43 @@ checks pass. Oracle signature verification and real downloaded package hash/arch
 checks pass. The only local Linux/Docker environment identified was the primary
 Docker Desktop runtime, which was not used for builds, installs or service tests.
 No hosted CI, image publication or production execution was performed here.
+
+### PR #39: local archive installation with `--no-download`
+
+The complete Linux CI log on source `fc0a4a8` establishes a separate failure:
+both archive checksums passed, `--download-only` selected the exact 8.4.11 pair
+and completed successfully, then the following `--no-download` install failed:
+
+```text
+E: Internal Error, Pathname to install is not absolute 'mysql-community-client-plugins_8.4.11-1debian12_amd64.deb'
+```
+
+This is the second APT operation's local-archive path preparation, not an Oracle
+package-discovery, checksum or dependency-resolution error. APT's local source
+acquisition can use the original absolute `.deb` path without caching a copy;
+`--no-download` is not equivalent to permitting that local acquisition. Debian's
+APT source removes queued acquisitions in this mode before normal completion
+resolves the stored filename, and its dpkg adapter rejects a relative filename.
+See [APT acquisition](https://github.com/Debian/apt/blob/2.6.1/apt-pkg/acquire-item.cc),
+[no-download handling](https://github.com/Debian/apt/blob/2.6.1/apt-private/private-install.cc)
+and [absolute-path guard](https://github.com/Debian/apt/blob/2.6.1/apt-pkg/deb/dpkgpm.cc).
+
+The correction uses one normal APT install of the already verified absolute local
+paths. APT still validates/resolves dependencies; it does not select a floating
+Oracle client or substitute package bytes. SHA-256, identity, TLS, repository
+signature checks and required native image/recovery gates remain unchanged.
+Static stage labels distinguish `APT_LOCAL_INSTALL`, `APT_TOOL_PURGE` and
+`APT_AUTOREMOVE`; normal APT diagnostics and nonzero exit codes are retained.
+
+The initial synthetic APT adapter did not model this `--no-download` path; its
+earlier 17 passing checks were not native-build evidence. The tightened adapter
+fails the old chain with the observed diagnostic before the Dockerfile correction
+and passes the single-install chain, including dependency rejection and stage/error
+propagation. This is a regression model backed by the real CI log, not a local
+native APT reproduction. No Docker daemon was available locally for the follow-up.
+The unchanged final UID-10001 image verifier must still pass mysql, mysqldump,
+exact installed package identities and all four authentication-plugin dependency
+checks in hosted Linux CI. Until that build completes, image success is unverified.
 
 Build/runtime verification checks package versions, genuine Community banner,
 required security flags, UID/GID and absent database-server binaries. Worker startup

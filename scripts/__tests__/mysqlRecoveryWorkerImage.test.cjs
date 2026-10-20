@@ -95,10 +95,12 @@ if [ "$1" = update ]; then
 fi
 mode=install
 count=0
+no_download=false
 # Only 8.4.13 is in the synthetic index. Older packages must be explicit files.
 for argument do
   case "$argument" in
     --download-only) mode=download ;;
+    --no-download) no_download=true ;;
     mysql-community-client-*=*) exit 100 ;;
     ./downloads/mysql-community-client-core_8.4.11-1debian12_amd64.deb|./downloads/mysql-community-client-plugins_8.4.11-1debian12_amd64.deb)
       [ -f "$argument" ]; count=$((count + 1)) ;;
@@ -106,7 +108,15 @@ for argument do
 done
 [ "$count" = 2 ]
 printf 'apt-%s\\n' "$mode" >> commands.log
-[ "$TEST_MODE" != dependency-failure ] || exit 100
+if [ "$no_download" = true ]; then
+  # Regression model of the actual PR #39 APT diagnostic, not a native APT run.
+  printf '%s\\n' "E: Internal Error, Pathname to install is not absolute 'mysql-community-client-plugins_8.4.11-1debian12_amd64.deb'" >&2
+  exit 100
+fi
+if [ "$TEST_MODE" = dependency-failure ]; then
+  printf '%s\\n' 'E: synthetic dependency refusal' >&2
+  exit 100
+fi
 `,
     };
     for (const [name, contents] of Object.entries(adapters)) fs.writeFileSync(path.join(directory, 'bin', name), contents, { mode: 0o755 });
@@ -116,12 +126,17 @@ printf 'apt-%s\\n' "$mode" >> commands.log
     const calls = fs.readFileSync(path.join(directory, 'commands.log'), 'utf8');
     if (scenario === 'rolling-index') {
       assert.equal(result.status, 0, result.stderr);
-      assert.match(calls, /metadata\napt-download\napt-install\n$/);
+      assert.match(calls, /metadata\napt-install\n$/);
+      assert.doesNotMatch(calls, /apt-download/);
+      assert.match(result.stdout, /stage=APT_LOCAL_INSTALL[\s\S]*stage=APT_TOOL_PURGE/);
     } else {
       assert.notEqual(result.status, 0);
       if (scenario === 'dependency-failure') {
         assert.equal(result.status, 100);
-        assert.match(calls, /apt-download\n$/);
+        assert.match(calls, /apt-install\n$/);
+        assert.match(result.stdout, /stage=APT_LOCAL_INSTALL/);
+        assert.doesNotMatch(result.stdout, /stage=APT_TOOL_PURGE/);
+        assert.match(result.stderr, /E: synthetic dependency refusal/);
       } else assert.doesNotMatch(calls, /apt-/);
       if (scenario === 'index-failure') assert.equal(calls, 'index\n');
       if (scenario === 'corrupt-download') assert.doesNotMatch(calls, /metadata/);
