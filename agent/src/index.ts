@@ -16,6 +16,7 @@ import {
   SourceAccessError,
 } from "./filesystemPolicy.js";
 import { checkConnection, run, runOnce } from "./runtime.js";
+import { UPGRADE_PROTOCOL } from "./upgradeGuard.js";
 import { lstat } from "node:fs/promises";
 import { loadIdentity } from "./identity.js";
 import {
@@ -71,6 +72,10 @@ function usage(): void {
 
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
+  if (command === "--upgrade-info" && !args.length) {
+    console.log(JSON.stringify(UPGRADE_PROTOCOL));
+    return;
+  }
   if (!command || command === "--help" || command === "-h") {
     usage();
     return;

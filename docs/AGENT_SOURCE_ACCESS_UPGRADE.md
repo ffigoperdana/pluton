@@ -1,5 +1,14 @@
 # Agent Source Access: controlled upgrade and rollback
 
+For the standard existing installation, prefer the upgrade-only
+[Agent upgrader](AGENT_UPGRADE.md): `sudo bash installers/upgrade-agent.sh --check`
+then `sudo bash installers/upgrade-agent.sh`. Agent 0.6.1 adds its local hold
+protocol. Older running Agents need the one-time operator-verified drain/stop
+described there. The manual artifact procedure below remains a separately
+reviewed alternative for unsupported/custom installations; never rerun enrollment
+as an upgrade workaround. All Source Access server-first, identity-preservation,
+host-delegation and rollback compatibility prerequisites still apply.
+
 **Prepared procedure; not executed.** Production access, installation, service
 restart, host approval, ACL changes and a real/synthetic host backup each require
 the applicable separate authorization. All addresses/paths identifying an
