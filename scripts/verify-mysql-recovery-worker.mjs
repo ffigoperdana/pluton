@@ -9,9 +9,22 @@ const probe = spawnSync('/usr/bin/mysql', ['--no-defaults', '--commands=OFF', '-
 assert.equal(probe.status, 0);
 assert.match(probe.stdout, /Ver 8\.4\.11\b.*MySQL Community/);
 assert.doesNotMatch(probe.stdout, /MariaDB/i);
+const dump = spawnSync('/usr/bin/mysqldump', ['--no-defaults', '--version'], { encoding: 'utf8', timeout: 2000 });
+assert.equal(dump.status, 0);
+assert.match(dump.stdout, /Ver 8\.4\.11\b.*MySQL Community/);
+assert.doesNotMatch(dump.stdout, /MariaDB/i);
 for (const name of ['mysql-community-client-core', 'mysql-community-client-plugins']) {
-  const result = spawnSync('/usr/bin/dpkg-query', ['-W', '-f=${Version}', name], { encoding: 'utf8' });
-  assert.equal(result.stdout, '8.4.11-1debian12');
+  const result = spawnSync('/usr/bin/dpkg-query', ['-W', '-f=${Status}\t${Version}\t${Architecture}', name], { encoding: 'utf8' });
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, 'install ok installed\t8.4.11-1debian12\tamd64');
+}
+for (const name of ['authentication_kerberos_client.so', 'authentication_ldap_sasl_client.so', 'authentication_oci_client.so', 'authentication_webauthn_client.so']) {
+  const file = `/usr/lib/mysql/plugin/${name}`;
+  assert.equal(statSync(file).uid, 0);
+  assert.equal(statSync(file).mode & 0o022, 0);
+  const dependencies = spawnSync('/usr/bin/ldd', [file], { encoding: 'utf8', timeout: 2000, env: { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' } });
+  assert.equal(dependencies.status, 0);
+  assert.doesNotMatch(dependencies.stdout + dependencies.stderr, /not found/);
 }
 for (const name of ['/usr/sbin/mysqld', '/usr/bin/mysqld', '/usr/bin/mariadbd', '/usr/lib/postgresql', '/var/run/docker.sock', '/data']) assert.equal(existsSync(name), false, name);
 assert.equal(statSync('/app/worker.mjs').uid, 0);
