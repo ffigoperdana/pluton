@@ -410,7 +410,12 @@ test("unknown hold files prevent cleanup without removing owner evidence", (t) =
   const f = fixture(t);
   f.c.service.health = () =>
     fs.writeFileSync(path.join(f.c.hold, "unknown"), "unrelated");
-  assert.throws(() => upgrade.upgrade(f.c), /Unknown files/);
+  const error = captureFailure(() => upgrade.upgrade(f.c));
+  assert.match(
+    error.message,
+    /Unknown files/,
+    JSON.stringify(diagnostics.safeRecord(error)),
+  );
   assert.equal(fs.existsSync(path.join(f.c.hold, "owner.json")), true);
   assert.equal(
     fs.readFileSync(path.join(f.c.hold, "unknown"), "utf8"),
@@ -762,6 +767,347 @@ test("CLI uses structured formatting and never prints untrusted invocation paths
   assert(!error.stderr.includes("synthetic-private-invocation-marker"));
   assert(!error.stderr.includes("at Object."));
 });
+
+function withBuildWorkspace(f) {
+  const build = f.c.build,
+    runtime = path.join(f.c.install, "runtime");
+  fs.mkdirSync(runtime);
+  fs.writeFileSync(path.join(runtime, "runtime-marker"), "unchanged runtime");
+  f.c.build = (id, next) => {
+    build(id, next);
+    const work = path.join(f.c.backups, id, "build"),
+      stage = path.join(work, "stage");
+    fs.mkdirSync(stage, { recursive: true });
+    fs.symlinkSync(
+      runtime,
+      path.join(stage, "runtime"),
+      linux ? "dir" : "junction",
+    );
+    fs.writeFileSync(path.join(work, "source.sha256"), "a".repeat(64));
+    // Scratch caches can contain hardlinks; app/identity guards remain stricter.
+    fs.linkSync(
+      path.join(work, "source.sha256"),
+      path.join(work, "cache-alias"),
+    );
+  };
+  return runtime;
+}
+test("backup sync handles real build directory links without opening targets and preserves all 88 copied app files", (t) => {
+  const f = fixture(t),
+    runtime = withBuildWorkspace(f),
+    open = fs.openSync,
+    sync = f.c.sync,
+    synced = [];
+  for (let i = 0; i < 86; i++)
+    fs.writeFileSync(path.join(f.c.app, "dist", `${i}.js`), `synthetic ${i}`);
+  const previous = upgrade.treeDigest(f.c.app, f.c.owner, linux),
+    runtimeDigest = upgrade.treeDigest(runtime, f.c.owner, linux),
+    original = fs.statSync(path.join(f.c.app, "dist/index.js"));
+  let openedLink = false;
+  fs.openSync = (file, ...args) => {
+    if (
+      typeof file === "string" &&
+      file.endsWith(path.join("build", "stage", "runtime"))
+    )
+      openedLink = true;
+    return open(file, ...args);
+  };
+  f.c.sync = (directory) => {
+    synced.push(directory);
+    sync(directory);
+  };
+  let result;
+  try {
+    result = upgrade.upgrade(f.c);
+  } finally {
+    fs.openSync = open;
+  }
+  const transaction = path.join(f.c.backups, result.id),
+    backup = path.join(transaction, "app");
+  assert.equal(result.phase, "healthy");
+  assert.equal(upgrade.treeDigest(backup, f.c.owner, linux), previous);
+  assert.equal(fs.readdirSync(path.join(backup, "dist")).length + 1, 88);
+  assert.equal(openedLink, false);
+  assert(synced.includes(path.join(transaction, "build/stage")));
+  assert(synced.includes(transaction));
+  assert(
+    fs
+      .lstatSync(path.join(transaction, "build/stage/runtime"))
+      .isSymbolicLink(),
+  );
+  assert.equal(upgrade.treeDigest(runtime, f.c.owner, linux), runtimeDigest);
+  const prior = path.join(f.c.install, `.previous-${result.id}`);
+  assert.equal(upgrade.treeDigest(prior, f.c.owner, linux), previous);
+  assert.equal(
+    fs.statSync(path.join(prior, "dist/index.js")).mtimeMs,
+    original.mtimeMs,
+  );
+  f.assertPreserved();
+});
+test("copy success followed by app fsync EIO is distinguished and retains incomplete transaction evidence", (t) => {
+  const f = fixture(t),
+    open = fs.openSync,
+    fsync = fs.fsyncSync,
+    close = fs.closeSync,
+    targets = new Set();
+  let injected = false,
+    closed = false;
+  fs.openSync = (file, ...args) => {
+    const fd = open(file, ...args);
+    if (
+      typeof file === "string" &&
+      file.startsWith(f.c.backups + path.sep) &&
+      file.endsWith(path.join("app", "dist", "index.js"))
+    )
+      targets.add(fd);
+    return fd;
+  };
+  fs.fsyncSync = (fd) => {
+    if (!injected && targets.has(fd)) {
+      injected = true;
+      throw Object.assign(new Error("synthetic-private-sync-marker"), {
+        code: "EIO",
+      });
+    }
+    return fsync(fd);
+  };
+  fs.closeSync = (fd) => {
+    if (targets.delete(fd)) closed = true;
+    return close(fd);
+  };
+  let error;
+  try {
+    error = captureFailure(() => upgrade.upgrade(f.c));
+  } finally {
+    fs.openSync = open;
+    fs.fsyncSync = fsync;
+    fs.closeSync = close;
+  }
+  const d = diagnostics.safeRecord(error),
+    receipt = receiptFailure(f);
+  assert(injected && closed);
+  assert.equal(d.failedStage, "SYNC_APP");
+  assert.equal(d.errorCode, "FILESYSTEM_IO_FAILED");
+  assert.equal(d.rollback, "FAILED"); // Protected backups are not complete yet.
+  assert.equal(receipt.phase, "drained");
+  assert.equal(
+    upgrade.treeDigest(
+      path.join(f.c.backups, receipt.id, "app"),
+      f.c.owner,
+      linux,
+    ),
+    f.old,
+  );
+  assert.equal(fs.existsSync(f.c.hold), true);
+  assert(!f.calls.includes("start"));
+  assert.equal(f.app(), "old app");
+  f.assertPreserved();
+  assert(!diagnostics.formatFailure(error).includes("synthetic-private"));
+});
+test("late backup directory fsync failure propagates through successful startup rollback without losing the original app", (t) => {
+  const f = fixture(t),
+    sync = f.c.sync;
+  withBuildWorkspace(f);
+  let injected = false;
+  f.c.sync = (directory) => {
+    if (!injected && directory.endsWith(path.join("build", "stage"))) {
+      injected = true;
+      throw Object.assign(new Error("synthetic-private-directory-sync"), {
+        code: "EIO",
+      });
+    }
+    sync(directory);
+  };
+  const error = captureFailure(() => upgrade.upgrade(f.c)),
+    d = diagnostics.safeRecord(error);
+  assert(injected);
+  assert.equal(d.failedStage, "SYNC_BACKUP");
+  assert.equal(d.errorCode, "FILESYSTEM_IO_FAILED");
+  assert.equal(d.rollback, "SUCCESS");
+  assert.equal(d.previousAgentPreserved, "YES");
+  assert.equal(receiptFailure(f).phase, "rolled-back");
+  assert.equal(f.c.service.active(), true);
+  assert.equal(f.calls.filter((call) => call === "start").length, 1);
+  assert.equal(f.app(), "old app");
+  f.assertPreserved();
+  assert.equal(fs.existsSync(f.c.hold), false);
+});
+for (const kind of ["partial-app", "protected-permission"]) {
+  test(`${kind} backup failure retains evidence and never activates an unprepared candidate`, (t) => {
+    const f = fixture(t),
+      cp = fs.cpSync,
+      copy = fs.copyFileSync;
+    fs.cpSync = (from, to, ...options) => {
+      if (kind === "partial-app" && from === f.c.app) {
+        fs.mkdirSync(to);
+        fs.writeFileSync(
+          path.join(to, "partial.js"),
+          "synthetic partial backup",
+        );
+        throw Object.assign(new Error("synthetic-private-partial"), {
+          code: "EIO",
+        });
+      }
+      return cp(from, to, ...options);
+    };
+    fs.copyFileSync = (from, to, ...options) => {
+      if (kind === "protected-permission" && from === f.c.unit)
+        throw Object.assign(new Error("synthetic-private-permission"), {
+          code: "EACCES",
+        });
+      return copy(from, to, ...options);
+    };
+    let error;
+    try {
+      error = captureFailure(() => upgrade.upgrade(f.c));
+    } finally {
+      fs.cpSync = cp;
+      fs.copyFileSync = copy;
+    }
+    const d = diagnostics.safeRecord(error),
+      receipt = receiptFailure(f);
+    assert.equal(
+      d.failedStage,
+      kind === "partial-app" ? "COPY_APP" : "COPY_PROTECTED_FILES",
+    );
+    assert.equal(
+      d.errorCode,
+      kind === "partial-app"
+        ? "FILESYSTEM_IO_FAILED"
+        : "FILESYSTEM_PERMISSION_DENIED",
+    );
+    assert.equal(d.rollback, "FAILED");
+    assert.equal(receipt.phase, "drained");
+    assert.equal(fs.existsSync(f.c.hold), true);
+    assert.equal(upgrade.treeDigest(f.c.app, f.c.owner, linux), f.old);
+    assert.equal(
+      fs.readFileSync(f.c.provenance, "utf8"),
+      "old verified provenance",
+    );
+    assert(!f.calls.includes("start"));
+    f.assertPreserved();
+    assert(!JSON.stringify(receipt.failure).includes("synthetic-private"));
+  });
+}
+test("sync rejects links outside build scratch and never opens their targets", (t) => {
+  const f = fixture(t),
+    outside = path.join(f.temporary, "outside"),
+    tree = path.join(f.temporary, "tree");
+  fs.mkdirSync(outside);
+  fs.mkdirSync(tree);
+  fs.symlinkSync(outside, path.join(tree, "link"), linux ? "dir" : "junction");
+  const error = captureFailure(() =>
+    upgrade.syncTree(tree, f.c.sync, path.join(tree, "build")),
+  );
+  assert.equal(diagnostics.safeRecord(error).errorCode, "SYNC_ENTRY_UNSAFE");
+  assert.throws(
+    () => upgrade.syncFile(path.join(tree, "link")),
+    /regular file/,
+  );
+  assert.equal(fs.readdirSync(outside).length, 0);
+});
+test("sync refuses file replacement during open, closes the descriptor and never flushes the unrelated file", (t) => {
+  const f = fixture(t),
+    expected = path.join(f.temporary, "expected"),
+    replacement = path.join(f.temporary, "replacement");
+  fs.writeFileSync(expected, "synthetic expected");
+  fs.writeFileSync(replacement, "synthetic unrelated");
+  const open = fs.openSync,
+    close = fs.closeSync,
+    fsync = fs.fsyncSync;
+  let opened,
+    closed = false,
+    flushed = false,
+    error;
+  fs.openSync = (file, ...args) => {
+    const fd = open(file === expected ? replacement : file, ...args);
+    if (file === expected) opened = fd;
+    return fd;
+  };
+  fs.closeSync = (fd) => {
+    if (fd === opened) closed = true;
+    return close(fd);
+  };
+  fs.fsyncSync = (fd) => {
+    if (fd === opened) flushed = true;
+    return fsync(fd);
+  };
+  try {
+    error = captureFailure(() => upgrade.syncFile(expected));
+  } finally {
+    fs.openSync = open;
+    fs.closeSync = close;
+    fs.fsyncSync = fsync;
+  }
+  assert.equal(diagnostics.safeRecord(error).errorCode, "SYNC_ENTRY_UNSAFE");
+  assert(closed && !flushed);
+  assert.equal(fs.readFileSync(replacement, "utf8"), "synthetic unrelated");
+});
+test(
+  "Linux directory-link r+ reproduction and read-only fsync preserve bytes, modes, owner and timestamps",
+  { skip: !linux },
+  (t) => {
+    const f = fixture(t),
+      work = path.join(f.temporary, "transaction/build"),
+      runtime = path.join(f.temporary, "runtime");
+    fs.mkdirSync(work, { recursive: true });
+    fs.mkdirSync(runtime);
+    const link = path.join(work, "runtime"),
+      file = path.join(work, "readonly.js");
+    fs.symlinkSync(runtime, link);
+    fs.writeFileSync(file, "synthetic readonly", { mode: 0o444 });
+    fs.utimesSync(file, 1000, 1000);
+    const before = fs.statSync(file);
+    assert.throws(
+      () => fs.openSync(link, "r+"),
+      (error) => error.code === "EISDIR",
+    );
+    const open = fs.openSync,
+      fsync = fs.fsyncSync;
+    let sawReadonly = false,
+      syncCount = 0;
+    fs.openSync = (name, flags, ...rest) => {
+      if (name === file) {
+        sawReadonly = true;
+        assert.equal(flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR), 0);
+        assert(flags & fs.constants.O_NOFOLLOW);
+      }
+      return open(name, flags, ...rest);
+    };
+    fs.fsyncSync = (fd) => {
+      syncCount++;
+      return fsync(fd);
+    };
+    try {
+      upgrade.syncTree(path.dirname(work), upgrade.syncDirectory, work);
+    } finally {
+      fs.openSync = open;
+      fs.fsyncSync = fsync;
+    }
+    assert(sawReadonly && syncCount >= 3); // File, build directory and parent directory.
+    const after = fs.statSync(file);
+    for (const field of ["mode", "uid", "gid", "size", "mtimeMs"])
+      assert.equal(after[field], before[field]);
+    assert.equal(fs.readFileSync(file, "utf8"), "synthetic readonly");
+  },
+);
+test(
+  "Linux real file permission refusal is fail-closed without chmod as recovery",
+  { skip: !linux || process.getuid?.() === 0 },
+  (t) => {
+    const f = fixture(t),
+      file = path.join(f.temporary, "unreadable");
+    fs.writeFileSync(file, "synthetic unreadable", { mode: 0o000 });
+    t.after(() => {
+      if (fs.existsSync(file)) fs.chmodSync(file, 0o600);
+    });
+    assert.throws(
+      () => upgrade.syncFile(file),
+      (error) => error.code === "EACCES",
+    );
+    assert.equal(fs.statSync(file).mode & 0o777, 0);
+  },
+);
 test(
   "Linux directory fsync, backup 0700 and credential backup 0600 are real filesystem checks",
   { skip: !linux },
