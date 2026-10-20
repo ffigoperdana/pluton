@@ -17,20 +17,32 @@ FROM node:24.16.0-bookworm-slim@sha256:2c87ef9bd3c6a3bd4b472b4bec2ce9d16354b0c57
 ARG VCS_REF=unknown
 ARG IMAGE_SOURCE=unknown
 LABEL org.opencontainers.image.source="${IMAGE_SOURCE}" org.opencontainers.image.revision="${VCS_REF}" org.opencontainers.image.title="Pluton optional Oracle MySQL recovery worker"
-# Oracle signed InRelease -> signed Packages SHA-256 -> exact reviewed package bytes.
-# Do not bypass an expired/missing signature. A changed key/version requires review.
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+# Oracle's rolling signed index can drop older versions while pool files remain.
+# Use the reviewed pool bytes by SHA-256, not version lookup in the current index.
+# Keep signed repository/dependency checks; key, package and hash changes need review.
+RUN apt-get update --error-on=any && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
     && curl --proto '=https' --tlsv1.2 -fsSL https://repo.mysql.com/RPM-GPG-KEY-mysql-2025 -o /tmp/mysql-key.asc \
     && test "$(gpg --show-keys --with-colons /tmp/mysql-key.asc | awk -F: '$1=="pub" {n++} END {print n}')" = 1 \
     && test "$(gpg --show-keys --with-colons /tmp/mysql-key.asc | awk -F: '$1=="fpr" {print $10; exit}')" = BCA43417C3B485DD128EC6D4B7B3B788A8D3785C \
     && gpg --dearmor --output /usr/share/keyrings/mysql-community.gpg /tmp/mysql-key.asc \
     && printf '%s\n' 'deb [arch=amd64 signed-by=/usr/share/keyrings/mysql-community.gpg] https://repo.mysql.com/apt/debian/ bookworm mysql-8.4-lts' > /etc/apt/sources.list.d/mysql-community.list \
-    && apt-get update \
-    && apt-get install -y --download-only --no-install-recommends mysql-community-client-core=8.4.11-1debian12 mysql-community-client-plugins=8.4.11-1debian12 \
-    && printf '%s\n' '19c6e1d38f95fa77ebb675c01c0b3c50554026adc5ed0c114cee2a72520c2fea  /var/cache/apt/archives/mysql-community-client-core_8.4.11-1debian12_amd64.deb' '95b66f6ba68e2b064e175fa7368ae6d6d52919b92b7d69e6b48d949af642eb07  /var/cache/apt/archives/mysql-community-client-plugins_8.4.11-1debian12_amd64.deb' | sha256sum -c - \
-    && apt-get install -y --no-download --no-install-recommends mysql-community-client-core=8.4.11-1debian12 mysql-community-client-plugins=8.4.11-1debian12 \
-    && apt-get purge -y curl gnupg && apt-get autoremove -y \
-    && rm -f /tmp/mysql-key.asc && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
+    && apt-get update --error-on=any \
+    && curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL https://repo.mysql.com/apt/debian/pool/mysql-8.4-lts/m/mysql-community/mysql-community-client-core_8.4.11-1debian12_amd64.deb -o /tmp/mysql-community-client-core_8.4.11-1debian12_amd64.deb \
+    && curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL https://repo.mysql.com/apt/debian/pool/mysql-8.4-lts/m/mysql-community/mysql-community-client-plugins_8.4.11-1debian12_amd64.deb -o /tmp/mysql-community-client-plugins_8.4.11-1debian12_amd64.deb \
+    && printf '%s\n' '19c6e1d38f95fa77ebb675c01c0b3c50554026adc5ed0c114cee2a72520c2fea  /tmp/mysql-community-client-core_8.4.11-1debian12_amd64.deb' '95b66f6ba68e2b064e175fa7368ae6d6d52919b92b7d69e6b48d949af642eb07  /tmp/mysql-community-client-plugins_8.4.11-1debian12_amd64.deb' | sha256sum -c - \
+    && test "$(dpkg-deb -f /tmp/mysql-community-client-core_8.4.11-1debian12_amd64.deb Package)" = mysql-community-client-core \
+    && test "$(dpkg-deb -f /tmp/mysql-community-client-core_8.4.11-1debian12_amd64.deb Version)" = 8.4.11-1debian12 \
+    && test "$(dpkg-deb -f /tmp/mysql-community-client-core_8.4.11-1debian12_amd64.deb Architecture)" = amd64 \
+    && test "$(dpkg-deb -f /tmp/mysql-community-client-plugins_8.4.11-1debian12_amd64.deb Package)" = mysql-community-client-plugins \
+    && test "$(dpkg-deb -f /tmp/mysql-community-client-plugins_8.4.11-1debian12_amd64.deb Version)" = 8.4.11-1debian12 \
+    && test "$(dpkg-deb -f /tmp/mysql-community-client-plugins_8.4.11-1debian12_amd64.deb Architecture)" = amd64 \
+    && printf '%s\n' '[mysql-worker] stage=APT_LOCAL_INSTALL' \
+    && apt-get install -y --no-install-recommends /tmp/mysql-community-client-core_8.4.11-1debian12_amd64.deb /tmp/mysql-community-client-plugins_8.4.11-1debian12_amd64.deb \
+    && printf '%s\n' '[mysql-worker] stage=APT_TOOL_PURGE' \
+    && apt-get purge -y curl gnupg \
+    && printf '%s\n' '[mysql-worker] stage=APT_AUTOREMOVE' \
+    && apt-get autoremove -y \
+    && rm -f /tmp/mysql-key.asc /tmp/mysql-community-client-core_8.4.11-1debian12_amd64.deb /tmp/mysql-community-client-plugins_8.4.11-1debian12_amd64.deb && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
     && groupadd -g 10001 pluton && useradd -u 10001 -g 10001 -M -s /usr/sbin/nologin pluton \
     && mkdir -p /run/pluton-mysql-worker && chown 10001:10001 /run/pluton-mysql-worker && chmod 0700 /run/pluton-mysql-worker
 WORKDIR /app

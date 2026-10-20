@@ -52,6 +52,9 @@ jobs:
           python3 scripts/__tests__/deployment_policy_test.py
           for script in deploy/*.sh; do sh -n "$script"; done
 
+      - name: Check pinned Oracle worker package installation boundaries
+        run: node --test scripts/__tests__/mysqlRecoveryWorkerImage.test.cjs
+
       - name: Check narrow automatic recovery host operator and lifecycle boundaries
         run: |
           node --check deploy/automatic-recovery/operator.cjs
