@@ -176,6 +176,43 @@ execution deadline; a child exiting nonzero is not called a timeout based on its
 output. Build, startup, filesystem permission/space/IO and preservation failures
 have separate codes. No checks or rollback requirements are bypassed.
 
+Backup operations now distinguish `COPY_APP` / `APP_BACKUP_COPY_FAILED`,
+`SYNC_APP` / `APP_BACKUP_SYNC_FAILED`, `COPY_PROTECTED_FILES` /
+`PROTECTED_BACKUP_COPY_FAILED`, and `SYNC_BACKUP` / `BACKUP_SYNC_FAILED`.
+Known filesystem errors retain their existing safe permission/space/IO codes;
+`SYNC_ENTRY_UNSAFE` refuses non-regular files, file replacement during open, or links
+outside the owned build scratch. The original stage/code survive rollback.
+
+The earlier whole-transaction walker treated `build/stage/runtime` as a file:
+the builder deliberately creates that directory symlink, `lstat()` does not call
+it a directory, and opening its target with `r+` fails with `EISDIR` on Linux.
+This can happen after every app byte was copied correctly; an app-only inventory
+does not inspect build scratch. It is a source defect consistent with a generic
+`BACKUP_FAILED`, but the historical stage/code alone cannot prove that incident's
+exact syscall or errno. Copy/timestamp, regular-file sync and directory sync
+failures were previously indistinguishable. Do not backfill old receipts.
+
+Regular files are now checked before/after opening with `O_NOFOLLOW` and fsynced
+through read-only descriptors on Linux. This does not chmod source files, alter
+their ownership or bypass a sync error. The Windows synthetic harness retains a
+writable handle because Windows requires it for `FlushFileBuffers`; Windows is
+not an installation target. Every regular file, including retained build files,
+is still fsynced and every real directory is synced after its children. Links
+are allowed only below this transaction's `build/` directory: their containing
+directories are synced and targets are never opened or traversed. App and
+protected-backup paths remain strict. No build/transaction evidence is deleted.
+
+An incomplete backup can still make automatic rollback fail closed even when
+the original app remains intact. Such failures retain the exact hold and receipt
+for the existing explicit rollback/operator procedure; they never activate the
+candidate or reset policy/identity to force recovery. A late sync failure with a
+complete verified backup can restore/start the previously active app normally.
+The prepared receipt is still published only after all required syncs succeed.
+
+References: [Linux open errors](https://man7.org/linux/man-pages/man2/open.2.html),
+[file and directory fsync](https://man7.org/linux/man-pages/man2/fsync.2.html), and
+[Windows FlushFileBuffers](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers).
+
 The first failure's stage/code survive automatic rollback. `Rollback: SUCCESS`
 means app restoration and owned-fence cleanup completed; `NOT_NEEDED` means no app
 rollback was needed; `FAILED` means recovery/cleanup could not complete. A failed
@@ -250,3 +287,25 @@ Linux workflow also watches the diagnostics helper; hosted Linux/systemd and
 production execution were not performed for this revision. Agent/backend source
 and transaction authorization rules are unchanged; their full suites were not
 rerun for this diagnostics-only patch.
+
+Backup synchronization follow-up: upgrade transaction tests **45 PASS / 4 Linux
+SKIPPED** locally (49 tests). They include a real 88-file copy with a private
+build directory link, non-dereference checks, copy-then-file-fsync and directory
+sync failures, partial backup, permission errors and original-artifact/state
+preservation. Linux-only tests reproduce the old `r+` directory-link `EISDIR`,
+exercise read-only file fsync and directory fsync, and test actual permission
+refusal without relaxing source modes. The local machine had no running Docker
+daemon or disposable Linux distro; the Linux cases have **not** run here.
+Passing Windows tests is not approval for another production attempt. Run the
+existing Agent upgrade safety Linux workflow on the final commit, then review
+its results and authorize any controlled retry separately. No existing Agent,
+production transaction or service is accessed by these tests.
+
+Agent typecheck/build with the repository's installed TypeScript compiler and
+the complete Agent suite passed (**75 PASS / 77 Linux SKIPPED**). Two initial
+sandbox loopback failures passed when rerun with local-test network access;
+no checks were disabled. One Windows hold-file assertion failed once and was
+not reproduced in five isolated reruns or the final full upgrade harness. Its
+assertion remains strict, now with sanitized failure metadata; the original
+one-off cause is unresolved. Bash syntax/help/refusal checks and the final
+upgrade harness pass. These limits still require independent Linux validation.

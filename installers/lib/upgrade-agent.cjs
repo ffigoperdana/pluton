@@ -309,22 +309,58 @@ function validateDisk(available, appKiB) {
     "Insufficient free disk: preserve at least 2 GiB plus two app copies on each staging/backup filesystem.",
   );
 }
-function syncTree(directory, sync) {
+function syncFile(file) {
+  const before = fs.lstatSync(file);
+  requireSafe(
+    before.isFile() && !before.isSymbolicLink(),
+    "Synchronization requires a regular file.",
+    "SYNC_ENTRY_UNSAFE",
+  );
+  const fd = fs.openSync(
+    file,
+    // Linux fsync accepts a read-only regular-file descriptor. Windows requires
+    // a writable handle for FlushFileBuffers in the portable synthetic tests.
+    (process.platform === "win32"
+      ? fs.constants.O_RDWR
+      : fs.constants.O_RDONLY) |
+      fs.constants.O_NOFOLLOW |
+      fs.constants.O_NONBLOCK,
+  );
+  try {
+    const opened = fs.fstatSync(fd);
+    requireSafe(
+      opened.isFile() && opened.dev === before.dev && opened.ino === before.ino,
+      "Synchronization entry changed during open.",
+      "SYNC_ENTRY_UNSAFE",
+    );
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+function syncTree(directory, sync, buildRoot) {
+  requireSafe(
+    fs.lstatSync(directory).isDirectory(),
+    "Synchronization requires a real directory.",
+    "SYNC_ENTRY_UNSAFE",
+  );
   for (const name of fs.readdirSync(directory)) {
-    const file = path.join(directory, name);
-    if (fs.lstatSync(file).isDirectory()) syncTree(file, sync);
-    else {
-      const fd = fs.openSync(file, "r+");
-      try {
-        fs.fsyncSync(fd);
-      } finally {
-        fs.closeSync(fd);
-      }
-    }
+    const file = path.join(directory, name),
+      stat = fs.lstatSync(file);
+    if (stat.isSymbolicLink())
+      // Build scratch deliberately links the private runtime. Persist the link
+      // entry via its parent below; never open, traverse or sync its target.
+      requireSafe(
+        buildRoot && file.startsWith(buildRoot + path.sep),
+        "Symlink outside build scratch refused during synchronization.",
+        "SYNC_ENTRY_UNSAFE",
+      );
+    else if (stat.isDirectory()) syncTree(file, sync, buildRoot);
+    else syncFile(file);
   }
   sync(directory);
 }
-function copyApp(from, to, c) {
+function copyAppFiles(from, to, c) {
   treeDigest(from, c.owner, c.enforceModes);
   fs.cpSync(from, to, {
     recursive: true,
@@ -332,6 +368,9 @@ function copyApp(from, to, c) {
     force: false,
     preserveTimestamps: true,
   });
+}
+function copyApp(from, to, c) {
+  copyAppFiles(from, to, c);
   syncTree(to, c.sync);
 }
 function save(c, receipt) {
@@ -457,8 +496,11 @@ function upgrade(c) {
       "State changed while stopping the drained service.",
       "STATE_PRESERVATION_MISMATCH",
     );
-    stage = "BACKUP";
-    copyApp(c.app, path.join(c.backups, id, "app"), c);
+    stage = "COPY_APP";
+    copyAppFiles(c.app, path.join(c.backups, id, "app"), c);
+    stage = "SYNC_APP";
+    syncTree(path.join(c.backups, id, "app"), c.sync);
+    stage = "COPY_PROTECTED_FILES";
     for (const [from, name] of [
       [c.config, "agent.env"],
       [c.unit, "pluton-agent.service"],
@@ -471,7 +513,12 @@ function upgrade(c) {
       );
       fs.chmodSync(path.join(c.backups, id, name), 0o600);
     }
-    syncTree(path.join(c.backups, id), c.sync);
+    stage = "SYNC_BACKUP";
+    syncTree(
+      path.join(c.backups, id),
+      c.sync,
+      path.join(c.backups, id, "build"),
+    );
     r.phase = "prepared";
     stage = "RECEIPT_WRITE";
     save(c, r);
@@ -1261,6 +1308,8 @@ module.exports = {
   releaseActivity,
   durableWrite,
   syncDirectory,
+  syncFile,
+  syncTree,
   productionContext,
   validateService,
   validateDisk,
