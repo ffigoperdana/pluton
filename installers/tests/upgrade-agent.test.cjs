@@ -3,12 +3,14 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const { execFileSync } = require("node:child_process");
 const upgrade = require("../lib/upgrade-agent.cjs");
+const diagnostics = require("../lib/upgrade-diagnostics.cjs");
 const root = path.resolve(__dirname, "../../tmp/agent-upgrade");
 fs.mkdirSync(root, { recursive: true });
 const linux = process.platform === "linux";
 
-function fixture(t) {
+function fixture(t, { wasActive = true } = {}) {
   const temporary = fs.mkdtempSync(path.join(root, "fixture-"));
   t.after(() => {
     assert(temporary.startsWith(root + path.sep));
@@ -75,7 +77,7 @@ function fixture(t) {
     }),
   );
   const calls = [];
-  let active = true;
+  let active = wasActive;
   c.service = {
     active: () => active,
     assertIdle: () => calls.push("idle"),
@@ -104,7 +106,7 @@ function fixture(t) {
   };
   c.build = (id, next) => {
     calls.push("build");
-    assert.equal(active, true);
+    assert.equal(active, wasActive);
     fs.mkdirSync(path.join(next, "dist"), { recursive: true });
     fs.writeFileSync(path.join(next, "dist/index.js"), "new app");
     fs.writeFileSync(
@@ -488,6 +490,277 @@ test("capacity guard refuses missing, invalid or insufficient staging/backup hea
       () => upgrade.validateDisk(available, 512),
       /Insufficient free disk/,
     );
+});
+
+function captureFailure(operation) {
+  try {
+    operation();
+  } catch (error) {
+    return error;
+  }
+  assert.fail("Expected upgrade refusal");
+}
+function receiptFailure(f) {
+  const [id] = f.retained();
+  return JSON.parse(
+    fs.readFileSync(path.join(f.c.backups, id, "receipt.json"), "utf8"),
+  );
+}
+test("build diagnostics preserve category, keep service running and disclose no private error text", (t) => {
+  const f = fixture(t);
+  f.c.build = () => {
+    throw new Error(
+      "synthetic-private-build-marker /srv/private-app token=synthetic-private-value",
+    );
+  };
+  const error = captureFailure(() => upgrade.upgrade(f.c));
+  assert.deepEqual(diagnostics.safeRecord(error), {
+    version: 1,
+    failedStage: "BUILD",
+    errorCode: "BUILD_FAILED",
+    rollback: "NOT_NEEDED",
+    previousAgentPreserved: "YES",
+  });
+  assert.deepEqual(receiptFailure(f).failure, diagnostics.safeRecord(error));
+  assert(!diagnostics.formatFailure(error).includes("synthetic-private"));
+  assert(!f.calls.includes("stop"));
+  assert.equal(f.c.service.active(), true);
+  f.assertPreserved();
+});
+for (const [target, code, stage] of [
+  ["build", "BUILD_TIMEOUT", "BUILD"],
+  ["start", "AGENT_START_FAILED", "SERVICE_START"],
+  ["health", "AGENT_HEARTBEAT_FAILED", "HEALTH_CHECK"],
+  ["health-timeout", "AGENT_HEALTH_TIMEOUT", "HEALTH_CHECK"],
+]) {
+  test(`structured ${target} failure survives successful cleanup/rollback without weakening checks`, (t) => {
+    const f = fixture(t, { wasActive: false });
+    const isTimeout = target.includes("timeout") || target === "build";
+    const raw = Object.assign(
+      new Error("synthetic-private-marker password=synthetic-private-value"),
+      {
+        code: isTimeout ? "ETIMEDOUT" : undefined,
+        status: 1,
+        stdout: "synthetic-private-marker",
+        stderr: "synthetic-private-marker",
+      },
+    );
+    const thrown = () => {
+      throw diagnostics.commandFailure(raw, code, code);
+    };
+    if (target === "build") f.c.build = thrown;
+    else if (target === "start") f.c.service.start = thrown;
+    else f.c.service.health = thrown;
+    const error = captureFailure(() => upgrade.upgrade(f.c));
+    const d = diagnostics.safeRecord(error);
+    assert.equal(d.failedStage, stage);
+    assert.equal(d.errorCode, code);
+    assert.equal(d.rollback, target === "build" ? "NOT_NEEDED" : "SUCCESS");
+    assert.equal(d.previousAgentPreserved, "YES");
+    assert.equal(f.app(), "old app");
+    f.assertPreserved();
+    assert.equal(fs.existsSync(f.c.hold), false);
+    const receipt = receiptFailure(f);
+    assert.equal(receipt.wasActive, target === "build" ? undefined : false);
+    assert.equal(
+      receipt.phase,
+      target === "build" ? "building" : "rolled-back",
+    );
+    assert.deepEqual(receipt.failure, d);
+    const text = diagnostics.formatFailure(error);
+    assert(text.includes(`Failed stage: ${stage}`));
+    assert(text.includes(`Error code: ${code}`));
+    assert(!text.includes("synthetic-private-marker"));
+    assert(!JSON.stringify(receipt).includes("synthetic-private-marker"));
+  });
+}
+test("activation IO failure produces the same rolled-back receipt facts as health failure, but a distinct safe stage", (t) => {
+  const f = fixture(t, { wasActive: false });
+  const rename = fs.renameSync;
+  let injected = false;
+  try {
+    fs.renameSync = (from, to) => {
+      if (
+        !injected &&
+        path.basename(from).startsWith(".next-") &&
+        to === f.c.app
+      ) {
+        injected = true;
+        throw Object.assign(new Error("synthetic-private-activation-marker"), {
+          code: "EIO",
+        });
+      }
+      return rename(from, to);
+    };
+    const error = captureFailure(() => upgrade.upgrade(f.c));
+    const d = diagnostics.safeRecord(error),
+      receipt = receiptFailure(f);
+    assert.equal(d.failedStage, "ACTIVATE_CANDIDATE");
+    assert.equal(d.errorCode, "FILESYSTEM_IO_FAILED");
+    assert.equal(d.rollback, "SUCCESS");
+    assert.equal(receipt.phase, "rolled-back");
+    assert.equal(receipt.wasActive, false);
+    assert(receipt.previous && receipt.candidate);
+    assert.equal(fs.existsSync(f.c.hold), false);
+    assert.equal(f.app(), "old app");
+    f.assertPreserved();
+  } finally {
+    fs.renameSync = rename;
+  }
+});
+test("preservation mismatch retains both the primary failure and rollback refusal without overwriting changed state", (t) => {
+  const f = fixture(t);
+  f.c.service.health = () =>
+    fs.appendFileSync(f.c.config, "# synthetic concurrent operator change\n");
+  const error = captureFailure(() => upgrade.upgrade(f.c)),
+    d = diagnostics.safeRecord(error);
+  assert.equal(d.failedStage, "POST_HEALTH_PRESERVATION_CHECK");
+  assert.equal(d.errorCode, "STATE_PRESERVATION_MISMATCH");
+  assert.equal(d.rollback, "FAILED");
+  assert.equal(d.previousAgentPreserved, "UNKNOWN");
+  assert.deepEqual(d.rollbackFailure, {
+    failedStage: "ROLLBACK_PRESERVATION_CHECK",
+    errorCode: "STATE_PRESERVATION_MISMATCH",
+  });
+  assert.equal(f.app(), "new app");
+  assert.equal(fs.existsSync(f.c.hold), true);
+  assert(
+    fs
+      .readFileSync(f.c.config, "utf8")
+      .includes("synthetic concurrent operator change"),
+  );
+  assert.deepEqual(receiptFailure(f).failure, d);
+});
+test("rollback health failure cannot replace the original upgrade error or report rollback success", (t) => {
+  const f = fixture(t);
+  f.c.service.health = () => {
+    throw diagnostics.commandFailure({ status: 1 }, "AGENT_HEARTBEAT_FAILED");
+  };
+  const error = captureFailure(() => upgrade.upgrade(f.c)),
+    d = diagnostics.safeRecord(error);
+  assert.equal(d.failedStage, "HEALTH_CHECK");
+  assert.equal(d.errorCode, "AGENT_HEARTBEAT_FAILED");
+  assert.equal(d.rollback, "FAILED");
+  assert.equal(d.rollbackFailure.failedStage, "ROLLBACK_HEALTH_CHECK");
+  assert.equal(fs.existsSync(f.c.hold), true);
+  assert.equal(f.app(), "old app");
+  f.assertPreserved();
+});
+test("diagnostic receipt write failure cannot replace a successful rollback outcome or retry service actions", (t) => {
+  const f = fixture(t, { wasActive: false }),
+    sync = f.c.sync;
+  f.c.service.health = () => {
+    throw diagnostics.commandFailure({ status: 1 }, "AGENT_HEARTBEAT_FAILED");
+  };
+  f.c.sync = (directory) => {
+    if (
+      !fs.existsSync(f.c.hold) &&
+      directory.startsWith(f.c.backups + path.sep)
+    )
+      throw new Error("synthetic-private-diagnostic-write-marker");
+    sync(directory);
+  };
+  const error = captureFailure(() => upgrade.upgrade(f.c));
+  assert.equal(diagnostics.safeRecord(error).rollback, "SUCCESS");
+  assert.equal(
+    diagnostics.safeRecord(error).errorCode,
+    "AGENT_HEARTBEAT_FAILED",
+  );
+  assert(
+    diagnostics
+      .formatFailure(error)
+      .includes("Diagnostic receipt: UNCONFIRMED"),
+  );
+  assert(!diagnostics.formatFailure(error).includes("synthetic-private"));
+  assert.equal(f.app(), "old app");
+  f.assertPreserved();
+});
+test("untrusted exception and spoofed diagnostic fields cannot leak through console/receipt formatting", () => {
+  const marker = "synthetic-private-marker";
+  const raw = Object.assign(new SyntaxError(marker), {
+    stdout: marker,
+    stderr: marker,
+    path: marker,
+    stage: marker,
+    diagnostics: { errorCode: marker },
+  });
+  assert(!diagnostics.formatFailure(raw).includes(marker));
+  assert(!JSON.stringify(diagnostics.safeRecord(raw)).includes(marker));
+  const d = diagnostics.failureOf(raw, "HEALTH_CHECK");
+  d.message = marker;
+  d.stage = marker;
+  d.code = marker;
+  d.rollback = marker;
+  d.previousAgentPreserved = marker;
+  d.rollbackFailure = raw;
+  assert(!diagnostics.formatFailure(d).includes(marker));
+  assert(!JSON.stringify(diagnostics.safeRecord(d)).includes(marker));
+  assert.equal(diagnostics.safeRecord(d).failedStage, "UNKNOWN");
+});
+test("a child nonzero exit is not inferred to be a timeout from output text", () => {
+  const error = diagnostics.failureOf(
+    diagnostics.commandFailure(
+      { status: 1, stderr: "timeout password=synthetic-private-marker" },
+      "AGENT_HEARTBEAT_FAILED",
+    ),
+    "HEALTH_CHECK",
+  );
+  assert.equal(
+    diagnostics.safeRecord(error).errorCode,
+    "AGENT_HEARTBEAT_FAILED",
+  );
+});
+test("actual bounded subprocess exits/deadlines yield safe codes without retaining captured output", () => {
+  for (const timedOut of [false, true]) {
+    const raw = captureFailure(() =>
+      execFileSync(
+        process.execPath,
+        [
+          "-e",
+          timedOut
+            ? "process.stderr.write('synthetic-private-marker');setTimeout(()=>{},10000)"
+            : "process.stderr.write('synthetic-private-marker');process.exit(9)",
+        ],
+        { timeout: timedOut ? 150 : 3000, stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    );
+    if (timedOut) assert.equal(raw.code, "ETIMEDOUT");
+    else assert.equal(raw.status, 9);
+    const error = diagnostics.failureOf(
+      diagnostics.commandFailure(
+        raw,
+        "AGENT_HEARTBEAT_FAILED",
+        "AGENT_HEALTH_TIMEOUT",
+      ),
+      "HEALTH_CHECK",
+    );
+    assert.equal(
+      diagnostics.safeRecord(error).errorCode,
+      timedOut ? "AGENT_HEALTH_TIMEOUT" : "AGENT_HEARTBEAT_FAILED",
+    );
+    assert(
+      !diagnostics.formatFailure(error).includes("synthetic-private-marker"),
+    );
+    assert(!JSON.stringify(error).includes("synthetic-private-marker"));
+  }
+});
+test("CLI uses structured formatting and never prints untrusted invocation paths", () => {
+  const error = captureFailure(() =>
+    execFileSync(
+      process.execPath,
+      [
+        path.join(__dirname, "../lib/upgrade-agent.cjs"),
+        "synthetic-private-invocation-marker",
+        "--unknown-option",
+      ],
+      { timeout: 3000, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    ),
+  );
+  assert.equal(error.status, 1);
+  assert(error.stderr.includes("Failed stage: CONTEXT"));
+  assert(error.stderr.includes("Error code: UPGRADE_CHECK_FAILED"));
+  assert(!error.stderr.includes("synthetic-private-invocation-marker"));
+  assert(!error.stderr.includes("at Object."));
 });
 test(
   "Linux directory fsync, backup 0700 and credential backup 0600 are real filesystem checks",

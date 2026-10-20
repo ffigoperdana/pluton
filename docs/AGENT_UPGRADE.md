@@ -154,6 +154,55 @@ possible and requires operator review. Do not erase a marker, kill an unknown jo
 or restore an old identity to bypass any refusal. A failure before a complete
 receipt exists requires exact manual review rather than automatic cleanup.
 
+## Safe failure diagnostics
+
+Failed upgrades now print closed, structured fields. For example only (this does
+not diagnose an earlier failure):
+
+```text
+Failed stage: HEALTH_CHECK
+Error code: AGENT_HEARTBEAT_FAILED
+Rollback: SUCCESS
+Previous Agent preserved: YES
+```
+
+`BUILD`, `CANDIDATE_VERIFY`, `ACTIVATE_PREVIOUS`, `ACTIVATE_CANDIDATE`,
+`PROVENANCE`, `SERVICE_START`, `HEALTH_CHECK`, preservation checks and fence/hold
+release are distinguished. `HEALTH_CHECK` can report `AGENT_NOT_RUNNING`,
+`AGENT_NOT_STABLE`, `AGENT_HEARTBEAT_FAILED` or `AGENT_HEALTH_TIMEOUT`.
+Heartbeat failure alone does not identify network, TLS, authentication or
+server-version compatibility. Timeout means the bounded local subprocess hit its
+execution deadline; a child exiting nonzero is not called a timeout based on its
+output. Build, startup, filesystem permission/space/IO and preservation failures
+have separate codes. No checks or rollback requirements are bypassed.
+
+The first failure's stage/code survive automatic rollback. `Rollback: SUCCESS`
+means app restoration and owned-fence cleanup completed; `NOT_NEEDED` means no app
+rollback was needed; `FAILED` means recovery/cleanup could not complete. A failed
+rollback prints its own stage/code separately. `NOT_ATTEMPTED` means the safe
+rollback boundary was not entered (including post-release or uncertain Stop).
+`Previous Agent preserved: YES` requires matching previous app and preserved-state
+hashes at reporting time; otherwise the value is `UNKNOWN`. It is not a claim
+that an originally stopped service was restarted. Keep plans paused until its
+separately verified intended service state is restored.
+
+For new failed transactions, the root-private receipt has a `failure` object with
+the same sanitized fields; `INCOMPLETE` can remain if interrupted during rollback.
+Diagnostic persistence is best effort and cannot trigger a service action or
+replace the primary error. `Diagnostic receipt: UNCONFIRMED` means that write
+could not be durably confirmed; retain the console fields locally. Do not publish
+the full receipt: its existing ownership/binding fields are private. Console and
+failure fields exclude child stdout/stderr, environment, command arguments,
+exception messages/stacks, sensitive paths and identity/credential material.
+
+A historical `rolled-back` phase with both artifact digests does not identify the
+failure stage: the candidate digest was recorded before activation. Later local
+preflight success and an empty warning journal cannot recover the discarded
+cause; the explicit heartbeat runs outside the service journal. Old receipts
+without `failure` remain undiagnosed. Do not edit/backfill them or rerun a
+production upgrade without the applicable authorization. Use only the safe
+stage/code and existing private operator evidence to plan a controlled retry.
+
 ## Tests and evidence limits
 
 On disposable Linux, without sudo or a real service:
@@ -185,9 +234,19 @@ publication. It has read-only repository permissions, no secrets, privileged
 service actions, publishing or deployment steps. It has **not run** locally or
 remotely as part of this task.
 
-Recorded local results: upgrade transaction suite **25 PASS / 2 Linux SKIPPED**;
+Original upgrader baseline results: upgrade transaction suite **25 PASS / 2 Linux SKIPPED**;
 complete Agent suite **75 PASS / 77 Linux SKIPPED**; article/identity validation
 **13 PASS**; Fumadocs **8 PASS**. Agent TypeScript/build, documentation TypeScript
 and production build, Bash syntax/help/invalid-option checks, JavaScript syntax
 and diff/privacy checks passed. No CI thresholds, dependency files or existing
 installer behavior were changed. No full backend/Phase 6 audit was repeated.
+
+Diagnostics extension: the same upgrade safety suite now has **38 PASS / 2 Linux
+SKIPPED** (40 tests), including the original guard/rollback regressions and new
+stage/category, rollback-result, preservation-mismatch, output-redaction and real
+bounded subprocess exit/deadline checks. Bash harness, both helper syntax checks,
+workflow parsing/permissions and diff/privacy checks pass locally. The dedicated
+Linux workflow also watches the diagnostics helper; hosted Linux/systemd and
+production execution were not performed for this revision. Agent/backend source
+and transaction authorization rules are unchanged; their full suites were not
+rerun for this diagnostics-only patch.

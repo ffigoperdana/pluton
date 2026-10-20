@@ -5,6 +5,15 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
+const {
+  GuardFailure,
+  commandFailure,
+  failureOf,
+  atStage,
+  outcome,
+  safeRecord,
+  formatFailure,
+} = require("./upgrade-diagnostics.cjs");
 
 const ID = /^[0-9]{14}-[a-f0-9]{12}-[a-f0-9]{12}$/;
 const ACTIVITY = "source-access-activity.json";
@@ -19,8 +28,8 @@ const exists = (file) => {
     throw e;
   }
 };
-function requireSafe(condition, message) {
-  if (!condition) throw new Error(message);
+function requireSafe(condition, message, code) {
+  if (!condition) throw new GuardFailure(message, code);
 }
 function syncDirectory(directory) {
   const fd = fs.openSync(
@@ -335,63 +344,74 @@ function save(c, receipt) {
 
 /** Injectable OS/build adapters allow disposable tests without a real service. */
 function upgrade(c) {
-  c.preflight();
-  assertLocallyDrained(c);
-  requireSafe(
-    !exists(c.hold),
-    "An upgrade is already active/interrupted. Review its exact receipt before rollback.",
-  );
-  requireSafe(
-    !exists(path.join(c.state, ACTIVITY)),
-    "Agent operation is active; nothing was stopped. Retry after drain.",
-  );
+  atStage("PREFLIGHT", () => {
+    c.preflight();
+    assertLocallyDrained(c);
+    requireSafe(
+      !exists(c.hold),
+      "An upgrade is already active/interrupted. Review its exact receipt before rollback.",
+    );
+    requireSafe(
+      !exists(path.join(c.state, ACTIVITY)),
+      "Agent operation is active; nothing was stopped. Retry after drain.",
+    );
+  });
   const id =
     new Date().toISOString().replace(/\D/g, "").slice(0, 14) +
     "-" +
     c.commit.slice(0, 12) +
     "-" +
     crypto.randomBytes(6).toString("hex");
-  fs.mkdirSync(c.hold, { mode: 0o700 });
-  c.sync(c.install);
-  durableWrite(
-    path.join(c.hold, "owner.json"),
-    JSON.stringify({ id, pid: process.pid }),
-    c.sync,
-  );
-  durableWrite(
-    path.join(c.hold, "node.sha256"),
-    hash(fs.readFileSync(c.node)),
-    c.sync,
-  );
-  fs.mkdirSync(c.backups, { recursive: true, mode: 0o700 });
-  requireSafe(
-    !c.enforceModes || (fs.statSync(c.backups).mode & 0o777) === 0o700,
-    "Backup parent must already be private; no permissions were changed.",
-  );
-  fs.mkdirSync(path.join(c.backups, id), { mode: 0o700 });
-  c.sync(c.backups);
-  const r = {
-    version: 1,
-    id,
-    commit: c.commit,
-    phase: "building",
-    binding: identityBinding(c.state).digest,
-    previous: treeDigest(c.app, c.owner, c.enforceModes),
-  };
-  save(c, r);
+  const r = atStage("LOCK_SETUP", () => {
+    fs.mkdirSync(c.hold, { mode: 0o700 });
+    c.sync(c.install);
+    durableWrite(
+      path.join(c.hold, "owner.json"),
+      JSON.stringify({ id, pid: process.pid }),
+      c.sync,
+    );
+    durableWrite(
+      path.join(c.hold, "node.sha256"),
+      hash(fs.readFileSync(c.node)),
+      c.sync,
+    );
+    fs.mkdirSync(c.backups, { recursive: true, mode: 0o700 });
+    requireSafe(
+      !c.enforceModes || (fs.statSync(c.backups).mode & 0o777) === 0o700,
+      "Backup parent must already be private; no permissions were changed.",
+    );
+    fs.mkdirSync(path.join(c.backups, id), { mode: 0o700 });
+    c.sync(c.backups);
+    const receipt = {
+      version: 1,
+      id,
+      commit: c.commit,
+      phase: "building",
+      binding: identityBinding(c.state).digest,
+      previous: treeDigest(c.app, c.owner, c.enforceModes),
+    };
+    save(c, receipt);
+    return receipt;
+  });
   let fence,
     stopped = false,
     stopAttempted = false,
     unlocked = false;
+  let stage = "ACTIVITY_FENCE";
   const previous = path.join(c.install, `.previous-${id}`);
   const next = path.join(c.install, `.next-${id}`);
   try {
     fence = acquireActivity(c, id);
     r.activity = fence;
+    stage = "PRESERVATION_CHECK";
     r.preserved = preservedDigest(c);
+    stage = "DRAIN_CHECK";
     c.service.assertIdle();
+    stage = "RECEIPT_WRITE";
     save(c, r);
+    stage = "BUILD";
     c.build(id, next);
+    stage = "CANDIDATE_VERIFY";
     normalizeApp(next);
     requireSafe(
       exists(path.join(next, "dist/index.js")) &&
@@ -406,29 +426,38 @@ function upgrade(c) {
       "Installed application changed during build.",
     );
     // Check again after the potentially long dependency/build step.
+    stage = "POST_BUILD_PREFLIGHT";
     c.preflight();
     assertLocallyDrained(c);
     requireSafe(
       fs.readFileSync(path.join(c.state, ACTIVITY), "utf8") === fence,
       "Activity fence changed during build.",
     );
+    stage = "PRESERVATION_CHECK";
     requireSafe(
       preservedDigest(c) === r.preserved,
       "Protected state changed during build; no service was stopped.",
+      "STATE_PRESERVATION_MISMATCH",
     );
+    stage = "DRAIN_CHECK";
     c.service.assertIdle();
     r.wasActive = c.service.active();
     r.phase = "drained";
+    stage = "RECEIPT_WRITE";
     save(c, r);
+    stage = "SERVICE_STOP";
     stopAttempted = true;
     c.service.stop();
     stopped = true;
     requireSafe(!c.service.active(), "Service did not stop.");
     c.service.assertEmpty();
+    stage = "PRESERVATION_CHECK";
     requireSafe(
       preservedDigest(c) === r.preserved,
       "State changed while stopping the drained service.",
+      "STATE_PRESERVATION_MISMATCH",
     );
+    stage = "BACKUP";
     copyApp(c.app, path.join(c.backups, id, "app"), c);
     for (const [from, name] of [
       [c.config, "agent.env"],
@@ -444,75 +473,150 @@ function upgrade(c) {
     }
     syncTree(path.join(c.backups, id), c.sync);
     r.phase = "prepared";
+    stage = "RECEIPT_WRITE";
     save(c, r);
+    stage = "PREPARED_CHECKPOINT";
     c.checkpoint("prepared");
+    stage = "ACTIVATE_PREVIOUS";
     fs.renameSync(c.app, previous);
     c.sync(c.install);
     r.phase = "old-moved";
+    stage = "RECEIPT_WRITE";
     save(c, r);
+    stage = "ACTIVATE_PREVIOUS";
     c.checkpoint("old-moved");
+    stage = "ACTIVATE_CANDIDATE";
     fs.renameSync(next, c.app);
     c.sync(c.install);
     r.phase = "activated";
+    stage = "RECEIPT_WRITE";
     save(c, r);
+    stage = "PROVENANCE";
     c.writeProvenance(id);
+    stage = "ACTIVATED_CHECKPOINT";
     c.checkpoint("activated");
+    stage = "PRESERVATION_CHECK";
     requireSafe(
       preservedDigest(c) === r.preserved,
       "Preserved state changed during replacement.",
+      "STATE_PRESERVATION_MISMATCH",
     );
+    stage = "SERVICE_START";
     c.service.start();
+    stage = "HEALTH_CHECK";
     c.service.health();
+    stage = "POST_HEALTH_PRESERVATION_CHECK";
     requireSafe(
-      preservedDigest(c) === r.preserved &&
-        treeDigest(c.app, c.owner, c.enforceModes) === r.candidate,
+      preservedDigest(c) === r.preserved,
       "Health check changed protected state/artifacts.",
+      "STATE_PRESERVATION_MISMATCH",
     );
+    stage = "POST_HEALTH_ARTIFACT_CHECK";
+    requireSafe(
+      treeDigest(c.app, c.owner, c.enforceModes) === r.candidate,
+      "Health check changed protected state/artifacts.",
+      "ARTIFACT_INTEGRITY_MISMATCH",
+    );
+    stage = "RECEIPT_WRITE";
     r.phase = "healthy";
     save(c, r);
+    stage = "FENCE_RELEASE";
     releaseActivity(c, fence);
     fence = undefined;
     // This is the commit point. Never stop/roll back an Agent after releasing its
     // work hold: it may have accepted a real command immediately afterwards.
     unlocked = true;
+    stage = "HOLD_RELEASE";
     releaseHold(c, id);
     return { id, commit: c.commit, phase: "healthy" };
   } catch (error) {
-    if (error.interrupted || unlocked || (stopAttempted && !stopped))
-      throw error;
+    if (error.interrupted) throw error;
+    const primary = failureOf(error, stage);
+    if (unlocked || (stopAttempted && !stopped)) {
+      const failure = outcome(
+        primary,
+        "NOT_ATTEMPTED",
+        "UNKNOWN",
+        primary.message,
+      );
+      recordFailure(c, r, failure);
+      throw failure;
+    }
+    r.failure = safeRecord(outcome(primary, "INCOMPLETE", "UNKNOWN"));
+    let rollbackStage = "ROLLBACK_DRAIN";
+    const needsRollback = Boolean(stopped && r.preserved);
     try {
       requireSafe(
         fence || !exists(path.join(c.state, ACTIVITY)),
         "Uncertain/foreign activity fence retained for review.",
       );
       if (stopped && r.preserved) {
+        rollbackStage = "ROLLBACK_PRESERVATION_CHECK";
         requireSafe(
           preservedDigest(c) === r.preserved,
           "Protected state changed; automatic rollback refused.",
+          "STATE_PRESERVATION_MISMATCH",
         );
+        rollbackStage = "ROLLBACK_DRAIN";
         c.service.assertIdle();
         c.service.stop();
         c.service.assertEmpty();
+        rollbackStage = "ROLLBACK_RESTORE";
         restorePrevious(c, r);
         r.phase = "rolled-back";
+        rollbackStage = "ROLLBACK_RECEIPT_WRITE";
         save(c, r);
         if (r.wasActive) {
+          rollbackStage = "ROLLBACK_SERVICE_START";
           c.service.start();
+          rollbackStage = "ROLLBACK_HEALTH_CHECK";
           c.service.health();
         }
       }
+      rollbackStage = "ROLLBACK_FENCE_RELEASE";
       if (fence) releaseActivity(c, fence);
+      rollbackStage = "ROLLBACK_HOLD_RELEASE";
       releaseHold(c, id);
     } catch (rollbackError) {
-      throw new Error(
+      const failure = outcome(
+        primary,
+        "FAILED",
+        "UNKNOWN",
         `Upgrade failed; hold and artifacts retained for exact operator review. Upgrade ID: ${id}`,
-        { cause: rollbackError },
+        failureOf(rollbackError, rollbackStage),
       );
+      recordFailure(c, r, failure);
+      throw failure;
     }
-    throw new Error(
+    const failure = outcome(
+      primary,
+      needsRollback ? "SUCCESS" : "NOT_NEEDED",
+      previousStatus(c, r),
       `Upgrade failed safely; prior app retained/restored. Upgrade ID: ${id}`,
-      { cause: error },
     );
+    recordFailure(c, r, failure);
+    throw failure;
+  }
+}
+function previousStatus(c, r) {
+  try {
+    return preservedDigest(c) === r.preserved &&
+      treeDigest(c.app, c.owner, c.enforceModes) === r.previous
+      ? "YES"
+      : "UNKNOWN";
+  } catch {
+    return "UNKNOWN";
+  }
+}
+function recordFailure(c, r, failure) {
+  failure.upgradeId = r.id;
+  r.failure = safeRecord(failure);
+  // Diagnostic persistence cannot change rollback decisions, retry a service
+  // action, erase state or replace the primary failure if storage is broken.
+  try {
+    save(c, r);
+  } catch {
+    failure.diagnosticReceiptUnavailable = true;
   }
 }
 function releaseHold(c, id) {
@@ -683,18 +787,17 @@ function productionContext(repository) {
     GIT_OPTIONAL_LOCKS: "0",
   };
   function run(file, args, options = {}) {
+    const { failureCode, timeoutCode, ...executionOptions } = options;
     try {
       return execFileSync(file, args, {
         env: cleanEnv,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
         timeout: 30_000,
-        ...options,
+        ...executionOptions,
       }).trim();
-    } catch {
-      throw new Error(
-        "A required local service/build check failed; private command output was not disclosed.",
-      );
+    } catch (error) {
+      throw commandFailure(error, failureCode, timeoutCode);
     }
   }
   const c = {
@@ -812,12 +915,17 @@ function productionContext(repository) {
       if (show().ActiveState !== "inactive")
         run("/usr/bin/systemctl", ["stop", "pluton-agent.service"]);
     },
-    start: () => run("/usr/bin/systemctl", ["start", "pluton-agent.service"]),
+    start: () =>
+      run("/usr/bin/systemctl", ["start", "pluton-agent.service"], {
+        failureCode: "AGENT_START_FAILED",
+        timeoutCode: "AGENT_START_TIMEOUT",
+      }),
     health: () => {
       const first = show();
       requireSafe(
         first.ActiveState === "active" && Number(first.MainPID) > 1,
         "Agent did not start.",
+        "AGENT_NOT_RUNNING",
       );
       run(
         "/usr/sbin/runuser",
@@ -829,7 +937,11 @@ function productionContext(repository) {
           path.join(c.app, "dist/index.js"),
           "check",
         ],
-        { env: { ...cleanEnv, ...env } },
+        {
+          env: { ...cleanEnv, ...env },
+          failureCode: "AGENT_HEARTBEAT_FAILED",
+          timeoutCode: "AGENT_HEALTH_TIMEOUT",
+        },
       );
       run("/usr/bin/sleep", ["3"]);
       const last = show();
@@ -838,6 +950,7 @@ function productionContext(repository) {
           last.MainPID === first.MainPID &&
           last.SubState === "running",
         "Agent did not remain healthy.",
+        "AGENT_NOT_STABLE",
       );
     },
   };
@@ -1099,33 +1212,40 @@ function productionContext(repository) {
 if (require.main === module) {
   try {
     const [repository, option, id] = process.argv.slice(2);
-    requireSafe(
-      process.argv.length >= 3 &&
-        process.argv.length <= 5 &&
-        ((!option && !id) ||
-          (option === "--check" && !id) ||
-          (option === "--rollback" && ID.test(id || ""))),
-      "Unsupported upgrade invocation.",
-    );
-    const c = productionContext(repository);
-    if (option === "--check") {
-      c.preflight();
+    atStage("CONTEXT", () =>
       requireSafe(
-        !exists(c.hold) && !exists(path.join(c.state, ACTIVITY)),
-        "Operation/upgrade hold remains; preflight is not ready.",
-      );
+        process.argv.length >= 3 &&
+          process.argv.length <= 5 &&
+          ((!option && !id) ||
+            (option === "--check" && !id) ||
+            (option === "--rollback" && ID.test(id || ""))),
+        "Unsupported upgrade invocation.",
+      ),
+    );
+    const c = atStage("CONTEXT", () => productionContext(repository));
+    if (option === "--check") {
+      atStage("PREFLIGHT", () => {
+        c.preflight();
+        requireSafe(
+          !exists(c.hold) && !exists(path.join(c.state, ACTIVITY)),
+          "Operation/upgrade hold remains; preflight is not ready.",
+        );
+      });
       console.log(
         `Read-only local preflight PASS. Source commit: ${c.commit}. Server plans/queued requests require operator review. No heartbeat/build/restart performed.`,
       );
     } else {
-      const result = option === "--rollback" ? rollback(c, id) : upgrade(c);
+      const result =
+        option === "--rollback"
+          ? atStage("MANUAL_ROLLBACK", () => rollback(c, id))
+          : upgrade(c);
       console.log(
         `Agent app transaction ${result.phase}. Upgrade ID: ${result.id}. Source commit: ${c.commit}. Rollback artifacts retained privately.`,
       );
     }
   } catch (error) {
     // Deliberately omit subprocess output/configuration/credentials.
-    console.error(`[pluton-agent-upgrade] ${error.message}`);
+    console.error(formatFailure(error));
     process.exitCode = 1;
   }
 }
