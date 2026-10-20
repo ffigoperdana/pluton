@@ -23,6 +23,7 @@ import {
   type SourceAccessCode,
 } from "./filesystemPolicy.js";
 import { privateBinaryPath } from "./inventory.js";
+import { sourcePathContainsPrivateDirectory } from "./sourceAccessPolicy.js";
 import type { AgentConfig } from "./types.js";
 import { BackupLifecycleJob, BackupLifecycleError } from "./backupLifecycle.js";
 import { runLifecycleProcess } from "./lifecycleProcess.js";
@@ -1297,10 +1298,31 @@ async function confirmLifecycleSnapshot(
   }
 }
 
+export const DELEGATED_PRIVATE_DIRECTORY_EXCLUDES = [
+  "**/.ssh",
+  "**/.aws",
+  "**/.gnupg",
+  "**/.kube",
+] as const;
+
+/** Agent-local authority only: no command payload or user exclude can remove these filters. */
+export function appendSourceBackupExcludes(
+  args: string[],
+  userExcludes: string[],
+  serverManaged: boolean,
+): void {
+  for (const exclude of [
+    ...userExcludes,
+    ...(serverManaged ? DELEGATED_PRIVATE_DIRECTORY_EXCLUDES : []),
+  ])
+    args.push("--exclude", exclude);
+}
+
 export async function executeFilesystemBackup(input: {
   payload: Record<string, unknown>;
   config: AgentConfig;
   allowedRoots: string[];
+  serverManagedSource?: boolean;
   shouldCancel: () => Promise<boolean>;
   onEvent: (event: Record<string, unknown>) => Promise<void>;
   onStage?: (event: BackupFilesystemStageEvent) => void;
@@ -1346,9 +1368,16 @@ export async function executeFilesystemBackup(input: {
     setStage("payload-validation", "command accepted");
 
     setStage("source-validation");
+    if (
+      input.serverManagedSource &&
+      sourcePathContainsPrivateDirectory(payload.sourcePath)
+    )
+      throw new SourceAccessError("source-policy-violation");
     const source = (
       await preflightSource(payload.sourcePath, input.allowedRoots)
     ).resolvedPath;
+    if (input.serverManagedSource && sourcePathContainsPrivateDirectory(source))
+      throw new SourceAccessError("source-policy-violation");
     input.onStage?.({
       stage: "source-validation",
       message: "source validated",
@@ -1634,7 +1663,11 @@ export async function executeFilesystemBackup(input: {
       "--tag",
       `pluton-backup-${payload.backupId}`,
     ];
-    for (const exclude of payload.excludes) args.push("--exclude", exclude);
+    appendSourceBackupExcludes(
+      args,
+      payload.excludes,
+      input.serverManagedSource === true,
+    );
     await runProgram(restic, args, {
       env,
       source,

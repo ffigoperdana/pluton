@@ -63,6 +63,8 @@ import { LegacyRepositoryStore } from './stores/LegacyRepositoryStore';
 import { LegacyRestoreJobStore } from './stores/LegacyRestoreJobStore';
 import { LegacyRepositoryService } from './services/LegacyRepositoryService';
 import { AgentStore } from './stores/AgentStore';
+import { AgentSourceAccessStore } from './stores/AgentSourceAccessStore';
+import { AgentSourceAccessService } from './services/AgentSourceAccessService';
 import { RemoteManagedRepositoryStore } from './stores/RemoteManagedRepositoryStore';
 import { AgentService } from './services/AgentService';
 import { RemoteBackupService } from './services/RemoteBackupService';
@@ -71,6 +73,7 @@ import { AgentAdminController } from './controllers/AgentAdminController';
 import { createAgentRouter } from './routes/agents';
 import { createAgentAdminRouter } from './routes/agentAdmin';
 import type { AgentRequest } from './types/agents';
+import { agentJson } from './middlewares/agentJson';
 import { RecoveryTestStore } from './stores/RecoveryTestStore';
 import { RecoveryTestService } from './services/RecoveryTestService';
 import { RecoveryTestController } from './controllers/RecoveryTestController';
@@ -114,6 +117,8 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	const legacyRepositoryStore = new LegacyRepositoryStore(db);
 	const legacyRestoreJobStore = new LegacyRestoreJobStore(db);
 	const agentStore = new AgentStore(db);
+	const sourceAccessStore = new AgentSourceAccessStore(db);
+	const sourceAccessService = new AgentSourceAccessService(sourceAccessStore, agentStore);
 	const remoteManagedRepositoryStore = new RemoteManagedRepositoryStore(db);
 
 	// Local Agents
@@ -129,6 +134,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		backupStore,
 		storageStore
 	);
+	remoteBackupService.setSourceAccessService(sourceAccessService);
 	const managedReplicationStore = new ManagedReplicationStore(sqlite);
 	const managedReplicationService = new ManagedReplicationService(
 		managedReplicationStore,
@@ -211,7 +217,8 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		agentStore,
 		configService.config.SECRET,
 		undefined,
-		remoteBackupService
+		remoteBackupService,
+		sourceAccessService
 	);
 	const deviceService = new DeviceService(
 		localSystemAgent,
@@ -246,7 +253,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	const setupController = new SetupController();
 	const legacyRepositoryController = new LegacyRepositoryController(legacyRepositoryService);
 	const agentController = new AgentController(agentService);
-	const agentAdminController = new AgentAdminController(agentService);
+	const agentAdminController = new AgentAdminController(agentService, sourceAccessService);
 
 	// Express App
 	const app = express();
@@ -281,6 +288,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	app.use(versionMiddleware);
 	app.use('/api/database-restores', express.json({ limit: '8kb' }));
 	app.use(databaseRestoreInputError);
+	app.use('/api/agent', agentJson);
 	app.use(
 		express.json({
 			verify: (req, _res, buffer) => {

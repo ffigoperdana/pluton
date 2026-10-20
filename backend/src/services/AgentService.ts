@@ -20,6 +20,8 @@ import { serverLogger } from '../utils/logger';
 import type { RemoteBackupService } from './RemoteBackupService';
 import { RemoteCommandPreparationError } from './remoteCommandPreparation';
 import { databaseIdSchema } from '../utils/remoteLifecycle';
+import { sourceAccessReportSchema } from '../utils/agentSourceAccess';
+import type { AgentSourceAccessService } from './AgentSourceAccessService';
 
 const inventorySchema = z
 	.object({
@@ -35,23 +37,27 @@ const inventorySchema = z
 			.nonnegative()
 			.max(365 * 24 * 60 * 60)
 			.optional(),
+		sourceAccess: sourceAccessReportSchema.optional(),
 		capabilities: z
 			.object({
 				filesystemRootsConfigured: z.boolean(),
 				commandTypes: z
-					.array(z.enum(['PING', 'INVENTORY_REFRESH', 'BACKUP_FILESYSTEM']))
+					.array(z.enum(['PING', 'INVENTORY_REFRESH', 'BACKUP_FILESYSTEM', 'SOURCE_ACCESS_VALIDATE', 'SOURCE_ACCESS_APPLY', 'SOURCE_ACCESS_MODE_SETUP']))
 					.min(1)
-					.max(3),
+					.max(6),
 				backupLifecycleVersion: z.union([z.literal(1), z.literal(2)]).optional(),
 				databaseEngines: z
 					.array(z.enum(['mysql', 'mariadb', 'postgresql']))
 					.max(3)
 					.optional(),
 				hooksConfigured: z.boolean().optional(),
+				sourceAccessVersion: z.literal(1).optional(),
+				sourceAccessModesVersion: z.literal(1).optional(),
 			})
 			.strict(),
 	})
-	.strict();
+	.strict()
+	.refine(inventory => !inventory.sourceAccess || inventory.capabilities.sourceAccessVersion === 1);
 
 const enrollmentSchema = z
 	.object({
@@ -227,7 +233,8 @@ export class AgentService {
 		private readonly agentStore: AgentStore,
 		private readonly encryptionSecret = configService.config.SECRET,
 		private readonly now: () => Date = () => new Date(),
-		private readonly remoteBackupService?: RemoteBackupService
+		private readonly remoteBackupService?: RemoteBackupService,
+		private readonly sourceAccessService?: AgentSourceAccessService
 	) {}
 
 	async createEnrollment(input: unknown): Promise<{
@@ -382,10 +389,11 @@ export class AgentService {
 		}
 	}
 
-	async heartbeat(agentId: string, input: unknown): Promise<AgentPublic> {
+	async heartbeat(agentId: string, input: unknown, signedTimestamp = this.now().getTime()): Promise<AgentPublic> {
 		const inventory = this.parseInventory(input);
 		const updated = await this.agentStore.updateHeartbeat(agentId, inventory);
 		if (!updated) throw new AppError(401, 'Agent authentication failed.');
+		if (inventory.sourceAccess) await this.sourceAccessService?.recordHeartbeat(agentId, inventory.sourceAccess, signedTimestamp);
 		return this.toPublic(updated);
 	}
 
@@ -406,6 +414,10 @@ export class AgentService {
 			this.now()
 		);
 		if (!command) return { command: null };
+		if (command.type === 'SOURCE_ACCESS_VALIDATE' || command.type === 'SOURCE_ACCESS_APPLY' || command.type === 'SOURCE_ACCESS_MODE_SETUP') {
+			if (!this.sourceAccessService) throw new AppError(503, 'Source Access service is unavailable.');
+			if (!await this.sourceAccessService.markDelivered(agent.agentId, command.id)) return { command: null };
+		}
 		let payload = command.payload;
 		if (command.type === 'BACKUP_FILESYSTEM') {
 			try {
@@ -534,7 +546,13 @@ export class AgentService {
 			);
 	}
 
-	async complete(agentId: string, commandId: string, input: unknown): Promise<void> {
+	async complete(agentId: string, commandId: string, input: unknown, signedTimestamp = this.now().getTime()): Promise<void> {
+		const existing = this.sourceAccessService ? await this.agentStore.getCommandForAgent(agentId, commandId) : null;
+		if (existing?.type === 'SOURCE_ACCESS_VALIDATE' || existing?.type === 'SOURCE_ACCESS_APPLY' || existing?.type === 'SOURCE_ACCESS_MODE_SETUP') {
+			if (!this.sourceAccessService) throw new AppError(503, 'Source Access service is unavailable.');
+			await this.sourceAccessService.complete(agentId, commandId, input, signedTimestamp);
+			return;
+		}
 		const parsed = z
 			.object({
 				sequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),

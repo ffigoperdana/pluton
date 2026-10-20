@@ -17,7 +17,7 @@ export class AgentController {
 
 	async heartbeat(req: AgentRequest, res: Response): Promise<void> {
 		try {
-			const result = await this.agentService.heartbeat(req.agent!.agentId, req.body);
+			const result = await this.agentService.heartbeat(req.agent!.agentId, req.body, Number(req.header('x-pluton-agent-timestamp')));
 			res.json({ success: true, result });
 		} catch (error) {
 			this.respond(res, error);
@@ -53,7 +53,7 @@ export class AgentController {
 
 	async complete(req: AgentRequest, res: Response): Promise<void> {
 		try {
-			await this.agentService.complete(req.agent!.agentId, req.params.id, req.body);
+			await this.agentService.complete(req.agent!.agentId, req.params.id, req.body, Number(req.header('x-pluton-agent-timestamp')));
 			res.json({ success: true });
 		} catch (error) {
 			this.respond(res, error);

@@ -6,6 +6,13 @@ Contoh fiktif: mesin `app-01`, source `/srv/example-app`, storage `SFTP contoh`,
 
 ## Sebelum membuka formulir
 
+Periksa mode pada **Source Access** mesin. Server-Managed memungkinkan validasi
+dan pengaktifan source di dalam delegasi host langsung dari UI. Host-Approved
+memerlukan persetujuan lokal untuk path baru di luar maksimum saat ini. Dalam
+kedua mode, path pending belum boleh menjadi source yang dijalankan; hasil
+canonical dan akses efektif harus dikonfirmasi dahulu. Mode tidak mengubah
+identitas plan, Database & Hooks, tujuan SFTP, replication atau retention.
+
 Pastikan agent sudah [terdaftar](/docs/remote-agent/enrollment), berstatus **ONLINE**, melaporkan capability `BACKUP_FILESYSTEM`, dan mempunyai **Allowed roots configured: Yes**. Jalankan [preflight source](/docs/remote-agent/permissions) agar folder serta file di dalamnya terbaca.
 
 Tambahkan [SFTP](/docs/storage/sftp) pada **Storages**. Agent dan server perlu mengakses primer itu. Layanan SFTP boleh berada pada VM Pluton jika operator menyiapkannya; alurnya tetap memakai SFTP, bukan pilihan Local. Siapkan path baru atau kosong khusus plan dan staging pemulihan yang terpisah.
@@ -15,7 +22,7 @@ Tambahkan [SFTP](/docs/storage/sftp) pada **Storages**. Agent dan server perlu m
 1. Buka **Backup Plans → + New**.
 2. Pada **Basic**, isi **Backup Plan Name***, misalnya `Backup contoh app-01`, dan gunakan **Incremental Backup**.
 3. Klik **Next: Configure Source & Destination**, lalu pilih `app-01` pada **Select Device***.
-4. Isi **Remote Backup Source*** dengan satu path absolut Linux, misalnya `/srv/example-app`. Tidak ada remote file browser untuk memilih isi mesin.
+4. Pada Agent yang mendukung **Source Access**, pilih **Effective approved source root** atau masukkan satu path pada **Remote Backup Source***, klik **Validate source path**, lalu periksa canonical target. Dalam Server-Managed, gunakan **Apply source access** untuk path yang readable di dalam delegasi. Dalam Host-Approved, gunakan **Request access for this path** bila masih pending dan selesaikan host approval pada detail mesin. Setelah akses efektif dikonfirmasi, pilih **Use validated canonical path**. Agent lama tetap memakai input path manual dan preflight statis lokal. Tidak ada remote file browser.
 5. Pada **Backup Destination***, pilih SFTP dan isi path `daily/app-01`. Periksa pemetaan home/chroot akun SFTP agar lokasi fisiknya benar.
 6. Biarkan **Enable Replication** mati untuk backup pertama.
 

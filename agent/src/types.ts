@@ -1,7 +1,35 @@
 export type AgentCommandType =
   | "PING"
   | "INVENTORY_REFRESH"
-  | "BACKUP_FILESYSTEM";
+  | "BACKUP_FILESYSTEM"
+  | "SOURCE_ACCESS_VALIDATE"
+  | "SOURCE_ACCESS_APPLY"
+  | "SOURCE_ACCESS_MODE_SETUP";
+
+export type SourceAccessValidation = {
+  requestedPath: string;
+  canonicalPath?: string;
+  status: "approved" | "pending-host-approval" | "rejected";
+  code?: string;
+};
+
+export type SourceAccessReport = {
+  version: 1;
+  authorizationMode?: "host-approved" | "server-managed";
+  delegatedRoots?: string[];
+  lastModeSetupRequestId?: string;
+  hostPolicyRevision: string;
+  effectiveVersion: number;
+  approvedRoots: string[];
+  effectiveRoots: string[];
+  rootStatuses: {
+    path: string;
+    status: "readable" | "unreadable" | "missing" | "rejected";
+    code?: string;
+  }[];
+  lastAppliedRequestId?: string;
+  policyError?: string;
+};
 
 export type AgentCapabilities = {
   filesystemRootsConfigured: boolean;
@@ -9,6 +37,8 @@ export type AgentCapabilities = {
   backupLifecycleVersion?: 1 | 2;
   databaseEngines?: ("mysql" | "mariadb" | "postgresql")[];
   hooksConfigured?: boolean;
+  sourceAccessVersion?: 1;
+  sourceAccessModesVersion?: 1;
 };
 
 export type AgentInventory = {
@@ -20,6 +50,7 @@ export type AgentInventory = {
   rcloneVersion?: string;
   uptimeSeconds?: number;
   capabilities: AgentCapabilities;
+  sourceAccess?: SourceAccessReport;
 };
 
 export type StoredCommandCompletion = {
@@ -54,6 +85,8 @@ export type AgentConfig = {
   /** Administrator-only local configuration; never supplied by a command. */
   hookRoot?: string;
   databaseBinDirs?: string[];
+  /** Local administrator-owned maximum. Never accepted from a server command. */
+  sourcePolicyFile?: string;
   allowInsecureHttp: boolean;
   caFile?: string;
   clientCertFile?: string;

@@ -2,13 +2,17 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
-import type { AgentCapabilities, AgentInventory } from "./types.js";
+import type {
+  AgentCapabilities,
+  AgentInventory,
+  SourceAccessReport,
+} from "./types.js";
 import {
   assertRootOwnedPath,
   detectDatabaseBinary,
 } from "./lifecyclePolicy.js";
 
-export const AGENT_VERSION = "0.4.1";
+export const AGENT_VERSION = "0.6.0";
 
 const SAFE_COMMANDS: AgentCapabilities["commandTypes"] = [
   "PING",
@@ -59,6 +63,7 @@ export function collectInventory(input: {
   binDir?: string;
   hookRoot?: string;
   databaseBinDirs?: string[];
+  sourceAccess?: SourceAccessReport;
 }): AgentInventory {
   const resticVersion = installedVersion(
     privateBinaryPath(input.binDir, "restic"),
@@ -98,7 +103,14 @@ export function collectInventory(input: {
     resticVersion,
     rcloneVersion,
     uptimeSeconds: Math.floor(os.uptime()),
+    ...(input.sourceAccess ? { sourceAccess: input.sourceAccess } : {}),
     capabilities: {
+      ...(input.sourceAccess
+        ? {
+            sourceAccessVersion: 1 as const,
+            sourceAccessModesVersion: 1 as const,
+          }
+        : {}),
       ...(process.platform === "linux" &&
       process.getuid?.() !== 0 &&
       immutableBackupTools
@@ -109,11 +121,20 @@ export function collectInventory(input: {
           }
         : {}),
       filesystemRootsConfigured: input.filesystemRootsConfigured,
-      commandTypes: commandTypesForInventory({
-        filesystemRootsConfigured: input.filesystemRootsConfigured,
-        resticVersion,
-        rcloneVersion,
-      }),
+      commandTypes: [
+        ...commandTypesForInventory({
+          filesystemRootsConfigured: input.filesystemRootsConfigured,
+          resticVersion,
+          rcloneVersion,
+        }),
+        ...(input.sourceAccess
+          ? ([
+              "SOURCE_ACCESS_VALIDATE",
+              "SOURCE_ACCESS_APPLY",
+              "SOURCE_ACCESS_MODE_SETUP",
+            ] as const)
+          : []),
+      ],
     },
   };
 }

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { AgentOperationError, atAgentStage, formatAgentFailure } from './errors.js';
+import { SourcePolicyError } from './sourceAccessPolicy.js';
 
 test('reports a lifecycle stage without including a sensitive upstream error message', async () => {
 	const sensitiveValue = 'secret-value-that-must-not-be-logged';
@@ -21,4 +22,10 @@ test('preserves the safe command-verification diagnostic and its stage', () => {
 		new AgentOperationError('verify-command', 'command lease has expired; check clock synchronization')
 	);
 	assert.equal(output, 'verify-command failed: command lease has expired; check clock synchronization.');
+});
+
+test('local policy refusal exposes only a bounded safe code, never injected path or credential text', () => {
+	assert.equal(formatAgentFailure(new SourcePolicyError('source-policy-stale')), 'startup failed: source access refused (source-policy-stale).');
+	const unsafe = formatAgentFailure(new SourcePolicyError('source-private/path?token=synthetic'));
+	assert.equal(unsafe, 'startup failed: operation failed.');
 });

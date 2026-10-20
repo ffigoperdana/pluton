@@ -15,6 +15,8 @@ import PlanFormNav from './PlanFormNav';
 import { useGetDevice } from '../../../services/devices';
 import PlanPruneSettings from '../PlanSettings/PlanPruneSettings';
 import PlanReplicationSettings from '../PlanSettings/PlanReplicationSettings';
+import { useSourceAccess } from '../../../services/agentSourceAccess';
+import { effectiveSourceRoots, sourceInsideRoot, sourcePathError, sourceModeSetupPending } from '../../../utils/agentSourceAccess';
 
 type PlanFormProps = {
    title: string;
@@ -47,6 +49,17 @@ const PlanForm = ({
 }: PlanFormProps) => {
    const [step, setStep] = useState<number>(1);
    const isRemoteFilesystemSource = planSettings.sourceType === 'device' && planSettings.sourceId !== 'main';
+   const sourceAccess = useSourceAccess(planSettings.sourceId, isRemoteFilesystemSource);
+   const sourceAccessView = sourceAccess.isError ? undefined : sourceAccess.data;
+   const [sourceDraftBlocked, setSourceDraftBlocked] = useState(false);
+   const sourcePath = planSettings.sourceConfig.includes[0] || '';
+   const legacyStaticSource = sourceAccessView?.supported === false;
+   const validLegacySource = legacyStaticSource && Boolean(sourcePath) && !sourcePathError(sourcePath, true);
+   const sourceReady =
+      !isRemoteFilesystemSource ||
+      (!sourceDraftBlocked &&
+         !sourceModeSetupPending(sourceAccessView) &&
+         (validLegacySource || effectiveSourceRoots(sourceAccessView).some((root) => sourceInsideRoot(sourcePath, root))));
 
    const { data: settingsData } = useGetSettings();
    const appSettings = settingsData?.result?.settings || {};
@@ -62,12 +75,12 @@ const PlanForm = ({
       },
       2: {
          title: 'Next: Setup Schedule & Retention',
-         onClick: () => isPlanSettingsValid(planSettings, step) && setStep(step + 1),
+         onClick: () => sourceReady && isPlanSettingsValid(planSettings, step) && setStep(step + 1),
       },
       3: { title: 'Next: Advanced Settings', onClick: () => isPlanSettingsValid(planSettings, step) && setStep(step + 1) },
       4: {
          title: 'Create Plan',
-         onClick: () => isPlanSettingsValid(planSettings, false) && onSubmit(),
+         onClick: () => sourceReady && isPlanSettingsValid(planSettings, false) && onSubmit(),
       },
    };
 
@@ -104,11 +117,19 @@ const PlanForm = ({
                   </div>
                   <div className={classes.footerRight}>
                      {type === 'add' ? (
-                        <button className={classes.createButton} onClick={buttonTexts[step].onClick}>
+                        <button
+                           className={classes.createButton}
+                           disabled={isSubmitting || (step >= 2 && !sourceReady)}
+                           onClick={buttonTexts[step].onClick}
+                        >
                            <Icon type="check" size={12} /> {buttonTexts[step].title}
                         </button>
                      ) : (
-                        <button className={classes.createButton} onClick={() => isPlanSettingsValid(planSettings, false) && onSubmit()}>
+                        <button
+                           className={classes.createButton}
+                           disabled={isSubmitting || !sourceReady}
+                           onClick={() => sourceReady && isPlanSettingsValid(planSettings, false) && onSubmit()}
+                        >
                            <Icon type="check" size={12} /> {'Update Plan'}
                         </button>
                      )}
@@ -120,6 +141,13 @@ const PlanForm = ({
          <PlanFormNav step={step} type={type} gotoStep={gotoStep} />
 
          <div className={`${PFClasses.formContent} styled__scrollbar`}>
+            {isRemoteFilesystemSource && !sourceReady && (
+               <p role="status" className={classes.fieldNotice}>
+                  {legacyStaticSource
+                     ? 'Enter one safe absolute Linux source path to continue. The agent validates it against its static roots before backup.'
+                     : 'Select a readable effective root or validate and use the canonical source path before saving. Pending access requests cannot be used for backup.'}
+               </p>
+            )}
             {isSubmitting && (
                <div className={classes.loader}>
                   <Icon size={36} type="loading" />
@@ -227,6 +255,9 @@ const PlanForm = ({
                      onUpdate={(plan) => onPlanSettingsChange({ ...plan })}
                      isEditing={type === 'edit' ? true : false}
                      error={planSettings.sourceConfig.includes.length === 0 ? 'Required' : ''}
+                     sourceAccess={sourceAccessView}
+                     sourceAccessError={sourceAccess.isError}
+                     onDraftBlocked={setSourceDraftBlocked}
                   />
                   <div className={classes.field}>
                      <label className={classes.label}>Backup Destination*</label>
@@ -252,7 +283,8 @@ const PlanForm = ({
                         <p className={classes.fieldNotice}>
                            Remote managed backups use SFTP. Database dumps and constrained hooks can be configured under Advanced → Database & Hooks.
                            Optional replicas are copied by the Pluton server after snapshot verification. Storage credentials stay on the server.
-                           Native database recovery continues to use the trusted primary repository. Agent prune and arbitrary scripts remain unavailable.
+                           Native database recovery continues to use the trusted primary repository. Agent prune and arbitrary scripts remain
+                           unavailable.
                         </p>
                      </div>
                   )}

@@ -3,11 +3,17 @@ import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqli
 import { devices } from './devices';
 
 /**
- * `BACKUP_FILESYSTEM` is intentionally the only execution command in the
- * community agent. It is a fixed Restic/Rclone workflow, not a shell-command
- * transport. All other remote strategy operations remain unavailable.
+ * `BACKUP_FILESYSTEM` is the fixed Restic/Rclone execution workflow. Source
+ * Access commands only validate paths or select within the host-approved
+ * maximum; they never change host permissions or carry shell commands.
  */
-export type AgentCommandType = 'PING' | 'INVENTORY_REFRESH' | 'BACKUP_FILESYSTEM';
+export type AgentCommandType =
+	| 'PING'
+	| 'INVENTORY_REFRESH'
+	| 'BACKUP_FILESYSTEM'
+	| 'SOURCE_ACCESS_VALIDATE'
+	| 'SOURCE_ACCESS_APPLY'
+	| 'SOURCE_ACCESS_MODE_SETUP';
 export type AgentCommandState =
 	| 'queued'
 	| 'leased'
@@ -89,8 +95,8 @@ export const agentRequestNonces = sqliteTable(
 );
 
 /**
- * A durable, agent-polled command queue. Only harmless control-plane command
- * types are allowed in Phase 4; no command can carry executable shell input.
+ * A durable, agent-polled command queue with a closed command allowlist. No
+ * command can carry executable shell input or change host-approved permissions.
  */
 export const agentCommands = sqliteTable(
 	'agent_commands',

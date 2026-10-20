@@ -10,6 +10,7 @@ import NotFound from '../../components/common/NotFound/NotFound';
 import DeviceBackups from '../../components/Device/DeviceBackups/DeviceBackups';
 import { DevicePlan, DeviceStorage } from '../../@types/devices';
 import AgentStatus from '../../components/Device/AgentStatus/AgentStatus';
+import SourceAccess from '../../components/Device/SourceAccess/SourceAccess';
 
 const DeviceSingle = () => {
    const { id } = useParams();
@@ -77,6 +78,7 @@ const DeviceSingle = () => {
                   <DeviceBackups plans={devicePlans} storages={deviceStorages} />
                   {metrics?.system && <DeviceInfo metrics={metrics} isRefetching={false} />}
                   {device?.agent && <AgentStatus deviceId={device.id} agent={device.agent} />}
+                  {device?.agent && <SourceAccess deviceId={device.id} agentId={device.agent.agentId} />}
                </>
             )}
          </div>

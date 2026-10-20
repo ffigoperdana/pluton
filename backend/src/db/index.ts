@@ -25,6 +25,7 @@ import { appPaths } from '../utils/AppPaths';
 import { internalRecoverySessions, internalRecoveryImportLeases } from './schema/internalRecovery';
 import { persistentDatabaseRestores, persistentRestoreImportLeases } from './schema/databaseRestores';
 import { retainedManagedRepositories } from './schema/retainedManagedRepositories';
+import { agentSourceAccessState, agentSourceAccessRequests } from './schema/agentSourceAccess';
 import {
 	notificationChannels,
 	notificationSubscriptions,
@@ -71,6 +72,8 @@ export const db = drizzle(sqlite, {
 		agentRequestNonces,
 		agentCommands,
 		agentCommandRelations,
+		agentSourceAccessState,
+		agentSourceAccessRequests,
 		remoteManagedRepositories,
 		retainedManagedRepositories,
 		remoteManagedRepositoryRelations,

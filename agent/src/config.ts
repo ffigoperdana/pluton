@@ -30,6 +30,7 @@ export function createAgentConfig(input: {
   clientKeyFile?: string;
   hookRoot?: string;
   databaseBinDirs?: string;
+  sourcePolicyFile?: string;
 }): AgentConfig {
   if (!input.serverUrl)
     throw new Error("PLUTON_SERVER_URL or --server is required.");
@@ -76,6 +77,9 @@ export function createAgentConfig(input: {
           path.resolve(value),
         )
       : undefined,
+    sourcePolicyFile: input.sourcePolicyFile
+      ? path.resolve(input.sourcePolicyFile)
+      : undefined,
   };
 }
 
@@ -95,5 +99,6 @@ export function configFromEnvironment(
     clientKeyFile: overrides.PLUTON_AGENT_CLIENT_KEY_FILE,
     hookRoot: overrides.PLUTON_AGENT_HOOK_ROOT,
     databaseBinDirs: overrides.PLUTON_AGENT_DATABASE_BIN_DIRS,
+    sourcePolicyFile: overrides.PLUTON_AGENT_SOURCE_POLICY_FILE,
   });
 }

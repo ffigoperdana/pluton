@@ -1,4 +1,5 @@
 import { AgentHttpError } from "./transport.js";
+import { SourcePolicyError } from "./sourceAccessPolicy.js";
 
 export type AgentOperationStage =
   | "load-configuration"
@@ -36,6 +37,11 @@ function isSafeHttpStatus(value: number): boolean {
 }
 
 export function sanitizeAgentError(error: unknown): string {
+  if (
+    error instanceof SourcePolicyError &&
+    /^source-[a-z0-9-]{1,80}$/.test(error.code)
+  )
+    return `source access refused (${error.code})`;
   if (error instanceof AgentHttpError && isSafeHttpStatus(error.statusCode)) {
     return `server returned HTTP ${error.statusCode}`;
   }
