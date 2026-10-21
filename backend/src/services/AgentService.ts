@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { agentDistribution } from '../utils/agentDistribution';
 import Cryptr from 'cryptr';
 import { z } from 'zod';
 import { remoteBackupFailure } from '../utils/remoteBackupDiagnostics';
@@ -254,9 +255,12 @@ export class AgentService {
 		deviceName: string;
 		serverUrl: string;
 		insecureHttpAllowed: boolean;
+		distribution: ReturnType<typeof agentDistribution>;
 	}> {
 		const parsed = enrollmentNameSchema.safeParse(input);
 		if (!parsed.success) throw new AppError(400, 'A remote machine name is required.');
+		// Fail before minting a token. Existing enrollment, heartbeat and upgrade paths are unchanged.
+		const distribution = agentDistribution(configService.config);
 
 		const token = crypto.randomBytes(32).toString('base64url');
 		const expiresAt = new Date(this.now().getTime() + 15 * 60 * 1000);
@@ -275,6 +279,7 @@ export class AgentService {
 			deviceName: created.deviceName,
 			serverUrl: configService.config.AGENT_SERVER_URL || configService.config.APP_URL,
 			insecureHttpAllowed: configService.config.ALLOW_INSECURE_AGENT_HTTP === true,
+			distribution,
 		};
 	}
 

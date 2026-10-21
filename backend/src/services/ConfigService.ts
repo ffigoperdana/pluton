@@ -40,6 +40,11 @@ const baseConfigSchema = z.object({
 		.default(false)
 		.optional(),
 	AGENT_SERVER_URL: z.string().optional(),
+	// Fresh standalone enrollment instructions only; never change installed Agents.
+	AGENT_INSTALL_REPOSITORY_URL: z.string().optional(),
+	AGENT_INSTALL_COMMIT: z.string().optional(),
+	AGENT_INSTALL_VERSION: z.string().optional(),
+	AGENT_INSTALL_CA_FILE: z.string().optional(),
 	AGENT_OFFLINE_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(90).optional(),
 
 	// Security (optional in setup mode)

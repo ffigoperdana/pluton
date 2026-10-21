@@ -236,6 +236,25 @@ describe('ConfigService', () => {
 		expect(configService.config.AGENT_SERVER_URL).toBe('http://192.0.2.10:5173');
 		expect(configService.config.APP_URL).toBe('https://pluton.example.internal');
 	});
+	it('preserves explicit fresh-install distribution metadata without writing existing server configuration', async () => {
+		process.env = { ...validBaseEnv, NODE_ENV: 'production',
+			AGENT_INSTALL_REPOSITORY_URL: 'https://git.example.internal/agents/pluton-agent.git',
+			AGENT_INSTALL_COMMIT: 'a'.repeat(40), AGENT_INSTALL_VERSION: '0.7.0',
+			AGENT_INSTALL_CA_FILE: '/etc/ssl/example-ca.pem' };
+		// Model an existing installation, including its already persisted private keys.
+		mockExistsSync.mockReturnValue(true);
+		mockReadFileSync.mockReturnValue(JSON.stringify({ APP_URL: 'https://pluton.example.internal' }));
+		mockPrivateFiles.set(require('path').join('/fake/data/dir', 'keys.json'), JSON.stringify({
+			SECRET: validBaseEnv.SECRET, APIKEY: validBaseEnv.APIKEY,
+			PASSWORD_HASH: jest.requireActual('bcryptjs').hashSync(validBaseEnv.USER_PASSWORD, 4),
+		}));
+		const { configService } = await import('../../src/services/ConfigService');
+		expect(configService.config.AGENT_INSTALL_COMMIT).toBe('a'.repeat(40));
+		expect(configService.config.AGENT_INSTALL_VERSION).toBe('0.7.0');
+		expect(configService.config.AGENT_INSTALL_CA_FILE).toBe('/etc/ssl/example-ca.pem');
+		expect(configService.config.APP_URL).toBe('https://pluton.example.internal');
+		expect(mockWriteFileSync).not.toHaveBeenCalled();
+	});
 	it('does not authorize HTTP Agent transport by setting a browser origin or Agent URL', async () => {
 		process.env = {
 			...validBaseEnv,

@@ -10,6 +10,8 @@ Halaman ini membantu operator mencocokkan konfigurasi dengan komponen yang memba
 | `APP_URL`, `APP_ALLOWED_ORIGINS` | Origin browser utama dan tambahan yang disetujui; jangan memuat credential |
 | `APP_TITLE` | Judul aplikasi |
 | `AGENT_SERVER_URL` | URL yang dipublikasikan untuk akses Agent |
+| `AGENT_INSTALL_REPOSITORY_URL`, `AGENT_INSTALL_COMMIT`, `AGENT_INSTALL_VERSION` | Distribusi instalasi baru: Git HTTPS tanpa credential, full reviewed SHA lowercase 40 karakter, versi 0.7.0; kosong/invalid menolak token baru tanpa mengubah Agent existing |
+| `AGENT_INSTALL_CA_FILE` | Opsional: path PEM CA yang disetujui pada host Agent; tidak diunggah dari server dan tidak menonaktifkan TLS |
 | `ENCRYPTION_KEY`, `SECRET` | Material key yang harus cocok dengan state existing; jangan diganti saat upgrade |
 | `USER_NAME`, `USER_PASSWORD` | Bootstrap administrator container melalui saluran privat |
 | `APIKEY`, `SESSION_DURATION` | API key dengan batas izin dan masa session; default session 7 hari |

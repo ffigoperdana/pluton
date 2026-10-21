@@ -602,6 +602,20 @@ describe('Agent Source Access durable administration and policy', () => {
 		).toEqual({ count: 22 });
 	});
 
+	it('protects fresh enrollment and refuses unconfigured standalone distribution without minting tokens', async () => {
+		const control = new AgentService(agentStore, encryptionKey, () => now);
+		const create = jest.spyOn(agentStore, 'createEnrollment');
+		const app = express(); app.use(express.json());
+		app.use('/api/agent-admin', createAgentAdminRouter(new AgentAdminController(control, service)));
+		expect((await request(app).post('/api/agent-admin/enrollments').send({ name: 'app-01' })).status).toBe(401);
+		const cookie = `token=${jwt.sign({ user: 'administrator-session' }, encryptionKey)}`;
+		const response = await request(app).post('/api/agent-admin/enrollments').set('Cookie', cookie).send({ name: 'app-01' });
+		expect(response.status).toBe(503);
+		expect(response.headers['cache-control']).toBe('no-store');
+		expect(response.body.error).toContain('Standalone Agent distribution is unavailable');
+		expect(create).not.toHaveBeenCalled();
+	});
+
 	it('protects all administrative source routes with the existing admin session model', async () => {
 		const control = new AgentService(agentStore, encryptionKey, () => now, undefined, service);
 		const app = express();

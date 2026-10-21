@@ -6,6 +6,13 @@ filesystem permission changes, or a new database/hook policy.
 
 ## Authorization and compatibility
 
+Fresh Agent enrollment now uses the separately configured standalone 0.7.0 Git
+distribution and reviewed immutable commit; see
+[AGENT_ENROLLMENT_DISTRIBUTION.md](AGENT_ENROLLMENT_DISTRIBUTION.md). Its planned
+roots/mode are not a host delegation or an effective Source Access receipt.
+Existing monorepo Agents keep their installer/upgrader and identity/policy state;
+no automatic distribution migration or integrity rewrite is performed.
+
 ### Two host-controlled modes
 
 **Host-Approved** is the default for existing installations. A new directory

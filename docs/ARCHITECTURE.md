@@ -109,6 +109,17 @@ proprietary implementations.
 
 ## Validation commands
 
+New standalone Agent enrollment distribution (configured HTTPS Git + immutable
+SHA + Agent 0.7.0) is described in
+[AGENT_ENROLLMENT_DISTRIBUTION.md](AGENT_ENROLLMENT_DISTRIBUTION.md). It leaves
+legacy monorepo Agent installers/upgraders and existing identities unchanged.
+Focused utility/UI tests are `frontend/__tests__/agentEnrollment.test.ts` and
+`agentSourceAccessUi.test.ts`; backend tests include `utils/agentDistribution`,
+`services/AgentService`, `services/ConfigService`, `agentSourceAccess`,
+`stores/AgentStore`, and `agentControlPlane.integration`. The disposable Ubuntu
+runner takes a separately reviewed clean standalone checkout; see its documented
+systemd/production limitations before using the evidence for acceptance.
+
 Run from the repository root with Node.js 24 and the pinned pnpm version:
 
 ```sh
