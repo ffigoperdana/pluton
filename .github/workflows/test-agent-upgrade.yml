@@ -8,6 +8,7 @@ on:
       - 'installers/lib/upgrade-*.cjs'
       - 'installers/install-agent.sh'
       - 'installers/tests/upgrade-agent.*'
+      - 'installers/tests/install-agent.locale.test.cjs'
       - 'package.json'
       - 'pnpm-lock.yaml'
       - '.github/workflows/test-agent-upgrade.yml'
@@ -38,7 +39,16 @@ jobs:
       - name: Install Agent build dependencies without lifecycle hooks
         run: pnpm install --frozen-lockfile --ignore-scripts --filter @plutonhq/pluton-agent...
       - name: Isolated upgrade transaction and Linux filesystem tests
-        run: bash installers/tests/upgrade-agent.test.sh
+        env:
+          LOCPATH: ${{ runner.temp }}/pluton-test-locales
+          PLUTON_REQUIRE_LOCALE_TESTS: '1'
+        # Private locale data only; no host locale/service configuration changes.
+        # A missing real Unicode collation must fail instead of silently skipping.
+        run: |
+          set -euo pipefail
+          mkdir -p "$LOCPATH"
+          localedef --no-archive --inputfile en_US --charmap UTF-8 "$LOCPATH/en_US.UTF-8"
+          bash installers/tests/upgrade-agent.test.sh
       - name: Compile and test unprivileged Agent including upgrade hold
         env:
           PLUTON_EXCLUSIONS_RESTIC: ${{ runner.temp }}/pluton-exclusion-tools/restic

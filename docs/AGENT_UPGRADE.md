@@ -54,6 +54,29 @@ is empty. It starts the upgraded Agent after verification. It does not invoke th
 enrollment installer, require a new token, rotate identity, or clear receipts.
 Do not stop an active backup merely to satisfy this prerequisite.
 
+## Deterministic locale compatibility
+
+Both `verified_tree_digest` and `source_fingerprint` now export `LC_ALL=C` only
+inside their calculation subshell. The former used inherited `sort -z` collation;
+the initial shell upgrade gate inherited the administrator locale, whereas later
+Node upgrade subprocesses already used `LANG=C`. Thus the same unchanged tree
+could fail before Node diagnostics under `en_US.UTF-8`. `LANG=C` alone also does
+not override an inherited `LC_ALL`/`LC_COLLATE`.
+
+Canonical byte ordering and record serialization preserve the existing format=1
+and correctly recorded C-locale provenance. No service/global environment change,
+metadata rewrite, force switch, enrollment, permission relaxation or receipt reset
+is performed. Existing records created under another collation are **not**
+automatically adopted: a mismatch still blocks the upgrade and needs an exact
+operator/maintainer review. Content/mode/ownership/link changes remain fail closed.
+
+Use the normal `--check` command from the reviewed fixed checkout. A persistent
+mismatch is not proof of another locale bug; do not edit `.verified-install` or
+calculate a replacement accepted hash. Keep the original installation and
+transaction evidence intact. See the in-app Agent troubleshooting article and
+[integrity/documentation audit](DETERMINISTIC_AGENT_INTEGRITY_AND_OPERATIONS_AUDIT.md)
+for regression scope, local Linux results and deployment boundaries.
+
 ## Supported installation and preflight
 
 - Linux x86_64, systemd with unified cgroup v2 and the installer-created
@@ -188,7 +211,8 @@ app, provenance and preserved state. Keep plans paused throughout this longer
 possible stopped-service interval and any rollback. Do not delete a hold or
 transaction to retry an uncertain failure.
 
-The exact installer `verified_tree_digest` implementation is unchanged. Existing
+The deadline-only follow-up retained the installer digest algorithm. The later
+locale fix above scopes C collation inside that same algorithm; existing
 `format=1` `.verified-install` metadata, record ordering, SHA-256, ownership,
 permissions, link validation and source/tree fields remain compatible. Updating
 only the app still requires hashing the entire private runtime/bin/app tree:

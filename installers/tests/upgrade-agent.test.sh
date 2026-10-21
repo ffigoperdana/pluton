@@ -13,4 +13,4 @@ for upgrade_flag in --re-enroll --token uninstall --server --purge --force; do
 		[[ "$upgrade_status" == 2 ]] || { printf 'FAIL: option was not refused at argument parsing\n' >&2; exit 1; }
 	fi
 done
-node --test "$test_directory/upgrade-agent.test.cjs" "$test_directory/upgrade-agent.provenance.test.cjs"
+node --test "$test_directory/upgrade-agent.test.cjs" "$test_directory/upgrade-agent.provenance.test.cjs" "$test_directory/install-agent.locale.test.cjs"

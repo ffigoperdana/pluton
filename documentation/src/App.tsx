@@ -168,6 +168,7 @@ export default function Docs() {
             </p>
             <h2>Mulai di sini</h2>
             <ol>
+              <li><a href="/docs/getting-started/complete-backup-setup">Complete Backup Setup: dari server baru sampai recovery terverifikasi</a>.</li>
               <li><a href="/docs/getting-started">Kenali Pluton dan pilih jenis backup</a>.</li>
               <li><a href="/docs/storage">Tambahkan Primary Storage</a>, lalu <a href="/docs/remote-agent">siapkan source atau Agent</a>.</li>
               <li><a href="/docs/getting-started/quick-start">Buat Backup Plan dan jalankan backup pertama</a>.</li>
@@ -179,6 +180,9 @@ export default function Docs() {
               hasil setiap tahap sebelum cutover.
             </Callout>
             <Cards>
+              <Card title="Setup lengkap, langkah 1–15" href="/docs/getting-started/complete-backup-setup">
+                Server, Agent, Source Access, database, exclusions, replika/HCP dan bukti recovery.
+              </Card>
               <Card title="Buat backup pertama" href="/docs/getting-started/quick-start">
                 Prasyarat, langkah pengaturan, dan hasil yang perlu diperiksa.
               </Card>

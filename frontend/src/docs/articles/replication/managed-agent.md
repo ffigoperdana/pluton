@@ -41,6 +41,24 @@ Jika mirror gagal, primary yang sukses tetap sukses. Baca **Decision**, **Attemp
 
 ## Verifikasi dan batas operasi
 
+### Mengubah prefix bukan memindahkan sejarah
+
+Field repository pada tujuan baru adalah prefix kosong yang akan dimiliki
+lifecycle baru. Mengubah setting/prefix tidak otomatis memindahkan snapshot lama,
+rekey repository atau mengubah retained binding. Jangan menukar primary/mirror
+atau membuat alias untuk melewati overlap guard. Rencanakan tujuan baru melalui
+flow Add/Confirm yang didukung, buktikan copy dan jalur recovery yang disetujui,
+lalu baru pertimbangkan detach lama sesuai owner/retention. Jangan hapus salinan
+lama sebelum tujuan baru dan pemulihannya diterima.
+
+**Redundancy incomplete** berkaitan dengan mirrors backup exact, bukan quota
+storage atau jumlah plan yang memakai storage. Untuk bukti copy, bandingkan
+source snapshot/verification/last replicated snapshot di dialog; bila field
+evidence tidak tersedia jangan mengisinya dengan asumsi. Direct recovery dari
+managed mirror belum tersedia: recovery primer tidak menjadi bukti recovery
+replica. Runbook operator terpisah diperlukan sebelum mengandalkan replica saat
+primary hilang. Lihat [retention/restore](/docs/replication/retention-restore).
+
 Contoh `app-01` dengan dua tujuan baru dinyatakan redundansinya lengkap bila kedua mirror **Completed** untuk backup yang diperiksa. Simpan bukti exact snapshot dan waktu verifikasi secara privat. RAM server 4 GiB bukan capacity result; ukur workload, queue wait, disk, dan memori tanpa menurunkan guard atau menambah concurrency.
 
 Physical cleanup/prune replika, Agent prune, serta direct mirror file/native database restore belum didukung. Detach mempertahankan data. Periksa [retention dan restore](/docs/replication/retention-restore) sebelum menghapus plan atau merencanakan recovery saat primary hilang. Interoperabilitas **HCP nyata belum diuji**; konfigurasi dan fixture otomatis tidak menggantikannya.

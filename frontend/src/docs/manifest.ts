@@ -16,6 +16,7 @@ export const docCategories: DocCategory[] = [
       evidence: ["frontend/src/routes/Setup/Setup.tsx","frontend/src/routes/Plans/Plans.tsx","backend/src/createApp.ts","agent/src/runtime.ts"],
       articles: [
          page("getting-started", "Mengenal Pluton mandiri"),
+         page("getting-started/complete-backup-setup", "Complete Backup Setup — dari nol sampai recovery terverifikasi", "operator-setup"),
          page("getting-started/terms", "Memahami istilah pada backup dan pemulihan"),
          page("architecture", "Cara kerja Pluton"),
          page("getting-started/requirements", "Menyiapkan kebutuhan sebelum backup pertama"),

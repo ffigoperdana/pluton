@@ -6,6 +6,11 @@ Panduan ini ditujukan kepada administrator yang sudah memiliki atau akan menyiap
 
 ## Kemampuan utama
 
+**Start Here:** [Complete Backup Setup — dari nol sampai recovery terverifikasi](/docs/getting-started/complete-backup-setup)
+menyatukan 15 langkah: server, Agent, Source Access, SFTP, filesystem/SQL,
+exclusions, replika/HCP, recovery, operasi dan upgrade/cutover. Gunakan panduan
+itu sebagai urutan kerja; halaman per fitur di bawah menjadi referensi detail.
+
 Alur kerja sehari-hari adalah: **Sources → Storages → Backup Plans → backup selesai → pemeriksaan isi → pemulihan ke tempat aman**.
 
 | Kebutuhan Anda | Mulai dari sini |

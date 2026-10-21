@@ -13,6 +13,8 @@ It shares the Pluton server/build; no documentation domain, hosted search servic
 or external CDN is required. Source: [frontend/src/docs/articles](frontend/src/docs/articles).
 
 - [Architecture and checks](docs/ARCHITECTURE.md)
+- [Start Here: zero to verified recovery](frontend/src/docs/articles/getting-started/complete-backup-setup.md) — available in the application at `/docs/getting-started/complete-backup-setup`
+- [Agent app-only upgrade and integrity](docs/AGENT_UPGRADE.md)
 - [Operational hardening](docs/OPERATIONAL_HARDENING_REPORT.md)
 - [Phase 7 Webhook/SMTP implementation and acceptance](docs/PHASE7_WEBHOOK_NOTIFICATIONS.md)
 - [Product hardening report](docs/SELFHOSTED_PRODUCT_HARDENING_REPORT.md)

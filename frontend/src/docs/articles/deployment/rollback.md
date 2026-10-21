@@ -30,7 +30,13 @@ Jangan menebak image lama, membuat volume kosong, atau menimpa SQLite dengan sal
 
 ## Rollback Agent
 
-Gunakan artefak Agent yang direview dengan config, allowed roots, dan identitas mesin yang sama. Installer mempunyai mekanisme pemulihan untuk kegagalan instalasi, tetapi perubahan source Agent yang terencana tetap perlu diverifikasi terpisah dari image server.
+Gunakan `upgrade-agent.sh --rollback <exact-upgrade-id>` hanya untuk transaksi
+yang memiliki receipt/backup sah, setelah drain dan preservation checks. Upgrader
+memulihkan app/provenance yang tercatat, bukan identity/command receipts lama;
+file konfigurasi/unit menjadi pembanding preservation, bukan alasan menimpanya.
+Jika state berubah atau cgroup belum kosong, rollback dapat ditolak. Jangan
+menjalankan `install-agent.sh` untuk melewati penolakan. Ikuti
+[Agent upgrade](/docs/remote-agent/updates) dan `docs/AGENT_UPGRADE.md`.
 
 ## Verifikasi
 

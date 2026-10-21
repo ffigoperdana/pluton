@@ -24,4 +24,15 @@ Dokumentasi `/docs` menggunakan artikel lokal dan pencarian statis, terpisah dar
 
 ## Memastikan yang terpasang
 
+### Digest Agent deterministik dan panduan operasional
+
+Source installer/upgrader menetapkan locale C hanya dalam perhitungan tree/source
+fingerprint, mempertahankan format=1 dan penolakan mismatch nyata. Tidak ada
+update global locale, rewrite provenance atau re-enrollment. Hosted Linux CI dan
+rollout existing Agent tetap perlu verifikasi pada exact commit.
+
+[Complete Backup Setup](/docs/getting-started/complete-backup-setup) menyatukan
+15 langkah dari deployment sampai verified recovery/cutover, dengan referensi
+Source Access/history, exclusions 0.7.0, SFTP/S3/HCP dan batas mirror recovery.
+
 Package version checked-in tidak membuktikan publikasi rilis atau kesiapan produksi. Bandingkan informasi footer, source commit, digest image, Agent, worker, dan host operator melalui [identifikasi build](/docs/reference/version). Gunakan [batasan fitur](/docs/reference/limitations) serta [pembaruan aman](/docs/deployment/updates) sebelum merencanakan perubahan.

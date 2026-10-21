@@ -37,4 +37,7 @@ Jangan menggunakan direktori repository sebagai source atau staging. Repository 
 
 ## Pelajari berikutnya
 
+[Complete Backup Setup](/docs/getting-started/complete-backup-setup#1-pahami-arsitektur-dan-siapa-yang-menjalankan-operasi)
+memetakan host eksekusi, jalur jaringan dan urutan instalasi sampai recovery.
+
 Ikuti [alur backup sampai recovery](/docs/architecture/workflow), [backup pertama](/docs/getting-started/quick-start), dan [perbedaan Standard dengan Managed Agent](/docs/backup-plans/managed-agent).
