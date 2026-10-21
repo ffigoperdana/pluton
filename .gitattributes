@@ -5,5 +5,6 @@ deploy/compose.yml text eol=lf
 deploy/*.py text eol=lf
 deploy/*.cjs text eol=lf
 scripts/__tests__/*_test.py text eol=lf
+scripts/__tests__/fixtures/deployment/*.yml text eol=lf
 Dockerfile.source text eol=lf
 .github/workflows/*.yml text eol=lf

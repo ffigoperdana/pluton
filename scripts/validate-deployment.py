@@ -24,6 +24,14 @@ PROJECTS, VOLUMES, CONTAINERS, TAGS = [], [], [], []
 SECRETS, PASSED = [], 0
 
 
+def previous_compose_template():
+    # Exact public cd18739 template. Never reconstruct historical acceptance
+    # inputs from the evolving current deployment configuration.
+    content = (ROOT / "scripts/__tests__/fixtures/deployment/compose.cd18739.yml").read_bytes()
+    assert hashlib.sha256(content).hexdigest() == "85cd8b7fe1e2d66a72d9d0a1c4adfc3bae5a8ed0c504f8ae309c37017b4bc34d", "old-template-fixture-drift"
+    return content.decode("utf-8")
+
+
 def run(arguments, ok=True, cwd=None, environment=None, stdin=None):
     result = subprocess.run(arguments, cwd=cwd, input=stdin, text=True, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, env=environment, timeout=600)
@@ -292,12 +300,7 @@ def main(workspace):
     write(lab / "compose.lab.yml", overlay)
     passed("changed mount contract refused before stopping the running application")
 
-    # Reconstruct the exact prior public template, not production configuration.
-    old_base = (ROOT / "deploy/compose.yml").read_text()
-    start = old_base.index("      # GET only:")
-    end = old_base.index("      interval:", start)
-    old_base = old_base[:start] + '      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:5173/api/health || exit 1"]\n' + old_base[end:]
-    assert hashlib.sha256(old_base.encode()).hexdigest() == "85cd8b7fe1e2d66a72d9d0a1c4adfc3bae5a8ed0c504f8ae309c37017b4bc34d", "old-template-fixture-drift"
+    old_base = previous_compose_template()
     # Keep loopback-only ports in a fixture overlay, not in the known base.
     overlay += '    ports: !override\n      - "127.0.0.1::5173"\n'
     write(lab / "compose.lab.yml", overlay)
