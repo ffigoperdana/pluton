@@ -749,6 +749,108 @@ test("actual bounded subprocess exits/deadlines yield safe codes without retaini
     assert(!JSON.stringify(error).includes("synthetic-private-marker"));
   }
 });
+test("full-tree provenance has a dedicated five-minute budget and closed error categories", () => {
+  let invoked = false;
+  const digest = "b".repeat(64);
+  assert.equal(
+    upgrade.verifiedInstallDigest(
+      (file, args, options) => {
+        invoked = true;
+        assert.equal(file, "/usr/bin/bash");
+        assert.deepEqual(args, [
+          "-Eeuo",
+          "pipefail",
+          "-c",
+          'source "$1/installers/install-agent.sh"; verified_tree_digest "$2"',
+          "agent-integrity",
+          "/synthetic/source",
+          "/synthetic/install",
+        ]);
+        assert.deepEqual(options, {
+          timeout: 300_000,
+          failureCode: "PROVENANCE_FAILED",
+          timeoutCode: "PROVENANCE_TIMEOUT",
+        });
+        return digest;
+      },
+      "/synthetic/source",
+      "/synthetic/install",
+    ),
+    digest,
+  );
+  assert(invoked);
+});
+
+for (const wasActive of [false, true]) {
+  for (const timedOut of [false, true]) {
+    test(`real provenance command ${timedOut ? "deadline" : "failure"} rolls back with prior service active=${wasActive} and exact state preserved`, (t) => {
+      const f = fixture(t, { wasActive }),
+        previousProvenance = fs.readFileSync(f.c.provenance);
+      f.c.writeProvenance = () =>
+        upgrade.verifiedInstallDigest(
+          (_file, _args, { timeout, failureCode, timeoutCode }) => {
+            assert.equal(timeout, 300_000);
+            // Exercise an actual child with a shorter test-only clock. There is
+            // no environment/CLI override for the production provenance budget.
+            try {
+              return execFileSync(
+                process.execPath,
+                [
+                  "-e",
+                  timedOut
+                    ? "process.stderr.write('synthetic-private-marker');setTimeout(()=>{},10000)"
+                    : "process.stderr.write('synthetic-private-marker');process.exit(9)",
+                ],
+                {
+                  timeout: timedOut ? 150 : 3000,
+                  stdio: ["ignore", "pipe", "pipe"],
+                },
+              );
+            } catch (raw) {
+              assert.equal(
+                timedOut ? raw.code : raw.status,
+                timedOut ? "ETIMEDOUT" : 9,
+              );
+              throw diagnostics.commandFailure(raw, failureCode, timeoutCode);
+            }
+          },
+          f.temporary,
+          f.c.install,
+        );
+      const error = captureFailure(() => upgrade.upgrade(f.c)),
+        record = diagnostics.safeRecord(error);
+      assert.deepEqual(record, {
+        version: 1,
+        failedStage: "PROVENANCE",
+        errorCode: timedOut ? "PROVENANCE_TIMEOUT" : "PROVENANCE_FAILED",
+        rollback: "SUCCESS",
+        previousAgentPreserved: "YES",
+      });
+      assert.equal(f.app(), "old app");
+      f.assertPreserved();
+      assert.deepEqual(fs.readFileSync(f.c.provenance), previousProvenance);
+      assert.equal(f.c.service.active(), wasActive);
+      assert.equal(
+        f.calls.filter((call) => call === "start").length,
+        wasActive ? 1 : 0,
+      );
+      assert.equal(receiptFailure(f).phase, "rolled-back");
+      assert.deepEqual(receiptFailure(f).failure, record);
+      assert.equal(fs.existsSync(f.c.hold), false);
+      assert.equal(
+        fs.existsSync(path.join(f.c.state, "source-access-activity.json")),
+        false,
+      );
+      assert(
+        !diagnostics.formatFailure(error).includes("synthetic-private-marker"),
+      );
+      assert(
+        !JSON.stringify(receiptFailure(f)).includes("synthetic-private-marker"),
+      );
+    });
+  }
+}
+
 test("CLI uses structured formatting and never prints untrusted invocation paths", () => {
   const error = captureFailure(() =>
     execFileSync(
