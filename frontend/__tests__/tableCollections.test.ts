@@ -188,7 +188,7 @@ test('actual plans route composes stored filters with sort/search and keeps filt
       plans_filter: JSON.stringify({ devices: [], tags: ['even'], storages: [], methods: [] }),
    });
    try {
-      assert.equal(f.status(), 'Showing 1–10 of 12 plans');
+      assert.equal(f.status(), 'Showing 1–9 of 12 plans');
       assert.equal(f.visible()[0], 'item-23');
       await f.input(f.search(), 'Item 0');
       assert.deepEqual(f.visible(), ['item-09', 'item-07', 'item-05', 'item-03', 'item-01']);
@@ -238,6 +238,36 @@ for (const route of ['sources', 'storages']) {
          assert.deepEqual(f.visible(), []);
          await f.input(tag, '');
          assert.deepEqual(f.visible(), ['item-02', 'item-04', 'item-06', 'item-08']);
+      } finally {
+         await f.close();
+      }
+   });
+}
+
+for (const count of [7, 9, 10, 18, 19]) {
+   test(`actual Plans route paginates ${count} records in nines and keeps exact totals`, async () => {
+      const f = await fixture('plans', rows(count));
+      try {
+         assert.equal(f.visible().length, Math.min(9, count));
+         assert.equal(f.status(), `Showing 1–${Math.min(9, count)} of ${count} plans`);
+         assert.deepEqual(
+            [...f.select('plans per page').options].map((option) => option.value),
+            ['9', '18', '27'],
+         );
+         if (count > 9) {
+            await f.click('Next');
+            assert.equal(f.visible().length, Math.min(9, count - 9));
+            if (count === 19) {
+               await f.click('Next');
+               assert.equal(f.status(), 'Showing 19–19 of 19 plans');
+               await f.update(rows(18));
+               assert.equal(f.status(), 'Showing 10–18 of 18 plans');
+            }
+         }
+         await f.input(f.select('plans per page'), '18');
+         assert.match(f.status()!, /^Showing 1–/);
+         await f.input(f.search(), 'Item 01');
+         assert.equal(f.status(), 'Showing 1–1 of 1 plans');
       } finally {
          await f.close();
       }

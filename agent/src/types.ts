@@ -32,6 +32,7 @@ export type SourceAccessReport = {
 };
 
 export type AgentCapabilities = {
+  backupExclusionsVersion?: 1;
   filesystemRootsConfigured: boolean;
   commandTypes: AgentCommandType[];
   backupLifecycleVersion?: 1 | 2;

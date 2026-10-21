@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { remoteBackupFailure } from '../utils/remoteBackupDiagnostics';
 import Cryptr from 'cryptr';
+import { parseBackupExclusions, sourceResticExclusions } from '../utils/backupExclusions';
 import { Plan, NewPlan } from '../db/schema/plans';
 import { type AgentCommand, type AgentIdentity } from '../db/schema/agents';
 import { type NewBackup } from '../db/schema/backups';
@@ -195,7 +196,9 @@ export class RemoteBackupService {
 		this.replicationService = service;
 	}
 
-	setSourceAccessService(service: AgentSourceAccessService): void { this.sourceAccessService = service; }
+	setSourceAccessService(service: AgentSourceAccessService): void {
+		this.sourceAccessService = service;
+	}
 
 	/** Internal server recovery shares the same narrow SFTP allowlist/decryption. */
 	async getSftpRecoveryOptions(storageId: string): Promise<Record<string, string>> {
@@ -417,6 +420,20 @@ export class RemoteBackupService {
 			setStage('source-validation');
 			const source = this.getSingleSource(plan.sourceConfig);
 			const excludes = this.getSafeExcludes(plan.sourceConfig);
+			// Retain an exact receipt of the policy actually executed. A queued
+			// backup must not silently adopt exclusion edits made after queuing.
+			if (
+				(excludes.length || backup.sourceConfig?.excludes?.length) &&
+				(!backup.sourceConfig ||
+					JSON.stringify(backup.sourceConfig.includes) !==
+						JSON.stringify(plan.sourceConfig.includes) ||
+					JSON.stringify(this.getSafeExcludes(backup.sourceConfig)) !== JSON.stringify(excludes))
+			) {
+				throw new AppError(
+					409,
+					'Backup source or exclusions changed after queuing. Start a new backup.'
+				);
+			}
 			let lifecycle;
 			if (plan.settings.remoteLifecycle) {
 				setStage('database-credential-preparation');
@@ -451,7 +468,7 @@ export class RemoteBackupService {
 			}
 			setStage('payload');
 			return {
-				version: lifecycle ? (lifecycle.version === 2 ? 3 : 2) : 1,
+				version: excludes.length ? 4 : lifecycle ? (lifecycle.version === 2 ? 3 : 2) : 1,
 				...(lifecycle ? { lifecycle } : {}),
 				backupId: backup.id,
 				planId: plan.id,
@@ -627,7 +644,10 @@ export class RemoteBackupService {
 			// The primary result stays independent from replica admission/execution.
 			// Startup reconciliation also scans completed rows if this process exits here.
 			void this.replicationService?.enqueueBackup(reference.backupId).catch(() => {
-				serverLogger?.warn({ event: 'managed_replication_admission_interrupted', code: 'admission-interrupted' }, 'Replica admission needs reconciliation.');
+				serverLogger?.warn(
+					{ event: 'managed_replication_admission_interrupted', code: 'admission-interrupted' },
+					'Replica admission needs reconciliation.'
+				);
 			});
 		}
 	}
@@ -696,13 +716,11 @@ export class RemoteBackupService {
 			);
 		}
 		if (hasEnabledScripts(plan)) {
-			throw new AppError(
-				400,
-				'Scripts are not available for remote filesystem backups.'
-			);
+			throw new AppError(400, 'Scripts are not available for remote filesystem backups.');
 		}
 		if (plan.settings.replication?.enabled) {
-			if (!this.replicationService) throw new AppError(503, 'Managed replication executor is not configured.');
+			if (!this.replicationService)
+				throw new AppError(503, 'Managed replication executor is not configured.');
 			// Existing primary backups remain available when a mirror loses access.
 			// Creation/settings changes still validate destination credentials and scope.
 			if (validateReplicaConfiguration) await this.replicationService.validatePlan(plan);
@@ -717,10 +735,20 @@ export class RemoteBackupService {
 		validateRepositoryPath(plan.storagePath || '');
 		setPreparationStage?.('agent-capability');
 		const sourceAgent = await this.getCapableAgent(plan.sourceId);
+		if (
+			this.getSafeExcludes(plan.sourceConfig).length &&
+			sourceAgent.capabilities.backupExclusionsVersion !== 1
+		) {
+			throw new AppError(
+				409,
+				'Update the Agent before using Backup Exclusions (capability v1 required).'
+			);
+		}
 		await this.sourceAccessService?.assertModeChangeIdle(sourceAgent.agentId);
 		if (sourceAgent.capabilities.sourceAccessVersion === 1) {
 			setPreparationStage?.('source-validation');
-			if (!this.sourceAccessService) throw new AppError(409, 'Source Access validation is unavailable.');
+			if (!this.sourceAccessService)
+				throw new AppError(409, 'Source Access validation is unavailable.');
 			await this.sourceAccessService.assertPlanSource(sourceAgent, sourcePath);
 		}
 		if (plan.settings.remoteLifecycle !== undefined) {
@@ -793,23 +821,16 @@ export class RemoteBackupService {
 	}
 
 	private getSafeExcludes(sourceConfig: PlanSource): string[] {
-		const excludes = sourceConfig?.excludes || [];
-		if (!Array.isArray(excludes) || excludes.length > 100) {
-			throw new AppError(400, 'Remote backup excludes are invalid.');
+		try {
+			const patterns = parseBackupExclusions(sourceConfig?.excludes ?? []);
+			if (patterns.length) sourceResticExclusions(this.getSingleSource(sourceConfig), patterns);
+			return patterns;
+		} catch (error) {
+			throw new AppError(
+				400,
+				error instanceof Error ? error.message : 'Invalid Backup Exclusions.'
+			);
 		}
-		return excludes.map(exclude => {
-			if (typeof exclude !== 'string') {
-				throw new AppError(400, 'Remote backup exclude is invalid.');
-			}
-			const value = exclude.trim();
-			if (!value || value.length > MAX_SOURCE_PATH_LENGTH || hasUnsafeControlCharacters(value)) {
-				throw new AppError(400, 'Remote backup exclude is invalid.');
-			}
-			if (value.split(/[\\/]+/).includes('..')) {
-				throw new AppError(400, 'Remote backup exclude cannot contain traversal.');
-			}
-			return value;
-		});
 	}
 
 	private async materializeSftpStorage(

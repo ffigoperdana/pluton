@@ -12,7 +12,7 @@ import {
   detectDatabaseBinary,
 } from "./lifecyclePolicy.js";
 
-export const AGENT_VERSION = "0.6.1";
+export const AGENT_VERSION = "0.7.0";
 
 const SAFE_COMMANDS: AgentCapabilities["commandTypes"] = [
   "PING",
@@ -105,6 +105,7 @@ export function collectInventory(input: {
     uptimeSeconds: Math.floor(os.uptime()),
     ...(input.sourceAccess ? { sourceAccess: input.sourceAccess } : {}),
     capabilities: {
+      backupExclusionsVersion: 1,
       ...(input.sourceAccess
         ? {
             sourceAccessVersion: 1 as const,

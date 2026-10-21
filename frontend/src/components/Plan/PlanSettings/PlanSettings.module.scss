@@ -1,4 +1,24 @@
 //Fields
+.backupExclusions {
+   textarea {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid var(--line-color);
+      border-radius: 6px;
+      padding: 10px;
+      resize: vertical;
+      font-size: 0.75rem;
+   }
+   p,
+   [role='alert'] {
+      font-size: 0.75rem;
+      line-height: 1.5;
+      margin: 8px 0 0;
+   }
+   [role='alert'] {
+      color: var(--error-active-text);
+   }
+}
 
 .field {
    margin-bottom: 20px;

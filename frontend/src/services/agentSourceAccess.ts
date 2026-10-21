@@ -1,5 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { SourceAccessAccepted, SourceAccessPayload, SourceAccessView, SourceModeSetupPayload } from '../@types/agentSourceAccess';
+import type {
+   SourceAccessAccepted,
+   SourceAccessPayload,
+   SourceAccessView,
+   SourceModeSetupPayload,
+   SourceAccessHistoryPage,
+   SourceAccessHistoryFilter,
+} from '../@types/agentSourceAccess';
 import { API_URL } from '../utils/constants';
 import { ApiResponseError, mutationResponse, parseApiResponse } from '../utils/httpResponse';
 
@@ -25,6 +32,30 @@ export function useSourceAccess(id: string, enabled = true) {
          return error || query.state.data?.online === false || query.state.data?.supported === false ? 10000 : 3000;
       },
       refetchIntervalInBackground: false,
+   });
+}
+
+export async function getSourceAccessHistory(
+   id: string,
+   cursor: string | undefined,
+   filter: SourceAccessHistoryFilter,
+): Promise<SourceAccessHistoryPage> {
+   const query = new URLSearchParams({ limit: '10', ...(cursor ? { cursor } : {}) });
+   if (filter.status) query.set('status', filter.status);
+   if (filter.kind) query.set('kind', filter.kind);
+   const response = await fetch(`${endpoint(id)}/requests?${query}`, { credentials: 'include', redirect: 'error' });
+   const data = await parseApiResponse<{ result: SourceAccessHistoryPage }>(response);
+   return data.result;
+}
+
+export function useSourceAccessHistory(id: string, cursor: string | undefined, filter: SourceAccessHistoryFilter, enabled: boolean) {
+   return useQuery({
+      queryKey: ['source-access', id, 'history', cursor ?? 'latest', filter],
+      queryFn: () => getSourceAccessHistory(id, cursor, filter),
+      enabled: Boolean(id) && enabled,
+      retry: false,
+      refetchOnWindowFocus: false,
+      refetchOnMount: false,
    });
 }
 

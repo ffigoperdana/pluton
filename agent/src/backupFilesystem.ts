@@ -12,6 +12,10 @@ import { constants } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import {
+  parseBackupExclusions,
+  sourceResticExclusions,
+} from "./backupExclusions.js";
+import {
   compatibleResticParent,
   resticParentArgs,
   resticParentDiscoveryArgs,
@@ -51,7 +55,7 @@ const PROGRESS_INTERVAL_MS = 5_000;
 const SFTP_OPTION_KEYS = new Set(["host", "port", "user", "pass"]);
 
 export type BackupFilesystemPayload = {
-  version: 1 | 2 | 3;
+  version: 1 | 2 | 3 | 4;
   lifecycle?: BackupLifecycle;
   backupId: string;
   planId: string;
@@ -444,12 +448,12 @@ export function parseBackupFilesystemPayload(
     "repository",
     "rclone",
     "repositoryPassword",
-    ...(value.version === 2 || value.version === 3 ? ["lifecycle"] : []),
+    ...([2, 3, 4].includes(value.version as number) ? ["lifecycle"] : []),
   ]);
   if (Object.keys(value).some((key) => !allowed.has(key))) {
     throw new Error("Backup command contains unsupported fields.");
   }
-  if (value.version !== 1 && value.version !== 2 && value.version !== 3)
+  if (![1, 2, 3, 4].includes(value.version as number))
     throw new Error("Backup command version is unsupported.");
   const repository = asRecord(value.repository, "Repository configuration");
   const rclone = asRecord(value.rclone, "Rclone configuration");
@@ -468,16 +472,26 @@ export function parseBackupFilesystemPayload(
   );
   if (password.length < 20) throw new Error("Repository password is invalid.");
   const lifecycle =
-    value.version === 1 ? undefined : parseBackupLifecycle(value.lifecycle);
-  if (lifecycle && lifecycle.version !== (value.version === 3 ? 2 : 1))
+    value.version === 1 ||
+    (value.version === 4 && value.lifecycle === undefined)
+      ? undefined
+      : parseBackupLifecycle(value.lifecycle);
+  if (
+    lifecycle &&
+    value.version !== 4 &&
+    lifecycle.version !== (value.version === 3 ? 2 : 1)
+  )
     throw new Error("Incompatible lifecycle envelope.");
   return {
-    version: value.version,
+    version: value.version as BackupFilesystemPayload["version"],
     ...(lifecycle ? { lifecycle } : {}),
     backupId: validateId(value.backupId, "Backup ID"),
     planId: validateId(value.planId, "Plan ID"),
     sourcePath: requiredString(value.sourcePath, "Source path", 4_096),
-    excludes: validateExcludes(value.excludes),
+    excludes:
+      value.version === 4
+        ? parseBackupExclusions(value.excludes)
+        : validateExcludes(value.excludes),
     repository: {
       remoteName: "pluton",
       path: validateRepositoryPath(repository.path),
@@ -1378,6 +1392,10 @@ export async function executeFilesystemBackup(input: {
     ).resolvedPath;
     if (input.serverManagedSource && sourcePathContainsPrivateDirectory(source))
       throw new SourceAccessError("source-policy-violation");
+    const userExcludes =
+      payload.version === 4
+        ? sourceResticExclusions(source, payload.excludes)
+        : payload.excludes;
     input.onStage?.({
       stage: "source-validation",
       message: "source validated",
@@ -1385,6 +1403,22 @@ export async function executeFilesystemBackup(input: {
 
     setStage("state-validation");
     await assertSourceDoesNotOverlapState(source, input.config.dataDir);
+    if (payload.version === 4) {
+      setStage("source-validation");
+      const scan = await preflightSource(
+        payload.sourcePath,
+        input.allowedRoots,
+        {
+          scan: true,
+          exclusions: payload.excludes,
+          mandatoryExclusions: input.serverManagedSource
+            ? DELEGATED_PRIVATE_DIRECTORY_EXCLUDES
+            : [],
+        },
+      );
+      if (scan.resolvedPath !== source)
+        throw new SourceAccessError("source-symlink-escape");
+    }
     if (await input.shouldCancel()) throw new BackupCancelledError();
 
     setStage("tool-validation");
@@ -1637,8 +1671,21 @@ export async function executeFilesystemBackup(input: {
     setStage("restic-backup");
     // Re-check the selected root after preparation; do not follow a changed symlink.
     if (
-      (await preflightSource(payload.sourcePath, input.allowedRoots))
-        .resolvedPath !== source
+      (
+        await preflightSource(
+          payload.sourcePath,
+          input.allowedRoots,
+          payload.version === 4
+            ? {
+                scan: true,
+                exclusions: payload.excludes,
+                mandatoryExclusions: input.serverManagedSource
+                  ? DELEGATED_PRIVATE_DIRECTORY_EXCLUDES
+                  : [],
+              }
+            : {},
+        )
+      ).resolvedPath !== source
     )
       throw new SourceAccessError("source-symlink-escape");
     if (job) await lifecycleEvent("backup-started");
@@ -1665,7 +1712,7 @@ export async function executeFilesystemBackup(input: {
     ];
     appendSourceBackupExcludes(
       args,
-      payload.excludes,
+      userExcludes,
       input.serverManagedSource === true,
     );
     await runProgram(restic, args, {

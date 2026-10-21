@@ -426,6 +426,80 @@ async function readCalls(file: string): Promise<string[][]> {
 }
 
 linuxExecutionTest(
+  "v4 workflow prunes excluded inaccessible entries, anchors actual argv and preserves mandatory private filters",
+  async () => {
+    const fixture = await createExecutionFixture("");
+    const denied = path.join(fixture.source, "node_modules"),
+      privateDirectory = path.join(fixture.source, ".ssh");
+    await mkdir(denied);
+    await mkdir(privateDirectory);
+    await chmod(denied, 0);
+    await chmod(privateDirectory, 0);
+    try {
+      const input = executionInput(fixture);
+      const result = await executeFilesystemBackup({
+        ...input,
+        serverManagedSource: true,
+        payload: {
+          ...input.payload,
+          version: 4,
+          excludes: ["node_modules/", "*.sql"],
+        },
+      });
+      assert(result.snapshotId);
+      const calls = await readCalls(path.join(fixture.dataDir, "restic-calls"));
+      const argv = calls.find((args) => args.includes("backup"))!;
+      assert(argv.includes(`${fixture.source}/**/node_modules`));
+      assert(argv.includes(`${fixture.source}/**/*.sql`));
+      assert(argv.includes("**/.ssh"));
+      assert(!argv.includes("*.sql"));
+      await writeFile(
+        path.join(fixture.source, "included"),
+        "synthetic included",
+      );
+      await chmod(path.join(fixture.source, "included"), 0);
+      await assert.rejects(
+        executeFilesystemBackup({
+          ...input,
+          payload: {
+            ...input.payload,
+            version: 4,
+            excludes: ["node_modules/", ".ssh/"],
+          },
+        }),
+        (error: unknown) =>
+          error instanceof BackupFilesystemError &&
+          error.code === "source-entry-inaccessible",
+      );
+      await chmod(path.join(fixture.source, "included"), 0o600);
+      await assert.rejects(
+        executeFilesystemBackup({
+          ...input,
+          shouldCancel: async () => true,
+          payload: {
+            ...input.payload,
+            version: 4,
+            excludes: ["node_modules/", ".ssh/"],
+          },
+        }),
+        (error: unknown) =>
+          error instanceof BackupFilesystemError && error.code === "cancelled",
+      );
+      assert.equal(
+        (await readCalls(path.join(fixture.dataDir, "restic-calls"))).filter(
+          (args) => args.includes("backup"),
+        ).length,
+        1,
+      );
+    } finally {
+      await chmod(denied, 0o700);
+      await chmod(privateDirectory, 0o700);
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  },
+);
+
+linuxExecutionTest(
   "reports a non-empty managed target before Restic init or backup",
   async () => {
     const fixture = await createExecutionFixture("repo\n");

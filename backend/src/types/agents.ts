@@ -23,6 +23,7 @@ export type AgentInventory = {
 	uptimeSeconds?: number;
 	sourceAccess?: SourceAccessReport;
 	capabilities: {
+		backupExclusionsVersion?: 1;
 		filesystemRootsConfigured: boolean;
 		commandTypes: AgentCommandType[];
 		backupLifecycleVersion?: 1 | 2;

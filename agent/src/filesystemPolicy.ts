@@ -1,6 +1,7 @@
 import path from "node:path";
 import { access, lstat, opendir, readlink, realpath } from "node:fs/promises";
 import { constants } from "node:fs";
+import { compileBackupExclusions } from "./backupExclusions.js";
 
 export type SourceAccessCode =
   | "source-parent-not-traversable"
@@ -155,8 +156,19 @@ export async function assertPathWithinAllowedRoots(
 export async function preflightSource(
   candidate: string,
   roots: string[],
-  options: { scan?: boolean; maxEntries?: number; deadlineMs?: number } = {},
+  options: {
+    scan?: boolean;
+    maxEntries?: number;
+    deadlineMs?: number;
+    exclusions?: string[];
+    /** Agent-local filters, separate from the bounded user policy. Never a payload field. */
+    mandatoryExclusions?: readonly string[];
+  } = {},
 ) {
+  const excluded = compileBackupExclusions(options.exclusions || []);
+  const mandatoryExcluded = compileBackupExclusions([
+    ...(options.mandatoryExclusions || []),
+  ]);
   const resolved = await assertPathWithinAllowedRoots(candidate, roots);
   await assertTraversableParents(resolved, candidate);
   const check = async (entry: string, root = false) => {
@@ -206,6 +218,7 @@ export async function preflightSource(
     resolvedPath: resolved,
     entriesChecked: 1,
     linksNotFollowed: 0,
+    entriesExcluded: 0,
     scan: options.scan ? "complete" : "not-requested",
   };
   if (!options.scan || !stat.isDirectory()) return report;
@@ -232,8 +245,16 @@ export async function preflightSource(
             report.entriesChecked >= limit ? "entry-limit" : "deadline";
           return report; // Iterator closes its fd; a partial scan is explicit.
         }
-        const filename = path.join(directory, entry.name),
-          info = await check(filename);
+        const filename = path.join(directory, entry.name);
+        const relative = path
+          .relative(resolved, filename)
+          .split(path.sep)
+          .join("/");
+        if (excluded(relative) || mandatoryExcluded(relative)) {
+          report.entriesExcluded++;
+          continue; // No lstat/access/open/traversal of an explicitly excluded entry.
+        }
+        const info = await check(filename);
         report.entriesChecked++;
         if (info.isSymbolicLink()) report.linksNotFollowed++;
         else if (info.isDirectory()) pending.push(filename);

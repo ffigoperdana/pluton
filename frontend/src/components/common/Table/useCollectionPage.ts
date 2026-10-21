@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { collectionPage, type CollectionPageSize } from './collection';
 
-export function useCollectionPage<T>(rows: readonly T[], resetKey: string) {
+export function useCollectionPage<T>(rows: readonly T[], resetKey: string, initialSize: CollectionPageSize = 10) {
    const [position, setPosition] = useState({ page: 1, key: resetKey });
-   const [pageSize, setPageSize] = useState<CollectionPageSize>(10);
+   const [pageSize, setPageSize] = useState<CollectionPageSize>(initialSize);
    // Reset in the same render as a filter change; clamp immediately when a deletion shrinks results.
    const result = collectionPage(rows, position.key === resetKey ? position.page : 1, pageSize);
    useEffect(() => {

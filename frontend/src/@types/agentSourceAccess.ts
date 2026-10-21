@@ -62,4 +62,14 @@ export type SourceAccessPayload = {
 
 export type SourceAccessAccepted = { requestId: string; status: SourceAccessRequest['status'] };
 
+export type SourceAccessHistoryPage = {
+   requests: SourceAccessRequest[];
+   total: number;
+   pageSize: number;
+   cursor: string;
+   nextCursor?: string;
+};
+
+export type SourceAccessHistoryFilter = { status?: SourceAccessRequest['status']; kind?: SourceAccessRequest['kind'] };
+
 export type SourceModeSetupPayload = SourceAccessPayload & { authorizationMode: SourceAuthorizationMode };

@@ -6,7 +6,7 @@ import PlanItem from '../../components/Plan/PlanItems/PlanItem';
 import AddPlan from '../../components/Plan/AddPlan/AddPlan';
 import { CollectionToolbar, CollectionPagination } from '../../components/common/Table/CollectionControls';
 import { useCollectionPage } from '../../components/common/Table/useCollectionPage';
-import { stableCollectionSort } from '../../components/common/Table/collection';
+import { stableCollectionSort, PLAN_PAGE_SIZES } from '../../components/common/Table/collection';
 import { useGetPlans } from '../../services/plans';
 import { Plan } from '../../@types/plans';
 import { useComponentOverride } from '../../context/ComponentOverrideContext';
@@ -53,7 +53,7 @@ const Plans = () => {
            return 0;
         })
       : plans;
-   const page = useCollectionPage(sorted, JSON.stringify([search, sort, filter]));
+   const page = useCollectionPage(sorted, JSON.stringify([search, sort, filter]), 9);
 
    return (
       <div className={classes.plans}>
@@ -108,7 +108,7 @@ const Plans = () => {
             )}
          </div>
          {isLoading && <SkeletonItems type="plan" layout={plansLayout} count={6} />}
-         {!error && <CollectionPagination label="plans" {...page} busy={isLoading} />}
+         {!error && <CollectionPagination label="plans" {...page} pageSizes={PLAN_PAGE_SIZES} busy={isLoading} />}
          {showSidePanel && <AddPlanModal close={() => setShowSidePanel(false)} />}
       </div>
    );

@@ -40,4 +40,18 @@ jobs:
       - name: Isolated upgrade transaction and Linux filesystem tests
         run: bash installers/tests/upgrade-agent.test.sh
       - name: Compile and test unprivileged Agent including upgrade hold
-        run: pnpm --filter @plutonhq/pluton-agent test
+        env:
+          PLUTON_EXCLUSIONS_RESTIC: ${{ runner.temp }}/pluton-exclusion-tools/restic
+        # Same approved release/hash as install-agent.sh; no global installation.
+        # An unavailable or modified artifact must fail, never skip integration.
+        run: |
+          set -euo pipefail
+          tools="$RUNNER_TEMP/pluton-exclusion-tools"
+          mkdir -p "$tools"
+          curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL \
+            https://github.com/restic/restic/releases/download/v0.19.1/restic_0.19.1_linux_amd64.bz2 -o "$tools/restic.bz2"
+          printf '%s  %s\n' f415415624dcc452f2a02b8c33641791a8c6d6d3b65bbb3543fcf9a25151585c "$tools/restic.bz2" | sha256sum -c -
+          bzip2 -dc "$tools/restic.bz2" > "$tools/restic"
+          chmod 0755 "$tools/restic"
+          "$tools/restic" version
+          pnpm --filter @plutonhq/pluton-agent test

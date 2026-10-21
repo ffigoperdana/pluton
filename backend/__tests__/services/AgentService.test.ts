@@ -93,14 +93,18 @@ describe('AgentService', () => {
 		}
 	});
 
-	it('uses the operator private Agent URL only for new enrollment instructions, independently of canonical web origin',async()=>{
-		(configService.config as any).AGENT_SERVER_URL='http://192.0.2.10:5173';
+	it('uses the operator private Agent URL only for new enrollment instructions, independently of canonical web origin', async () => {
+		(configService.config as any).AGENT_SERVER_URL = 'http://192.0.2.10:5173';
 		try {
-			expect((await service.createEnrollment({name:'app-01'})).serverUrl).toBe('http://192.0.2.10:5173');
+			expect((await service.createEnrollment({ name: 'app-01' })).serverUrl).toBe(
+				'http://192.0.2.10:5173'
+			);
 			expect(configService.config.APP_URL).toBe('https://pluton.example.internal');
 			expect(store.updateHeartbeat).not.toHaveBeenCalled();
 			expect(store.enrollAgent).not.toHaveBeenCalled();
-		} finally { delete (configService.config as any).AGENT_SERVER_URL; }
+		} finally {
+			delete (configService.config as any).AGENT_SERVER_URL;
+		}
 	});
 
 	it.each(['expired', 'reused', 'revoked'])('rejects a %s enrollment token', async () => {
@@ -421,6 +425,21 @@ describe('AgentService', () => {
 		now = new Date('2026-01-01T00:02:00.000Z');
 		const result = await service.getPublicAgent(agent.deviceId);
 		expect(result?.status).toBe('offline');
+	});
+
+	it('persists explicit exclusion capability and rejects unknown policy versions', async () => {
+		const extended = {
+			...inventory,
+			capabilities: { ...inventory.capabilities, backupExclusionsVersion: 1 },
+		};
+		await service.heartbeat(agent.agentId, extended);
+		expect(store.updateHeartbeat).toHaveBeenCalledWith(agent.agentId, extended);
+		await expect(
+			service.heartbeat(agent.agentId, {
+				...extended,
+				capabilities: { ...extended.capabilities, backupExclusionsVersion: 2 },
+			})
+		).rejects.toThrow();
 	});
 
 	it('updates heartbeat inventory and derives the resulting online status', async () => {

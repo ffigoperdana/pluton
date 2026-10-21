@@ -35,7 +35,7 @@ const plan = {
 	storagePath: 'managed-repositories/example-plan',
 	sourceId: 'remote-device-01',
 	sourceType: 'device',
-	sourceConfig: { includes: ['/srv/example-app'], excludes: ['*.tmp'] },
+	sourceConfig: { includes: ['/srv/example-app'], excludes: [] },
 	method: 'backup',
 	settings: {
 		encryption: true,
@@ -146,7 +146,9 @@ describe('RemoteBackupService', () => {
 		repositories.deleteByPlanId = jest.fn();
 		backupStore.getAll = jest.fn().mockResolvedValue([]);
 		(service as any).cronManager.removeSchedulesByType = jest.fn();
-		await expect(service.removeManagedPlan(plan)).resolves.toEqual({ storagePath: plan.storagePath });
+		await expect(service.removeManagedPlan(plan)).resolves.toEqual({
+			storagePath: plan.storagePath,
+		});
 		expect(repositories.deleteByPlanId).not.toHaveBeenCalled();
 	});
 
@@ -161,32 +163,74 @@ describe('RemoteBackupService', () => {
 	});
 
 	it('enforces opt-in Source Access at plan validation and queue time while preserving old-agent behavior', async () => {
-		const sourceAccess = { assertPlanSource: jest.fn().mockResolvedValue(undefined), assertModeChangeIdle: jest.fn().mockResolvedValue(undefined) };
+		const sourceAccess = {
+			assertPlanSource: jest.fn().mockResolvedValue(undefined),
+			assertModeChangeIdle: jest.fn().mockResolvedValue(undefined),
+		};
 		service.setSourceAccessService(sourceAccess as any);
 		await service.validatePlanCreation(plan);
 		expect(sourceAccess.assertPlanSource).not.toHaveBeenCalled();
-		agentStore.getAgentByDeviceId.mockResolvedValue({ ...capableAgent, lastSeen: new Date(), capabilities: { ...capableAgent.capabilities, sourceAccessVersion: 1 } });
+		agentStore.getAgentByDeviceId.mockResolvedValue({
+			...capableAgent,
+			lastSeen: new Date(),
+			capabilities: { ...capableAgent.capabilities, sourceAccessVersion: 1 },
+		});
 		await service.validatePlanCreation(plan);
-		expect(sourceAccess.assertPlanSource).toHaveBeenCalledWith(expect.objectContaining({ agentId: capableAgent.agentId }), '/srv/example-app');
-		sourceAccess.assertPlanSource.mockRejectedValue(new Error('Source Access needs a fresh healthy report.'));
+		expect(sourceAccess.assertPlanSource).toHaveBeenCalledWith(
+			expect.objectContaining({ agentId: capableAgent.agentId }),
+			'/srv/example-app'
+		);
+		sourceAccess.assertPlanSource.mockRejectedValue(
+			new Error('Source Access needs a fresh healthy report.')
+		);
 		await expect(service.queuePlanBackup(plan.id)).rejects.toThrow('fresh healthy');
 		expect(repositories.createBackupAndCommand).not.toHaveBeenCalled();
 	});
 
 	it('refuses normal plan Resume while a guarded authorization mode setup is pending', async () => {
-		const sourceAccess = { assertModeChangeIdle: jest.fn().mockRejectedValue(new Error('Keep this agent backup plans paused.')) };
+		const sourceAccess = {
+			assertModeChangeIdle: jest
+				.fn()
+				.mockRejectedValue(new Error('Keep this agent backup plans paused.')),
+		};
 		service.setSourceAccessService(sourceAccess as any);
-		agentStore.getAgentByDeviceId.mockResolvedValue({ ...capableAgent, capabilities: { ...capableAgent.capabilities, sourceAccessModesVersion: 1 } });
+		agentStore.getAgentByDeviceId.mockResolvedValue({
+			...capableAgent,
+			capabilities: { ...capableAgent.capabilities, sourceAccessModesVersion: 1 },
+		});
 		await expect(service.resumePlan(plan.id)).rejects.toThrow('Keep this agent');
 		expect(sourceAccess.assertModeChangeIdle).toHaveBeenCalledWith(capableAgent.agentId);
 	});
 
 	it('rechecks Source Access before materializing a queued command, including database lifecycle plans', async () => {
-		const sourceAccess = { assertPlanSource: jest.fn().mockRejectedValue(new Error('Source Access changed.')), assertModeChangeIdle: jest.fn().mockResolvedValue(undefined) };
+		const sourceAccess = {
+			assertPlanSource: jest.fn().mockRejectedValue(new Error('Source Access changed.')),
+			assertModeChangeIdle: jest.fn().mockResolvedValue(undefined),
+		};
 		service.setSourceAccessService(sourceAccess as any);
-		agentStore.getAgentByDeviceId.mockResolvedValue({ ...capableAgent, lastSeen: new Date(), capabilities: { ...capableAgent.capabilities, sourceAccessVersion: 1, backupLifecycleVersion: 2, databaseEngines: ['mysql'] } });
-		const command = { id: 'remote-backup-example-01', agentId: capableAgent.agentId, type: 'BACKUP_FILESYSTEM', payload: { backupId: 'backup-example-01', planId: plan.id, repositoryId: 'remote-repo-example-01' } } as AgentCommand;
-		await expect(service.materializeCommand(capableAgent.agentId, command)).rejects.toMatchObject({ stage: 'source-validation' });
+		agentStore.getAgentByDeviceId.mockResolvedValue({
+			...capableAgent,
+			lastSeen: new Date(),
+			capabilities: {
+				...capableAgent.capabilities,
+				sourceAccessVersion: 1,
+				backupLifecycleVersion: 2,
+				databaseEngines: ['mysql'],
+			},
+		});
+		const command = {
+			id: 'remote-backup-example-01',
+			agentId: capableAgent.agentId,
+			type: 'BACKUP_FILESYSTEM',
+			payload: {
+				backupId: 'backup-example-01',
+				planId: plan.id,
+				repositoryId: 'remote-repo-example-01',
+			},
+		} as AgentCommand;
+		await expect(service.materializeCommand(capableAgent.agentId, command)).rejects.toMatchObject({
+			stage: 'source-validation',
+		});
 		expect(sourceAccess.assertPlanSource).toHaveBeenCalledTimes(1);
 	});
 
@@ -196,8 +240,85 @@ describe('RemoteBackupService', () => {
 				...plan,
 				sourceConfig: { includes: ['/srv/example-app'], excludes: [123] },
 			} as any)
-		).rejects.toThrow('Remote backup exclude is invalid');
+		).rejects.toThrow('Invalid Backup Exclusions');
 	});
+
+	it('refuses exclusions with HTTP 409 on legacy Agents but preserves empty-exclusion plans', async () => {
+		await expect(service.validatePlanCreation(plan)).resolves.toBeUndefined();
+		await expect(
+			service.validatePlanCreation({
+				...plan,
+				sourceConfig: { ...plan.sourceConfig, excludes: ['.git/'] },
+			})
+		).rejects.toMatchObject({ statusCode: 409 });
+		expect(repositories.createBackupAndCommand).not.toHaveBeenCalled();
+	});
+
+	it('validates relative exclusions before persistence and sends v4 only to an explicitly capable Agent', async () => {
+		const configured = {
+			...plan,
+			sourceConfig: { ...plan.sourceConfig, excludes: ['.git/', '**/node_modules/', '*.sql'] },
+		};
+		agentStore.getAgentByDeviceId.mockResolvedValue({
+			...capableAgent,
+			agentVersion: '0.7.0',
+			capabilities: { ...capableAgent.capabilities, backupExclusionsVersion: 1 },
+		});
+		planStore.getById.mockResolvedValue(configured);
+		backupStore.getById.mockResolvedValue({
+			id: 'backup-example-01',
+			planId: plan.id,
+			sourceId: plan.sourceId,
+			status: 'queued',
+			inProgress: true,
+			sourceConfig: configured.sourceConfig,
+		});
+		await expect(service.validatePlanCreation(configured)).resolves.toBeUndefined();
+		await service.queuePlanBackup(plan.id);
+		expect(repositories.createBackupAndCommand.mock.calls[0][0].backup.sourceConfig).toEqual(
+			configured.sourceConfig
+		);
+		const command = {
+			agentId: capableAgent.agentId,
+			type: 'BACKUP_FILESYSTEM',
+			payload: {
+				backupId: 'backup-example-01',
+				planId: plan.id,
+				repositoryId: 'remote-repo-example-01',
+			},
+		} as AgentCommand;
+		await expect(service.materializeCommand(capableAgent.agentId, command)).resolves.toMatchObject({
+			version: 4,
+			excludes: ['.git', '**/node_modules', '*.sql'],
+		});
+		backupStore.getById.mockResolvedValue({
+			id: 'backup-example-01',
+			planId: plan.id,
+			sourceId: plan.sourceId,
+			status: 'queued',
+			inProgress: true,
+			sourceConfig: { ...configured.sourceConfig, excludes: ['other'] },
+		});
+		await expect(service.materializeCommand(capableAgent.agentId, command)).rejects.toThrow(
+			'changed after queuing'
+		);
+		agentStore.getAgentByDeviceId.mockResolvedValue(capableAgent);
+		await expect(service.materializeCommand(capableAgent.agentId, command)).rejects.toBeInstanceOf(
+			RemoteCommandPreparationError
+		);
+	});
+
+	it.each(['/absolute', '../escape', '!keep', '**bad', 'a//b', '$(command)', '[ab]'])(
+		'rejects unsupported exclusion %s with HTTP 400',
+		async pattern => {
+			await expect(
+				service.validatePlanCreation({
+					...plan,
+					sourceConfig: { ...plan.sourceConfig, excludes: [pattern] },
+				})
+			).rejects.toMatchObject({ statusCode: 400 });
+		}
+	);
 
 	it('queues a non-secret durable command reference for a capable agent', async () => {
 		await expect(service.queuePlanBackup(plan.id)).resolves.toBe(
@@ -218,9 +339,33 @@ describe('RemoteBackupService', () => {
 		expect(persistedPayload).not.toContain(encryptionSecret);
 	});
 	it('requires the server replication lifecycle and never sends mirror credentials to the Agent', async () => {
-		const replicated = { ...plan, settings: { ...plan.settings, replication: { enabled: true, concurrent: false, storages: [{ replicationId: 'replica-01', storageId: 'mirror-01', storagePath: 'bucket-01/owned', storageType: 's3compatible', storageName: 'Mirror', addedAt: 1 }] } } };
-		await expect(service.validatePlanCreation(replicated)).rejects.toMatchObject({ statusCode: 503 });
-		const replication = { validatePlan: jest.fn(async () => undefined), enqueueBackup: jest.fn(async () => undefined) };
+		const replicated = {
+			...plan,
+			settings: {
+				...plan.settings,
+				replication: {
+					enabled: true,
+					concurrent: false,
+					storages: [
+						{
+							replicationId: 'replica-01',
+							storageId: 'mirror-01',
+							storagePath: 'bucket-01/owned',
+							storageType: 's3compatible',
+							storageName: 'Mirror',
+							addedAt: 1,
+						},
+					],
+				},
+			},
+		};
+		await expect(service.validatePlanCreation(replicated)).rejects.toMatchObject({
+			statusCode: 503,
+		});
+		const replication = {
+			validatePlan: jest.fn(async () => undefined),
+			enqueueBackup: jest.fn(async () => undefined),
+		};
 		service.setReplicationService(replication);
 		planStore.getById.mockResolvedValue(replicated);
 		await expect(service.validatePlanCreation(replicated)).resolves.toBeUndefined();
@@ -229,10 +374,16 @@ describe('RemoteBackupService', () => {
 		expect(replication.validatePlan).toHaveBeenCalledWith(replicated);
 		expect(JSON.stringify(payload)).not.toContain('mirror-01');
 		expect(payload).not.toHaveProperty('replication');
-		replication.validatePlan.mockRejectedValue(new Error('synthetic mirror credentials unavailable'));
-		await expect(service.materializeCommand(capableAgent.agentId, command)).resolves.toHaveProperty('repository');
+		replication.validatePlan.mockRejectedValue(
+			new Error('synthetic mirror credentials unavailable')
+		);
+		await expect(service.materializeCommand(capableAgent.agentId, command)).resolves.toHaveProperty(
+			'repository'
+		);
 		await expect(service.queuePlanBackup(replicated.id)).resolves.toContain('queued');
-		await expect(service.validatePlanCreation(replicated)).rejects.toThrow('mirror credentials unavailable');
+		await expect(service.validatePlanCreation(replicated)).rejects.toThrow(
+			'mirror credentials unavailable'
+		);
 	});
 
 	it('does not cancel a completed remote backup record', async () => {

@@ -3,6 +3,7 @@ import { NewPlanSettings, PlanInterval } from '../@types/plans';
 import { isValidEmail } from './helpers';
 import { remoteLifecycleValidation } from './remoteLifecycle';
 import { replicationSettingsError } from './replication';
+import { parseBackupExclusions } from './backupExclusions';
 
 export function planIntervalName(interval: PlanInterval): string {
    switch (interval.type) {
@@ -46,6 +47,14 @@ export function planIntervalAgeName(age: string) {
 }
 
 export function isPlanSettingsValid(newPlan: NewPlanSettings, step: number | false = false): boolean {
+   if ((step === 4 || step === false) && newPlan.sourceType === 'device' && newPlan.sourceId !== 'main') {
+      try {
+         parseBackupExclusions(newPlan.sourceConfig.excludes);
+      } catch (error) {
+         toast.error(error instanceof Error ? error.message : 'Invalid Backup Exclusions.');
+         return false;
+      }
+   }
    if (step === 4 || step === false) {
       const error = remoteLifecycleValidation(newPlan.settings.remoteLifecycle);
       if (error) {
