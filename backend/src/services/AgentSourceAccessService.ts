@@ -5,11 +5,7 @@ import type { AgentIdentity } from '../db/schema/agents';
 import type { AgentSourceAccessState } from '../db/schema/agentSourceAccess';
 import { AgentStore } from '../stores/AgentStore';
 import { AgentSourceAccessStore } from '../stores/AgentSourceAccessStore';
-import type {
-	SourceAccessReport,
-	SourceAccessRequest,
-	SourceAccessView,
-} from '../types/agentSourceAccess';
+import type { SourceAccessReport, SourceAccessView } from '../types/agentSourceAccess';
 import { AppError, NotFoundError } from '../utils/AppError';
 import {
 	hasOverlappingSourceRoots,
@@ -25,6 +21,11 @@ import {
 import { configService } from './ConfigService';
 import { serverLogger } from '../utils/logger';
 import { sameSourceRoots } from '../utils/agentSourceAccess';
+import {
+	parseSourceHistoryQuery,
+	publicSourceAccessRequest,
+	sourceHistoryCursor,
+} from '../utils/sourceAccessHistory';
 
 const completionSchema = z
 	.object({
@@ -59,6 +60,32 @@ export class AgentSourceAccessService {
 		return agent;
 	}
 
+	async getRequestHistory(deviceId: string, input: unknown) {
+		const agent = await this.identity(deviceId);
+		const options = parseSourceHistoryQuery(input);
+		const page = await this.store.requestHistory(agent.agentId, options);
+		const last = page.requests[page.requests.length - 1];
+		return {
+			requests: page.requests.map(publicSourceAccessRequest),
+			total: page.total,
+			pageSize: options.limit,
+			cursor: sourceHistoryCursor({
+				version: 1,
+				ceiling: page.ceiling,
+				...(options.cursor?.before ? { before: options.cursor.before } : {}),
+			}),
+			...(page.hasMore && last
+				? {
+						nextCursor: sourceHistoryCursor({
+							version: 1,
+							ceiling: page.ceiling,
+							before: { time: last.createdAt.getTime(), id: last.id },
+						}),
+					}
+				: {}),
+		};
+	}
+
 	async getView(deviceId: string): Promise<SourceAccessView> {
 		const agent = await this.identity(deviceId);
 		const supported = agent.capabilities.sourceAccessVersion === 1;
@@ -85,24 +112,7 @@ export class AgentSourceAccessService {
 				state.receivedAt <= this.now() &&
 				this.now().getTime() - state.receivedAt.getTime() <= this.freshnessMs(),
 			...(state ? { report: { ...state.report, receivedAt: state.receivedAt } } : {}),
-			requests: requests.map(
-				request =>
-					({
-						id: request.id,
-						requestId: request.id,
-						kind: request.kind,
-						...(request.requestedMode ? { requestedMode: request.requestedMode } : {}),
-						...(request.setupExpiresAt ? { setupExpiresAt: request.setupExpiresAt } : {}),
-						status: request.status,
-						roots: request.roots,
-						expectedVersion: request.expectedVersion,
-						expectedHostPolicyRevision: request.expectedHostPolicyRevision,
-						...(request.validation ? { validation: request.validation } : {}),
-						...(request.resultCode ? { resultCode: request.resultCode } : {}),
-						createdAt: request.createdAt,
-						completedAt: request.completedAt,
-					}) satisfies SourceAccessRequest
-			),
+			requests: requests.map(publicSourceAccessRequest),
 			affectedPlans: state
 				? plans.filter(plan =>
 						state.selectedRoots.some(root => sourcePathWithin(root, plan.sourcePath))

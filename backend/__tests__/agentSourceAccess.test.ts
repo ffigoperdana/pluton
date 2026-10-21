@@ -650,6 +650,251 @@ describe('Agent Source Access durable administration and policy', () => {
 		expect(JSON.stringify(authorized.body)).not.toContain(agentSecret);
 	});
 
+	describe('read-only paged Source Access history', () => {
+		function seedHistory(count: number, offset = 0, timestamp = now.getTime()) {
+			for (let index = offset; index < offset + count; index++) {
+				const id = `source-history-${String(index).padStart(5, '0')}`;
+				const kind = index % 3 === 0 ? 'mode-setup' : index % 3 === 1 ? 'validate' : 'apply';
+				const status = [
+					'applied',
+					'validated',
+					'rejected',
+					'queued',
+					'pending-host-approval',
+					'pending-host-setup',
+				][index % 6];
+				sqlite
+					.prepare(
+						'INSERT INTO agent_commands(id,agent_id,type,payload,state,idempotency_key) VALUES(?,?,?,?,?,?)'
+					)
+					.run(
+						`command-${id}`,
+						agentId,
+						'SOURCE_ACCESS_VALIDATE',
+						JSON.stringify({ privateMarker: 'synthetic-command-private-marker' }),
+						'completed',
+						id
+					);
+				sqlite
+					.prepare(
+						`INSERT INTO agent_source_access_requests
+					(id,agent_id,command_id,kind,status,expected_version,expected_host_policy_revision,roots,confirmed_affected_plan_ids,created_at,validation,result_code,requested_mode,setup_expires_at,completed_at)
+					VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+					)
+					.run(
+						id,
+						agentId,
+						`command-${id}`,
+						kind,
+						status,
+						3,
+						revision,
+						JSON.stringify([root]),
+						'[]',
+						timestamp,
+						JSON.stringify([
+							{
+								requestedPath: root,
+								canonicalPath: root,
+								status: 'approved',
+								code: 'source-readable',
+							},
+						]),
+						'source-readable',
+						kind === 'mode-setup' ? 'server-managed' : null,
+						timestamp + 60000,
+						timestamp + 1000
+					);
+			}
+		}
+
+		it.each([0, 1, 5, 6, 125])(
+			'returns a bounded default page for %i historical requests without altering audit rows',
+			async count => {
+				seedHistory(count);
+				const before = sqlite.serialize();
+				sqlite.pragma('query_only=ON');
+				const page = await service.getRequestHistory(deviceId, {});
+				expect(page.requests).toHaveLength(Math.min(10, count));
+				expect(page.total).toBe(count);
+				expect(page.pageSize).toBe(10);
+				expect(!!page.nextCursor).toBe(count > 10);
+				expect(sqlite.serialize()).toEqual(before);
+			}
+		);
+
+		it('uses exact newest-first keysets across ties, retains page boundaries during new inserts and includes new records on refresh', async () => {
+			seedHistory(23);
+			const first = await service.getRequestHistory(deviceId, {});
+			seedHistory(1, 23, now.getTime() + 1000);
+			seedHistory(1, 24); // Same timestamp and an ID below the first-page cursor is still a later insertion.
+			sqlite
+				.prepare('UPDATE agent_source_access_requests SET id=? WHERE id=?')
+				.run('source-history-00000-extra', 'source-history-00024');
+			seedHistory(1, 25, now.getTime() - 1000);
+			const sameFirst = await service.getRequestHistory(deviceId, { cursor: first.cursor });
+			expect(sameFirst).toEqual(first);
+			const second = await service.getRequestHistory(deviceId, { cursor: first.nextCursor });
+			const third = await service.getRequestHistory(deviceId, { cursor: second.nextCursor });
+			expect([first.requests.length, second.requests.length, third.requests.length]).toEqual([
+				10, 10, 3,
+			]);
+			expect(third.nextCursor).toBeUndefined();
+			const ids = [...first.requests, ...second.requests, ...third.requests].map(row => row.id);
+			expect(ids).toEqual(
+				Array.from({ length: 23 }, (_, i) => `source-history-${String(22 - i).padStart(5, '0')}`)
+			);
+			expect(second.total).toBe(23);
+			const refreshed = await service.getRequestHistory(deviceId, {});
+			expect(refreshed.total).toBe(26);
+			expect(refreshed.requests[0].id).toBe('source-history-00023');
+			const empty = await service.getRequestHistory(deviceId, {
+				cursor: Buffer.from(
+					JSON.stringify({ version: 1, ceiling: 26, before: { time: 0, id: 'source-zero' } })
+				).toString('base64url'),
+			});
+			expect(empty.requests).toEqual([]);
+			expect(empty.nextCursor).toBeUndefined();
+		});
+
+		it('preserves safe full details, filters all statuses/types and keeps command/identity material private', async () => {
+			seedHistory(36);
+			sqlite.pragma('query_only=ON');
+			for (const status of [
+				'applied',
+				'validated',
+				'rejected',
+				'queued',
+				'pending-host-approval',
+				'pending-host-setup',
+			]) {
+				const page = await service.getRequestHistory(deviceId, { status });
+				expect(page.total).toBe(6);
+				expect(page.requests.every(item => item.status === status)).toBe(true);
+			}
+			for (const kind of ['validate', 'apply', 'mode-setup']) {
+				const page = await service.getRequestHistory(deviceId, { kind, limit: '2' });
+				expect(page.requests).toHaveLength(2);
+				expect(page.total).toBe(12);
+				expect(page.requests.every(item => item.kind === kind)).toBe(true);
+			}
+			const page = await service.getRequestHistory(deviceId, {
+				kind: 'mode-setup',
+				status: 'applied',
+			});
+			expect(page.requests[0]).toMatchObject({
+				requestId: 'source-history-00030',
+				expectedVersion: 3,
+				expectedHostPolicyRevision: revision,
+				roots: [root],
+				requestedMode: 'server-managed',
+				resultCode: 'source-readable',
+				validation: [
+					{ requestedPath: root, canonicalPath: root, status: 'approved', code: 'source-readable' },
+				],
+				createdAt: now,
+				completedAt: new Date(now.getTime() + 1000),
+				setupExpiresAt: new Date(now.getTime() + 60000),
+			});
+			expect(JSON.stringify(page)).not.toMatch(
+				/synthetic-command-private-marker|encryptedSecret|leaseToken|signature|commandId/
+			);
+			await expect(service.getRequestHistory('main', {})).rejects.toMatchObject({
+				statusCode: 404,
+			});
+			await expect(service.getRequestHistory('other-device', {})).rejects.toMatchObject({
+				statusCode: 404,
+			});
+		});
+
+		it('keeps even a reused or modified cursor scoped to the selected Agent', async () => {
+			seedHistory(12);
+			const first = await service.getRequestHistory(deviceId, {});
+			sqlite
+				.prepare('INSERT INTO devices(id,name,type,agent_id) VALUES(?,?,?,?)')
+				.run('other-device', 'app-02', 'remote-agent', 'other-agent');
+			sqlite
+				.prepare(
+					`INSERT INTO agent_identities(agent_id,device_id,encrypted_secret,hostname,os,architecture,agent_version,capabilities)
+				SELECT 'other-agent','other-device',encrypted_secret,'app-02',os,architecture,agent_version,capabilities FROM agent_identities WHERE agent_id=?`
+				)
+				.run(agentId);
+			sqlite
+				.prepare(
+					`INSERT INTO agent_commands(id,agent_id,type,payload,state,idempotency_key)
+				VALUES('other-command','other-agent','SOURCE_ACCESS_VALIDATE','{}','completed','other-command')`
+				)
+				.run();
+			sqlite
+				.prepare(
+					`INSERT INTO agent_source_access_requests(id,agent_id,command_id,kind,status,expected_version,expected_host_policy_revision,roots,confirmed_affected_plan_ids,created_at)
+				VALUES('other-request','other-agent','other-command','validate','validated',1,?,'["/srv/other-app"]','[]',?)`
+				)
+				.run(revision, now.getTime());
+			sqlite.pragma('query_only=ON');
+			const reused = await service.getRequestHistory('other-device', { cursor: first.cursor });
+			expect(reused.requests).toEqual([]);
+			const modified = await service.getRequestHistory('other-device', {
+				cursor: Buffer.from(
+					JSON.stringify({ version: 1, ceiling: Number.MAX_SAFE_INTEGER })
+				).toString('base64url'),
+			});
+			expect(modified.requests.map(row => row.id)).toEqual(['other-request']);
+			expect(JSON.stringify(modified)).not.toContain(root);
+		});
+
+		it.each([
+			{ limit: '0' },
+			{ limit: '51' },
+			{ limit: '-1' },
+			{ limit: ['10'] },
+			{ cursor: 'a'.repeat(1025) },
+			{ cursor: 'not-json' },
+			{ cursor: Buffer.from('{"version":1,"ceiling":-1}').toString('base64url') },
+			{ status: 'unknown' },
+			{ kind: 'shell' },
+			{ extra: 'ignored?' },
+		])('refuses malformed pagination or filters %j', async input => {
+			sqlite.pragma('query_only=ON');
+			await expect(service.getRequestHistory(deviceId, input)).rejects.toMatchObject({
+				statusCode: 400,
+			});
+		});
+
+		it('requires the existing admin cookie, handles failure safely, sets no-store and scopes every query to the selected Agent', async () => {
+			seedHistory(12);
+			const control = new AgentService(agentStore, encryptionKey, () => now, undefined, service);
+			const app = express();
+			app.use(
+				'/api/agent-admin',
+				createAgentAdminRouter(new AgentAdminController(control, service))
+			);
+			const url = `/api/agent-admin/devices/${deviceId}/source-access/requests`;
+			expect((await request(app).get(url)).status).toBe(401);
+			expect(
+				(await request(app).get(url).set('Authorization', 'Bearer synthetic-read-only-api-key'))
+					.status
+			).toBe(401);
+			const cookie = `token=${jwt.sign({ user: 'administrator-session' }, encryptionKey)}`;
+			const result = await request(app).get(url).set('Cookie', cookie);
+			expect(result.status).toBe(200);
+			expect(result.headers['cache-control']).toBe('no-store');
+			expect(result.body.result.requests).toHaveLength(10);
+			expect((await request(app).get(`${url}?limit=500`).set('Cookie', cookie)).status).toBe(400);
+			const other = await request(app)
+				.get(url.replace(deviceId, 'other-device'))
+				.set('Cookie', cookie);
+			expect(other.status).toBe(404);
+			expect(JSON.stringify(other.body)).not.toContain(root);
+			jest
+				.spyOn(store, 'requestHistory')
+				.mockRejectedValueOnce(new Error('synthetic-command-private-marker'));
+			const failed = await request(app).get(url).set('Cookie', cookie);
+			expect(failed.status).toBe(500);
+			expect(JSON.stringify(failed.body)).not.toContain('synthetic-command-private-marker');
+		});
+	});
+
 	it('authenticates source reports and rejects HMAC nonce replay before advancing report freshness', async () => {
 		const control = new AgentService(agentStore, encryptionKey, () => now, undefined, service);
 		const app = express();

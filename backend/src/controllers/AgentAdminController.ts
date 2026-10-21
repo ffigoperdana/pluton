@@ -17,6 +17,18 @@ export class AgentAdminController {
 		catch (error) { this.respond(res, error); }
 	}
 
+	async getSourceAccessHistory(req: Request, res: Response): Promise<void> {
+		res.setHeader('Cache-Control', 'no-store');
+		try {
+			res.json({
+				success: true,
+				result: await this.sourceAccess().getRequestHistory(req.params.id, req.query),
+			});
+		} catch (error) {
+			this.respond(res, error);
+		}
+	}
+
 	async validateSourceAccess(req: Request, res: Response): Promise<void> {
 		try { res.status(202).json({ success: true, result: await this.sourceAccess().request(req.params.id, 'validate', req.body) }); }
 		catch (error) { this.respond(res, error); }

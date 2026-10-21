@@ -1,4 +1,5 @@
-import { and, desc, eq, inArray, or } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, lt, lte, or, sql } from 'drizzle-orm';
+import type { parseSourceHistoryQuery } from '../utils/sourceAccessHistory';
 import type { DatabaseType } from '../db';
 import { agentCommands, agentIdentities } from '../db/schema/agents';
 import {
@@ -45,6 +46,55 @@ export class AgentSourceAccessStore {
 			.orderBy(desc(agentSourceAccessRequests.createdAt), desc(agentSourceAccessRequests.id))
 			.limit(20)
 			.all();
+	}
+
+	/** Read-only keyset pages. The rowid high-water mark excludes later insertions,
+	 * including requests with equal/backdated timestamps. No audit rows are truncated. */
+	async requestHistory(agentId: string, options: ReturnType<typeof parseSourceHistoryQuery>) {
+		return this.db.transaction(tx => {
+			const rowid = sql<number>`${agentSourceAccessRequests}.rowid`;
+			const ceiling =
+				options.cursor?.ceiling ??
+				tx
+					.select({ value: sql<number>`coalesce(max(${rowid}), 0)` })
+					.from(agentSourceAccessRequests)
+					.where(eq(agentSourceAccessRequests.agentId, agentId))
+					.get()!.value;
+			const scope = and(
+				eq(agentSourceAccessRequests.agentId, agentId),
+				lte(rowid, ceiling),
+				options.status ? eq(agentSourceAccessRequests.status, options.status) : undefined,
+				options.kind ? eq(agentSourceAccessRequests.kind, options.kind) : undefined
+			);
+			const before = options.cursor?.before;
+			const position = before
+				? or(
+						lt(agentSourceAccessRequests.createdAt, new Date(before.time)),
+						and(
+							eq(agentSourceAccessRequests.createdAt, new Date(before.time)),
+							lt(agentSourceAccessRequests.id, before.id)
+						)
+					)
+				: undefined;
+			const requests = tx
+				.select()
+				.from(agentSourceAccessRequests)
+				.where(and(scope, position))
+				.orderBy(desc(agentSourceAccessRequests.createdAt), desc(agentSourceAccessRequests.id))
+				.limit(options.limit + 1)
+				.all();
+			const total = tx
+				.select({ value: count() })
+				.from(agentSourceAccessRequests)
+				.where(scope)
+				.get()!.value;
+			return {
+				requests: requests.slice(0, options.limit),
+				hasMore: requests.length > options.limit,
+				total,
+				ceiling,
+			};
+		});
 	}
 
 	async getOpenApply(agentId: string): Promise<AgentSourceAccessRequest | null> {

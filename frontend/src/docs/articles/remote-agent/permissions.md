@@ -63,6 +63,29 @@ Pada plan baru, pilih root efektif atau gunakan **Validate source path**, periks
 
 Jika policy atau durabilitas state tidak dapat diverifikasi, Agent menolak akses. Jangan menghapus file state, mengulang enrollment, atau mengubah revision untuk mencoba memulihkannya. Ikuti prosedur operator yang telah ditinjau.
 
+## Meninjau riwayat Source Access
+
+Pada detail mesin, **Source Access → Recent requests** menampilkan lima request
+terbaru, termasuk validasi, perubahan akses dan perubahan mode. Setiap baris
+meringkas jenis, status dan waktu. Klik **Details** untuk melihat request ID,
+path yang diminta/canonical, hasil validasi, alasan, versi/revision serta waktu
+penyelesaian. Detail tetap dibatasi dalam area scroll; tidak ada riwayat yang
+dipotong atau dihapus dari database audit.
+
+Gunakan **View all requests** untuk membuka history dengan 10 request per halaman,
+urutan terbaru dahulu, serta filter **Status** dan **Type**. **Previous** dan
+**Next** menelusuri kumpulan request yang sama walaupun request baru masuk.
+**Refresh history** kembali ke halaman pertama dan memasukkan request terbaru;
+perubahan filter juga kembali ke halaman pertama. Status request dapat berubah
+ketika Agent mengonfirmasi hasil; ini bukan ekspor snapshot database yang beku.
+
+Membuka atau memperluas history hanya membaca data. Tombol **Cancel request** dan
+persetujuan host yang sudah ada tetap merupakan tindakan eksplisit tersendiri;
+melihat history tidak memberikan akses. Modal dapat ditutup dengan Escape dan
+mengembalikan fokus ke tombol pembuka. Jika history gagal dimuat, periksa sesi
+administrator lalu klik **Refresh history**. Jangan membagikan path/policy detail
+internal tanpa penyamaran.
+
 ## ACL minimum
 
 Administrator dapat memberi ACL read-only khusus service account: traverse pada induk yang diperlukan, read/traverse pada direktori source, serta read pada file. Periksa ACL mask efektif dan kebijakan file baru/default ACL agar backup berikutnya tidak gagal setelah aplikasi membuat file.

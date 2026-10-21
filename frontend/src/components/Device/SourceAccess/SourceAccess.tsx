@@ -24,6 +24,7 @@ import { copyToClipboard } from '../../../utils/clipboard';
 import Button from '../../common/Button/Button';
 import classes from './SourceAccess.module.scss';
 import SourceAuthorizationSetup from './SourceAuthorizationSetup';
+import SourceAccessHistory from './SourceAccessHistory';
 
 const SourceAccess = ({ deviceId, agentId }: { deviceId: string; agentId: string }) => {
    const query = useSourceAccess(deviceId);
@@ -130,9 +131,42 @@ const SourceAccess = ({ deviceId, agentId }: { deviceId: string; agentId: string
       return (
          <article className={classes.request} key={request.requestId}>
             <strong>
-               {request.kind === 'validate' ? 'Validation' : 'Access change'}: {sourceAccessStatus(request.status)}
+               {request.kind === 'validate' ? 'Validation' : request.kind === 'mode-setup' ? 'Policy change' : 'Access change'}:{' '}
+               {sourceAccessStatus(request.status)}
             </strong>
             <p className={classes.muted}>{new Date(request.createdAt).toLocaleString()}</p>
+            <dl className={classes.requestMetadata}>
+               <dt>Request ID</dt>
+               <dd>
+                  <code>{request.requestId}</code>
+               </dd>
+               <dt>Type</dt>
+               <dd>{request.kind}</dd>
+               <dt>Expected version</dt>
+               <dd>{request.expectedVersion}</dd>
+               <dt>Host policy revision</dt>
+               <dd>
+                  <code>{request.expectedHostPolicyRevision}</code>
+               </dd>
+               {request.completedAt && (
+                  <>
+                     <dt>Completed</dt>
+                     <dd>{new Date(request.completedAt).toLocaleString()}</dd>
+                  </>
+               )}
+               {request.requestedMode && (
+                  <>
+                     <dt>Requested mode</dt>
+                     <dd>{request.requestedMode}</dd>
+                  </>
+               )}
+               {request.setupExpiresAt && (
+                  <>
+                     <dt>Setup expires</dt>
+                     <dd>{new Date(request.setupExpiresAt).toLocaleString()}</dd>
+                  </>
+               )}
+            </dl>
             <ul>
                {validationRows.map((item, index) => (
                   <li key={`${item.requestedPath}-${index}`}>
@@ -505,14 +539,7 @@ const SourceAccess = ({ deviceId, agentId }: { deviceId: string; agentId: string
                      onClick={requestPaths}
                   />
                </div>
-               <div className={classes.history}>
-                  <h4>Recent requests</h4>
-                  {view.requests
-                     .filter((request) => request.kind !== 'mode-setup')
-                     .slice(0, 12)
-                     .map(requestHistory)}
-                  {!view.requests.length && <p>No source access requests.</p>}
-               </div>
+               <SourceAccessHistory key={deviceId} deviceId={deviceId} requests={view.requests} renderDetails={requestHistory} />
             </>
          )}
          {notice && (
