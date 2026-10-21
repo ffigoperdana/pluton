@@ -1,13 +1,21 @@
 # Memperbarui agent sambil mempertahankan identity
 
-Gunakan artifact dari revision fork yang telah ditinjau untuk memperbarui binary Agent. Pada Agent 0.6.0, perubahan pilihan folder memakai **Source Access** tanpa reinstall: Host-Approved mempertahankan persetujuan host lokal, sedangkan Server-Managed mengizinkan Validate dan Apply di dalam delegasi yang telah disahkan host satu kali. Pertahankan identity dan state agar mesin yang sama tetap terkait dengan plan yang ada. Contoh di halaman ini memakai source `/srv/example-app`.
-
-Sebelum mulai, catat **Agent ID**, **Agent version**, versi Restic/Rclone, dan **Last seen** pada panel **Remote Agent**. Catat pula revision/build yang sedang terpasang secara privat. Hindari pembaruan ketika backup aktif; pilih jendela pemeliharaan setelah pekerjaan selesai.
+Pemasangan pertama memakai `installers/install-agent.sh`. Existing enrolled Agent
+memakai `installers/upgrade-agent.sh`, **app-only**: bukan reinstall, re-enrollment,
+update Restic/Rclone, migrasi server atau perubahan Source Access. Referensi teknis
+authoritative adalah `docs/AGENT_UPGRADE.md` pada checkout yang direview.
 
 ## Urutan pembaruan Source Access
 
-Untuk instalasi standar existing, gunakan upgrader khusus dari checkout yang telah
-ditinjau. Contoh path ini fiktif:
+1. Review source commit, hasil hosted Linux CI dan kompatibilitas server/Agent.
+   Server dengan migration 0019 mendukung Source Access; exclusions memerlukan
+   server v4/capability baru dan Agent 0.7.0. Deploy server kompatibel lebih dahulu.
+2. Simpan control-plane backup konsisten, configuration/key dan rollback privat.
+   Catat Agent ID, versi/client, effective roots/revision, serta transaksi aktif.
+3. Pause plan terkait dan drain backup, copy/recovery serta request Source Access.
+   Jangan run `/poll` atau `run --once` untuk membuktikan idle: itu dapat
+   menjalankan command pending. Local upgrade fence bukan server queue inventory.
+4. Jalankan preflight dari checkout instalasi standar yang ditinjau:
 
 ```sh
 cd /srv/pluton
@@ -17,63 +25,72 @@ sudo bash installers/upgrade-agent.sh
 systemctl is-active pluton-agent
 ```
 
-Pause plan dan selesaikan pekerjaan/request Source Access terlebih dahulu.
-`--check` hanya membaca preflight lokal, tanpa heartbeat, build atau restart.
-Agent 0.6.1 mendukung hold agar update berikutnya dapat memeriksa drain sebelum
-menghentikan service. Agent lama yang masih berjalan ditolak: operator harus
-memastikan drain lalu menghentikannya secara aman untuk update pertama.
+`/srv/pluton` adalah path checkout contoh. `--check` tidak build/download,
+heartbeat, restart, membuat transaksi atau memperbarui Git index. Standard
+Linux x86_64/systemd/cgroup v2 dan exact installer paths/provenance wajib.
+Private Node/Corepack serta pinned pnpm/frozen lockfile dipakai tanpa global pnpm.
+Minimal disk 2 GiB + dua ukuran app pada filesystem staging dan backup; jumlah
+backup historis dan dependency build dapat memerlukan lebih banyak.
 
-Upgrader hanya mengganti aplikasi; EnvironmentFile, unit, state/identity, TLS,
-roots, Database & Hooks serta Restic/Rclone tetap dipertahankan. Build memakai
-Node/Corepack privat dan pnpm yang dipin; pnpm global tidak diperlukan. Instalasi
-custom atau tanpa provenance cocok ditolak. Backup root-private dan receipt
-disimpan; rollback memakai `--rollback <exact-upgrade-id>` dan tidak pernah
-menimpa identity/receipt lama. Ikuti `docs/AGENT_UPGRADE.md` untuk syarat platform,
-kapasitas, kegagalan, dan batas rollback. Validasi systemd/Linux nyata tetap wajib
-sebelum rollout; hasil tes Windows bukan bukti production.
-
-Pasang server yang mendukung migration additive 0019 terlebih dahulu. Server baru tetap menerima Agent lama dan konfigurasi statisnya. Agent 0.6.0 tidak boleh dipasang lebih dahulu pada server lama yang belum memahami kontraknya.
-
-Pause jadwal terkait dan drain semua pekerjaan sebelum mengganti binary. Simpan backup root-private atas aplikasi, EnvironmentFile, unit, identity/state, dan host policy. Pertahankan seluruh konfigurasi CA/mTLS, Database & Hooks, SFTP serta roots lama. Bandingkan Agent ID, device, dan secret secara lokal tanpa mencetak secret. Setelah pembaruan, periksa ONLINE, versi/capability, root efektif, lalu validasi source sintetis yang disetujui sebelum workload nyata.
-
-Jangan langsung mengulang installer pada existing host: installer menulis EnvironmentFile dan unit baru, hanya mempertahankan sebagian opsi existing secara eksplisit, serta melakukan restart. Operator perlu memakai prosedur penggantian artifact yang mempertahankan konfigurasi lengkap, sebagaimana runbook `docs/AGENT_SOURCE_ACCESS_UPGRADE.md` pada repository yang ditinjau.
+5. Periksa service serta **Remote Agent**: Agent ID tetap, ONLINE/Last seen baru,
+   versi/client/capability authenticated, TLS/config, effective scope dan
+   Database & Hooks tetap. Baru uji shadow cycle yang disetujui dan resume jadwal.
 
 ## Installer pada konfigurasi statis lama
 
-1. Periksa revision target dan kompatibilitas server/agent.
-2. Tinjau seluruh allowed roots yang masih dibutuhkan plan. Instalasi ulang harus menyertakan kumpulan root yang memang ingin dipertahankan.
-3. Jalankan installer dari checkout yang ditinjau dengan server origin yang sama dan konfigurasi CA yang sesuai.
-4. Bila identity existing sehat, gunakan kembali identity itu; pembaruan biasa tidak memerlukan token baru.
-5. Periksa service dan inventory sesudah pemasangan, lalu lakukan backup serta restore contoh.
+Agent sebelum 0.6.1 belum mendukung local upgrade-hold. Upgrader menolak Agent
+lama yang masih running. Operator harus membuktikan server/host drain, lalu stop
+aman melalui prosedur yang disetujui sebelum update pertama. Jangan stop backup
+aktif atau menganggap tidak ada child process sebagai bukti cukup.
 
-```sh
-sudo bash installers/install-agent.sh \
-  --server https://pluton.example.internal \
-  --allowed-root /srv/example-app
-```
-
-Opsi `--allowed-root` dapat diulang bila ada beberapa root yang disetujui. Jangan menghilangkan root yang masih dipakai plan atau memperluasnya ke seluruh filesystem untuk memudahkan konfigurasi.
-
-Mengganti server origin atau memakai `--re-enroll` adalah keputusan identity terpisah. Jangan melakukannya hanya karena UI menunjukkan OFFLINE atau versi lama. Gunakan [diagnostik agent](/docs/remote-agent/troubleshooting) dahulu.
+Instalasi custom, provenance missing, unit drop-in/paths tidak cocok atau runtime
+pin berbeda memerlukan review terpisah. Mengulang `install-agent.sh` bukan
+workaround: installer dapat menulis unit/EnvironmentFile dan restart. Perubahan
+identity/server origin atau `--re-enroll` adalah keputusan berbeda. Menambah
+folder dilakukan melalui [Source Access](/docs/remote-agent/permissions), bukan
+reinstall. Root delegation tetap host-authorized; update tidak memperluasnya.
 
 ## Cache dan pinning
 
-Installer dapat memakai kembali private Node, Restic, dan Rclone hanya bila manifest, checksum, versi, mode, serta ownership memenuhi pemeriksaan. Runtime privat tidak mengganti Node.js global host. Executable arbitrary dari PATH atau binary yang dapat ditulis service account bukan pengganti yang aman.
+Upgrader mempertahankan `/etc/pluton-agent.env`, unit, `/var/lib/pluton-agent`,
+identity, TLS, roots/policy, DB/hooks config dan command receipts. Hanya aplikasi
+diganti. Root-private versioned backups, lock, staging dan receipt mendukung
+preservation/rollback; jangan menghapus evidence untuk mencoba ulang.
 
-Jika validasi toolchain gagal, tinjau error dan paket yang dipakai. Jangan melewati checksum atau membuat direktori runtime dapat ditulis agent. Installer memeriksa eksekusi sebagai pengguna service untuk menghindari instalasi yang hanya bekerja sebagai root.
+`.verified-install` merekam format=1, pin dan tree hash. Perhitungan tree serta
+source fingerprint kini menetapkan `LC_ALL=C` **dalam subshell hash saja**:
+LANG, LC_ALL dan LC_COLLATE administrator tidak mengubah canonical ordering.
+Mode service/global locale tidak diubah dan existing C-locale provenance tetap
+cocok. Hash konten, mode, ownership, symlink dan protected ancestor tetap diperiksa.
+
+Jika masih mismatch, berhenti dan gunakan [diagnostik Agent](/docs/remote-agent/troubleshooting#integrity-dan-upgrade-preflight).
+Tidak ada auto-rewrite metadata, force integrity bypass atau migrasi non-C record
+secara diam-diam. Versi pada dashboard bukan pengganti provenance checkout/app.
 
 ## Rollback
 
-Drain kembali sebelum rollback. Agent lama mengabaikan pilihan Source Access yang lebih sempit; downgrade hanya aman bila akses efektif sama persis dengan roots statis lama dan tidak ada command policy yang pending. Jika berbeda, hentikan proses dan minta tinjauan konfigurasi host; jangan hapus policy state untuk memaksakan rollback. Identity dan receipt command terbaru harus dipertahankan, bukan ditimpa snapshot lama.
+Gagal upgrade dapat diikuti rollback sukses; itu tetap **upgrade gagal**.
+Output aman menampilkan Failed stage, Error code, Rollback dan Previous Agent
+preserved. BACKUP, ACTIVATE, PROVENANCE dan HEALTH_CHECK adalah tahap berbeda.
+Jangan menyimpulkan sebab hanya dari timeout/kode umum; simpan receipt privat
+dan gunakan prosedur troubleshooting yang sesuai.
 
-Installer mempunyai transaksi untuk menyimpan instalasi kerja sebelumnya dan memulihkannya bila validasi gagal. Setelah kegagalan, tetap periksa status service, inventory, dan konfigurasi root. Jangan berasumsi semua perubahan operasional di luar installer ikut dibatalkan.
+Untuk rollback eksplisit yang memang disetujui, gunakan
+`sudo bash installers/upgrade-agent.sh --rollback <exact-upgrade-id>` setelah
+drain/preservation checks. Script menolak receipt/ownership/state yang tidak
+cocok. Ia memulihkan app dan provenance yang tercatat, bukan state identity atau
+command receipts lama. Verifikasi service, scope dan server compatibility lagi.
 
-Jangan menghapus `/var/lib/pluton-agent` sebagai cara rollback. Direktori itu menyimpan identity dan state pekerjaan. Gunakan revision sebelumnya melalui prosedur pembaruan yang ditinjau apabila rollback aplikasi diperlukan, dengan origin dan roots yang konsisten.
+Downgrade ke Agent yang mengabaikan Source Access selection atau exclusions v4
+tidak aman. Review/remove konfigurasi fitur baru hanya melalui perubahan yang
+diotorisasi dan drain; jangan hapus policy/receipt/revision agar downgrade lolos.
+Pertahankan rollback artifacts sampai kebijakan owner mengizinkan cleanup exact.
 
 ## Patch parent
 
-Optimasi incremental dikerjakan pada agent. Memperbarui server saja tidak memasang patch eksekusi agent. Label **Agent version** dapat tetap sama pada build yang berbeda; catatan revision/build diperlukan untuk membuktikan patch mana yang terpasang.
-
-Setelah pembaruan, jalankan dua backup disposable berurutan pada source yang sama tanpa perubahan, lalu ubah satu file dan ulangi. Periksa **New Files**, **Modified Files**, **Unmodified Files**, dan jumlah data baru sesuai [panduan incremental](/docs/backup-plans/incremental). Tidak perlu membuat ulang plan atau storage hanya untuk pengujian ini.
-
-Hasil yang diharapkan adalah **Agent ID** tetap, heartbeat kembali **ONLINE**, backup mencapai **Complete**, dan file contoh dapat dipulihkan. Jika capability atau source berubah, tinjau [izin source](/docs/remote-agent/permissions) sebelum meneruskan workload penting.
+Setelah update, periksa satu backup unchanged lalu satu perubahan contoh di
+window terpisah yang disetujui. Identity/repository/paths dan receipt parent harus
+tetap terikat; tidak perlu membuat ulang plan/storage. Periksa snapshot dan staged
+restore, bukan hanya counter New Files. [Incremental](/docs/backup-plans/incremental)
+menjelaskan deduplikasi versus parent hint. Tidak ada janji upgrade tidak pernah
+gagal, dan dokumentasi tidak memberi izin production retry otomatis.

@@ -517,6 +517,8 @@ build_agent_app_from_source() {
 
 source_fingerprint() {
 	(
+		# Canonical byte ordering, scoped to this calculation (not the Agent service).
+		export LC_ALL=C
 		cd -- "$REPOSITORY_ROOT"
 		[[ -f package.json && -f pnpm-lock.yaml && -f pnpm-workspace.yaml && -f agent/package.json && -f agent/tsconfig.json ]] || return 1
 		# Source links would make a source-only fingerprint incomplete; refuse reuse.
@@ -529,6 +531,10 @@ verified_tree_digest() {
 	local root="$1" entry owner mode target expected_owner=0
 	if is_test_mode; then expected_owner="$(id -u)"; fi
 	(
+		# Keep format=1 compatible with existing C-locale provenance. LANG alone
+		# cannot override inherited LC_ALL/LC_COLLATE; sorting and serialization
+		# must use the same locale when recording and verifying the tree.
+		export LC_ALL=C
 		cd -- "$root" || return 1
 		[[ -d runtime && -d bin && -d app && ! -L runtime && ! -L bin && ! -L app ]] || return 1
 		while IFS= read -r -d '' entry; do

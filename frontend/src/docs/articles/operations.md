@@ -26,6 +26,18 @@ Buka **Settings → Webhooks & Email → Delivery History**. Periksa pending/sen
 
 ## Perubahan
 
+### Mingguan dan periodik
+
+Setiap minggu, tinjau pertumbuhan primary/replica, quotas, staging/cache serta
+root/source drift, exclusions dan credential/CA expiry. Jangan prune Managed
+Agent atau memakai object expiry sebagai pengganti retention yang belum tersedia.
+Secara periodik dan setelah perubahan, lakukan drill filesystem+SQL+aplikasi pada
+snapshot exact dan catat RPO/RTO terukur. Jadwalkan heavy jobs menurut resource
+measurement, bukan menambah concurrency agar queue tampak kosong.
+
+[Panduan lengkap](/docs/getting-started/complete-backup-setup#13-scheduling-kapasitas-dan-operasi-rutin)
+menyediakan checklist harian/mingguan/periodik dan urutan maintenance.
+
 Gunakan maintenance window, salinan control plane konsisten, image immutable, key/volume preserved, dan rollback yang ditinjau. Ukur kapasitas memakai workload representatif; angka RAM 4 GiB bukan hasil capacity test dan tidak membenarkan penurunan resource guard.
 
 Catatan harian berikut diisi dengan hasil nyata; kolom kosong belum lulus.

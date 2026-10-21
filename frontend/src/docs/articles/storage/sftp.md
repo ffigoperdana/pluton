@@ -29,6 +29,30 @@ Representasi password sementara yang dibutuhkan Rclone bukan pengganti perlindun
 
 ## Repository safety
 
+### Akun, connectivity dan failure domain
+
+Siapkan akun backup khusus dengan scope pada repository yang disetujui, bukan
+akun administrator source. Agent memerlukan write untuk snapshot; server juga
+memerlukan akses primary untuk verification/copy/restore. Permission/chroot/quota
+ditata administrator SFTP. Tidak ada perintah chroot/setfacl otomatis di panduan
+ini, dan keberhasilan password login bukan bukti scope atau host-key pinning.
+
+Sebelum membuat plan, verifikasi DNS/port dari Agent dan server serta working
+directory/listing dengan akun yang sama melalui tool privat yang disetujui.
+Jangan menampilkan password pada argumen atau salinan transcript publik. Setelah
+Add Storage berhasil, uji hanya prefix kosong dedicated dan satu file sintetis
+melalui workflow backup/restore; jangan menguji penulisan pada repository existing.
+
+Folder berbeda pada filesystem/VM yang sama memberi isolasi logical tetapi
+tetap berbagi disk, quota dan kegagalan host. Replica independen memerlukan
+failure domain yang benar-benar berbeda dan jalur recovery teruji. Storage
+authentication, password repository Restic dan master key Pluton berbeda.
+
+Untuk rotasi password: identifikasi semua consumer (Agent/server/retained
+repository) secara privat, pause/drain, ubah melalui konfigurasi storage yang
+didukung, verifikasi koneksi, backup dan staged restore sebelum mencabut akses
+lama. Jangan recreate storage/plan atau merotasi encryption key sebagai shortcut.
+
 Tujuan Managed Agent harus belum ada atau kosong. Setelah plan pertama disiapkan, repository itu menjadi milik plan tersebut. Jangan memasukkan file aplikasi, dump manual, atau repository plan lain ke dalamnya.
 
 Hasil yang diharapkan adalah storage tersimpan, plan dapat mempersiapkan repository, lalu **Backup Now** mencapai **Complete**. Buka **Browse** dan lakukan [restore ke staging](/docs/restore/staging) untuk membuktikan isi dapat diambil kembali.

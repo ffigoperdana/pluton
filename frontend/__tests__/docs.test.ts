@@ -12,7 +12,7 @@ const index = createDocsIndex(
 );
 test('all required categories and representative routes have original Bahasa Indonesia articles', () => {
    assert.equal(docCategories.length, 15);
-   assert.equal(index.length, 96);
+   assert.equal(index.length, 97);
    assert.equal(new Set(index.map((a) => a.slug)).size, index.length);
    // Source-built images need no Git metadata; a checkout must not silently omit
    // a public article because a credential-file ignore pattern matches its name.
@@ -27,6 +27,7 @@ test('all required categories and representative routes have original Bahasa Ind
    }
    for (const route of [
       'getting-started',
+      'getting-started/complete-backup-setup',
       'architecture',
       'backup-plans',
       'remote-agent',
@@ -93,6 +94,48 @@ test('all sidebar paths, internal links and heading anchors resolve', () => {
 test('reference evidence points to actual implementation, not fabricated feature files', () => {
    for (const category of docCategories)
       for (const source of category.evidence) assert(existsSync(new URL('../../' + source, import.meta.url)), source);
+});
+
+test('Start Here provides all fifteen verified workflow steps and is reachable from home/sidebar/search', () => {
+   const guide = resolveDoc('/docs/getting-started/complete-backup-setup');
+   assert(guide);
+   const article = index.find((item) => item.slug === 'getting-started/complete-backup-setup')!;
+   const steps = article.headings.filter((heading) => heading.depth === 2).map((heading) => Number(heading.text.match(/^(\d+)\./)?.[1]));
+   assert.deepEqual(
+      steps,
+      Array.from({ length: 15 }, (_, i) => i + 1),
+   );
+   const app = readFileSync(new URL('../../documentation/src/App.tsx', import.meta.url), 'utf8');
+   assert(app.includes('/docs/getting-started/complete-backup-setup'));
+   assert(searchDocs(index, 'LC_COLLATE').some((item) => item.article.slug === article.slug));
+   for (const route of [
+      'remote-agent/enrollment',
+      'remote-agent/permissions',
+      'storage/sftp',
+      'storage/hcp',
+      'backup-plans/managed-agent',
+      'database-backup/artifacts',
+      'replication/managed-agent',
+      'replication/retention-restore',
+      'recovery-testing',
+      'migration/cutover',
+   ])
+      assert(article.markdown.includes('/docs/' + route), route);
+});
+
+test('operational guides keep unsupported mirror recovery, provenance mismatch and secret boundaries explicit', () => {
+   const updates = index.find((item) => item.slug === 'remote-agent/updates')!.markdown;
+   assert(updates.includes('upgrade-agent.sh --check'));
+   assert(!/sudo bash installers\/install-agent\.sh/.test(updates), 'existing-Agent update must not instruct reinstall');
+   assert(updates.includes('Tidak ada auto-rewrite metadata'));
+   const hcp = index.find((item) => item.slug === 'storage/hcp')!.markdown;
+   for (const term of ['Tenant', 'Namespace', 'Force Path Style', 'S3 protocol', '403', 'console', 'belum diuji'])
+      assert(hcp.toLowerCase().includes(term.toLowerCase()), term);
+   assert(hcp.includes('docs.hitachivantara.com/'));
+   assert(!/curl[^\n]*\s(?:-k|--insecure)\b/.test(hcp));
+   const guide = index.find((item) => item.slug === 'getting-started/complete-backup-setup')!.markdown;
+   assert(guide.includes('Direct mirror restore Managed Agent belum tersedia'));
+   assert(guide.includes('NOT TESTED/BLOCKED'));
 });
 test('local search covers title, headings and operational article content', () => {
    assert(searchDocs(index, 'HMAC').some((item) => item.article.slug === 'notifications/webhook'));

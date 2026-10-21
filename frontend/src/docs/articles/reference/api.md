@@ -14,6 +14,8 @@ Jangan menaruh cookie, token, password, atau secret pada URL maupun contoh publi
 | --- | --- |
 | `GET /api/health` | Status dasar layanan dan control database, tanpa kredensial |
 | `GET /api/health/details` | Pemeriksaan komponen dengan autentikasi; mencakup file uji kecil pada data directory |
+| `GET /api/agent-admin/devices/:id/source-access` | Report/source-selection dan 20 request terbaru; sesi administrator |
+| `GET /api/agent-admin/devices/:id/source-access/requests?limit=10` | History read-only dengan cursor, status/kind; default 10, maksimum 50; sesi administrator, no-store |
 | `GET /api/plans/:id/backups` | Riwayat backup yang dipaginasi dan difilter |
 | `GET /api/backups/:id/files` | Browse isi snapshot sesuai backup |
 | `GET /api/backups/:id/progress` | Progress dan tahap pekerjaan |
@@ -32,6 +34,12 @@ Remove Backup Plan menggunakan `DELETE /api/plans/:id`; opsi `removeData` menent
 Jika UI melaporkan `Unexpected token '<'`, catat method, path tersanitasi, status HTTP, Content-Type, dan redirect. HTML dapat berasal dari proxy, login, atau fallback; itu bukan JSON aplikasi yang boleh dianggap sukses.
 
 ## Respons asinkron
+
+History Source Access memakai `cursor`/`nextCursor`, bukan nomor page/offset.
+Boundary menahan insert baru selama pagination; Refresh/filter memulai boundary
+baru. Cursor tidak memberi otorisasi dan bukan identifier durable setelah
+maintenance/restore database. Request status tetap dapat berubah; history bukan
+snapshot ekspor database. Jangan menafsirkan **View all** sebagai bulk mutation.
 
 HTTP 202 berarti pekerjaan diterima/diantrekan. Tunggu status terminal dan cleanup, bukan hanya respons request awal. Prinsip ini berlaku pada recovery, Delete, dan test notifikasi sesuai kontrak masing-masing.
 

@@ -4,6 +4,10 @@ Latihan ini membawa Anda dari source contoh sampai file hasil pemulihan. Gunakan
 
 ## Persiapan
 
+Untuk setup awal server sampai replikasi dan recovery database, ikuti
+[panduan lengkap](/docs/getting-started/complete-backup-setup). Latihan ini sengaja
+lebih pendek dan tidak membuktikan SQL import, replica atau application recovery.
+
 Pastikan [Pluton Server sudah terpasang](/docs/deployment), Anda dapat login, dan [kebutuhan sistem](/docs/getting-started/requirements) terpenuhi. Jika data berada pada mesin lain, lakukan [enrollment agent](/docs/remote-agent/enrollment) dan pastikan mesin **ONLINE**. Jika data berada pada host Pluton, pastikan folder terlihat serta terbaca dari lingkungan server atau container.
 
 Pilih alur sesuai lokasi source. Contoh utama berikut memakai Managed Agent dengan SFTP primer. Untuk filesystem host Pluton, gunakan panduan [Backup Plan](/docs/backup-plans); pilihan primer dapat berupa Local, SFTP, atau S3 sesuai konfigurasi yang tersedia.
@@ -12,7 +16,7 @@ Pilih alur sesuai lokasi source. Contoh utama berikut memakai Managed Agent deng
 
 1. Buka **Storages → + New**. Pada **Add New Remote Storage**, isi **Storage Name***, pilih **Storage Type*** yang sesuai, lalu isi koneksinya. Untuk contoh Managed Agent, ikuti [SFTP](/docs/storage/sftp) dan klik **Add Storage**.
 2. Buka **Backup Plans → + New**. Formulir **Add New Plan** dimulai pada **Basic**. Isi **Backup Plan Name***, misalnya `Backup contoh app-01`, dan gunakan **Incremental Backup**.
-3. Klik **Next: Configure Source & Destination**. Pilih `app-01` pada **Select Device***, isi **Remote Backup Source*** dengan `/srv/example-app`, lalu pilih SFTP pada **Backup Destination***.
+3. Klik **Next: Configure Source & Destination**. Pilih `app-01` pada **Select Device***. Agent Source Access mendukung pemilihan root efektif atau **Validate source path → Apply source access → Use validated canonical path** setelah host delegation/approval dan Agent confirmation. Agent statis lama tetap memakai path manual yang sudah diizinkan host. Cocokkan source `/srv/example-app`, lalu pilih SFTP pada **Backup Destination***.
 4. Isi path repository baru, misalnya `daily/app-01`. Path harus khusus untuk plan ini dan belum ada atau kosong. Biarkan **Enable Replication** mati selama latihan pertama.
 5. Klik **Next: Setup Schedule & Retention**. Pilih **Backup Interval** yang sesuai waktu uji, misalnya **Daily**. Managed Agent tidak menawarkan retensi/prune lokal pada langkah ini.
 6. Klik **Next: Advanced Settings**. Pada **General**, tinjau **Encryption**, **Compression**, dan **Run Backup Now**. Matikan **Run Backup Now** agar Anda dapat memeriksa plan dahulu; jangan menambahkan database atau hooks dulu.

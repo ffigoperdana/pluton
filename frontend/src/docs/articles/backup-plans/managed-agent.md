@@ -61,6 +61,20 @@ total. Semua pola dibatasi ke source canonical. Dump SQL dan metadata yang
 dihasilkan **Database & Hooks** pada workspace terpisah tidak ikut dikecualikan;
 file SQL yang sudah berada di source tetap mengikuti pola source.
 
+Matching case-sensitive: `Cache` berbeda dari `cache`. Pola `node_modules/**`
+prunes root `node_modules`, sedangkan `**/node_modules` mencakup semua kedalaman.
+Trailing `/**` dinormalisasi ke subtree root agar entri direktori sendiri juga
+tidak perlu diakses. Source dengan karakter glob/escape yang tidak aman ditolak
+untuk exclusions nonempty. Tidak ada fallback mengabaikan pola yang invalid.
+
+`cache`, `tmp`, `temp`, `logs`, `log`, `sessions` dan `vendor` adalah contoh nama
+yang mungkin cocok untuk aplikasi tertentu, bukan rekomendasi default universal.
+Sessions/uploads/dependencies bisa diperlukan recovery. Pemilik harus menerima
+cakupan sebelum konfigurasi disimpan. Untuk local read-only scan Agent 0.7.0,
+tambahkan `--exclude .git --exclude node_modules --exclude .cache` pada command
+[preflight](/docs/remote-agent/permissions#diagnostik-lokal-read-only). Scan lokal
+tidak menyimpan setting plan atau memberikan host authorization.
+
 Data yang dikecualikan tidak ada dalam snapshot pemulihan baru. Snapshot lama
 tidak dihapus. Direktori yang dikecualikan tidak perlu dibuka; file terpilih yang
 tidak terbaca tetap membuat backup gagal. Exclusions tidak memberi izin baru,

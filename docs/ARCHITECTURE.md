@@ -184,7 +184,7 @@ Additional isolated checks are `scripts/validate-phase7.ps1` and
 
 ## Build validation
 
-`frontend/src/docs` supplies 96 Bahasa Indonesia Markdown articles in
+`frontend/src/docs` supplies 97 Bahasa Indonesia Markdown articles in
 15 manifest-ordered categories. All 77 original article URLs are retained; new
 guides cover Persistent Restore, replication, storage and SYS MON migration.
 `documentation/` compiles these article sources
@@ -197,6 +197,12 @@ local static Fumadocs index, without a hosted service.
 
 `pnpm test:docs` checks articles/routes/anchors/evidence/security/rendering. The
 frontend production build runs it automatically before bundling the articles.
+
+Start with `/docs/getting-started/complete-backup-setup` for the authoritative
+15-step operator journey. It links existing feature references rather than
+inventing unsupported mirror restore or re-enrollment upgrade procedures. See
+[the integrity and documentation audit](DETERMINISTIC_AGENT_INTEGRITY_AND_OPERATIONS_AUDIT.md)
+for current-source evidence, scope, compatibility and validation limitations.
 `pnpm test:fumadocs` checks the real compiler, every registered TOC, React isolation,
 official layout rendering, static search and Markdown/clipboard security paths.
 The docs build runs these tests automatically. See

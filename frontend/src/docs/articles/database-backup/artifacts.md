@@ -20,6 +20,13 @@ Pratinjau tidak menjalankan import. Konfirmasi [Persistent Restore](/docs/databa
 
 ## Validasi
 
+Empat bukti minimum harus dibaca terpisah: **dikonfigurasi**, dump berhasil
+dibuat, artifact benar-benar termasuk snapshot exact, dan SQL berhasil diimpor
+pada recovery target. Label DB pada card/detail plan hanya configuration summary,
+tanpa database name atau password; receipt kosong/backup failed tidak berubah
+menjadi verified database backup. Bahkan SQL import lulus belum membuktikan
+aplikasi dapat menggunakan role/extensions atau transaksi bisnisnya.
+
 Penyelesaian backup memeriksa full snapshot ID, ikatan plan/backup, pohon sumber, dan ukuran artefak. Sebelum import recovery, ukuran dan SHA-256 SQL diperiksa lagi dari data yang dipulihkan.
 
 Hash yang cocok membuktikan artefak sesuai catatan. Ia belum membuktikan transaksi bisnis, ekstensi, hak aplikasi, atau aplikasi dapat berjalan. Berkas .sql biasa pada folder sumber juga tidak mendapat identitas database native hanya karena ekstensinya.

@@ -6,6 +6,11 @@ Mode **HCP / pre-existing namespace mode** memakai endpoint S3 API HTTPS dan buc
 
 ## Siapkan sebelum menambahkan storage
 
+Gunakan [storage HCP](/docs/storage/hcp) sebagai referensi tunggal untuk
+Tenant/Namespace, S3 protocol, ACL, key, endpoint/path-style, region, TLS/CA,
+quota dan retention. Artikel ini berfokus pada acceptance replika Pluton agar
+prasyarat vendor tidak diduplikasi dengan instruksi yang berbeda.
+
 Minta administrator menyiapkan HTTPS S3 API endpoint, existing namespace/bucket, credential dengan scope minimum yang diperlukan, prefix kosong dedicated, trust CA, serta kebijakan quota/retention/Object Lock. Jangan memakai URL konsol pengelolaan. Contoh fiktif: endpoint `https://objects.example.internal`, bucket `example-backups`, dan prefix `app-01/replica-a`.
 
 Pastikan server Pluton dapat menjangkau endpoint dan mempercayai sertifikat. CA storage privat dikelola operator melalui `PLUTON_STORAGE_CA_FILE` sesuai [storage HCP](/docs/storage/hcp) dan [konfigurasi](/docs/reference/configuration). File CA harus memenuhi pemeriksaan keamanan server; jangan memasukkan arbitrary CA path/TLS flags melalui field storage atau menonaktifkan verifikasi sertifikat.
