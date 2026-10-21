@@ -7,6 +7,7 @@ import type { SourceAccessView } from '../src/@types/agentSourceAccess.ts';
 const require = createRequire(new URL('../package.json', import.meta.url));
 const backendRequire = createRequire(new URL('../../backend/package.json', import.meta.url));
 const React = require('react');
+const { QueryClient, QueryClientProvider } = require('@tanstack/react-query');
 const { act } = React;
 const { JSDOM } = require('jsdom');
 const revision = 'a'.repeat(64);
@@ -36,7 +37,7 @@ async function component(relative: string) {
       format: 'cjs',
       jsx: 'automatic',
       write: false,
-      external: ['react', 'react/jsx-runtime', 'react-dom'],
+      external: ['react', 'react/jsx-runtime', 'react-dom', '@tanstack/react-query'],
       plugins: [
          {
             name: 'source-access-fixtures',
@@ -50,6 +51,7 @@ async function component(relative: string) {
                   /[\\/]services[\\/]agentSourceAccess\.ts$/,
                   `
             export const useSourceAccess=()=>globalThis.__sourceAccessUi.query;
+            export const useSourceAccessHistory=()=>globalThis.__sourceAccessUi.history;
             export const useSourceAccessMutation=(id,kind)=>globalThis.__sourceAccessUi.mutations[kind];
             export const useRefreshSourceAccess=()=>globalThis.__sourceAccessUi.refresh;
             export const useCancelSourceAccess=()=>globalThis.__sourceAccessUi.cancel;
@@ -96,6 +98,7 @@ async function fixture(Component: any, initial: Record<string, unknown>, custom:
    const updates: any[] = [];
    const state = {
       query: { data: access(), isPending: false, isError: false },
+      history: { data: { requests: [], total: 0, pageSize: 10, cursor: 'synthetic-history-cursor' }, isPending: false, isFetching: false },
       modeSetup: {
          isPending: false,
          mutateAsync: async (payload: any) => {
@@ -160,11 +163,14 @@ async function fixture(Component: any, initial: Record<string, unknown>, custom:
       });
    const { createRoot } = require('react-dom/client');
    const root = createRoot(dom.window.document.getElementById('root'));
+   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
    let props: any = { onUpdate: (value: any) => updates.push(value), onDraftBlocked: (value: any) => updates.push({ blocked: value }), ...initial };
-   await act(async () => root.render(React.createElement(Component, props)));
+   const renderComponent = () =>
+      root.render(React.createElement(QueryClientProvider, { client: queryClient }, React.createElement(Component, props)));
+   await act(async () => renderComponent());
    const render = async (next: Record<string, unknown> = {}) => {
       props = { ...props, ...next };
-      await act(async () => root.render(React.createElement(Component, props)));
+      await act(async () => renderComponent());
    };
    const button = (label: string) =>
       [...dom.window.document.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent?.includes(label));
@@ -188,6 +194,7 @@ async function fixture(Component: any, initial: Record<string, unknown>, custom:
       text: () => dom.window.document.body.textContent || '',
       cleanup: async () => {
          await act(async () => root.unmount());
+         queryClient.clear();
          dom.window.close();
          for (const [key, descriptor] of previous) descriptor ? Object.defineProperty(globalThis, key, descriptor) : delete (globalThis as any)[key];
       },
@@ -412,6 +419,11 @@ test('pending-host validation shows canonical host command and never claims effe
    const ui = await fixture(SourceAccess, { deviceId: 'device-01', agentId: 'agent-01' }, { query: { data, isPending: false, isError: false } });
    try {
       assert.match(ui.text(), /Pending host approval/);
+      assert.doesNotMatch(ui.text(), /Pending paths cannot be backed up|source-access approve/);
+      const details = ui.dom.window.document.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
+      assert.ok(details, 'request details are collapsed by default');
+      await act(async () => details.click());
+      assert.equal(details.getAttribute('aria-expanded'), 'true');
       assert.match(ui.text(), /Pending paths cannot be backed up/);
       assert.match(ui.text(), /source-access approve/);
       assert.ok(ui.text().includes("--root '/srv/example-canonical'"));
@@ -821,6 +833,10 @@ test('Server-Managed outside-scope, unreadable and substituted canonical results
          await ui.render();
          assert.equal(ui.button('Apply validated paths')!.disabled, true);
          assert.equal(ui.submissions.length, 1);
+         const details = ui.dom.window.document.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
+         assert.ok(details, 'validation reason remains available in expanded audit details');
+         await act(async () => details.click());
+         assert.equal(details.getAttribute('aria-expanded'), 'true');
          if (code === 'source-outside-delegated-scope') assert.match(ui.text(), /Outside host-delegated scope/);
          if (code === 'source-root-not-readable') assert.match(ui.text(), /cannot read this directory/);
       } finally {
