@@ -176,6 +176,52 @@ execution deadline; a child exiting nonzero is not called a timeout based on its
 output. Build, startup, filesystem permission/space/IO and preservation failures
 have separate codes. No checks or rollback requirements are bypassed.
 
+### Full-tree provenance deadline
+
+`PROVENANCE` now has a dedicated **300-second** command deadline. Ordinary local
+commands keep their 30-second limit; the existing build deadline is unchanged.
+There is no operator/environment override or automatic retry. A deadline reports
+`PROVENANCE_TIMEOUT`; a verifier exiting nonzero reports `PROVENANCE_FAILED`
+(known command availability/permission errors retain their specific safe codes).
+Rollback retains the original failure category and still verifies the previous
+app, provenance and preserved state. Keep plans paused throughout this longer
+possible stopped-service interval and any rollback. Do not delete a hold or
+transaction to retry an uncertain failure.
+
+The exact installer `verified_tree_digest` implementation is unchanged. Existing
+`format=1` `.verified-install` metadata, record ordering, SHA-256, ownership,
+permissions, link validation and source/tree fields remain compatible. Updating
+only the app still requires hashing the entire private runtime/bin/app tree:
+the provenance covers all executable artifacts, not only the replacement files.
+
+Sourcing the installer loads definitions and path constants; the `BASH_SOURCE`
+guard prevents installer `main()` from running. Verification does two external
+`stat` calls per regular file/directory and a `sha256sum` per regular file.
+Each link additionally uses canonicalization and `readlink`. Work therefore
+depends on file count/process startup as well as bytes: enumeration is linear,
+sorting is O(n log n), and content hashing is O(bytes). A generic 30-second
+deadline is not a reliable budget for a many-file toolchain on a constrained host.
+No batching/algorithm rewrite was made to avoid changing the legacy digest.
+
+A disposable Debian/Node 22.18.0 Linux container reproduced this deadline failure
+using the actual Node executable, Corepack/npm and headers, padded to 193 MiB:
+4,097 files, 597 directories, one link and 13,488 per-entry external commands.
+The synthetic app has 88 modules; no installed Agent or private data is mounted.
+
+| CPU quota | Source definitions | Original 30-second scan | Dedicated-budget scans |
+| --- | --- | --- | --- |
+| 2 CPUs | 9 ms | Complete, 9.43 s | Complete, 9.65 / 10.00 s |
+| 0.25 CPU | 12 ms | Timeout, 30.03 s | Complete, 71.60 / 49.99 s |
+
+Every completed scan matches an independent rendering of the legacy digest
+records. The in-process reference, including hashing all bytes, took 226 ms and
+1,387 ms respectively; the repeated shell/process work dominates this controlled
+fixture. These are warm disposable-filesystem measurements, not production
+capacity measurements. The reported historical timeout establishes deadline
+exhaustion; production file counts, scheduling, storage latency and the exact
+contribution of each remain unmeasured. A five-minute budget gives finite
+headroom for the reproduced case, not a guarantee for every host.
+
 Backup operations now distinguish `COPY_APP` / `APP_BACKUP_COPY_FAILED`,
 `SYNC_APP` / `APP_BACKUP_SYNC_FAILED`, `COPY_PROTECTED_FILES` /
 `PROTECTED_BACKUP_COPY_FAILED`, and `SYNC_BACKUP` / `BACKUP_SYNC_FAILED`.
@@ -309,3 +355,34 @@ not reproduced in five isolated reruns or the final full upgrade harness. Its
 assertion remains strict, now with sanitized failure metadata; the original
 one-off cause is unresolved. Bash syntax/help/refusal checks and the final
 upgrade harness pass. These limits still require independent Linux validation.
+
+Provenance deadline follow-up: the upgrade harness passes **57/57 on Linux with
+no skips**, both at two CPUs and at a constrained 0.25 CPU. It tests the actual
+legacy shell verifier, large runtime/toolchain hashing, exact record/hash
+compatibility, unsafe modes/links/names, the original deadline, safe command
+failure categories, rollback from active/stopped service models and preservation
+of identity/configuration/policy/state. The real subprocess deadline tests use a
+shorter injected test clock; the production call's exact 300,000 ms option is
+asserted separately. The large benchmark has a stricter 120-second per-scan CI
+bound and emits only synthetic aggregate metrics. It is included in the existing
+`Agent upgrade safety` workflow without changing that workflow's permissions or
+required checks.
+
+Linux execution used an unprivileged disposable container, no network or ports,
+read-only allowlisted source, dropped capabilities and private temporary files;
+all test containers and temporary Linux files were removed. The immutable test
+image was `node@sha256:0d130e2ee18e88e1561375276daced6bff032539200173f2daf48c2e33f38ff5`.
+Windows transaction tests passed **50**, with **7 Linux-only skips**. An initial
+Windows sandbox refusal of test symlinks passed under the local test permission;
+assertions were unchanged. Agent TypeScript/typecheck/build passed. The additional
+Agent suite passed **117**, with **35 existing Phase 5 tool-fixture skips** because
+`PLUTON_PHASE5_TEST_TOOLS` was not configured. Its initial seven child-liveness
+failures disappeared when Docker's init process was enabled to reap orphaned test
+children; no Agent code or assertions were changed. Bash syntax/help/refusal,
+JavaScript syntax and diff checks passed.
+
+Hosted Linux CI for this final commit and real systemd/production upgrade were
+not run here. Publish manually, review the exact commit's Linux CI, then approve
+any controlled retry separately after normal pause/drain and read-only preflight.
+No production host, existing Agent, historical receipt, enrollment or policy was
+accessed or modified by this follow-up.

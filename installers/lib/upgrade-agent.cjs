@@ -18,6 +18,9 @@ const {
 const ID = /^[0-9]{14}-[a-f0-9]{12}-[a-f0-9]{12}$/;
 const ACTIVITY = "source-access-activity.json";
 const HOLD = ".upgrade-lock";
+// A complete private runtime/toolchain has thousands of entries. Keep the
+// installer's exact verifier, but give this full-tree scan its own finite budget.
+const PROVENANCE_TIMEOUT_MS = 5 * 60_000;
 const hash = (data) => crypto.createHash("sha256").update(data).digest("hex");
 const exists = (file) => {
   try {
@@ -821,6 +824,26 @@ function rollback(c, id) {
   return { id, phase: "rolled-back" };
 }
 
+function verifiedInstallDigest(run, snapshot, install) {
+  return run(
+    "/usr/bin/bash",
+    [
+      "-Eeuo",
+      "pipefail",
+      "-c",
+      'source "$1/installers/install-agent.sh"; verified_tree_digest "$2"',
+      "agent-integrity",
+      snapshot,
+      install,
+    ],
+    {
+      timeout: PROVENANCE_TIMEOUT_MS,
+      failureCode: "PROVENANCE_FAILED",
+      timeoutCode: "PROVENANCE_TIMEOUT",
+    },
+  );
+}
+
 function productionContext(repository) {
   requireSafe(
     process.platform === "linux" && process.getuid() === 0,
@@ -1219,15 +1242,7 @@ function productionContext(repository) {
   };
   c.writeProvenance = (id) => {
     const snapshot = path.join(c.backups, id, "build/source");
-    const digest = run("/usr/bin/bash", [
-      "-Eeuo",
-      "pipefail",
-      "-c",
-      'source "$1/installers/install-agent.sh"; verified_tree_digest "$2"',
-      "agent-integrity",
-      snapshot,
-      c.install,
-    ]);
+    const digest = verifiedInstallDigest(run, snapshot, c.install);
     const sourceHash = fs
       .readFileSync(path.join(c.backups, id, "build/source.sha256"), "utf8")
       .trim();
@@ -1310,6 +1325,7 @@ module.exports = {
   syncDirectory,
   syncFile,
   syncTree,
+  verifiedInstallDigest,
   productionContext,
   validateService,
   validateDisk,
