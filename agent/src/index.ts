@@ -63,7 +63,7 @@ function usage(): void {
     "       pluton-agent check [--server <url>] [--data-dir <dir>] (heartbeat only; no command execution)",
   );
   console.log(
-    "       pluton-agent preflight --source <absolute-path> --allowed-roots <comma-separated-paths> [--scan] (local, read-only; run as pluton-agent)",
+    "       pluton-agent preflight --source <absolute-path> --allowed-roots <comma-separated-paths> [--scan] [--exclude <relative-pattern> ...] (local, read-only; run as pluton-agent)",
   );
   console.log(
     "       pluton-agent source-access <approve|revoke|recover-selection|delegate|host-approved> --config-file /etc/pluton-agent.env --agent-id <id> --expected-host-policy-revision <sha256> [--root <canonical-directory> ... | --request-id <id>] [--confirm-drained] [--confirm-delegation] (explicit local host operator only)",
@@ -211,6 +211,9 @@ async function main(): Promise<void> {
     try {
       const result = await preflightSource(source, roots, {
         scan: args.includes("--scan"),
+        exclusions: args.flatMap((value, index) =>
+          value === "--exclude" ? [args[index + 1]] : [],
+        ),
       });
       console.log(
         JSON.stringify({

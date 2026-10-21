@@ -49,6 +49,7 @@ export interface AgentInfo {
    resticVersion: string | null;
    rcloneVersion: string | null;
    capabilities: {
+      backupExclusionsVersion?: 1;
       filesystemRootsConfigured?: boolean;
       sourceAccessVersion?: 1;
       sourceAccessModesVersion?: 1;

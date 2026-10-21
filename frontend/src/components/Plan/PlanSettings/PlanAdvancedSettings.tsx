@@ -13,6 +13,7 @@ import { Device } from '../../../@types/devices';
 import PlanRemoteLifecycleSettings from './PlanRemoteLifecycleSettings';
 import RecoverySettings from '../RecoveryTesting/RecoverySettings';
 import ManagedPlanNotifications from './ManagedPlanNotifications';
+import PlanBackupExclusions from './PlanBackupExclusions';
 
 interface PlanAdvancedSettingsProps {
    plan: NewPlanSettings;
@@ -127,13 +128,16 @@ const PlanAdvancedSettings = ({
                />
             )}
             {advancedTab === 'General' && (
-               <PlanGeneralSettings
-                  settings={settings}
-                  onUpdate={(newSettings) => onUpdate({ ...plan, settings: newSettings })}
-                  isEditing={isEditing}
-                  runSettings={runSettings}
-                  setRunSettings={setRunSettings}
-               />
+               <>
+                  {remoteLifecycle && plan.method === 'backup' && <PlanBackupExclusions plan={plan} device={device} onUpdate={onUpdate} />}
+                  <PlanGeneralSettings
+                     settings={settings}
+                     onUpdate={(newSettings) => onUpdate({ ...plan, settings: newSettings })}
+                     isEditing={isEditing}
+                     runSettings={runSettings}
+                     setRunSettings={setRunSettings}
+                  />
+               </>
             )}
             {advancedTab === 'Notification' && (
                <>

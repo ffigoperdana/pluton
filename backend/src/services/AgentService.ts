@@ -40,9 +40,19 @@ const inventorySchema = z
 		sourceAccess: sourceAccessReportSchema.optional(),
 		capabilities: z
 			.object({
+				backupExclusionsVersion: z.literal(1).optional(),
 				filesystemRootsConfigured: z.boolean(),
 				commandTypes: z
-					.array(z.enum(['PING', 'INVENTORY_REFRESH', 'BACKUP_FILESYSTEM', 'SOURCE_ACCESS_VALIDATE', 'SOURCE_ACCESS_APPLY', 'SOURCE_ACCESS_MODE_SETUP']))
+					.array(
+						z.enum([
+							'PING',
+							'INVENTORY_REFRESH',
+							'BACKUP_FILESYSTEM',
+							'SOURCE_ACCESS_VALIDATE',
+							'SOURCE_ACCESS_APPLY',
+							'SOURCE_ACCESS_MODE_SETUP',
+						])
+					)
 					.min(1)
 					.max(6),
 				backupLifecycleVersion: z.union([z.literal(1), z.literal(2)]).optional(),
@@ -389,11 +399,20 @@ export class AgentService {
 		}
 	}
 
-	async heartbeat(agentId: string, input: unknown, signedTimestamp = this.now().getTime()): Promise<AgentPublic> {
+	async heartbeat(
+		agentId: string,
+		input: unknown,
+		signedTimestamp = this.now().getTime()
+	): Promise<AgentPublic> {
 		const inventory = this.parseInventory(input);
 		const updated = await this.agentStore.updateHeartbeat(agentId, inventory);
 		if (!updated) throw new AppError(401, 'Agent authentication failed.');
-		if (inventory.sourceAccess) await this.sourceAccessService?.recordHeartbeat(agentId, inventory.sourceAccess, signedTimestamp);
+		if (inventory.sourceAccess)
+			await this.sourceAccessService?.recordHeartbeat(
+				agentId,
+				inventory.sourceAccess,
+				signedTimestamp
+			);
 		return this.toPublic(updated);
 	}
 
@@ -414,9 +433,15 @@ export class AgentService {
 			this.now()
 		);
 		if (!command) return { command: null };
-		if (command.type === 'SOURCE_ACCESS_VALIDATE' || command.type === 'SOURCE_ACCESS_APPLY' || command.type === 'SOURCE_ACCESS_MODE_SETUP') {
-			if (!this.sourceAccessService) throw new AppError(503, 'Source Access service is unavailable.');
-			if (!await this.sourceAccessService.markDelivered(agent.agentId, command.id)) return { command: null };
+		if (
+			command.type === 'SOURCE_ACCESS_VALIDATE' ||
+			command.type === 'SOURCE_ACCESS_APPLY' ||
+			command.type === 'SOURCE_ACCESS_MODE_SETUP'
+		) {
+			if (!this.sourceAccessService)
+				throw new AppError(503, 'Source Access service is unavailable.');
+			if (!(await this.sourceAccessService.markDelivered(agent.agentId, command.id)))
+				return { command: null };
 		}
 		let payload = command.payload;
 		if (command.type === 'BACKUP_FILESYSTEM') {
@@ -546,10 +571,22 @@ export class AgentService {
 			);
 	}
 
-	async complete(agentId: string, commandId: string, input: unknown, signedTimestamp = this.now().getTime()): Promise<void> {
-		const existing = this.sourceAccessService ? await this.agentStore.getCommandForAgent(agentId, commandId) : null;
-		if (existing?.type === 'SOURCE_ACCESS_VALIDATE' || existing?.type === 'SOURCE_ACCESS_APPLY' || existing?.type === 'SOURCE_ACCESS_MODE_SETUP') {
-			if (!this.sourceAccessService) throw new AppError(503, 'Source Access service is unavailable.');
+	async complete(
+		agentId: string,
+		commandId: string,
+		input: unknown,
+		signedTimestamp = this.now().getTime()
+	): Promise<void> {
+		const existing = this.sourceAccessService
+			? await this.agentStore.getCommandForAgent(agentId, commandId)
+			: null;
+		if (
+			existing?.type === 'SOURCE_ACCESS_VALIDATE' ||
+			existing?.type === 'SOURCE_ACCESS_APPLY' ||
+			existing?.type === 'SOURCE_ACCESS_MODE_SETUP'
+		) {
+			if (!this.sourceAccessService)
+				throw new AppError(503, 'Source Access service is unavailable.');
 			await this.sourceAccessService.complete(agentId, commandId, input, signedTimestamp);
 			return;
 		}

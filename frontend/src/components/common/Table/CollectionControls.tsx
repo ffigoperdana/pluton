@@ -52,6 +52,7 @@ export function CollectionPagination({
    onPage,
    onSize,
    busy = false,
+   pageSizes = COLLECTION_PAGE_SIZES,
 }: {
    label: string;
    page: number;
@@ -63,6 +64,7 @@ export function CollectionPagination({
    onPage: (page: number) => void;
    onSize: (size: CollectionPageSize) => void;
    busy?: boolean;
+   pageSizes?: readonly CollectionPageSize[];
 }) {
    return (
       <nav className={paginationClasses.pagination} aria-label={`${label} pagination`} aria-busy={busy}>
@@ -71,7 +73,7 @@ export function CollectionPagination({
             <label>
                {label} per page
                <select disabled={busy} value={pageSize} onChange={(event) => onSize(Number(event.target.value) as CollectionPageSize)}>
-                  {COLLECTION_PAGE_SIZES.map((size) => (
+                  {pageSizes.map((size) => (
                      <option key={size} value={size}>
                         {size}
                      </option>

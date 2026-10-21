@@ -12,6 +12,7 @@ import { planIntervalName } from '../../../utils/plans';
 import PlanHistory from '../PlanHistory/PlanHistory';
 import PlanStorageInfo from '../PlanStorageInfo/PlanStorageInfo';
 import { planReportedSize, statisticHelp } from '../../../utils/backupStatistics';
+import { planDatabaseSummary } from '../../../utils/planDatabase';
 
 interface PlanItemProps {
    plan: Plan;
@@ -54,6 +55,7 @@ const PlanItem = ({ plan, layout = 'list' }: PlanItemProps) => {
    const isSync = method === 'sync';
    const remoteManaged = plan.sourceType === 'device' && plan.sourceId !== 'main' && method === 'backup';
    const displayedSize = planReportedSize(plan);
+   const database = planDatabaseSummary(settings);
    const changeStatus = () => {
       if (inProgress || shouldBeInaccessible) {
          return;
@@ -124,6 +126,15 @@ const PlanItem = ({ plan, layout = 'list' }: PlanItemProps) => {
                <NavLink to={`/plan/${id}`}>
                   <div className={classes.title}>
                      <h4>{title}</h4>
+                     {database.count > 0 && (
+                        <span
+                           className={classes.databaseIndicator}
+                           title="Database backup configured; snapshot contents and recovery status are reported separately."
+                        >
+                           <Icon type="database" size={12} />
+                           {database.card}
+                        </span>
+                     )}
                      {description && (
                         <i
                            className={classes.planDescription}

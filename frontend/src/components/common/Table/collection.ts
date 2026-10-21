@@ -1,5 +1,6 @@
 export const COLLECTION_PAGE_SIZES = [10, 25, 50] as const;
-export type CollectionPageSize = (typeof COLLECTION_PAGE_SIZES)[number];
+export const PLAN_PAGE_SIZES = [9, 18, 27] as const;
+export type CollectionPageSize = (typeof COLLECTION_PAGE_SIZES)[number] | (typeof PLAN_PAGE_SIZES)[number];
 
 /** Configuration lists are already returned by their existing APIs; never fetch extra pages here. */
 export function collectionPage<T>(rows: readonly T[], requestedPage: number, pageSize: CollectionPageSize) {

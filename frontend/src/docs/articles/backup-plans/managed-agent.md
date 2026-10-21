@@ -28,6 +28,51 @@ Tambahkan [SFTP](/docs/storage/sftp) pada **Storages**. Agent dan server perlu m
 
 Source harus tetap berada dalam allowed roots setelah symlink diselesaikan. Source, mesin, serta destination yang sudah dipilih tidak dapat dipindahkan lewat edit biasa sebagai cara memigrasi repository.
 
+## Backup Exclusions
+
+Pada **Edit → Advanced → General → Backup Exclusions**, isi satu pola relatif per
+baris. Field ini tersedia juga saat membuat plan; edit tidak membuat repository
+atau plan baru. Perlu server yang mendukung exclusions dan Agent 0.7.0 dengan
+capability `backupExclusionsVersion: 1`. Server menolak Agent lama bila pola diisi;
+plan dengan exclusions kosong tetap memakai perilaku sebelumnya.
+
+Contoh yang perlu disesuaikan dengan data yang benar-benar ingin dipulihkan:
+
+```text
+.git/
+node_modules/
+.cache/
+**/cache/
+*.tmp
+```
+
+Nama tunggal cocok di semua kedalaman. Pola berisi `/` dimulai dari source;
+`*/cache/` hanya satu tingkat, sedangkan `**/cache/` juga mencakup cache pada root
+source. `*` dan `?` tidak melewati `/`; `**` harus satu komponen utuh. Huruf,
+angka, spasi, titik, `_`, `+` dan `-` didukung. Trailing `/` diabaikan, sehingga
+pola nama juga dapat mengecualikan file atau symlink dengan nama yang sama.
+Maksimum satu komponen recursive `**` ditambah akhiran `/**` opsional;
+`**/dir/**/cache` ditolak. `.cache` berbeda dari `cache`. Jangan menyalin semua pengecualian sistem lama
+tanpa menilai data yang dibutuhkan untuk pemulihan.
+
+Path absolut, traversal, negasi `!`, character class `[ab]`, shell syntax dan
+backslash ditolak. Maksimum 100 pola, 512 karakter per pola dan 16.384 unit teks
+total. Semua pola dibatasi ke source canonical. Dump SQL dan metadata yang
+dihasilkan **Database & Hooks** pada workspace terpisah tidak ikut dikecualikan;
+file SQL yang sudah berada di source tetap mengikuti pola source.
+
+Data yang dikecualikan tidak ada dalam snapshot pemulihan baru. Snapshot lama
+tidak dihapus. Direktori yang dikecualikan tidak perlu dibuka; file terpilih yang
+tidak terbaca tetap membuat backup gagal. Exclusions tidak memberi izin baru,
+tidak mengikuti target nested symlink, dan tidak mengubah private-path guards.
+Jika source atau exclusions berubah setelah job diantrekan, jalankan backup baru
+sesuai pesan penolakan. Jangan melewati error dengan mengubah permission aplikasi.
+
+Pada daftar plan, default pagination sekarang 9, dengan pilihan 18/27. Label
+`DB · MariaDB` berarti database **dikonfigurasi**, bukan bukti dump masuk snapshot
+atau recovery lulus. Detail plan menunjukkan engine/jumlah konfigurasi; periksa
+artifact snapshot dan hasil recovery secara terpisah.
+
 ## Salinan S3 opsional
 
 Anda dapat menambahkan 0, 1, atau 2 replika melalui **Enable Replication** dan **+ Add Replication Destination**. Pilih **AWS S3** atau **S3 Compatible Storage**, lalu gunakan prefix khusus pada bucket yang sudah tersedia. UI menampilkan awalan bucket bila ada; isi hanya subfolder pada field sisanya.

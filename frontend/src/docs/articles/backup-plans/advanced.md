@@ -6,6 +6,13 @@ Sebelum mengubah lifecycle database atau hook, tunggu backup aktif selesai. Peru
 
 ## Mode berbeda
 
+Untuk Managed Agent, **General → Backup Exclusions** menerima pola relatif per
+baris. Baca [sintaks dan batasannya](/docs/backup-plans/managed-agent#backup-exclusions)
+sebelum menyimpan: data yang dikecualikan tidak tersedia pada snapshot pemulihan
+baru. Server dan Agent harus mendukung capability exclusions; kosongkan field
+jika memang tidak membutuhkan pengecualian, bukan untuk menutupi file terpilih
+yang gagal dibaca.
+
 1. Buka plan dan klik **Edit**.
 2. Pilih **Advanced**. Pada layar kecil, pilih bagian yang sama melalui dropdown.
 3. Tinjau **General**, **Performance**, **Notification**, dan **Misc.**.
