@@ -4,6 +4,7 @@ import authM from '../middlewares/authMiddleware';
 
 export function createPlanRouter(controller: PlanController, router: Router = Router()): Router {
 	router.get('/', authM, controller.getPlans.bind(controller));
+	router.get('/schedule-preview', authM, controller.previewSchedule.bind(controller));
 	router.get('/:id', authM, controller.getPlan.bind(controller));
 	router.get('/:id/backups', authM, controller.getBackupHistory.bind(controller));
 	router.post('/', authM, controller.createPlan.bind(controller));

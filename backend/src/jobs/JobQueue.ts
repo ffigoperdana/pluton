@@ -75,6 +75,11 @@ class JobQueue {
 	/**
 	 * Whether a job of this name is queued or currently running.
 	 */
+	public hasPendingForPlan(jobName: string, planId: string): boolean {
+		return (this.runningJob?.name === jobName && this.runningJob.payload?.planId === planId) ||
+			this.queue.some(job => job.name === jobName && job.payload?.planId === planId);
+	}
+
 	public hasPending(jobName: string): boolean {
 		return this.runningJob?.name === jobName || this.queue.some(job => job.name === jobName);
 	}

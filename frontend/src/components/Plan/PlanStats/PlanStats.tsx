@@ -10,6 +10,7 @@ import classes from './PlanStats.module.scss';
 import PlanStorageInfo from '../PlanStorageInfo/PlanStorageInfo';
 import { formatBytes, formatNumberToK } from '../../../utils/helpers';
 import { statisticHelp, backupStatistics } from '../../../utils/backupStatistics';
+import { PlanScheduleSummary } from '../PlanSettings/PlanScheduleField';
 
 interface PlanStatsProps {
    plan: Plan;
@@ -57,6 +58,7 @@ const PlanStats = ({ plan, isSync, lastBackupItem, storageAction }: PlanStatsPro
             <div className={classes.widgetTitle}>
                <Icon type={getBackupIconName(plan.method, plan.sourceType)} size={12} /> {isSync ? 'Sync source' : 'Backup source'}
             </div>
+            <PlanScheduleSummary interval={interval} active={isActive} />
             <div className={classes.sourceContent}>
                <div data-tooltip-id="htmlToolTip" data-tooltip-place="top" data-tooltip-html={sourceTooltipHTML(sourceConfig)}>
                   {isStorageSource ? <StorageIcon type={sourceStorage?.type} size={18} /> : <Icon type="folders" size={18} />}

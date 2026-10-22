@@ -2,6 +2,8 @@ import { Cron } from 'croner';
 import path from 'path';
 import { mkdir, writeFile, readFile } from 'fs/promises';
 import { appPaths } from '../utils/AppPaths';
+import { scheduleTimeZone } from '../utils/planSchedule';
+import { cronLogger } from '../utils/logger';
 
 interface ScheduleOptions {
 	isActive: boolean;
@@ -31,6 +33,8 @@ export class CronManager<T extends ScheduleOptions> {
 	// Make this property static and private
 	private static instance: CronManager<any>;
 	private schedules: Map<string, ScheduleEntry<T>[]> = new Map();
+	private readonly dispatching = new Set<string>();
+	private readonly loadedHolds = new Set<string>();
 	private initialized: Promise<void>;
 	private taskCallbacks: TaskCallbacks;
 	private readonly SCHEDULE_FILE: string;
@@ -84,12 +88,7 @@ export class CronManager<T extends ScheduleOptions> {
 					entry.cron.stop();
 					const patchedOptions = { ...entry.options, taskCallback: cb } as T;
 					const cronExpression = entry.cronExpression;
-					const newCron = new Cron(cronExpression, () => {
-						(patchedOptions as any).taskCallback(id, patchedOptions);
-					});
-					if (!patchedOptions.isActive) {
-						newCron.pause();
-					}
+					const newCron = this.createCron(id, entry.type, cronExpression, patchedOptions);
 					patched.push({
 						type: entry.type,
 						cron: newCron,
@@ -102,6 +101,39 @@ export class CronManager<T extends ScheduleOptions> {
 			}
 			this.schedules.set(id, patched);
 		}
+	}
+
+	private createCron(id: string, type: string, expression: string, options: T): Cron {
+		const key = JSON.stringify([id, type]);
+		const timeZone = scheduleTimeZone(options.timeZone ?? options.settings?.interval?.timeZone);
+		const cron = new Cron(expression, {
+			timezone: timeZone,
+			protect: true,
+			paused: options.isActive === false || this.loadedHolds.has(key),
+		}, async () => {
+			if (this.loadedHolds.has(key) || options.isActive === false || this.dispatching.has(key)) return;
+			this.dispatching.add(key);
+			try {
+				await options.taskCallback?.(id, options);
+			} catch {
+				// Never log credentials, provider output or cached options.
+				cronLogger.error({ scheduleType: type, planId: id }, 'Scheduled dispatch failed; inspect plan history and Agent status.');
+			} finally {
+				this.dispatching.delete(key);
+			}
+		});
+		if (options.isActive === false || this.loadedHolds.has(key)) cron.pause();
+		return cron;
+	}
+
+	/** Release only after this cached plan was reconciled against authoritative DB state. */
+	async activateLoadedSchedule(id: string, type: string): Promise<void> {
+		await this.initialized;
+		const key = JSON.stringify([id, type]);
+		if (!this.loadedHolds.has(key)) return;
+		const entry = this.schedules.get(id)?.find(schedule => schedule.type === type);
+		this.loadedHolds.delete(key);
+		if (entry && entry.options.isActive !== false && typeof entry.options.taskCallback === 'function') entry.cron.resume();
 	}
 
 	private async saveSchedules(): Promise<void> {
@@ -139,6 +171,9 @@ export class CronManager<T extends ScheduleOptions> {
 					taskCallback: this.taskCallbacks[scheduleType],
 				};
 
+				// Hold cached backups until DB/startup recovery authorizes each plan.
+				if (scheduleType === 'backup' || scheduleType === 'remote-backup')
+					this.loadedHolds.add(JSON.stringify([id, scheduleType]));
 				await this.scheduleTask(id, cronExpression, taskOptions, scheduleType);
 			}
 		} catch (error: any) {
@@ -166,21 +201,7 @@ export class CronManager<T extends ScheduleOptions> {
 		}
 
 		try {
-			const cron = new Cron(cronExpression, () => {
-				if (
-					options &&
-					typeof options === 'object' &&
-					'taskCallback' in options &&
-					(options as any).taskCallback
-				) {
-					(options as any).taskCallback(id, options);
-				}
-			});
-
-			if (options && typeof options === 'object' && 'isActive' in options && !options.isActive) {
-				cron.pause();
-			}
-
+			const cron = this.createCron(id, scheduleType, cronExpression, options);
 			existingSchedules.push({ type: scheduleType, cron, cronExpression, options });
 			this.schedules.set(id, existingSchedules);
 			await this.saveSchedules();
@@ -201,22 +222,9 @@ export class CronManager<T extends ScheduleOptions> {
 			const scheduleToUpdate = existingSchedules.find(s => s.type === scheduleType);
 			if (scheduleToUpdate) {
 				try {
+					// Validate before retiring the existing valid timer.
+					const newCron = this.createCron(id, scheduleType, cronExpression, options);
 					scheduleToUpdate.cron.stop();
-					const newCron = new Cron(cronExpression, () => {
-						if (options && typeof options === 'object' && 'taskCallback' in options) {
-							(options as any).taskCallback(id, options);
-						}
-					});
-
-					if (
-						options &&
-						typeof options === 'object' &&
-						'isActive' in options &&
-						!options.isActive
-					) {
-						newCron.pause();
-					}
-
 					const updatedSchedules = existingSchedules.map(s =>
 						s.type === scheduleType
 							? { type: scheduleType, cron: newCron, cronExpression, options }

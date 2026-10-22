@@ -37,7 +37,7 @@ describe('CronManager', () => {
 		(CronManager as any).instance = undefined;
 
 		// Mock the Cron constructor to intercept its creation
-		(Cron as jest.Mock).mockImplementation((expression, callback) => {
+		(Cron as jest.Mock).mockImplementation((expression, options, callback) => {
 			const mockCron: jest.Mocked<Cron> = {
 				stop: jest.fn(),
 				pause: jest.fn().mockReturnValue(true),
@@ -104,8 +104,8 @@ describe('CronManager', () => {
 
 			// Assert: Verify that Cron was called for each loaded schedule
 			expect(Cron).toHaveBeenCalledTimes(2);
-			expect(Cron).toHaveBeenCalledWith('* * * * *', expect.any(Function));
-			expect(Cron).toHaveBeenCalledWith('0 0 * * *', expect.any(Function));
+			expect(Cron).toHaveBeenCalledWith('* * * * *', expect.objectContaining({ timezone: expect.any(String), protect: true }), expect.any(Function));
+			expect(Cron).toHaveBeenCalledWith('0 0 * * *', expect.objectContaining({ timezone: expect.any(String), protect: true }), expect.any(Function));
 
 			const schedules = await newCronManager.getSchedules();
 			expect(schedules.has('plan-1')).toBe(true);
@@ -153,7 +153,7 @@ describe('CronManager', () => {
 			await cronManager.scheduleTask(planId, cronExpression, options, 'backup');
 
 			// Assert: A new Cron job was created
-			expect(Cron).toHaveBeenCalledWith(cronExpression, expect.any(Function));
+			expect(Cron).toHaveBeenCalledWith(cronExpression, expect.objectContaining({ timezone: expect.any(String), protect: true }), expect.any(Function));
 
 			// Assert: The new schedule was saved to the file
 			expect(fs.writeFile).toHaveBeenCalledTimes(1);
@@ -221,7 +221,7 @@ describe('CronManager', () => {
 			// Assert
 			expect(oldCronInstance.stop).toHaveBeenCalledTimes(1); // Old job was stopped
 			expect(Cron).toHaveBeenCalledTimes(2); // Called for create and update
-			expect(Cron).toHaveBeenLastCalledWith(newExpression, expect.any(Function));
+			expect(Cron).toHaveBeenLastCalledWith(newExpression, expect.objectContaining({ timezone: expect.any(String), protect: true }), expect.any(Function));
 
 			// Assert the file was updated correctly
 			const savedData = JSON.parse((fs.writeFile as jest.Mock).mock.calls[1][1]);

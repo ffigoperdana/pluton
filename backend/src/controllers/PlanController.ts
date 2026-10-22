@@ -4,9 +4,28 @@ import { BackupRunConfig } from '../types/backups';
 import { PlanService } from '../services/PlanService';
 import { AppError } from '../utils/AppError';
 import { RetainedRestoreDependencyError } from '../utils/retainedRestoreDependency';
+import { previewPlanSchedule } from '../utils/planSchedule';
+import type { PlanInterval } from '../types/plans';
 
 export class PlanController {
 	constructor(protected planService: PlanService) {}
+
+	async previewSchedule(req: Request, res: Response): Promise<void> {
+		res.setHeader('Cache-Control', 'private, no-store');
+		try {
+			if (typeof req.query.interval !== 'string' || req.query.interval.length > 2048)
+				throw new AppError(400, 'A bounded schedule interval is required.');
+			let interval: PlanInterval;
+			try { interval = JSON.parse(req.query.interval); }
+			catch { throw new AppError(400, 'Invalid schedule interval.'); }
+			res.status(200).json({ success: true, result: previewPlanSchedule(interval) });
+		} catch (error) {
+			res.status(error instanceof AppError ? error.statusCode : 500).json({
+				success: false,
+				error: error instanceof AppError ? error.message : 'Could not calculate the schedule.',
+			});
+		}
+	}
 
 	async getPlans(req: Request, res: Response): Promise<void> {
 		try {

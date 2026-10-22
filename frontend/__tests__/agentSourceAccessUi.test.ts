@@ -68,6 +68,9 @@ async function component(relative: string) {
          `,
                );
                load(/[\\/]services[\\/]storage\.ts$/, 'export const useGetStorages=()=>({data:{result:[]}});');
+               // Source Access tests do not contact the schedule-preview API.
+               // Its real query/editor integration is covered by planScheduleUi.test.ts.
+               load(/[\\/]services[\\/]plans\.ts$/, 'export const useSchedulePreview=()=>({isPending:true});');
                load(/[\\/]services[\\/]settings\.ts$/, 'export const useGetSettings=()=>({data:{result:{settings:{}}}});');
                load(/[\\/]utils[\\/]plans\.ts$/, 'export const isPlanSettingsValid=()=>true;');
                load(/[\\/]PlanAdvancedSettings\.tsx$/, 'export default ()=>null;');

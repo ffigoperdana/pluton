@@ -50,6 +50,7 @@ export type PlanNotification = {
 };
 
 export type PlanInterval = {
+   timeZone?: string;
    type: 'hourly' | 'daily' | 'weekly' | 'monthly' | 'days' | 'hours' | 'minutes';
    minutes?: number;
    hours?: string;

@@ -12,7 +12,11 @@ Sebelum mengubah kebijakan, pastikan setidaknya satu snapshot telah diperiksa da
 4. Simpan lewat **Update Plan**; pada form baru, lanjutkan ke **Advanced** sebelum **Create Plan**.
 5. Periksa backup terjadwal berikutnya pada tab **Backups**, termasuk waktu mulai, status akhir, dan source yang digunakan.
 
-Jadwal direkonsiliasi dari data plan saat startup. Perhatikan waktu dan timezone server. Mengubah timezone tampilan riwayat hanya mengubah cara tanggal/filter dibaca; itu tidak mengubah jadwal backup.
+Plan baru memakai timezone **Asia/Jakarta (WIB)** secara eksplisit. Pilih timezone di editor dan periksa **Next scheduled time** dari server sebelum menyimpan. Daily **04:00 WIB** berarti **21:00 UTC pada hari kalender sebelumnya**. UTC tetap dipakai untuk timestamp internal; timezone container tidak perlu diubah.
+
+Plan lama tanpa timezone tetap mengikuti waktu server yang sebelumnya digunakan. Pada server UTC, Daily **04:00** berarti **11:00 WIB**. Membuka editor tidak mengubahnya. Pilih Asia/Jakarta dan simpan hanya setelah perubahan waktu tersebut disetujui; memilih UTC mempertahankan jam UTC secara eksplisit. Jangan mengubah semua plan lama sekaligus tanpa meninjau jadwalnya.
+
+Jadwal direkonsiliasi dari data plan saat startup sebelum timer backup dari cache diaktifkan. Eksekusi yang terlewat saat layanan mati tidak diputar ulang otomatis. Preview adalah slot kalender berikutnya, bukan bukti bahwa antrean atau Agent sehat. Antrean sibuk dapat menunda pekerjaan; Agent offline atau izin source yang ditolak dapat menggagalkan dispatch. Periksa riwayat dan status Agent. Mengubah timezone tampilan riwayat hanya mengubah cara tanggal/filter dibaca; itu tidak mengubah jadwal backup.
 
 Gunakan **Pause** untuk menghentikan jadwal sementara dan **Resume** untuk mengaktifkannya kembali. Pause tidak menghapus snapshot dan bukan tombol untuk membatalkan backup aktif. UI menolak pause ketika backup sedang berjalan. Tunggu status akhir sebelum pemeliharaan atau perubahan yang memerlukan keadaan idle.
 

@@ -4,6 +4,7 @@ import { StorageStore } from '../stores/StorageStore';
 import { Plan, NewPlan } from '../db/schema/plans';
 import { BackupPlanArgs } from '../types/plans';
 import { intervalToCron } from '../utils/intervalToCron';
+import { scheduleTimeZone } from '../utils/planSchedule';
 import { NotFoundError } from '../utils/AppError';
 
 /**
@@ -36,9 +37,23 @@ export class ScheduleReconciler {
 
 		let schedulesAdded = 0;
 		for (const [planId, plan] of dbPlanMap) {
-			if (scheduledIds.has(planId)) continue;
-
 			try {
+				const existing = schedulesMap.get(planId)?.find(entry => entry.type === 'backup');
+				// Preserve scheduler-owned sync/integrity kinds; do not create a second workflow.
+				if (scheduledIds.has(planId) && !existing) continue;
+				if (existing) {
+					const interval = plan.settings?.interval;
+					if (!interval) continue;
+					if (existing.cronExpression !== intervalToCron(interval) ||
+						scheduleTimeZone('settings' in existing.options ? existing.options.settings?.interval?.timeZone : undefined) !== scheduleTimeZone(interval.timeZone) ||
+						existing.options.isActive !== plan.isActive) {
+						const options = await this.buildReconciliationScheduleOptions(planId, plan);
+						if (!options) continue;
+						await this.localAgent.createOrUpdateSchedules(planId, options, 'update');
+					}
+					await this.localAgent.cronManager.activateLoadedSchedule(planId, 'backup');
+					continue;
+				}
 				if (await this.reconcileMissingSchedule(planId, plan)) {
 					schedulesAdded++;
 				}

@@ -6,6 +6,24 @@ import { NewPlanSettings, Plan, PlanAddRunSettings, PlanNotification } from '../
 import { historyApiQuery } from '../utils/backupHistory';
 import type { HistoryPage, HistoryState } from '../utils/backupHistory';
 import { hasPendingMirrors } from '../utils/replication';
+import type { PlanInterval } from '../@types/plans';
+import type { SchedulePreview } from '../utils/planSchedule';
+
+export function useSchedulePreview(interval: PlanInterval) {
+   return useQuery({
+      queryKey: ['schedule-preview', interval],
+      queryFn: async ({ signal }): Promise<SchedulePreview> => {
+         const params = new URLSearchParams({ interval: JSON.stringify(interval) });
+         const response = await fetch(`${API_URL}/plans/schedule-preview?${params}`, { credentials: 'include', signal });
+         const data = await response.json();
+         if (!response.ok || !data.success) throw new Error('Could not calculate the schedule.');
+         return data.result;
+      },
+      retry: false,
+      staleTime: 30000,
+      refetchInterval: 60000,
+   });
+}
 
 type BackupRunConfig = {
    skipDryRun?: boolean;
