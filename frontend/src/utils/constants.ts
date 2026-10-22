@@ -15,7 +15,7 @@ export const DEFAULT_PLAN_SETTINGS: NewPlanSettings = {
    storage: { id: 's89hibdias67', name: '' },
    storagePath: '',
    settings: {
-      interval: { type: 'daily', time: '10:00AM', days: '', hours: '', minutes: 5 },
+      interval: { type: 'daily', time: '10:00AM', days: '', hours: '', minutes: 5, timeZone: 'Asia/Jakarta' },
       compression: true,
       encryption: true,
       retries: 5,

@@ -144,6 +144,7 @@ const convertDaysToDates = (days: string): string => {
 		tue: 2,
 		wed: 3,
 		thu: 4,
+		thur: 4, // Historical editor spelling; preserve its intended Thursday.
 		fri: 5,
 		sat: 6,
 	};

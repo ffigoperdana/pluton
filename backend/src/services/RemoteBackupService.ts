@@ -13,6 +13,7 @@ import { StorageStore } from '../stores/StorageStore';
 import { CronManager } from '../managers/CronManager';
 import { BackupEventService } from './events/BackupEventService';
 import { intervalToCron } from '../utils/intervalToCron';
+import { scheduleTimeZone } from '../utils/planSchedule';
 import { AppError, NotFoundError } from '../utils/AppError';
 import { generateUID } from '../utils/helpers';
 import type { PlanAddRunSettings, PlanSource } from '../types/plans';
@@ -681,14 +682,18 @@ export class RemoteBackupService {
 	private async queueScheduledBackup(planId: string): Promise<void> {
 		try {
 			await this.queuePlanBackup(planId);
-		} catch {
-			// A later schedule run can retry; detailed source/provider diagnostics are not logged.
+		} catch (error) {
+			serverLogger.warn({
+				schedulerEvent: 'remote_backup_not_queued', planId,
+				status: error instanceof AppError ? error.statusCode : 500,
+			}, 'Scheduled remote backup was not queued; inspect Agent status and plan history.');
 		}
 	}
 
 	private async ensureSchedule(plan: Plan): Promise<void> {
 		const cronExpression = intervalToCron(plan.settings.interval);
 		const options = {
+			timeZone: scheduleTimeZone(plan.settings.interval.timeZone),
 			isActive: plan.isActive,
 			taskCallback: async (planId: string) => this.queueScheduledBackup(planId),
 		};
@@ -698,6 +703,7 @@ export class RemoteBackupService {
 		} else {
 			await this.cronManager.scheduleTask(plan.id, cronExpression, options, 'remote-backup');
 		}
+		await this.cronManager.activateLoadedSchedule(plan.id, 'remote-backup');
 	}
 
 	private async assertSupportedPlan(

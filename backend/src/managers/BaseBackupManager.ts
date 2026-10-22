@@ -134,7 +134,7 @@ export class BaseBackupManager extends EventEmitter {
 	}
 
 	async queueBackup(planId: string, options: Record<string, any>): Promise<any> {
-		if (options && !options.isActive) {
+		if ((options && !options.isActive) || jobQueue.hasPendingForPlan('Backup', planId)) {
 			return; // Return to satisfy the Promise<any> signature
 		}
 		const backupId = generateUID();
@@ -489,7 +489,7 @@ export class BaseBackupManager extends EventEmitter {
 			...backupExecOpts,
 			isActive: backupExecOpts.isActive || false,
 			taskCallback: (id: string, opts: Record<string, any>) => {
-				this.queueBackup(id, opts);
+				return this.queueBackup(id, opts);
 			},
 		};
 
@@ -505,6 +505,8 @@ export class BaseBackupManager extends EventEmitter {
 				await this.cronManager.scheduleTask(planId, cronExpression, backupOptions, 'backup');
 			}
 		}
+		// A successful explicit update can repair a plan held after failed startup reconciliation.
+		await this.cronManager.activateLoadedSchedule(planId, 'backup');
 	}
 
 	async updatePlanStorageName(storageId: string, newStorageName: string) {

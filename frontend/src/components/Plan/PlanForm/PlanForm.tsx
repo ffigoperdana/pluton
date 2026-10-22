@@ -10,7 +10,7 @@ import PFClasses from './PlanForm.module.scss';
 import { useGetSettings } from '../../../services/settings';
 import PlanAdvancedSettings from '../PlanSettings/PlanAdvancedSettings';
 import { isPlanSettingsValid } from '../../../utils/plans';
-import IntervalField from '../../common/form/IntervalField/IntervalField';
+import PlanScheduleField from '../PlanSettings/PlanScheduleField';
 import PlanFormNav from './PlanFormNav';
 import { useGetDevice } from '../../../services/devices';
 import PlanPruneSettings from '../PlanSettings/PlanPruneSettings';
@@ -307,10 +307,9 @@ const PlanForm = ({
             )}
             {step === 3 && (
                <div className={PFClasses.planStep}>
-                  <div className={classes.field} style={{ width: '150px' }}>
-                     <IntervalField
-                        label="Backup Interval"
-                        fieldValue={planSettings.settings.interval}
+                  <div className={classes.field}>
+                     <PlanScheduleField
+                        interval={planSettings.settings.interval}
                         onUpdate={(intervalSettings) =>
                            onPlanSettingsChange({ ...planSettings, settings: { ...planSettings.settings, interval: intervalSettings } })
                         }

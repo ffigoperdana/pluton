@@ -56,6 +56,7 @@ export type PlanNotification = {
 };
 
 export type PlanInterval = {
+	timeZone?: string; // IANA zone; absent on legacy plans means server-local time.
 	type: 'hourly' | 'daily' | 'weekly' | 'monthly' | 'days' | 'hours' | 'minutes';
 	minutes?: number;
 	time?: string; // 10:00AM, 02:00PM etc.

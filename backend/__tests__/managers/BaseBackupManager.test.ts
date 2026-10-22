@@ -11,6 +11,7 @@ const mockGetSchedules = jest.fn();
 
 // jobQueue mock
 const mockJobQueue = {
+	hasPendingForPlan: jest.fn(() => false),
 	add: jest.fn(),
 	addPriorityJob: jest.fn(),
 	remove: jest.fn(),
@@ -32,6 +33,7 @@ jest.mock('../../src/utils/rclone/rclone', () => ({
 
 // Mock singleton instance for CronManager
 const mockCronManagerInstance = {
+	activateLoadedSchedule: jest.fn(),
 	scheduleTask: (...args: any[]) => mockScheduleTask(...args),
 	updateSchedule: (...args: any[]) => mockUpdateSchedule(...args),
 	removeSchedule: (...args: any[]) => mockRemoveSchedule(...args),
@@ -256,6 +258,11 @@ describe('BaseBackupManager', () => {
 	});
 
 	describe('queueBackup', () => {
+		it('skips a queued/running plan before allocating a new backup ID', async () => {
+			mockJobQueue.hasPendingForPlan.mockReturnValueOnce(true);
+			await mgr.queueBackup('plan-1', { isActive: true });
+			expect(mockJobQueue.add).not.toHaveBeenCalled();
+		});
 		it('does nothing if schedule is not active', async () => {
 			await mgr.queueBackup('plan-1', { isActive: false, settings: {} });
 			expect(mockJobQueue.add).not.toHaveBeenCalled();

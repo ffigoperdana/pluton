@@ -76,6 +76,28 @@ describe('Plan Routes', () => {
 		setupAuthMock(true);
 	});
 
+	it('authenticated preview is timezone-explicit, read-only and cannot be mistaken for a plan ID', async () => {
+		setupAuthMock(true);
+		const response = await request(app).get('/api/plans/schedule-preview').query({ interval: JSON.stringify({ type: 'daily', time: '04:00AM', timeZone: 'Asia/Jakarta' }) });
+		expect(response.status).toBe(200);
+		expect(response.headers['cache-control']).toContain('no-store');
+		expect(response.body.result).toMatchObject({ timeZone: 'Asia/Jakarta', legacyTimeZone: false, missedRunPolicy: 'skip' });
+		expect(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', hour: '2-digit', hourCycle: 'h23' }).format(new Date(response.body.result.nextRunAt))).toBe('04');
+		expect(mockPlanService.getPlan).not.toHaveBeenCalled();
+		expect(mockPlanService.createPlan).not.toHaveBeenCalled();
+	});
+	it('schedule preview retains administrative authorization', async () => {
+		setupAuthMock(false);
+		const response = await request(app).get('/api/plans/schedule-preview').query({ interval: '{}' });
+		expect(response.status).toBe(401);
+	});
+	it.each(['{}', '{', 'x'.repeat(2049), JSON.stringify({ type: 'daily', timeZone: 'invalid/private-value' })])('refuses invalid or oversized preview without disclosing input', async interval => {
+		setupAuthMock(true);
+		const response = await request(app).get('/api/plans/schedule-preview').query({ interval });
+		expect(response.status).toBe(400);
+		expect(JSON.stringify(response.body)).not.toContain('private-value');
+	});
+
 	describe('GET /api/plans', () => {
 		it('should return 401 if not authenticated', async () => {
 			setupAuthMock(false);

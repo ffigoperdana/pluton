@@ -42,6 +42,18 @@ describe('JobQueue', () => {
 		});
 	});
 
+	it('detects the scheduled plan across queued, running and retry states without blocking another plan', () => {
+		jobQueue.add('Backup', { planId: 'plan-01', backupId: 'backup-01' });
+		expect(jobQueue.hasPendingForPlan('Backup', 'plan-01')).toBe(true);
+		expect(jobQueue.hasPendingForPlan('Backup', 'plan-02')).toBe(false);
+		const job = jobQueue.getNext()!;
+		expect(jobQueue.hasPendingForPlan('Backup', 'plan-01')).toBe(true);
+		jobQueue.failJob(job);
+		expect(jobQueue.hasPendingForPlan('Backup', 'plan-01')).toBe(true);
+		jobQueue.getNext(); jobQueue.completeJob();
+		expect(jobQueue.hasPendingForPlan('Backup', 'plan-01')).toBe(false);
+	});
+
 	describe('add', () => {
 		it('adds job to queue with default parameters', () => {
 			jobQueue.add('TestJob', { data: 'test' });

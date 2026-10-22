@@ -154,6 +154,8 @@ describe('PlanService', () => {
 
 			// Act: Call the method we are testing
 			const result = await planService.createPlan(planData);
+			expect(mockPlanStore.create).toHaveBeenCalledWith(expect.objectContaining({ settings: expect.objectContaining({ interval: expect.objectContaining({ timeZone: 'Asia/Jakarta' }) }) }));
+			expect(planData.settings.interval.timeZone).toBeUndefined();
 
 			// Assert: Verify that the correct methods were called with the correct arguments
 			expect(mockStorageStore.getById).toHaveBeenCalledWith('storage-123');
@@ -363,6 +365,28 @@ describe('PlanService', () => {
 				interval: { type: 'weekly', days: 'sun', time: '02:00PM' },
 			},
 		};
+
+		it.each([undefined, 'UTC', 'Asia/Jakarta'])('unrelated old-client edits preserve the stored timezone %s and other settings', async timeZone => {
+			const interval = { ...currentPlan.settings.interval, ...(timeZone ? { timeZone } : {}) };
+			const previous = { ...currentPlan, settings: { interval, encryption: true, retries: 7, replication: { enabled: false, storages: [] } } };
+			mockPlanStore.getById.mockResolvedValue(previous);
+			mockPlanStore.update.mockImplementation(async (_id, values) => ({ ...previous, ...values }) as any);
+			mockStorageStore.getById.mockResolvedValue({ id: 'storage-123', name: 'Example storage', type: 'local' } as any);
+			mockStrategy.updateBackup.mockResolvedValue({ success: true, result: 'OK' });
+			const request = { settings: { interval: { ...currentPlan.settings.interval } }, title: 'Changed title' } as any;
+			const result = await planService.updatePlan(planId, request);
+			expect(result.settings.interval.timeZone).toBe(timeZone);
+			expect(result.settings).toMatchObject({ encryption: true, retries: 7, replication: previous.settings.replication });
+			expect(request.settings.interval).not.toHaveProperty('timeZone');
+			expect(previous.settings.interval).toEqual(interval);
+		});
+
+		it('rejects an invalid explicit timezone before persistence or schedule mutation', async () => {
+			mockPlanStore.getById.mockResolvedValue(currentPlan);
+			await expect(planService.updatePlan(planId, { settings: { interval: { type: 'daily', timeZone: 'invalid/zone' } } } as any)).rejects.toHaveProperty('statusCode', 400);
+			expect(mockPlanStore.update).not.toHaveBeenCalled();
+			expect(mockStrategy.updateBackup).not.toHaveBeenCalled();
+		});
 
 		it('should successfully update a plan and its schedule', async () => {
 			// Arrange
@@ -1298,12 +1322,14 @@ describe('PlanService', () => {
 	describe('reconcileSchedules', () => {
 		let mockCronManager: {
 			getSchedules: jest.Mock;
+			activateLoadedSchedule: jest.Mock;
 			removeSchedule: jest.Mock;
 		};
 
 		beforeEach(() => {
 			mockCronManager = {
 				getSchedules: jest.fn(),
+				activateLoadedSchedule: jest.fn(),
 				removeSchedule: jest.fn(),
 			};
 			// Attach the mock cronManager to the localAgent
@@ -1394,7 +1420,7 @@ describe('PlanService', () => {
 			// Arrange: DB and CronManager both have the same plan
 			const plan = makePlan('plan-synced');
 			const schedulesMap = new Map();
-			schedulesMap.set('plan-synced', [{ type: 'backup', options: {} }]);
+			schedulesMap.set('plan-synced', [{ type: 'backup', cronExpression: '00 10 * * *', options: { isActive: true, settings: plan.settings } }]);
 			mockCronManager.getSchedules.mockResolvedValue(schedulesMap);
 			mockPlanStore.getAll = jest.fn().mockResolvedValue([plan]);
 

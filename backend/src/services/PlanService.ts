@@ -23,6 +23,7 @@ import {
 import { planLogger } from '../utils/logger';
 import { generateUID, normalizeStorageName } from '../utils/helpers';
 import { intervalToCron } from '../utils/intervalToCron';
+import { preparePlanInterval } from '../utils/planSchedule';
 import { LocalStrategy as LocalBackupStrategy } from '../strategies/backup/LocalStrategy';
 import { RemoteStrategy as RemoteBackupStrategy } from '../strategies/backup/RemoteStrategy';
 import { DeviceStore } from '../stores/DeviceStore';
@@ -131,6 +132,10 @@ export class PlanService {
 	 * Creates a new plan, its schedule, and optionally triggers the first backup.
 	 */
 	public async createPlan(planData: NewPlanReq, runSettings?: PlanAddRunSettings): Promise<Plan> {
+		planData = {
+			...planData,
+			settings: { ...planData.settings, interval: preparePlanInterval(planData.settings?.interval) },
+		};
 		const planId = generateUID();
 		const {
 			title,
@@ -320,6 +325,7 @@ export class PlanService {
 		// Disabling is an explicit version-2 empty collection (hooks may remain).
 		if (planData.settings) {
 			planData = { ...planData, settings: { ...currentPlan.settings, ...planData.settings } };
+			planData.settings!.interval = preparePlanInterval(planData.settings!.interval, currentPlan.settings.interval);
 		}
 		if (
 			lifecycleSupplied &&

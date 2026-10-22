@@ -849,4 +849,21 @@ describe('RemoteBackupService', () => {
 			})
 		);
 	});
+	it('schedules a capable standalone Agent 0.7.0 in WIB without changing the durable command reference contract', async () => {
+		agentStore.getAgentByDeviceId.mockResolvedValue({ ...capableAgent, agentVersion: '0.7.0', lastSeen: new Date() });
+		const clockPlan = { ...plan, settings: { ...plan.settings, interval: { type: 'daily', time: '04:00AM', timeZone: 'Asia/Jakarta' } } };
+		planStore.getById.mockResolvedValue(clockPlan);
+		const cron = { getSchedule: jest.fn().mockResolvedValue([]), scheduleTask: jest.fn(), activateLoadedSchedule: jest.fn() };
+		(service as any).cronManager = cron;
+		await (service as any).ensureSchedule(clockPlan);
+		const [id, expression, options, type] = cron.scheduleTask.mock.calls[0];
+		expect([id, expression, type]).toEqual([plan.id, '00 4 * * *', 'remote-backup']);
+		expect(options.timeZone).toBe('Asia/Jakarta');
+		await options.taskCallback(plan.id);
+		expect(repositories.createBackupAndCommand).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ payload: expect.objectContaining({ planId: plan.id, repositoryId: 'remote-repo-example-01' }) }) }));
+		agentStore.getAgentByDeviceId.mockResolvedValue({ ...capableAgent, lastSeen: new Date(Date.now() - 91_000) });
+		await options.taskCallback(plan.id);
+		expect(repositories.createBackupAndCommand).toHaveBeenCalledTimes(1);
+	});
+
 });
