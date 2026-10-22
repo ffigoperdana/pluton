@@ -24,6 +24,9 @@ jest.mock('../src/services/ConfigService', () => ({
 		config: {
 			SECRET: 'agent-control-plane-test-encryption-secret',
 			ALLOW_INSECURE_AGENT_HTTP: true,
+			AGENT_INSTALL_REPOSITORY_URL: 'https://git.example.internal/agents/pluton-agent.git',
+			AGENT_INSTALL_COMMIT: 'a'.repeat(40),
+			AGENT_INSTALL_VERSION: '0.7.0',
 			AGENT_OFFLINE_TIMEOUT_SECONDS: 90,
 		},
 	},

@@ -1,9 +1,11 @@
 # Memperbarui agent sambil mempertahankan identity
 
-Pemasangan pertama memakai `installers/install-agent.sh`. Existing enrolled Agent
-memakai `installers/upgrade-agent.sh`, **app-only**: bukan reinstall, re-enrollment,
+Pemasangan pertama baru mengikuti [enrollment standalone](/docs/remote-agent/enrollment) dengan root-level `install-agent.sh` pada repository Agent tersendiri yang dipin ke reviewed commit. Existing **monorepo** Agent
+tetap memakai `installers/upgrade-agent.sh` dari checkout monorepo, **app-only**: bukan reinstall, re-enrollment,
 update Restic/Rclone, migrasi server atau perubahan Source Access. Referensi teknis
 authoritative adalah `docs/AGENT_UPGRADE.md` pada checkout yang direview.
+
+Agent yang memang dipasang dari standalone memakai root-level `upgrade-agent.sh` dan prosedur dari repository standalone yang direview. Jangan menukar checkout/updater berdasarkan versi dashboard saja. Migrasi monorepo ke standalone memerlukan rencana serta persetujuan terpisah; konfigurasi distribusi server hanya berlaku untuk instalasi baru, tidak menulis provenance/identity/policy existing.
 
 ## Urutan pembaruan Source Access
 

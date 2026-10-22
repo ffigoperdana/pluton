@@ -1,20 +1,17 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Modal from '../../common/Modal/Modal';
 import Input from '../../common/form/Input/Input';
 import Button from '../../common/Button/Button';
 import { useCreateAgentEnrollment, useRevokeAgentEnrollment, type AgentEnrollment } from '../../../services/devices';
 import classes from './AgentEnrollment.module.scss';
-import { buildAgentInstallCommand, parseSourceRoots } from '../../../utils/agentSourceAccess';
+import { parseSourceRoots } from '../../../utils/agentSourceAccess';
+import { buildStandaloneAgentCommand } from '../../../utils/agentEnrollment';
 import { copyToClipboard } from '../../../utils/clipboard';
 import type { SourceAuthorizationMode } from '../../../@types/agentSourceAccess';
 
 type AgentEnrollmentProps = {
    close: () => void;
 };
-
-type InstallVariant = 'quick' | 'secure';
-
-const communityForkUrl = 'https://github.com/ffigoperdana/pluton.git';
 
 const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
    const [name, setName] = useState('');
@@ -25,20 +22,40 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
    const [enrollment, setEnrollment] = useState<AgentEnrollment | null>(null);
    const [revokeError, setRevokeError] = useState('');
    const [copyError, setCopyError] = useState('');
-   const [copiedVariant, setCopiedVariant] = useState<InstallVariant | null>(null);
+   const [copied, setCopied] = useState(false);
+   const [tokenVisible, setTokenVisible] = useState(false);
+   const [expired, setExpired] = useState(false);
+   useEffect(() => {
+      if (!enrollment) return;
+      const remaining = Date.parse(enrollment.expiresAt) - Date.now();
+      if (!Number.isFinite(remaining) || remaining <= 0) {
+         setExpired(true);
+         return;
+      }
+      const timer = setTimeout(
+         () => {
+            setExpired(true);
+            setTokenVisible(false);
+         },
+         Math.min(remaining, 2147483647),
+      );
+      return () => clearTimeout(timer);
+   }, [enrollment]);
    const createEnrollment = useCreateAgentEnrollment();
    const revokeEnrollment = useRevokeAgentEnrollment();
    const serverUrl = enrollment?.serverUrl || (typeof window === 'undefined' ? '' : window.location.origin);
-   const requiresInsecureHttp = serverUrl.startsWith('http:') && enrollment?.insecureHttpAllowed === true;
-   const insecureHttpBlocked = serverUrl.startsWith('http:') && enrollment?.insecureHttpAllowed !== true;
    const parsedRoots = parseSourceRoots(allowedRoots);
    const hasValidSourceRoots = !parsedRoots.error;
-   const canGenerateCommands = enrollment && hasValidSourceRoots && !insecureHttpBlocked;
    const delegated = parseSourceRoots(delegationScope);
-   const quickInstallCommand = canGenerateCommands
-      ? buildAgentInstallCommand(serverUrl, parsedRoots.roots, requiresInsecureHttp, enrollment.token)
-      : '';
-   const secureInstallCommand = canGenerateCommands ? buildAgentInstallCommand(serverUrl, parsedRoots.roots, requiresInsecureHttp) : '';
+   let installCommand = '';
+   let commandError = '';
+   if (enrollment && hasValidSourceRoots && !expired) {
+      try {
+         installCommand = buildStandaloneAgentCommand(enrollment.distribution, serverUrl, parsedRoots.roots);
+      } catch {
+         commandError = 'Installation instructions unavailable. Review the standalone distribution configuration and HTTPS Agent URL.';
+      }
+   }
 
    const create = async () => {
       try {
@@ -49,13 +66,13 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
       }
    };
 
-   const copyCommand = async (variant: InstallVariant, command: string) => {
+   const copyCommand = async (command: string) => {
       setCopyError('');
       try {
          await copyToClipboard(command);
-         setCopiedVariant(variant);
+         setCopied(true);
       } catch {
-         setCopiedVariant(null);
+         setCopied(false);
          setCopyError('Could not copy the command. Select and copy it manually.');
       }
    };
@@ -85,7 +102,11 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
                   fieldValue={name}
                   placeholder="app-01"
                   onUpdate={setName}
-                  error={createEnrollment.isError ? 'Could not create enrollment token.' : ''}
+                  error={
+                     createEnrollment.isError
+                        ? 'Could not create enrollment token. Ask the administrator to verify the standalone Agent distribution configuration.'
+                        : ''
+                  }
                />
                <fieldset className={classes.modes}>
                   <legend>Authorization Mode</legend>
@@ -164,17 +185,34 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
             </div>
          ) : (
             <div className={classes.content}>
-               <p className={classes.warning}>Copy this token now. It is not stored in the browser after this dialog closes.</p>
+               <p className={classes.warning}>
+                  Keep this single-use token private. Paste it only into the installer's hidden terminal prompt. Closing this dialog removes it from
+                  view.
+               </p>
+               <p>
+                  Token expires: <time dateTime={enrollment.expiresAt}>{new Date(enrollment.expiresAt).toLocaleString()}</time>. Expired, used or
+                  revoked tokens cannot enroll another Agent.
+               </p>
                <p>
                   Requested authorization mode:{' '}
                   <strong>{authorizationMode === 'server-managed' ? 'Server-Managed — pending one-time host setup' : 'Host-Approved'}</strong>
                </p>
                <label className={classes.label}>One-time enrollment token</label>
-               <code className={classes.token}>{enrollment.token}</code>
-               <label className={classes.label}>Step 1 — Clone your Pluton community fork</label>
-               <pre className={classes.command}>{`git clone ${communityForkUrl} pluton\ncd pluton`}</pre>
+               {expired && (
+                  <p className={classes.error} role="status">
+                     Token expired. Close this dialog and create a new one when ready.
+                  </p>
+               )}
+               <code className={classes.token}>{tokenVisible && !expired ? enrollment.token : '••••••••••••••••'}</code>
+               <Button
+                  text={tokenVisible ? 'Hide token' : 'Show token'}
+                  variant="tertiary"
+                  size="sm"
+                  disabled={expired}
+                  onClick={() => setTokenVisible(!tokenVisible)}
+               />
                <label className={classes.label} htmlFor="enrollment-source-roots">
-                  Allowed source roots — one application directory per line
+                  Planned initial source roots — one application directory per line
                </label>
                <textarea
                   id="enrollment-source-roots"
@@ -185,7 +223,7 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
                   spellCheck={false}
                   onChange={(event) => {
                      setAllowedRoots(event.target.value);
-                     setCopiedVariant(null);
+                     setCopied(false);
                      setCopyError('');
                   }}
                />
@@ -199,54 +237,31 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
                   plans. Choose specific directories and provision read/traverse permissions for pluton-agent; the installer does not broaden
                   permissions.
                </p>
-               {canGenerateCommands ? (
-                  <div className={classes.installOptions}>
-                     <section className={classes.installOption} aria-labelledby="quick-install-title">
-                        <h4 className={classes.installTitle} id="quick-install-title">
-                           Step 2 — Quick install
-                        </h4>
-                        <p className={classes.quickWarning}>
-                           The easiest option for a trusted internal/admin environment. The token is one-time and short-lived, but may be stored in
-                           shell history and briefly appear in process listings.
-                        </p>
-                        <pre className={classes.command}>{quickInstallCommand}</pre>
-                        <div className={classes.copyAction}>
-                           <Button
-                              text={copiedVariant === 'quick' ? 'Copied' : 'Copy quick install command'}
-                              variant="secondary"
-                              size="sm"
-                              icon={copiedVariant === 'quick' ? 'check' : 'copy'}
-                              onClick={() => copyCommand('quick', quickInstallCommand)}
-                           />
-                        </div>
-                     </section>
-                     <section className={classes.installOption} aria-labelledby="secure-install-title">
-                        <h4 className={classes.installTitle} id="secure-install-title">
-                           Step 3 — Secure install
-                        </h4>
-                        <p className={classes.help}>
-                           Preferred for public, VPS, or less-trusted environments. The installer requests the token interactively and keeps it out of
-                           shell history and process arguments.
-                        </p>
-                        <pre className={classes.command}>{secureInstallCommand}</pre>
-                        <div className={classes.copyAction}>
-                           <Button
-                              text={copiedVariant === 'secure' ? 'Copied' : 'Copy secure install command'}
-                              variant="secondary"
-                              size="sm"
-                              icon={copiedVariant === 'secure' ? 'check' : 'copy'}
-                              onClick={() => copyCommand('secure', secureInstallCommand)}
-                           />
-                        </div>
-                     </section>
-                  </div>
+               {installCommand ? (
+                  <section className={classes.installOption} aria-labelledby="standalone-install-title">
+                     <h4 className={classes.installTitle} id="standalone-install-title">
+                        Clone, pin, install and enroll the standalone Agent
+                     </h4>
+                     <p className={classes.help}>
+                        On a fresh Ubuntu 22.04 host with Bash, Git, Python 3 and sudo, run this complete block as your normal administrator. It
+                        checks the reviewed commit and Agent version before asking for sudo. The installer prompts privately for the token. For a
+                        private repository, configure Git access separately; never put a Git password or token in these commands.
+                     </p>
+                     <pre className={classes.command}>{installCommand}</pre>
+                     <Button
+                        text={copied ? 'Copied' : 'Copy installation commands'}
+                        variant="secondary"
+                        size="sm"
+                        icon={copied ? 'check' : 'copy'}
+                        onClick={() => copyCommand(installCommand)}
+                     />
+                  </section>
                ) : hasValidSourceRoots ? null : (
                   <p className={classes.help}>Enter absolute application source roots to generate complete copy-paste installation commands.</p>
                )}
-               {insecureHttpBlocked && (
-                  <p className={classes.error}>
-                     This Pluton server is not configured to accept agent HTTP. Use HTTPS or enable the explicit server-side trusted-LAN setting
-                     before installing an agent.
+               {commandError && (
+                  <p className={classes.error} role="alert">
+                     {commandError}
                   </p>
                )}
                {copyError && <p className={classes.error}>{copyError}</p>}
@@ -265,20 +280,21 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
                      </p>
                      <pre className={classes.command}>{delegated.roots.join('\n')}</pre>
                      <p>
-                        The install command below uses the reviewed initial static roots. It does not silently delegate this scope. Once host setup is
+                        The installation uses only the reviewed initial static roots. It does not silently delegate this scope. Once host setup is
                         confirmed, future readable directories inside the scope can be validated and applied entirely in Pluton.
                      </p>
                   </div>
                )}
-               <pre className={classes.command}>
-                  systemctl status pluton-agent{`\n`}sudo ./installers/install-agent.sh uninstall{`\n`}sudo ./installers/install-agent.sh uninstall
-                  --purge
-               </pre>
-               {revokeError && <p className={classes.error}>{revokeError}</p>}
+               <pre className={classes.command}>systemctl is-active pluton-agent.service{'\n'}systemctl status --no-pager pluton-agent.service</pre>
                <p className={classes.help}>
-                  For HTTP on a trusted LAN, the server and agent must each explicitly allow insecure HTTP. Backup source metadata and temporary
-                  storage credentials cross the control channel, so use HTTPS for every untrusted or public network.
+                  Refresh Sources and confirm this Agent is Online with version 0.7.0 and its reported capabilities. Planned roots do not authorize
+                  backup by themselves. Existing monorepo Agents keep their existing reviewed upgrade path.
                </p>
+               {revokeError && (
+                  <p className={classes.error} role="alert">
+                     {revokeError}
+                  </p>
+               )}
                <div className={classes.actions}>
                   <Button text="Revoke token" variant="danger" onClick={revoke} disabled={revokeEnrollment.isPending} />
                   <Button text="Done" variant="primary" onClick={close} />

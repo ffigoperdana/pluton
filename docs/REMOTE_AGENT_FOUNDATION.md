@@ -4,6 +4,12 @@ This document describes the independently implemented, Apache-2.0 Phase 4
 control-plane foundation for the community fork. It does not use or depend on
 any proprietary Pluton implementation.
 
+The Phase 4 protocol/legacy installer examples below remain historical context.
+For current fresh standalone enrollment use
+[AGENT_ENROLLMENT_DISTRIBUTION.md](AGENT_ENROLLMENT_DISTRIBUTION.md) and its
+configured immutable distribution. Do not use a legacy install/uninstall example
+to migrate or upgrade an existing Agent.
+
 The agent is an outbound-only Node.js process intended to run as a dedicated,
 non-root Linux user. It has no listener, does not need Docker, and does not
 need inbound SSH. This foundation does **not** back up files, restore files,
@@ -105,33 +111,32 @@ x86_64. It installs a private Node.js 22 runtime under
 `/opt/pluton-agent/runtime`; it never upgrades or replaces `/usr/bin/node`,
 the host npm installation, or another production runtime.
 
-1. In **Sources**, select **Add Remote Machine**, give it a descriptive name,
-   and create the one-time token.
-2. On the remote host, clone the community fork you administer and run:
+For NEW Agents, use the independently configured standalone distribution described
+in [AGENT_ENROLLMENT_DISTRIBUTION.md](AGENT_ENROLLMENT_DISTRIBUTION.md). The server
+requires a credential-free HTTPS Git repository URL, reviewed full immutable SHA,
+and expected Agent 0.7.0. It never defaults to this Server monorepo or moving main.
 
-   ```sh
-   git clone https://github.com/<your-community-fork>/pluton.git pluton
-   cd pluton
-   sudo ./installers/install-agent.sh \
-     --server https://pluton.example.internal \
-     --allowed-root /srv/example-app
-   ```
+1. In **Sources → Add Remote Machine**, review the name and authorization intent,
+   create the one-time token and enter narrow planned initial source roots.
+2. Copy the complete generated installation block to a fresh Ubuntu 22.04 host.
+   It clones only standalone pluton-agent, detaches at the configured full SHA,
+   verifies the clean checkout and package/runtime version, then runs root-level
+   `sudo bash install-agent.sh` with repeated quoted `--allowed-root` options.
+3. Paste the token only at the installer's hidden terminal prompt. The UI no
+   longer offers a token-in-argv Quick install. Expiry is 15 minutes and one use;
+   closing the dialog is not revocation. New generated installation requires TLS.
+4. Check `systemctl is-active pluton-agent.service`, refresh Sources, and verify
+   authenticated Online/version/capabilities. Complete explicit host delegation,
+   Validate, Apply and effective confirmation separately for Server-Managed mode.
 
-3. Choose an enrollment method in the dialog:
+Private Git access is configured independently using approved read-only Git
+credential handling; never put a long-lived Git token in a command or URL. Private
+Agent CA trust is provisioned on the host and passed as `--ca-file`, not a TLS bypass.
 
-   - **Secure install** is the default and preferred option for public, VPS,
-     or less-trusted environments. Its generated command has no token; the
-     installer requests the one-time token from a hidden terminal prompt.
-   - **Quick install** is intended only for a trusted internal/admin
-     environment. Its Copy button includes the actual one-time, short-lived
-     enrollment token as `--token` so the command can be pasted directly.
-     That token can be recorded in shell history and briefly appear in process
-     listings. It is never written to the systemd environment, state directory,
-     identity file, or agent command line.
-
-Both commands use the server's configured URL and the allowed source root
-entered in the dialog. The HTTP opt-in flag appears only when the server has
-explicitly enabled trusted-LAN agent HTTP.
+The remaining installer implementation notes below describe the legacy monorepo
+contract. Existing monorepo Agents keep that checkout's reviewed **upgrade-agent.sh**
+path until a separately authorized migration; fresh standalone installs reject an
+existing installation. Do not apply legacy reinstall behavior to standalone Agents.
 
 The installer validates the supported operating system, architecture, active
 systemd manager, required utilities, server URL, and allowed roots. It

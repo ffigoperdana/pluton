@@ -15,6 +15,8 @@ Template utama repository adalah `.env.template`; bundle deployment juga mempuny
 | `USER_NAME`, `USER_PASSWORD` | Bootstrap container; gunakan saluran privat |
 | `APP_URL`, `APP_ALLOWED_ORIGINS` | Origin browser yang benar dan origin tambahan yang disetujui |
 | `AGENT_SERVER_URL` | URL yang dapat dijangkau Agent, bila berbeda dari origin browser |
+| `AGENT_INSTALL_REPOSITORY_URL`, `AGENT_INSTALL_COMMIT`, `AGENT_INSTALL_VERSION` | Instalasi standalone baru: repository HTTPS tanpa credential, full reviewed commit SHA, versi 0.7.0; tidak ada default moving branch |
+| `AGENT_INSTALL_CA_FILE` | Opsional approved CA PEM pada host Agent; bukan path CA container server |
 | `TRUST_PROXY` | Hanya proxy/hop yang benar-benar dipercaya |
 
 ## Urutan pemeriksaan

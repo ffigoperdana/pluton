@@ -50,6 +50,7 @@ jobs:
         run: |
           node --test scripts/__tests__/deployment.test.cjs
           python3 scripts/__tests__/deployment_policy_test.py
+          python3 scripts/__tests__/deployment_fixture_test.py
           for script in deploy/*.sh; do sh -n "$script"; done
 
       - name: Check pinned Oracle worker package installation boundaries

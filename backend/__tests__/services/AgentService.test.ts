@@ -12,6 +12,9 @@ jest.mock('../../src/services/ConfigService', () => ({
 		config: {
 			SECRET: 'agent-service-test-secret-that-is-long-enough',
 			APP_URL: 'https://pluton.example.internal',
+			AGENT_INSTALL_REPOSITORY_URL: 'https://git.example.internal/agents/pluton-agent.git',
+			AGENT_INSTALL_COMMIT: 'a'.repeat(40),
+			AGENT_INSTALL_VERSION: '0.7.0',
 			ALLOW_INSECURE_AGENT_HTTP: false,
 			AGENT_OFFLINE_TIMEOUT_SECONDS: 90,
 		},
@@ -81,6 +84,18 @@ describe('AgentService', () => {
 		expect((store.createEnrollment.mock.calls[0][0] as { tokenHash: string }).tokenHash).toBe(
 			crypto.createHash('sha256').update(result.token).digest('base64url')
 		);
+	});
+
+	it('fails closed before creating a token when fresh-install distribution is unavailable, without touching existing Agents', async () => {
+		const config = configService.config as any;
+		const original = config.AGENT_INSTALL_COMMIT;
+		delete config.AGENT_INSTALL_COMMIT;
+		try {
+			await expect(service.createEnrollment({ name: 'app-01' })).rejects.toMatchObject({ statusCode: 503 });
+			expect(store.createEnrollment).not.toHaveBeenCalled();
+			expect(store.updateHeartbeat).not.toHaveBeenCalled();
+			expect(store.enrollAgent).not.toHaveBeenCalled();
+		} finally { config.AGENT_INSTALL_COMMIT = original; }
 	});
 
 	it('reports the explicit server-side HTTP exception with an enrollment response', async () => {

@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
    affectedSourcePlans,
-   buildAgentInstallCommand,
    effectiveSourceRoots,
    hostApprovalCommand,
    parseSourceRoots,
@@ -111,17 +110,6 @@ test('removal warnings use directory containment and exact plan identity', () =>
    ];
    assert.deepEqual(affectedSourcePlans(plans, [root]), [plans[1]]);
    assert.deepEqual(affectedSourcePlans(plans, []), plans);
-});
-
-test('enrollment emits repeated shell-quoted roots and keeps secure command token-free', () => {
-   const roots = [root, "/srv/example-app's worker"];
-   const secure = buildAgentInstallCommand('https://example.internal', roots, false);
-   assert.equal(secure.match(/--allowed-root/g)?.length, 2);
-   assert.match(secure, /example-app'\\''s worker/);
-   assert.doesNotMatch(secure, /--token|--allow-insecure-http/);
-   const quick = buildAgentInstallCommand('http://example.internal', roots, true, 'synthetic-enrollment-token');
-   assert.match(quick, /--token 'synthetic-enrollment-token'/);
-   assert.match(quick, /--allow-insecure-http$/);
 });
 
 test('host approval command binds local config, identity and revision without resetting static roots', () => {

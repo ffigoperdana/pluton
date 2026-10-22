@@ -198,14 +198,3 @@ export function hostModeSetupCommand(agentId: string, request: SourceAccessReque
       ...(delegated ? request.roots.map((root) => '  --root ' + shellQuote(root)) : []),
    ].join(' \\\n');
 }
-
-export function buildAgentInstallCommand(serverUrl: string, roots: string[], insecureHttp: boolean, token?: string): string {
-   const args = [
-      'sudo ./installers/install-agent.sh',
-      '  --server ' + shellQuote(serverUrl),
-      ...(token ? ['  --token ' + shellQuote(token)] : []),
-      ...roots.map((root) => '  --allowed-root ' + shellQuote(root)),
-      ...(insecureHttp ? ['  --allow-insecure-http'] : []),
-   ];
-   return args.join(' \\\n');
-}

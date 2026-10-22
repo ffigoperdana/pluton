@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { API_URL } from '../utils/constants';
 import { mutationResponse } from '../utils/httpResponse';
+import type { AgentDistribution } from '../utils/agentEnrollment';
 
 // Get System Metrics
 export async function getSystemMetrics(id: string) {
@@ -59,6 +60,7 @@ export type AgentEnrollment = {
    deviceName: string;
    serverUrl: string;
    insecureHttpAllowed: boolean;
+   distribution: AgentDistribution;
 };
 
 async function agentAdminRequest<T>(pathname: string, method: 'POST', body?: Record<string, unknown>): Promise<T> {
@@ -74,6 +76,7 @@ async function agentAdminRequest<T>(pathname: string, method: 'POST', body?: Rec
 
 export function useCreateAgentEnrollment() {
    return useMutation({
+      gcTime: 0,
       mutationFn: (name: string) => agentAdminRequest<AgentEnrollment>('/enrollments', 'POST', { name }),
    });
 }

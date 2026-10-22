@@ -138,6 +138,8 @@ async function fixture(Component: any, initial: Record<string, unknown>, custom:
             token: 'synthetic-enrollment-token',
             serverUrl: 'https://example.internal',
             insecureHttpAllowed: false,
+            expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+            distribution: { repositoryUrl: 'https://git.example.internal/agents/pluton-agent.git', commit: 'a'.repeat(40), version: '0.7.0', contract: 'pluton-agent-standalone-v1' },
          }),
       },
       devices: [
@@ -531,16 +533,54 @@ test('enrollment generates multiple root flags and explains separate host approv
       await act(async () => ui.button('Create enrollment token')!.click());
       await ui.setValue('textarea', `${appRoot}\n${workerRoot}`);
       const commands = [...ui.dom.window.document.querySelectorAll('pre')].map((pre) => pre.textContent || '');
-      const installs = commands.filter((command) => command.startsWith('sudo ./installers/install-agent.sh \\'));
-      assert.equal(installs.length, 2);
+      const installs = commands.filter((command) => command.includes('sudo bash install-agent.sh'));
+      assert.equal(installs.length, 1);
       for (const command of installs) assert.equal(command.match(/--allowed-root/g)?.length, 2);
-      assert.match(installs[0], /--token/);
-      assert.doesNotMatch(installs[1], /--token/);
+      assert.doesNotMatch(installs[0], /--token|synthetic-enrollment-token|installers\/install-agent|uninstall/);
+      assert.equal(ui.text().includes('synthetic-enrollment-token'), false);
+      await act(async () => ui.button('Show token')!.click());
+      assert.match(ui.text(), /synthetic-enrollment-token/);
+      await act(async () => ui.button('Hide token')!.click());
+      assert.equal(ui.text().includes('synthetic-enrollment-token'), false);
+      assert.match(ui.text(), /Token expires:/);
       assert.match(ui.text(), /single agent can serve multiple application plans/);
       assert.match(ui.text(), /host approval followed by an explicit enable action/);
    } finally {
       await ui.cleanup();
    }
+});
+
+test('enrollment fails clearly on unavailable distribution or HTTP without old installer fallback', async () => {
+   for (const patch of [{ distribution: undefined }, { serverUrl: 'http://example.internal', insecureHttpAllowed: true }]) {
+      const ui = await fixture(Enrollment, { close() {} });
+      try {
+         const original = ui.state.enrollment.mutateAsync;
+         ui.state.enrollment.mutateAsync = async () => ({ ...await original(), ...patch });
+         await ui.setValue('input[type="text"]', 'app-01');
+         await act(async () => ui.button('Create enrollment token')!.click());
+         await ui.setValue('#enrollment-source-roots', appRoot);
+         assert.match(ui.text(), /Installation instructions unavailable/);
+         assert.equal(ui.button('Copy installation commands'), undefined);
+         assert.doesNotMatch(ui.text(), /git clone|installers\/install-agent|--allow-insecure-http/);
+         assert.equal(ui.dom.window.localStorage.length, 0);
+         assert.equal(ui.dom.window.sessionStorage.length, 0);
+      } finally { await ui.cleanup(); }
+   }
+});
+
+test('expired enrollment token is identified, hidden and cannot generate installation commands', async () => {
+   const ui = await fixture(Enrollment, { close() {} });
+   try {
+      const original = ui.state.enrollment.mutateAsync;
+      ui.state.enrollment.mutateAsync = async () => ({ ...await original(), expiresAt: '2020-01-01T00:00:00Z' });
+      await ui.setValue('input[type="text"]', 'app-01');
+      await act(async () => ui.button('Create enrollment token')!.click());
+      await ui.setValue('#enrollment-source-roots', appRoot);
+      assert.match(ui.text(), /Token expired/);
+      assert.equal(ui.button('Show token')!.disabled, true);
+      assert.equal(ui.button('Copy installation commands'), undefined);
+      assert.doesNotMatch(ui.text(), /synthetic-enrollment-token/);
+   } finally { await ui.cleanup(); }
 });
 
 test('form allows legacy unrelated edits and blocks v1 pending paths without mutating settings', async () => {
@@ -1061,8 +1101,8 @@ test('Server-Managed enrollment is an explicit reviewed intent; installer stays 
       await ui.setValue('#enrollment-source-roots', `${appRoot}\n${workerRoot}`);
       const commands = [...ui.dom.window.document.querySelectorAll('pre')]
          .map((item) => item.textContent || '')
-         .filter((item) => item.startsWith('sudo ./installers/install-agent.sh'));
-      assert.equal(commands.length, 2);
+         .filter((item) => item.includes('sudo bash install-agent.sh'));
+      assert.equal(commands.length, 1);
       for (const command of commands) {
          assert.equal(command.match(/--allowed-root /g)?.length, 2);
          assert.doesNotMatch(command, /--delegat|--source-access|server-managed/);

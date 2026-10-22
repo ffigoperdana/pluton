@@ -55,6 +55,7 @@ export class AgentAdminController {
 	}
 
 	async createEnrollment(req: Request, res: Response): Promise<void> {
+		res.setHeader('Cache-Control', 'no-store');
 		try {
 			const result = await this.agentService.createEnrollment(req.body);
 			res.status(201).json({ success: true, result });

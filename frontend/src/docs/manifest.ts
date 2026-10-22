@@ -42,7 +42,7 @@ export const docCategories: DocCategory[] = [
    {
       id: "remote-agent",
       title: "Remote Machine dan Agent",
-      evidence: ["installers/install-agent.sh","agent/src/identity.ts","agent/src/filesystemPolicy.ts"],
+      evidence: ["backend/src/utils/agentDistribution.ts","frontend/src/utils/agentEnrollment.ts","installers/install-agent.sh","agent/src/identity.ts","agent/src/filesystemPolicy.ts"],
       articles: [
          page("remote-agent", "Mencadangkan mesin lain dengan Remote Agent"),
          page("remote-agent/enrollment", "Mendaftarkan dan memasang Remote Agent", "operator-setup"),
