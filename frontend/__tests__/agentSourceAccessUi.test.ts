@@ -550,6 +550,40 @@ test('enrollment generates multiple root flags and explains separate host approv
    }
 });
 
+test('enrollment failure has a focused in-flow alert outside the input label and clears on retry', async () => {
+   const ui = await fixture(Enrollment, { close() {} });
+   try {
+      const original = ui.state.enrollment.mutateAsync;
+      ui.state.enrollment.mutateAsync = async () => {
+         ui.state.enrollment.isError = true;
+         throw new Error('synthetic enrollment failure');
+      };
+      await ui.setValue('input[type="text"]', 'app-01');
+      await act(async () => ui.button('Create enrollment token')!.click());
+      await ui.render();
+      const alert = ui.dom.window.document.querySelector<HTMLElement>('[role="alert"]')!;
+      assert.equal(alert.textContent?.trim(), 'Could not create enrollment token. Ask the administrator to verify the standalone Agent distribution configuration.');
+      assert.equal(alert.parentElement, ui.dom.window.document.querySelector('input[type="text"]')!.parentElement!.parentElement!.parentElement);
+      assert.equal(alert.closest('label'), null);
+      assert.equal(alert.closest('[class*="formField"]'), null);
+      assert.equal(ui.dom.window.document.activeElement, alert, 'focus brings the alert into view after a long dialog submission');
+      assert.equal(ui.dom.window.document.querySelector<HTMLInputElement>('input[type="text"]')!.value, 'app-01');
+      assert.equal(ui.button('Create enrollment token')!.disabled, false);
+
+      ui.state.enrollment.isError = false;
+      ui.state.enrollment.isPending = true;
+      await ui.render();
+      assert.equal(ui.dom.window.document.querySelector('[role="alert"]'), null);
+      assert.equal(ui.button('Creating…')!.disabled, true);
+      ui.state.enrollment.isPending = false;
+      ui.state.enrollment.mutateAsync = original;
+      await ui.render();
+      await act(async () => ui.button('Create enrollment token')!.click());
+      assert.match(ui.text(), /One-time enrollment token/);
+      assert.equal(ui.dom.window.document.querySelector('[role="alert"]'), null);
+   } finally { await ui.cleanup(); }
+});
+
 test('enrollment fails clearly on unavailable distribution or HTTP without old installer fallback', async () => {
    for (const patch of [{ distribution: undefined }, { serverUrl: 'http://example.internal', insecureHttpAllowed: true }]) {
       const ui = await fixture(Enrollment, { close() {} });

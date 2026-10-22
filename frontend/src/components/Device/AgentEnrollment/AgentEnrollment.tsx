@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Modal from '../../common/Modal/Modal';
 import Input from '../../common/form/Input/Input';
 import Button from '../../common/Button/Button';
@@ -42,6 +42,10 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
       return () => clearTimeout(timer);
    }, [enrollment]);
    const createEnrollment = useCreateAgentEnrollment();
+   const enrollmentErrorRef = useRef<HTMLDivElement>(null);
+   useEffect(() => {
+      if (createEnrollment.isError) enrollmentErrorRef.current?.focus();
+   }, [createEnrollment.isError]);
    const revokeEnrollment = useRevokeAgentEnrollment();
    const serverUrl = enrollment?.serverUrl || (typeof window === 'undefined' ? '' : window.location.origin);
    const parsedRoots = parseSourceRoots(allowedRoots);
@@ -95,6 +99,11 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
                   Create a single-use enrollment token for a self-hosted Pluton Agent. A capable agent can run the limited remote filesystem backup
                   workflow.
                </p>
+               {createEnrollment.isError && (
+                  <div ref={enrollmentErrorRef} className={classes.enrollmentError} role="alert" tabIndex={-1}>
+                     Could not create enrollment token. Ask the administrator to verify the standalone Agent distribution configuration.
+                  </div>
+               )}
                <Input
                   label="Machine name"
                   required={true}
@@ -102,11 +111,6 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
                   fieldValue={name}
                   placeholder="app-01"
                   onUpdate={setName}
-                  error={
-                     createEnrollment.isError
-                        ? 'Could not create enrollment token. Ask the administrator to verify the standalone Agent distribution configuration.'
-                        : ''
-                  }
                />
                <fieldset className={classes.modes}>
                   <legend>Authorization Mode</legend>

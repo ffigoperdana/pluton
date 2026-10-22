@@ -16,6 +16,21 @@
 .error {
    color: var(--error-text-color);
 }
+.enrollmentError {
+   box-sizing: border-box;
+   width: 100%;
+   min-width: 0;
+   padding: 12px;
+   border: 1px solid var(--error-text-color);
+   border-radius: 6px;
+   color: var(--error-text-color);
+   overflow-wrap: anywhere;
+   line-height: 1.5;
+   &:focus-visible {
+      outline: 2px solid var(--error-text-color);
+      outline-offset: 2px;
+   }
+}
 .label {
    color: var(--content-title-color);
    font-size: 0.75rem;
