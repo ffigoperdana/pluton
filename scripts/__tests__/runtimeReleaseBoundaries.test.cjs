@@ -4,8 +4,31 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { verifyRuntime } = require("../verify-runtime-release-boundaries.cjs");
+const { verifyRuntime, verifyNodeRuntime } = require("../verify-runtime-release-boundaries.cjs");
 const root = path.resolve(__dirname, "../..");
+test("runtime gate refuses an unpatched or different Node release", () => {
+  assert.doesNotThrow(() => verifyNodeRuntime("v24.22.1"));
+  for (const version of ["v24.16.0", "v22.18.0", "v24.22.0", "v25.0.0"])
+    assert.throws(() => verifyNodeRuntime(version), /Patched Server runtime/);
+});
+
+test("all source image stages and Server CI use the reviewed security release", () => {
+  const app = fs.readFileSync(path.join(root, "Dockerfile.source"), "utf8");
+  assert.match(app, /^ARG NODE_IMAGE=node:24\.22\.1-alpine3\.24@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53$/m);
+  assert.deepEqual([...app.matchAll(/^FROM \$\{NODE_IMAGE\} AS (.+)$/gm)].map(m => m[1]),
+    ["build", "production-dependencies", "production"]);
+  assert.match(app.split("USER pluton")[1], /RUN test "\$\(node --version\)" = v24\.22\.1/);
+  const worker = fs.readFileSync(path.join(root, "Dockerfile.mysql-recovery-worker"), "utf8");
+  assert.equal((worker.match(/^FROM node:24\.22\.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS (?:build|production)\r?$/gm) || []).length, 2);
+  assert.match(worker, /RUN test "\$\(node --version\)" = v24\.22\.1 && node \.\/verify\.mjs/);
+  for (const name of ["ci-backend", "container", "release-assets", "release-please"]) {
+    const workflow = fs.readFileSync(path.join(root, `.github/workflows/${name}.yml`), "utf8");
+    const versions = [...workflow.matchAll(/node-version: "([^"]+)"/g)].map(m => m[1]);
+    assert(versions.length > 0);
+    assert(versions.every(v => v === "24.22.1"));
+  }
+});
+
 function fixture(t) {
   const temporary = fs.mkdtempSync(
     path.join(os.tmpdir(), "pluton-release-test-"),

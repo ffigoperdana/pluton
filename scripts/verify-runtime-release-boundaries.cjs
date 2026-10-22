@@ -5,6 +5,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const assert = require("node:assert/strict");
 
+function verifyNodeRuntime(version = process.version) {
+  assert.equal(version, "v24.22.1", "Patched Server runtime required");
+}
+
 function verifyRuntime(root = "/app") {
   assert.deepEqual(fs.readdirSync(root).sort(), [
     "LICENSE",
@@ -64,10 +68,11 @@ function verifyRuntime(root = "/app") {
     assert(fs.statSync(path.join(root, directory)).isDirectory());
   return checked;
 }
-module.exports = { verifyRuntime };
+module.exports = { verifyRuntime, verifyNodeRuntime };
 if (require.main === module) {
   try {
     assert.equal(process.argv.length, 2);
+    verifyNodeRuntime();
     assert.equal(process.getuid(), 10001);
     assert.equal(process.getgid(), 10001);
     assert.equal(process.getgid(), 10001);
@@ -88,6 +93,7 @@ if (require.main === module) {
     process.stdout.write(
       JSON.stringify({
         event: "runtime_release_boundaries_verified",
+        node: process.version,
         uid: 10001,
         gid: 10001,
         gid: 10001,

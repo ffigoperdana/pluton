@@ -13,7 +13,7 @@ test('native argument inspection detects password flags, not unrelated protocol/
 });
 test('worker uses a pinned glibc base and official, signature-verified, SHA-pinned Oracle LTS packages', () => {
   const docker = read('Dockerfile.mysql-recovery-worker');
-  assert.match(docker, /node:24\.16\.0-bookworm-slim@sha256:[a-f0-9]{64}/);
+  assert.match(docker, /node:24\.22\.1-bookworm-slim@sha256:[a-f0-9]{64}/);
   assert.match(docker, /signed-by=\/usr\/share\/keyrings\/mysql-community.gpg/);
   assert.match(docker, /BCA43417C3B485DD128EC6D4B7B3B788A8D3785C/);
   for (const [name, hash] of [
@@ -28,7 +28,7 @@ test('worker uses a pinned glibc base and official, signature-verified, SHA-pinn
   assert.equal((docker.match(/apt-get update --error-on=any/g) || []).length, 2);
   assert.match(docker, /--proto '=https' --proto-redir '=https' --tlsv1\.2/);
   assert(!/allow-unauthenticated|trusted=yes|AllowInsecureRepositories|FROM mysql:|install[^\n]*mysql-community-server/.test(docker));
-  assert.match(docker, /USER 10001:10001\s+RUN node/);
+  assert.match(docker, /USER 10001:10001\s+RUN test "\$\(node --version\)" = v24\.22\.1 && node/);
   assert(!/EXPOSE|VOLUME|Dockerfile.source/.test(docker));
 });
 
