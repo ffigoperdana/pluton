@@ -215,6 +215,11 @@ local static Fumadocs index, without a hosted service.
 `pnpm test:docs` checks articles/routes/anchors/evidence/security/rendering. The
 frontend production build runs it automatically before bundling the articles.
 
+Source Diagnostics V2 adds actionable source error details and static shortcuts
+inside this same documentation system. See
+[SOURCE_DIAGNOSTICS_V2.md](SOURCE_DIAGNOSTICS_V2.md) for the presentation, access,
+command-copy boundaries, validation and Agent compatibility audit.
+
 Start with `/docs/getting-started/complete-backup-setup` for the authoritative
 15-step operator journey. It links existing feature references rather than
 inventing unsupported mirror restore or re-enrollment upgrade procedures. See

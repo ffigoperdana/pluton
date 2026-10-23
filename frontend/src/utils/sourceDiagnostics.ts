@@ -28,7 +28,10 @@ export function safeDiagnosticRelativePath(value: string): boolean {
 }
 
 export function historicalSourceFailure(message: string): SourceFailure | undefined {
-   const match = /\((source-validation|restic-backup)\/(source-entry-inaccessible|source-root-not-readable|source-missing)\)/.exec(message);
+   const match =
+      /\((source-validation|restic-backup)\/(source-entry-inaccessible|source-root-not-readable|source-missing|source-parent-not-traversable|source-symlink-escape|source-policy-violation|source-unsupported-type|source-validation-failed)\)\.?$/.exec(
+         message,
+      );
    return match ? { failureStage: match[1], failureCode: match[2] } : undefined;
 }
 
@@ -42,6 +45,53 @@ export const sourceProblemCause = (errno: SourceDiagnostics['entries'][number]['
       UNKNOWN: 'OS category was not reported',
    })[errno];
 
+/** Defense in depth for UI/clipboard: the authenticated API already validates
+ * this contract. Bound samples again and never spread arbitrary entry fields. */
+export function visibleSourceDiagnostics(report?: SourceDiagnostics): SourceDiagnostics | undefined {
+   if (
+      !report ||
+      report.version !== 1 ||
+      !['preflight', 'restic'].includes(report.origin) ||
+      !Number.isSafeInteger(report.problemCount) ||
+      report.problemCount < 1 ||
+      !Array.isArray(report.entries) ||
+      !report.entries.length ||
+      report.problemCount < Math.min(report.entries.length, 20)
+   )
+      return;
+   return {
+      version: 1,
+      origin: report.origin,
+      problemCount: report.problemCount,
+      countIsLowerBound: report.countIsLowerBound !== false,
+      entries: report.entries.slice(0, 20).map((entry) => ({
+         relativePath:
+            typeof entry?.relativePath === 'string' && safeDiagnosticRelativePath(entry.relativePath) && !/[$;&'()]/.test(entry.relativePath)
+               ? entry.relativePath
+               : undefined,
+         entryType: ['file', 'directory', 'symlink', 'other', 'unknown'].includes(entry?.entryType) ? entry.entryType : 'unknown',
+         errno: ['EACCES', 'EPERM', 'ENOENT', 'ENOTDIR', 'ELOOP', 'UNKNOWN'].includes(entry?.errno) ? entry.errno : 'UNKNOWN',
+         excluded: false,
+      })),
+   };
+}
+
+export function safeErrorText(message: string): string {
+   return message
+      .slice(0, 2000)
+      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+      .replace(/[\p{Cc}\p{Cf}\p{Cs}]/gu, (character) => (character === '\n' ? '\n' : ' '));
+}
+
+export function hasSensitiveSourceName(relative?: string): boolean {
+   return Boolean(
+      relative &&
+         /(?:^|\/)(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?|\.ssh|\.aws|\.gnupg|\.kube|\.env(?:\.[^/]*)?|credentials?(?:\.[^/]*)?|secrets?(?:\.[^/]*)?|[^/]+\.(?:pem|key|p12|pfx))(?:\/|$)/i.test(
+            relative,
+         ),
+   );
+}
+
 /** Copy only closed metadata and validated names, never arbitrary legacy error
  * text or provider messages. Rendering uses React text nodes, never HTML. */
 export function diagnosticSummary(failure?: SourceFailure): string {
@@ -50,7 +100,7 @@ export function diagnosticSummary(failure?: SourceFailure): string {
       `Failure stage: ${/^[a-z-]{1,60}$/.test(failure.failureStage) ? failure.failureStage : 'unavailable'}`,
       `Failure code: ${/^[a-z-]{1,80}$/.test(failure.failureCode) ? failure.failureCode : 'unavailable'}`,
    ];
-   const report = failure.sourceDiagnostics;
+   const report = visibleSourceDiagnostics(failure.sourceDiagnostics);
    if (!report) return [...lines, 'Path-level diagnostics were not reported for this backup.'].join('\n');
    lines.push(
       `Problem observations: ${report.countIsLowerBound ? 'at least ' : ''}${report.problemCount}`,

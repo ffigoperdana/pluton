@@ -100,9 +100,9 @@ const BackupEvents = ({ id, type = 'backup', sourceId, sourceType, planId, inPro
                            <span className={classes.action}>
                               {type === 'backup' ? getBackupEventActionMessage(event.action) : getRestoreEventActionMessage(event.action)}
                               {event.error && (
-                                 <span className={classes.viewError} onClick={() => setShowError(`main-${index}`)}>
+                                 <button type="button" className={classes.viewError} onClick={() => setShowError(`main-${index}`)}>
                                     View Error
-                                 </span>
+                                 </button>
                               )}
                            </span>
                         </li>
@@ -139,9 +139,13 @@ const BackupEvents = ({ id, type = 'backup', sourceId, sourceType, planId, inPro
                                        <span className={classes.action}>
                                           {getBackupEventActionMessage(event.action, mirror.storageName)}
                                           {event.error && (
-                                             <span className={classes.viewError} onClick={() => setShowError(`mirror-${storageId}-${index}`)}>
+                                             <button
+                                                type="button"
+                                                className={classes.viewError}
+                                                onClick={() => setShowError(`mirror-${storageId}-${index}`)}
+                                             >
                                                 View Error
-                                             </span>
+                                             </button>
                                           )}
                                        </span>
                                     </li>
@@ -157,8 +161,8 @@ const BackupEvents = ({ id, type = 'backup', sourceId, sourceType, planId, inPro
             )}
          </div>
          {showError && (
-            <Modal title="Error Details" closeModal={() => setShowError(false)} width={'600px'}>
-               <div className={classes.errorDetails} data-length={showError.length}>
+            <Modal title="Error Details" stableLayout closeModal={() => setShowError(false)} width={'680px'}>
+               <div className={showError.startsWith('main-') ? undefined : classes.errorDetails} data-length={showError.length}>
                   {(() => {
                      if (typeof showError === 'string') {
                         if (showError.startsWith('main-')) {
@@ -167,6 +171,8 @@ const BackupEvents = ({ id, type = 'backup', sourceId, sourceType, planId, inPro
                               <BackupErrorDetails
                                  message={progressDataToUse?.events[idx]?.error || 'Unknown error occurred.'}
                                  failure={progressDataToUse?.sourceFailure}
+                                 planId={planId}
+                                 onClose={() => setShowError(false)}
                               />
                            );
                         }

@@ -5,6 +5,7 @@ import {
   docCategories,
 } from "../../frontend/src/docs/manifest.ts";
 import type { Root } from "fumadocs-core/page-tree";
+import { backupRecoveryTopics } from "../../frontend/src/docs/troubleshootingTopics.ts";
 
 export const collection = defineDocs({
   dir: "../frontend/src/docs/articles",
@@ -37,6 +38,15 @@ export const tree: Root = {
   name: "Pluton Documentation",
   children: [
     { type: "page", name: "Documentation", url: "/docs" },
+    {
+      type: "folder",
+      name: "Backup & Recovery",
+      children: backupRecoveryTopics.map((topic) => ({
+        type: "page",
+        name: topic.title,
+        url: topic.href,
+      })),
+    },
     ...docCategories.map((category) => ({
       type: "folder" as const,
       name: category.title,

@@ -1,3 +1,4 @@
+import { troubleshootingTopics } from '../../../docs/troubleshootingTopics';
 import { useState } from 'react';
 import type { NewPlanSettings } from '../../../@types/plans';
 import type { Device } from '../../../@types/devices';
@@ -64,6 +65,9 @@ export default function PlanBackupExclusions({
                exclusions will not be changed automatically.
             </p>
          )}
+         <p>
+            <a href={troubleshootingTopics.exclusions.href}>Backup Exclusions and permission troubleshooting</a>
+         </p>
          <details>
             <summary>Preview a relative path</summary>
             <label htmlFor="exclusion-preview">Sample path inside the source</label>

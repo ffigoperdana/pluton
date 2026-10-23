@@ -77,6 +77,14 @@
       .action {
          color: var(--content-text-color);
          .viewError {
+            background: transparent;
+            border: 0;
+            padding: 4px;
+            font: inherit;
+            &:focus-visible {
+               outline: 2px solid var(--primary-color);
+               outline-offset: 2px;
+            }
             text-decoration: underline;
             text-decoration-style: dashed;
             margin-left: 10px;

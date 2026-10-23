@@ -75,9 +75,12 @@ test('error details show real observations, safe copy, historical limitation and
    try {
       await render({ message: 'Safe error.', failure });
       const text = dom.window.document.body.textContent;
-      assert.match(text, /Source access denied/);
+      assert.match(text, /Source Access Problem/);
       assert.match(text, /app\/logs\/id_rsa/);
-      assert.match(text, /Entry type: Not reported/);
+      assert.equal(
+         [...dom.window.document.querySelectorAll('dt')].find((node) => node.textContent === 'Entry type')?.nextElementSibling?.textContent,
+         'Not reported',
+      );
       assert.match(text, /ENOENT/);
       assert.match(text, /path withheld for safety/);
       assert.equal(dom.window.document.querySelectorAll('img').length, 0);
