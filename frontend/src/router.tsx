@@ -16,6 +16,7 @@ import NotFoundRoute from './routes/NotFoundRoute/NotFoundRoute';
 import Icon from './components/common/Icon/Icon';
 import DocumentationRedirect from './docs/DocumentationRedirect';
 import DatabaseRestores from './routes/DatabaseRestores/DatabaseRestores';
+import Mcp from './routes/Mcp/Mcp';
 
 function PublicRoute({ children }: { children: React.ReactNode }) {
    const { data: authData, isLoading: authLoading } = useAuth();
@@ -73,6 +74,7 @@ export function AppRoutes() {
          <Route path="/" element={<ProtectedLayout />}>
             <Route index element={<Plans />} />
             <Route path="settings" element={<Settings />} />
+            <Route path="mcp" element={<Mcp />} />
             <Route path="storages" element={<Storages />} />
             <Route path="legacy-repositories" element={<LegacyRepositories />} />
             <Route path="legacy-repositories/:id" element={<LegacyRepositoryDetail />} />

@@ -1,0 +1,184 @@
+.page {
+   width: 100%;
+   display: grid;
+   gap: 20px;
+   padding-bottom: 32px;
+   color: var(--content-text-color);
+   h3 {
+      margin: 0 0 12px;
+   }
+   p {
+      line-height: 1.6;
+   }
+   button,
+   input,
+   select,
+   textarea {
+      font: inherit;
+   }
+   button {
+      cursor: pointer;
+      padding: 8px 14px;
+      border-radius: 6px;
+      border: 1px solid var(--line-color, #41434c);
+      color: inherit;
+      background: var(--content-background-color, #24262e);
+   }
+   button:disabled {
+      opacity: 0.5;
+      cursor: default;
+   }
+   button:focus-visible,
+   input:focus-visible,
+   select:focus-visible,
+   textarea:focus-visible {
+      outline: 2px solid var(--primary-color, #8f86ff);
+      outline-offset: 3px;
+   }
+}
+.card {
+   border: 1px solid var(--line-color, #41434c);
+   border-radius: 10px;
+   padding: 22px;
+   background: var(--content-background-color, #20222a);
+   min-width: 0;
+}
+.overview {
+   display: grid;
+   grid-template-columns: repeat(4, minmax(0, 1fr));
+   gap: 16px;
+   dl {
+      margin: 0;
+   }
+   dt {
+      font-size: 0.85em;
+      opacity: 0.7;
+      margin-bottom: 8px;
+   }
+   dd {
+      margin: 0;
+      font-size: 1.2em;
+      font-weight: 600;
+   }
+}
+.heading,
+.actions,
+.pager {
+   display: flex;
+   align-items: center;
+   justify-content: space-between;
+   gap: 12px;
+   flex-wrap: wrap;
+}
+.actions {
+   justify-content: flex-start;
+}
+.badge {
+   display: inline-block;
+   font-size: 0.8em;
+   padding: 4px 8px;
+   border-radius: 5px;
+   background: var(--primary-color-mid, #39364e);
+}
+.muted {
+   opacity: 0.7;
+   font-size: 0.9em;
+}
+.scroll {
+   overflow: auto;
+   max-height: 580px;
+   margin: 18px 0;
+   table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+   }
+   th,
+   td {
+      padding: 14px 10px;
+      vertical-align: top;
+      border-bottom: 1px solid var(--line-color, #41434c);
+      font-size: 0.9em;
+   }
+   th {
+      white-space: nowrap;
+   }
+   td {
+      overflow-wrap: anywhere;
+   }
+}
+.form {
+   display: grid;
+   gap: 16px;
+   padding: 4px;
+   label {
+      display: grid;
+      gap: 6px;
+   }
+   input:not([type='checkbox']),
+   select,
+   textarea {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid var(--line-color, #41434c);
+      border-radius: 6px;
+      padding: 10px;
+      background: var(--content-background-color, #20222a);
+      color: inherit;
+   }
+   textarea {
+      min-height: 60px;
+   }
+   fieldset {
+      border: 1px solid var(--line-color, #41434c);
+      padding: 12px;
+   }
+}
+.checks {
+   display: grid;
+   grid-template-columns: repeat(2, minmax(0, 1fr));
+   gap: 10px;
+   label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+   }
+}
+.instructions {
+   white-space: pre-wrap;
+   overflow-wrap: anywhere;
+   line-height: 1.6;
+   padding: 14px;
+   border: 1px solid var(--line-color, #41434c);
+   border-radius: 6px;
+   font-size: 0.85em;
+}
+.error {
+   color: var(--error-text-color);
+}
+.tool {
+   padding: 15px 0;
+   border-bottom: 1px solid var(--line-color, #41434c);
+   label {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+   }
+   code {
+      overflow-wrap: anywhere;
+   }
+}
+@media (max-width: 1000px) {
+   .overview {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+   }
+}
+@media (max-width: 600px) {
+   .card {
+      padding: 15px;
+   }
+   .overview,
+   .checks {
+      grid-template-columns: 1fr;
+   }
+}

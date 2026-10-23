@@ -92,6 +92,9 @@ const SideNav = () => {
                   </span>
                )}
             </NavLink>
+            <NavLink to="/mcp" end aria-label="MCP">
+               <span className={classes.navMenuLabel} title="MCP"><Icon type="lock" size={26} /></span>
+            </NavLink>
             <button type="button" onClick={() => setShowLogoutModal(true)} aria-label="Logout">
                <span
                   className={classes.navMenuLabel}
