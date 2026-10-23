@@ -46,6 +46,10 @@ const baseConfigSchema = z.object({
 	AGENT_INSTALL_VERSION: z.string().optional(),
 	AGENT_INSTALL_CA_FILE: z.string().optional(),
 	AGENT_OFFLINE_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(90).optional(),
+	// MCP is disabled in durable policy by default. Authorization is delegated to an existing IdP.
+	MCP_RESOURCE_URL: z.string().optional(),
+	MCP_OAUTH_ISSUER: z.string().optional(),
+	MCP_OAUTH_JWKS_URL: z.string().optional(),
 
 	// Security (optional in setup mode)
 	ENCRYPTION_KEY: z

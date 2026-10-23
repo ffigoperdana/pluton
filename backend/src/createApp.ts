@@ -95,6 +95,11 @@ import { ManagedReplicationStore } from './stores/ManagedReplicationStore';
 import { ManagedReplicationService } from './services/ManagedReplicationService';
 import { configureProtectedStorageDatabase, s3RepositoryScope } from './utils/storageSecurity';
 import { configureReplicaScopeResolver } from './utils/managedReplicationPolicy';
+import { McpStore } from './mcp/McpStore';
+import { OperationalReadService } from './mcp/OperationalReadService';
+import { mcpConfig } from './mcp/authorization';
+import { createMcpGateway, createMcpAdminRouter, mcpInputError } from './mcp/gateway';
+import { mcpBrowserAdministrator } from './mcp/browserAdministrator';
 
 const MemoryStore = createMemoryStore(session);
 
@@ -265,6 +270,14 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	}
 
 	const webPolicy = parseWebOrigins(configService.config);
+	const mcpStore = new McpStore(sqlite);
+	const mcpSettings = mcpConfig(configService.config);
+	const mcpGateway = createMcpGateway(mcpStore, new OperationalReadService(db), mcpSettings);
+	// Separate machine boundary: cookie sessions, web CORS and body parsing never authorize MCP.
+	app.use((req, res, next) => {
+		if (req.path === '/mcp' || req.path.startsWith('/mcp/') || req.path === '/.well-known/oauth-protected-resource/mcp' || req.path.startsWith('/api/v1/operations')) return mcpGateway(req, res, next);
+		next();
+	});
 	app.use(webAccess(webPolicy));
 	app.use(sameOriginCors(webPolicy));
 
@@ -286,6 +299,8 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		})
 	);
 	app.use(versionMiddleware);
+	app.use('/api/mcp-admin', express.json({ limit: '16kb' }));
+	app.use(mcpInputError);
 	app.use('/api/database-restores', express.json({ limit: '8kb' }));
 	app.use(databaseRestoreInputError);
 	app.use('/api/agent', agentJson);
@@ -375,6 +390,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	);
 	app.use('/api/health', createHealthRouter());
 	app.use('/api/database-restores', createDatabaseRestoreRouter(databaseRestoreService));
+	app.use('/api/mcp-admin', createMcpAdminRouter(mcpStore, mcpBrowserAdministrator, mcpSettings));
 	app.use(databaseRestoreInputError);
 
 	// For any other request that doesn't match an API route or a static file,
