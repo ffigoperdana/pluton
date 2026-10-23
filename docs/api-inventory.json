@@ -1,0 +1,4586 @@
+[
+  {
+    "feature": "MCP protocol",
+    "method": "GET",
+    "route": "/.well-known/oauth-protected-resource/mcp",
+    "handler": "RFC 9728 metadata; public only when enabled",
+    "services": [
+      "official SDK",
+      "OperationalReadService",
+      "McpStore"
+    ],
+    "authentication": "public transport/discovery only when enabled",
+    "authorization": "per-tool scope intersection and exact local resource grant",
+    "classification": "protocol/read-only",
+    "support": "Fully supported within documented protocol versions",
+    "request": [
+      "official SDK schemas; 16 KiB JSON; exact Host/Origin; TLS"
+    ],
+    "requestSchemas": [
+      "SDK types + toolCatalog"
+    ],
+    "response": "SDK JSON-RPC; tools: schemaVersion 1 evidence DTO",
+    "pagination": "tools bounded catalog; collections limit/offset",
+    "errors": "transport HTTP codes; SDK JSON-RPC; generic sanitized tool admission errors",
+    "available": "external MCP clients; disabled by default",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts"
+    ],
+    "source": "backend/src/mcp/gateway.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "No arbitrary API proxy, filesystem, SQL, shell, backup export or writes."
+  },
+  {
+    "feature": "agentAdmin",
+    "method": "POST",
+    "route": "/api/agent-admin/devices/:id/revoke",
+    "handler": "AgentAdminController.revokeDevice",
+    "services": [
+      "agentService.revokeDevice"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/agentSourceAccess.test.ts"
+    ],
+    "source": "backend/src/controllers/AgentAdminController.ts",
+    "routeSource": "backend/src/routes/agentAdmin.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "agentAdmin",
+    "method": "GET",
+    "route": "/api/agent-admin/devices/:id/source-access",
+    "handler": "AgentAdminController.getSourceAccess",
+    "services": [
+      "AgentSourceAccessService.getView"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/agentSourceAccess.test.ts"
+    ],
+    "source": "backend/src/controllers/AgentAdminController.ts",
+    "routeSource": "backend/src/routes/agentAdmin.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "agentAdmin",
+    "method": "POST",
+    "route": "/api/agent-admin/devices/:id/source-access/mode-setup",
+    "handler": "AgentAdminController.setupSourceAccessMode",
+    "services": [
+      "AgentSourceAccessService.setupMode"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/agentSourceAccess.test.ts"
+    ],
+    "source": "backend/src/controllers/AgentAdminController.ts",
+    "routeSource": "backend/src/routes/agentAdmin.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "agentAdmin",
+    "method": "POST",
+    "route": "/api/agent-admin/devices/:id/source-access/refresh",
+    "handler": "AgentAdminController.refreshSourceAccess",
+    "services": [
+      "AgentSourceAccessService.refresh"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/agentSourceAccess.test.ts"
+    ],
+    "source": "backend/src/controllers/AgentAdminController.ts",
+    "routeSource": "backend/src/routes/agentAdmin.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "agentAdmin",
+    "method": "GET",
+    "route": "/api/agent-admin/devices/:id/source-access/requests",
+    "handler": "AgentAdminController.getSourceAccessHistory",
+    "services": [
+      "AgentSourceAccessService.getRequestHistory"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "query"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "bounded keyset cursor",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/agentSourceAccess.test.ts"
+    ],
+    "source": "backend/src/controllers/AgentAdminController.ts",
+    "routeSource": "backend/src/routes/agentAdmin.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "agentAdmin",
+    "method": "POST",
+    "route": "/api/agent-admin/devices/:id/source-access/requests",
+    "handler": "AgentAdminController.requestSourceAccess",
+    "services": [
+      "AgentSourceAccessService.request"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/agentSourceAccess.test.ts"
+    ],
+    "source": "backend/src/controllers/AgentAdminController.ts",
+    "routeSource": "backend/src/routes/agentAdmin.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "agentAdmin",
+    "method": "POST",
+    "route": "/api/agent-admin/devices/:id/source-access/requests/:requestId/cancel",
+    "handler": "AgentAdminController.cancelSourceAccess",
+    "services": [
+      "AgentSourceAccessService.cancel"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "params.requestId"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/agentSourceAccess.test.ts"
+    ],
+    "source": "backend/src/controllers/AgentAdminController.ts",
+    "routeSource": "backend/src/routes/agentAdmin.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "agentAdmin",
+    "method": "POST",
+    "route": "/api/agent-admin/devices/:id/source-access/validate",
+    "handler": "AgentAdminController.validateSourceAccess",
+    "services": [
+      "AgentSourceAccessService.request"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/agentSourceAccess.test.ts"
+    ],
+    "source": "backend/src/controllers/AgentAdminController.ts",
+    "routeSource": "backend/src/routes/agentAdmin.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "agentAdmin",
+    "method": "POST",
+    "route": "/api/agent-admin/enrollments",
+    "handler": "AgentAdminController.createEnrollment",
+    "services": [
+      "agentService.createEnrollment"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/agentSourceAccess.test.ts"
+    ],
+    "source": "backend/src/controllers/AgentAdminController.ts",
+    "routeSource": "backend/src/routes/agentAdmin.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "agentAdmin",
+    "method": "POST",
+    "route": "/api/agent-admin/enrollments/:id/revoke",
+    "handler": "AgentAdminController.revokeEnrollment",
+    "services": [
+      "agentService.revokeEnrollment"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/agentSourceAccess.test.ts"
+    ],
+    "source": "backend/src/controllers/AgentAdminController.ts",
+    "routeSource": "backend/src/routes/agentAdmin.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "agents",
+    "method": "POST",
+    "route": "/api/agent/commands/:id/ack",
+    "handler": "AgentController.acknowledge",
+    "services": [
+      "agentService.acknowledge"
+    ],
+    "authentication": "Agent HMAC, timestamp, nonce + TLS policy",
+    "authorization": "Agent identity/command binding",
+    "classification": "mutating/privileged",
+    "support": "Fully supported (special-purpose)",
+    "request": [
+      "params.id",
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "Agent protocol only; not general API",
+    "testReferences": [
+      "backend/__tests__/agentControlPlane.integration.test.ts",
+      "backend/__tests__/agentSourceAccess.test.ts",
+      "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/dualOrigin.test.ts"
+    ],
+    "source": "backend/src/controllers/AgentController.ts",
+    "routeSource": "backend/src/routes/agents.ts",
+    "security": "Never reuse device/enrollment credentials for MCP."
+  },
+  {
+    "feature": "agents",
+    "method": "POST",
+    "route": "/api/agent/commands/:id/complete",
+    "handler": "AgentController.complete",
+    "services": [
+      "agentService.complete"
+    ],
+    "authentication": "Agent HMAC, timestamp, nonce + TLS policy",
+    "authorization": "Agent identity/command binding",
+    "classification": "mutating/privileged",
+    "support": "Fully supported (special-purpose)",
+    "request": [
+      "params.id",
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "Agent protocol only; not general API",
+    "testReferences": [
+      "backend/__tests__/agentControlPlane.integration.test.ts",
+      "backend/__tests__/agentSourceAccess.test.ts",
+      "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/dualOrigin.test.ts"
+    ],
+    "source": "backend/src/controllers/AgentController.ts",
+    "routeSource": "backend/src/routes/agents.ts",
+    "security": "Never reuse device/enrollment credentials for MCP."
+  },
+  {
+    "feature": "agents",
+    "method": "POST",
+    "route": "/api/agent/commands/:id/events",
+    "handler": "AgentController.event",
+    "services": [
+      "agentService.recordEvent"
+    ],
+    "authentication": "Agent HMAC, timestamp, nonce + TLS policy",
+    "authorization": "Agent identity/command binding",
+    "classification": "mutating/privileged",
+    "support": "Fully supported (special-purpose)",
+    "request": [
+      "params.id",
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "Agent protocol only; not general API",
+    "testReferences": [
+      "backend/__tests__/agentControlPlane.integration.test.ts",
+      "backend/__tests__/agentSourceAccess.test.ts",
+      "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/dualOrigin.test.ts"
+    ],
+    "source": "backend/src/controllers/AgentController.ts",
+    "routeSource": "backend/src/routes/agents.ts",
+    "security": "Never reuse device/enrollment credentials for MCP."
+  },
+  {
+    "feature": "agents",
+    "method": "POST",
+    "route": "/api/agent/commands/:id/status",
+    "handler": "AgentController.commandStatus",
+    "services": [
+      "agentService.commandStatus"
+    ],
+    "authentication": "Agent HMAC, timestamp, nonce + TLS policy",
+    "authorization": "Agent identity/command binding",
+    "classification": "mutating/privileged",
+    "support": "Fully supported (special-purpose)",
+    "request": [
+      "params.id",
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "Agent protocol only; not general API",
+    "testReferences": [
+      "backend/__tests__/agentControlPlane.integration.test.ts",
+      "backend/__tests__/agentSourceAccess.test.ts",
+      "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/dualOrigin.test.ts"
+    ],
+    "source": "backend/src/controllers/AgentController.ts",
+    "routeSource": "backend/src/routes/agents.ts",
+    "security": "Never reuse device/enrollment credentials for MCP."
+  },
+  {
+    "feature": "agents",
+    "method": "POST",
+    "route": "/api/agent/enroll",
+    "handler": "AgentController.enroll",
+    "services": [
+      "agentService.enroll"
+    ],
+    "authentication": "one-time enrollment + transport policy",
+    "authorization": "Agent identity/command binding",
+    "classification": "mutating/privileged",
+    "support": "Fully supported (special-purpose)",
+    "request": [
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "Agent protocol only; not general API",
+    "testReferences": [
+      "backend/__tests__/agentControlPlane.integration.test.ts",
+      "backend/__tests__/agentSourceAccess.test.ts",
+      "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/dualOrigin.test.ts"
+    ],
+    "source": "backend/src/controllers/AgentController.ts",
+    "routeSource": "backend/src/routes/agents.ts",
+    "security": "Never reuse device/enrollment credentials for MCP."
+  },
+  {
+    "feature": "agents",
+    "method": "POST",
+    "route": "/api/agent/heartbeat",
+    "handler": "AgentController.heartbeat",
+    "services": [
+      "agentService.heartbeat"
+    ],
+    "authentication": "Agent HMAC, timestamp, nonce + TLS policy",
+    "authorization": "Agent identity/command binding",
+    "classification": "mutating/privileged",
+    "support": "Fully supported (special-purpose)",
+    "request": [
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "Agent protocol only; not general API",
+    "testReferences": [
+      "backend/__tests__/agentControlPlane.integration.test.ts",
+      "backend/__tests__/agentSourceAccess.test.ts",
+      "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/dualOrigin.test.ts"
+    ],
+    "source": "backend/src/controllers/AgentController.ts",
+    "routeSource": "backend/src/routes/agents.ts",
+    "security": "Never reuse device/enrollment credentials for MCP."
+  },
+  {
+    "feature": "agents",
+    "method": "POST",
+    "route": "/api/agent/poll",
+    "handler": "AgentController.poll",
+    "services": [
+      "agentService.poll"
+    ],
+    "authentication": "Agent HMAC, timestamp, nonce + TLS policy",
+    "authorization": "Agent identity/command binding",
+    "classification": "mutating/privileged",
+    "support": "Fully supported (special-purpose)",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "Agent protocol only; not general API",
+    "testReferences": [
+      "backend/__tests__/agentControlPlane.integration.test.ts",
+      "backend/__tests__/agentSourceAccess.test.ts",
+      "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/dualOrigin.test.ts"
+    ],
+    "source": "backend/src/controllers/AgentController.ts",
+    "routeSource": "backend/src/routes/agents.ts",
+    "security": "Never reuse device/enrollment credentials for MCP."
+  },
+  {
+    "feature": "backups",
+    "method": "DELETE",
+    "route": "/api/backups/:id",
+    "handler": "BackupController.deleteBackup",
+    "services": [
+      "backupService.deleteBackup"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "destructive/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "params.rs"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "backups",
+    "method": "POST",
+    "route": "/api/backups/:id",
+    "handler": "BackupController.updateBackup",
+    "services": [
+      "backupService.updateBackup"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "backups",
+    "method": "POST",
+    "route": "/api/backups/:id/action/cancel",
+    "handler": "BackupController.cancelBackup",
+    "services": [
+      "backupService.cancelBackup"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "query.planId"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "backups",
+    "method": "DELETE",
+    "route": "/api/backups/:id/action/download",
+    "handler": "BackupController.cancelBackupDownload",
+    "services": [
+      "backupService.cancelBackupDownload"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "destructive/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "query.planId"
+    ],
+    "requestSchemas": [],
+    "response": "controller JSON or binary/stream contract; unversioned",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "backups",
+    "method": "GET",
+    "route": "/api/backups/:id/action/download",
+    "handler": "BackupController.getBackupDownload",
+    "services": [
+      "backupService.getBackupDownload"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "controller JSON or binary/stream contract; unversioned",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "backups",
+    "method": "POST",
+    "route": "/api/backups/:id/action/download",
+    "handler": "BackupController.generateBackupDownload",
+    "services": [
+      "backupService.generateBackupDownload"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "query.replicationId",
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "controller JSON or binary/stream contract; unversioned",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "backups",
+    "method": "POST",
+    "route": "/api/backups/:id/action/replication-retry",
+    "handler": "BackupController.retryFailedReplications",
+    "services": [
+      "backupService.retryFailedReplications"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "query.replicationId"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "backups",
+    "method": "GET",
+    "route": "/api/backups/:id/files",
+    "handler": "BackupController.getSnapshotFiles",
+    "services": [
+      "backupService.getSnapshotFiles"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "query.replicationId"
+    ],
+    "requestSchemas": [],
+    "response": "controller JSON or binary/stream contract; unversioned",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "backups",
+    "method": "GET",
+    "route": "/api/backups/:id/progress",
+    "handler": "BackupController.getBackupProgress",
+    "services": [
+      "backupService.getBackupProgress"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "query.sourceId",
+      "query.sourceType"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "databaseRestores",
+    "method": "GET",
+    "route": "/api/database-restores",
+    "handler": "inline route handler",
+    "services": [
+      "service.list"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/databaseRestores.test.ts",
+      "backend/__tests__/routes/dualOrigin.test.ts"
+    ],
+    "source": "backend/src/routes/databaseRestores.ts",
+    "routeSource": "backend/src/routes/databaseRestores.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "databaseRestores",
+    "method": "POST",
+    "route": "/api/database-restores",
+    "handler": "inline route handler",
+    "services": [
+      "service.create"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/databaseRestores.test.ts",
+      "backend/__tests__/routes/dualOrigin.test.ts"
+    ],
+    "source": "backend/src/routes/databaseRestores.ts",
+    "routeSource": "backend/src/routes/databaseRestores.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "databaseRestores",
+    "method": "GET",
+    "route": "/api/database-restores/:id",
+    "handler": "inline route handler",
+    "services": [
+      "service.get"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/databaseRestores.test.ts",
+      "backend/__tests__/routes/dualOrigin.test.ts"
+    ],
+    "source": "backend/src/routes/databaseRestores.ts",
+    "routeSource": "backend/src/routes/databaseRestores.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "databaseRestores",
+    "method": "POST",
+    "route": "/api/database-restores/:id/delete",
+    "handler": "inline route handler",
+    "services": [
+      "service.delete"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "destructive/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/databaseRestores.test.ts",
+      "backend/__tests__/routes/dualOrigin.test.ts"
+    ],
+    "source": "backend/src/routes/databaseRestores.ts",
+    "routeSource": "backend/src/routes/databaseRestores.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "databaseRestores",
+    "method": "POST",
+    "route": "/api/database-restores/:id/inspect",
+    "handler": "inline route handler",
+    "services": [
+      "service.inspect"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/databaseRestores.test.ts",
+      "backend/__tests__/routes/dualOrigin.test.ts"
+    ],
+    "source": "backend/src/routes/databaseRestores.ts",
+    "routeSource": "backend/src/routes/databaseRestores.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "databaseRestores",
+    "method": "POST",
+    "route": "/api/database-restores/:id/provision",
+    "handler": "inline route handler",
+    "services": [
+      "service.operator"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/databaseRestores.test.ts",
+      "backend/__tests__/routes/dualOrigin.test.ts"
+    ],
+    "source": "backend/src/routes/databaseRestores.ts",
+    "routeSource": "backend/src/routes/databaseRestores.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "databaseRestores",
+    "method": "POST",
+    "route": "/api/database-restores/:id/resume",
+    "handler": "inline route handler",
+    "services": [
+      "service.operator"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/databaseRestores.test.ts",
+      "backend/__tests__/routes/dualOrigin.test.ts"
+    ],
+    "source": "backend/src/routes/databaseRestores.ts",
+    "routeSource": "backend/src/routes/databaseRestores.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "databaseRestores",
+    "method": "POST",
+    "route": "/api/database-restores/:id/stop",
+    "handler": "inline route handler",
+    "services": [
+      "service.operator"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/databaseRestores.test.ts",
+      "backend/__tests__/routes/dualOrigin.test.ts"
+    ],
+    "source": "backend/src/routes/databaseRestores.ts",
+    "routeSource": "backend/src/routes/databaseRestores.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "databaseRestores",
+    "method": "POST",
+    "route": "/api/database-restores/preparation",
+    "handler": "inline route handler",
+    "services": [
+      "service.preview"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/databaseRestores.test.ts",
+      "backend/__tests__/routes/dualOrigin.test.ts"
+    ],
+    "source": "backend/src/routes/databaseRestores.ts",
+    "routeSource": "backend/src/routes/databaseRestores.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "devices",
+    "method": "GET",
+    "route": "/api/devices",
+    "handler": "DeviceController.getDevices",
+    "services": [
+      "deviceService.getDevices"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Partially exposed",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "500",
+    "available": "legacy key intended; mounted-path defect; use scoped v1 for reads",
+    "testReferences": [
+      "backend/__tests__/controllers/DeviceController.test.ts",
+      "backend/__tests__/routes/devices.test.ts"
+    ],
+    "source": "backend/src/controllers/DeviceController.ts",
+    "routeSource": "backend/src/routes/devices.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "devices",
+    "method": "GET",
+    "route": "/api/devices/:id",
+    "handler": "DeviceController.getDevice",
+    "services": [
+      "deviceService.getDevice"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "query.metrics"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 404",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/DeviceController.test.ts",
+      "backend/__tests__/routes/devices.test.ts"
+    ],
+    "source": "backend/src/controllers/DeviceController.ts",
+    "routeSource": "backend/src/routes/devices.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "devices",
+    "method": "PUT",
+    "route": "/api/devices/:id",
+    "handler": "DeviceController.updateDevice",
+    "services": [
+      "deviceService.updateDevice"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/DeviceController.test.ts",
+      "backend/__tests__/routes/devices.test.ts"
+    ],
+    "source": "backend/src/controllers/DeviceController.ts",
+    "routeSource": "backend/src/routes/devices.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "devices",
+    "method": "POST",
+    "route": "/api/devices/:id/action/update/rclone",
+    "handler": "DeviceController.updateRclone",
+    "services": [
+      "deviceService.updateRclone"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "query.version"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/DeviceController.test.ts",
+      "backend/__tests__/routes/devices.test.ts"
+    ],
+    "source": "backend/src/controllers/DeviceController.ts",
+    "routeSource": "backend/src/routes/devices.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "devices",
+    "method": "POST",
+    "route": "/api/devices/:id/action/update/restic",
+    "handler": "DeviceController.updateRestic",
+    "services": [
+      "deviceService.updateRestic"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "query.version"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/DeviceController.test.ts",
+      "backend/__tests__/routes/devices.test.ts"
+    ],
+    "source": "backend/src/controllers/DeviceController.ts",
+    "routeSource": "backend/src/routes/devices.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "devices",
+    "method": "GET",
+    "route": "/api/devices/:id/browse",
+    "handler": "DeviceController.getBrowsePath",
+    "services": [
+      "deviceService.getBrowsePath"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "query.path"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/DeviceController.test.ts",
+      "backend/__tests__/routes/devices.test.ts"
+    ],
+    "source": "backend/src/controllers/DeviceController.ts",
+    "routeSource": "backend/src/routes/devices.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "devices",
+    "method": "GET",
+    "route": "/api/devices/:id/metrics",
+    "handler": "DeviceController.getMetrics",
+    "services": [
+      "deviceService.getMetrics"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/DeviceController.test.ts",
+      "backend/__tests__/routes/devices.test.ts"
+    ],
+    "source": "backend/src/controllers/DeviceController.ts",
+    "routeSource": "backend/src/routes/devices.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "health",
+    "method": "GET",
+    "route": "/api/health",
+    "handler": "inline route handler",
+    "services": [],
+    "authentication": "public; setup/login state checks",
+    "authorization": "rate limits and setup/auth state",
+    "classification": "read (may perform IO)",
+    "support": "Fully supported (special-purpose)",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "503",
+    "available": "public contract (state restrictions)",
+    "testReferences": [
+      "backend/__tests__/routes/health.test.ts"
+    ],
+    "source": "backend/src/routes/health.ts",
+    "routeSource": "backend/src/routes/health.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "health",
+    "method": "GET",
+    "route": "/api/health/details",
+    "handler": "inline route handler",
+    "services": [],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "503",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/health.test.ts"
+    ],
+    "source": "backend/src/routes/health.ts",
+    "routeSource": "backend/src/routes/health.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "legacyRepositories",
+    "method": "GET",
+    "route": "/api/legacy-repositories",
+    "handler": "LegacyRepositoryController.list",
+    "services": [
+      "legacyRepositoryService.getAll"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/legacyRepositories.test.ts"
+    ],
+    "source": "backend/src/controllers/LegacyRepositoryController.ts",
+    "routeSource": "backend/src/routes/legacyRepositories.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "legacyRepositories",
+    "method": "POST",
+    "route": "/api/legacy-repositories",
+    "handler": "LegacyRepositoryController.create",
+    "services": [
+      "legacyRepositoryService.register"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/legacyRepositories.test.ts"
+    ],
+    "source": "backend/src/controllers/LegacyRepositoryController.ts",
+    "routeSource": "backend/src/routes/legacyRepositories.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "legacyRepositories",
+    "method": "DELETE",
+    "route": "/api/legacy-repositories/:id",
+    "handler": "LegacyRepositoryController.delete",
+    "services": [
+      "legacyRepositoryService.deleteRegistration"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "destructive/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/legacyRepositories.test.ts"
+    ],
+    "source": "backend/src/controllers/LegacyRepositoryController.ts",
+    "routeSource": "backend/src/routes/legacyRepositories.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "legacyRepositories",
+    "method": "GET",
+    "route": "/api/legacy-repositories/:id",
+    "handler": "LegacyRepositoryController.get",
+    "services": [
+      "legacyRepositoryService.getById"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/legacyRepositories.test.ts"
+    ],
+    "source": "backend/src/controllers/LegacyRepositoryController.ts",
+    "routeSource": "backend/src/routes/legacyRepositories.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "legacyRepositories",
+    "method": "POST",
+    "route": "/api/legacy-repositories/:id/restores",
+    "handler": "LegacyRepositoryController.createRestore",
+    "services": [
+      "legacyRepositoryService.startRestore"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/legacyRepositories.test.ts"
+    ],
+    "source": "backend/src/controllers/LegacyRepositoryController.ts",
+    "routeSource": "backend/src/routes/legacyRepositories.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "legacyRepositories",
+    "method": "GET",
+    "route": "/api/legacy-repositories/:id/restores/:jobId",
+    "handler": "LegacyRepositoryController.getRestore",
+    "services": [
+      "legacyRepositoryService.getRestoreJob"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "params.jobId"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/legacyRepositories.test.ts"
+    ],
+    "source": "backend/src/controllers/LegacyRepositoryController.ts",
+    "routeSource": "backend/src/routes/legacyRepositories.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "legacyRepositories",
+    "method": "POST",
+    "route": "/api/legacy-repositories/:id/restores/:jobId/cancel",
+    "handler": "LegacyRepositoryController.cancelRestore",
+    "services": [
+      "legacyRepositoryService.cancelRestore"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "params.jobId"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/legacyRepositories.test.ts"
+    ],
+    "source": "backend/src/controllers/LegacyRepositoryController.ts",
+    "routeSource": "backend/src/routes/legacyRepositories.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "legacyRepositories",
+    "method": "GET",
+    "route": "/api/legacy-repositories/:id/restores/:jobId/files",
+    "handler": "LegacyRepositoryController.downloadRestoredFile",
+    "services": [
+      "legacyRepositoryService.openRestoredFile"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "params.jobId"
+    ],
+    "requestSchemas": [],
+    "response": "controller JSON or binary/stream contract; unversioned",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/legacyRepositories.test.ts"
+    ],
+    "source": "backend/src/controllers/LegacyRepositoryController.ts",
+    "routeSource": "backend/src/routes/legacyRepositories.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "legacyRepositories",
+    "method": "GET",
+    "route": "/api/legacy-repositories/:id/snapshots",
+    "handler": "LegacyRepositoryController.listSnapshots",
+    "services": [
+      "legacyRepositoryService.listSnapshots"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "bounded adapter result; inspect service cursor",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/legacyRepositories.test.ts"
+    ],
+    "source": "backend/src/controllers/LegacyRepositoryController.ts",
+    "routeSource": "backend/src/routes/legacyRepositories.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "legacyRepositories",
+    "method": "GET",
+    "route": "/api/legacy-repositories/:id/snapshots/:snapshotId",
+    "handler": "LegacyRepositoryController.getSnapshot",
+    "services": [
+      "legacyRepositoryService.getSnapshot"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "params.snapshotId"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/legacyRepositories.test.ts"
+    ],
+    "source": "backend/src/controllers/LegacyRepositoryController.ts",
+    "routeSource": "backend/src/routes/legacyRepositories.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "legacyRepositories",
+    "method": "GET",
+    "route": "/api/legacy-repositories/:id/snapshots/:snapshotId/tree",
+    "handler": "LegacyRepositoryController.listSnapshotDirectory",
+    "services": [
+      "legacyRepositoryService.listSnapshotDirectory"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "params.snapshotId"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/legacyRepositories.test.ts"
+    ],
+    "source": "backend/src/controllers/LegacyRepositoryController.ts",
+    "routeSource": "backend/src/routes/legacyRepositories.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "legacyRepositories",
+    "method": "GET",
+    "route": "/api/legacy-repositories/:id/stats",
+    "handler": "LegacyRepositoryController.getStats",
+    "services": [
+      "legacyRepositoryService.getStats"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/legacyRepositories.test.ts"
+    ],
+    "source": "backend/src/controllers/LegacyRepositoryController.ts",
+    "routeSource": "backend/src/routes/legacyRepositories.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "legacyRepositories",
+    "method": "POST",
+    "route": "/api/legacy-repositories/:id/validate",
+    "handler": "LegacyRepositoryController.validate",
+    "services": [
+      "legacyRepositoryService.validate"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/legacyRepositories.test.ts"
+    ],
+    "source": "backend/src/controllers/LegacyRepositoryController.ts",
+    "routeSource": "backend/src/routes/legacyRepositories.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "MCP administration",
+    "method": "GET",
+    "route": "/api/mcp-admin/activity",
+    "handler": "explicit administration action",
+    "services": [
+      "McpStore"
+    ],
+    "authentication": "administrator cookie JWT; machine tokens refused",
+    "authorization": "single administrator; same-origin JSON on writes",
+    "classification": "privileged read",
+    "support": "Supported but internal-only",
+    "request": [
+      "strict policy/grant/page schema; path ID"
+    ],
+    "requestSchemas": [
+      "grantInput / pageInput / inline zod schema"
+    ],
+    "response": "schemaVersion 1, success, result; failure: error, traceId",
+    "pagination": "clients/activity: limit 1–50, offset 0–10000; SQL-bounded",
+    "errors": "400,401,403,404,409,500; stable codes",
+    "available": "administrator web session only",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts",
+      "frontend/__tests__/mcp.test.ts"
+    ],
+    "source": "backend/src/mcp/gateway.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "Durable atomic audit on grants/revocation/policy. Never issues or accepts a model-provider key."
+  },
+  {
+    "feature": "MCP administration",
+    "method": "GET",
+    "route": "/api/mcp-admin/clients",
+    "handler": "explicit administration action",
+    "services": [
+      "McpStore"
+    ],
+    "authentication": "administrator cookie JWT; machine tokens refused",
+    "authorization": "single administrator; same-origin JSON on writes",
+    "classification": "privileged read",
+    "support": "Supported but internal-only",
+    "request": [
+      "strict policy/grant/page schema; path ID"
+    ],
+    "requestSchemas": [
+      "grantInput / pageInput / inline zod schema"
+    ],
+    "response": "schemaVersion 1, success, result; failure: error, traceId",
+    "pagination": "clients/activity: limit 1–50, offset 0–10000; SQL-bounded",
+    "errors": "400,401,403,404,409,500; stable codes",
+    "available": "administrator web session only",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts",
+      "frontend/__tests__/mcp.test.ts"
+    ],
+    "source": "backend/src/mcp/gateway.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "Durable atomic audit on grants/revocation/policy. Never issues or accepts a model-provider key."
+  },
+  {
+    "feature": "MCP administration",
+    "method": "POST",
+    "route": "/api/mcp-admin/clients",
+    "handler": "explicit administration action",
+    "services": [
+      "McpStore"
+    ],
+    "authentication": "administrator cookie JWT; machine tokens refused",
+    "authorization": "single administrator; same-origin JSON on writes",
+    "classification": "privileged mutation",
+    "support": "Supported but internal-only",
+    "request": [
+      "strict policy/grant/page schema; path ID"
+    ],
+    "requestSchemas": [
+      "grantInput / pageInput / inline zod schema"
+    ],
+    "response": "schemaVersion 1, success, result; failure: error, traceId",
+    "pagination": "clients/activity: limit 1–50, offset 0–10000; SQL-bounded",
+    "errors": "400,401,403,404,409,500; stable codes",
+    "available": "administrator web session only",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts",
+      "frontend/__tests__/mcp.test.ts"
+    ],
+    "source": "backend/src/mcp/gateway.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "Durable atomic audit on grants/revocation/policy. Never issues or accepts a model-provider key."
+  },
+  {
+    "feature": "MCP administration",
+    "method": "PUT",
+    "route": "/api/mcp-admin/clients/:id",
+    "handler": "explicit administration action",
+    "services": [
+      "McpStore"
+    ],
+    "authentication": "administrator cookie JWT; machine tokens refused",
+    "authorization": "single administrator; same-origin JSON on writes",
+    "classification": "privileged mutation",
+    "support": "Supported but internal-only",
+    "request": [
+      "strict policy/grant/page schema; path ID"
+    ],
+    "requestSchemas": [
+      "grantInput / pageInput / inline zod schema"
+    ],
+    "response": "schemaVersion 1, success, result; failure: error, traceId",
+    "pagination": "clients/activity: limit 1–50, offset 0–10000; SQL-bounded",
+    "errors": "400,401,403,404,409,500; stable codes",
+    "available": "administrator web session only",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts",
+      "frontend/__tests__/mcp.test.ts"
+    ],
+    "source": "backend/src/mcp/gateway.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "Durable atomic audit on grants/revocation/policy. Never issues or accepts a model-provider key."
+  },
+  {
+    "feature": "MCP administration",
+    "method": "POST",
+    "route": "/api/mcp-admin/clients/:id/revoke",
+    "handler": "explicit administration action",
+    "services": [
+      "McpStore"
+    ],
+    "authentication": "administrator cookie JWT; machine tokens refused",
+    "authorization": "single administrator; same-origin JSON on writes",
+    "classification": "privileged mutation",
+    "support": "Supported but internal-only",
+    "request": [
+      "strict policy/grant/page schema; path ID"
+    ],
+    "requestSchemas": [
+      "grantInput / pageInput / inline zod schema"
+    ],
+    "response": "schemaVersion 1, success, result; failure: error, traceId",
+    "pagination": "clients/activity: limit 1–50, offset 0–10000; SQL-bounded",
+    "errors": "400,401,403,404,409,500; stable codes",
+    "available": "administrator web session only",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts",
+      "frontend/__tests__/mcp.test.ts"
+    ],
+    "source": "backend/src/mcp/gateway.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "Durable atomic audit on grants/revocation/policy. Never issues or accepts a model-provider key."
+  },
+  {
+    "feature": "MCP administration",
+    "method": "GET",
+    "route": "/api/mcp-admin/overview",
+    "handler": "explicit administration action",
+    "services": [
+      "McpStore"
+    ],
+    "authentication": "administrator cookie JWT; machine tokens refused",
+    "authorization": "single administrator; same-origin JSON on writes",
+    "classification": "privileged read",
+    "support": "Supported but internal-only",
+    "request": [
+      "strict policy/grant/page schema; path ID"
+    ],
+    "requestSchemas": [
+      "grantInput / pageInput / inline zod schema"
+    ],
+    "response": "schemaVersion 1, success, result; failure: error, traceId",
+    "pagination": "clients/activity: limit 1–50, offset 0–10000; SQL-bounded",
+    "errors": "400,401,403,404,409,500; stable codes",
+    "available": "administrator web session only",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts",
+      "frontend/__tests__/mcp.test.ts"
+    ],
+    "source": "backend/src/mcp/gateway.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "Durable atomic audit on grants/revocation/policy. Never issues or accepts a model-provider key."
+  },
+  {
+    "feature": "MCP administration",
+    "method": "PUT",
+    "route": "/api/mcp-admin/policy",
+    "handler": "explicit administration action",
+    "services": [
+      "McpStore"
+    ],
+    "authentication": "administrator cookie JWT; machine tokens refused",
+    "authorization": "single administrator; same-origin JSON on writes",
+    "classification": "privileged mutation",
+    "support": "Supported but internal-only",
+    "request": [
+      "strict policy/grant/page schema; path ID"
+    ],
+    "requestSchemas": [
+      "grantInput / pageInput / inline zod schema"
+    ],
+    "response": "schemaVersion 1, success, result; failure: error, traceId",
+    "pagination": "clients/activity: limit 1–50, offset 0–10000; SQL-bounded",
+    "errors": "400,401,403,404,409,500; stable codes",
+    "available": "administrator web session only",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts",
+      "frontend/__tests__/mcp.test.ts"
+    ],
+    "source": "backend/src/mcp/gateway.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "Durable atomic audit on grants/revocation/policy. Never issues or accepts a model-provider key."
+  },
+  {
+    "feature": "MCP administration",
+    "method": "GET",
+    "route": "/api/mcp-admin/tools",
+    "handler": "explicit administration action",
+    "services": [
+      "McpStore"
+    ],
+    "authentication": "administrator cookie JWT; machine tokens refused",
+    "authorization": "single administrator; same-origin JSON on writes",
+    "classification": "privileged read",
+    "support": "Supported but internal-only",
+    "request": [
+      "strict policy/grant/page schema; path ID"
+    ],
+    "requestSchemas": [
+      "grantInput / pageInput / inline zod schema"
+    ],
+    "response": "schemaVersion 1, success, result; failure: error, traceId",
+    "pagination": "clients/activity: limit 1–50, offset 0–10000; SQL-bounded",
+    "errors": "400,401,403,404,409,500; stable codes",
+    "available": "administrator web session only",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts",
+      "frontend/__tests__/mcp.test.ts"
+    ],
+    "source": "backend/src/mcp/gateway.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "Durable atomic audit on grants/revocation/policy. Never issues or accepts a model-provider key."
+  },
+  {
+    "feature": "notifications",
+    "method": "GET",
+    "route": "/api/notifications/channels",
+    "handler": "inline route handler",
+    "services": [
+      "store.channels"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/notifications.test.ts"
+    ],
+    "source": "backend/src/routes/notifications.ts",
+    "routeSource": "backend/src/routes/notifications.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "notifications",
+    "method": "POST",
+    "route": "/api/notifications/channels",
+    "handler": "inline route handler",
+    "services": [
+      "store.saveChannel"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/notifications.test.ts"
+    ],
+    "source": "backend/src/routes/notifications.ts",
+    "routeSource": "backend/src/routes/notifications.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "notifications",
+    "method": "DELETE",
+    "route": "/api/notifications/channels/:id",
+    "handler": "inline route handler",
+    "services": [
+      "store.deleteChannel"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "destructive/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/notifications.test.ts"
+    ],
+    "source": "backend/src/routes/notifications.ts",
+    "routeSource": "backend/src/routes/notifications.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "notifications",
+    "method": "PUT",
+    "route": "/api/notifications/channels/:id",
+    "handler": "inline route handler",
+    "services": [
+      "store.saveChannel"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/notifications.test.ts"
+    ],
+    "source": "backend/src/routes/notifications.ts",
+    "routeSource": "backend/src/routes/notifications.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "notifications",
+    "method": "POST",
+    "route": "/api/notifications/channels/:id/test",
+    "handler": "inline route handler",
+    "services": [
+      "store.test"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/notifications.test.ts"
+    ],
+    "source": "backend/src/routes/notifications.ts",
+    "routeSource": "backend/src/routes/notifications.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "notifications",
+    "method": "GET",
+    "route": "/api/notifications/deliveries",
+    "handler": "inline route handler",
+    "services": [
+      "store.deliveries"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "query.page"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "50 rows; page 0–400",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/notifications.test.ts"
+    ],
+    "source": "backend/src/routes/notifications.ts",
+    "routeSource": "backend/src/routes/notifications.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "notifications",
+    "method": "GET",
+    "route": "/api/notifications/deliveries/:id",
+    "handler": "inline route handler",
+    "services": [
+      "store.delivery"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "404",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/notifications.test.ts"
+    ],
+    "source": "backend/src/routes/notifications.ts",
+    "routeSource": "backend/src/routes/notifications.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "notifications",
+    "method": "POST",
+    "route": "/api/notifications/deliveries/:id/retry",
+    "handler": "inline route handler",
+    "services": [
+      "store.retry"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/notifications.test.ts"
+    ],
+    "source": "backend/src/routes/notifications.ts",
+    "routeSource": "backend/src/routes/notifications.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "notifications",
+    "method": "GET",
+    "route": "/api/notifications/plans/:id",
+    "handler": "inline route handler",
+    "services": [
+      "store.subscription"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/notifications.test.ts"
+    ],
+    "source": "backend/src/routes/notifications.ts",
+    "routeSource": "backend/src/routes/notifications.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "notifications",
+    "method": "PUT",
+    "route": "/api/notifications/plans/:id",
+    "handler": "inline route handler",
+    "services": [
+      "store.saveSubscription"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/notifications.test.ts"
+    ],
+    "source": "backend/src/routes/notifications.ts",
+    "routeSource": "backend/src/routes/notifications.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "plans",
+    "method": "GET",
+    "route": "/api/plans",
+    "handler": "PlanController.getPlans",
+    "services": [
+      "planService.getAllPlans"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Partially exposed",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "legacy key intended; mounted-path defect; use scoped v1 for reads",
+    "testReferences": [
+      "backend/__tests__/controllers/PlanController.test.ts",
+      "backend/__tests__/routes/backupHistory.test.ts",
+      "backend/__tests__/routes/plans.test.ts",
+      "backend/__tests__/services/DeleteReliability.test.ts"
+    ],
+    "source": "backend/src/controllers/PlanController.ts",
+    "routeSource": "backend/src/routes/plans.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "plans",
+    "method": "POST",
+    "route": "/api/plans",
+    "handler": "PlanController.createPlan",
+    "services": [
+      "planService.createPlan"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Partially exposed",
+    "request": [
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "legacy key intended; mounted-path defect; use scoped v1 for reads",
+    "testReferences": [
+      "backend/__tests__/controllers/PlanController.test.ts",
+      "backend/__tests__/routes/backupHistory.test.ts",
+      "backend/__tests__/routes/plans.test.ts",
+      "backend/__tests__/services/DeleteReliability.test.ts"
+    ],
+    "source": "backend/src/controllers/PlanController.ts",
+    "routeSource": "backend/src/routes/plans.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "plans",
+    "method": "DELETE",
+    "route": "/api/plans/:id",
+    "handler": "PlanController.deletePlan",
+    "services": [
+      "planService.deletePlan"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "destructive/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "query.removeData"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/PlanController.test.ts",
+      "backend/__tests__/routes/backupHistory.test.ts",
+      "backend/__tests__/routes/plans.test.ts",
+      "backend/__tests__/services/DeleteReliability.test.ts"
+    ],
+    "source": "backend/src/controllers/PlanController.ts",
+    "routeSource": "backend/src/routes/plans.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "plans",
+    "method": "GET",
+    "route": "/api/plans/:id",
+    "handler": "PlanController.getPlan",
+    "services": [
+      "planService.getPlan"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "query.backupHistory"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/PlanController.test.ts",
+      "backend/__tests__/routes/backupHistory.test.ts",
+      "backend/__tests__/routes/plans.test.ts",
+      "backend/__tests__/services/DeleteReliability.test.ts"
+    ],
+    "source": "backend/src/controllers/PlanController.ts",
+    "routeSource": "backend/src/routes/plans.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "plans",
+    "method": "PUT",
+    "route": "/api/plans/:id",
+    "handler": "PlanController.updatePlan",
+    "services": [
+      "planService.updatePlan"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body.plan",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/PlanController.test.ts",
+      "backend/__tests__/routes/backupHistory.test.ts",
+      "backend/__tests__/routes/plans.test.ts",
+      "backend/__tests__/services/DeleteReliability.test.ts"
+    ],
+    "source": "backend/src/controllers/PlanController.ts",
+    "routeSource": "backend/src/routes/plans.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "plans",
+    "method": "POST",
+    "route": "/api/plans/:id/action/backup",
+    "handler": "PlanController.performBackup",
+    "services": [
+      "planService.performBackup"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/PlanController.test.ts",
+      "backend/__tests__/routes/backupHistory.test.ts",
+      "backend/__tests__/routes/plans.test.ts",
+      "backend/__tests__/services/DeleteReliability.test.ts"
+    ],
+    "source": "backend/src/controllers/PlanController.ts",
+    "routeSource": "backend/src/routes/plans.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "plans",
+    "method": "POST",
+    "route": "/api/plans/:id/action/checkintegrity",
+    "handler": "PlanController.checkIntegrity",
+    "services": [
+      "planService.checkIntegrity"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/PlanController.test.ts",
+      "backend/__tests__/routes/backupHistory.test.ts",
+      "backend/__tests__/routes/plans.test.ts",
+      "backend/__tests__/services/DeleteReliability.test.ts"
+    ],
+    "source": "backend/src/controllers/PlanController.ts",
+    "routeSource": "backend/src/routes/plans.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "plans",
+    "method": "POST",
+    "route": "/api/plans/:id/action/delete-replication-storage",
+    "handler": "PlanController.deleteReplicationStorage",
+    "services": [
+      "planService.deleteReplicationStorage"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "destructive/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/PlanController.test.ts",
+      "backend/__tests__/routes/backupHistory.test.ts",
+      "backend/__tests__/routes/plans.test.ts",
+      "backend/__tests__/services/DeleteReliability.test.ts"
+    ],
+    "source": "backend/src/controllers/PlanController.ts",
+    "routeSource": "backend/src/routes/plans.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "plans",
+    "method": "POST",
+    "route": "/api/plans/:id/action/pause",
+    "handler": "PlanController.pauseBackup",
+    "services": [
+      "planService.pauseBackup"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/PlanController.test.ts",
+      "backend/__tests__/routes/backupHistory.test.ts",
+      "backend/__tests__/routes/plans.test.ts",
+      "backend/__tests__/services/DeleteReliability.test.ts"
+    ],
+    "source": "backend/src/controllers/PlanController.ts",
+    "routeSource": "backend/src/routes/plans.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "plans",
+    "method": "POST",
+    "route": "/api/plans/:id/action/prune",
+    "handler": "PlanController.pruneBackup",
+    "services": [
+      "planService.pruneBackups"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "destructive/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/PlanController.test.ts",
+      "backend/__tests__/routes/backupHistory.test.ts",
+      "backend/__tests__/routes/plans.test.ts",
+      "backend/__tests__/services/DeleteReliability.test.ts"
+    ],
+    "source": "backend/src/controllers/PlanController.ts",
+    "routeSource": "backend/src/routes/plans.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "plans",
+    "method": "POST",
+    "route": "/api/plans/:id/action/repair",
+    "handler": "PlanController.repairRepo",
+    "services": [
+      "planService.repairRepo"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "destructive/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "query.type",
+      "query.replicationId"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/PlanController.test.ts",
+      "backend/__tests__/routes/backupHistory.test.ts",
+      "backend/__tests__/routes/plans.test.ts",
+      "backend/__tests__/services/DeleteReliability.test.ts"
+    ],
+    "source": "backend/src/controllers/PlanController.ts",
+    "routeSource": "backend/src/routes/plans.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "plans",
+    "method": "POST",
+    "route": "/api/plans/:id/action/resume",
+    "handler": "PlanController.resumeBackup",
+    "services": [
+      "planService.resumeBackup"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/PlanController.test.ts",
+      "backend/__tests__/routes/backupHistory.test.ts",
+      "backend/__tests__/routes/plans.test.ts",
+      "backend/__tests__/services/DeleteReliability.test.ts"
+    ],
+    "source": "backend/src/controllers/PlanController.ts",
+    "routeSource": "backend/src/routes/plans.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "plans",
+    "method": "POST",
+    "route": "/api/plans/:id/action/test-notification",
+    "handler": "PlanController.sendTestBackupNotification",
+    "services": [
+      "planService.sendTestNotification"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body.planId",
+      "body.notificationCase",
+      "body.channelSettings",
+      "body.notificationChannel",
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/PlanController.test.ts",
+      "backend/__tests__/routes/backupHistory.test.ts",
+      "backend/__tests__/routes/plans.test.ts",
+      "backend/__tests__/services/DeleteReliability.test.ts"
+    ],
+    "source": "backend/src/controllers/PlanController.ts",
+    "routeSource": "backend/src/routes/plans.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "plans",
+    "method": "POST",
+    "route": "/api/plans/:id/action/unlock",
+    "handler": "PlanController.unlockRepo",
+    "services": [
+      "planService.unlockRepo"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "destructive/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/PlanController.test.ts",
+      "backend/__tests__/routes/backupHistory.test.ts",
+      "backend/__tests__/routes/plans.test.ts",
+      "backend/__tests__/services/DeleteReliability.test.ts"
+    ],
+    "source": "backend/src/controllers/PlanController.ts",
+    "routeSource": "backend/src/routes/plans.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "plans",
+    "method": "GET",
+    "route": "/api/plans/:id/backups",
+    "handler": "PlanController.getBackupHistory",
+    "services": [
+      "planService.getBackupHistory"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "query"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "page/pageSize, dates, timezone; bounded",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/PlanController.test.ts",
+      "backend/__tests__/routes/backupHistory.test.ts",
+      "backend/__tests__/routes/plans.test.ts",
+      "backend/__tests__/services/DeleteReliability.test.ts"
+    ],
+    "source": "backend/src/controllers/PlanController.ts",
+    "routeSource": "backend/src/routes/plans.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "plans",
+    "method": "GET",
+    "route": "/api/plans/:id/checkactive",
+    "handler": "PlanController.checkActiveBackupsOrRestore",
+    "services": [
+      "planService.checkActiveBackupsOrRestore"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "query.type"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/PlanController.test.ts",
+      "backend/__tests__/routes/backupHistory.test.ts",
+      "backend/__tests__/routes/plans.test.ts",
+      "backend/__tests__/services/DeleteReliability.test.ts"
+    ],
+    "source": "backend/src/controllers/PlanController.ts",
+    "routeSource": "backend/src/routes/plans.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "plans",
+    "method": "GET",
+    "route": "/api/plans/:id/logs",
+    "handler": "PlanController.getLogs",
+    "services": [
+      "planService.getPlanLogs"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/PlanController.test.ts",
+      "backend/__tests__/routes/backupHistory.test.ts",
+      "backend/__tests__/routes/plans.test.ts",
+      "backend/__tests__/services/DeleteReliability.test.ts"
+    ],
+    "source": "backend/src/controllers/PlanController.ts",
+    "routeSource": "backend/src/routes/plans.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "plans",
+    "method": "GET",
+    "route": "/api/plans/:id/logs/download",
+    "handler": "PlanController.downloadLogs",
+    "services": [
+      "planService.downloadPlanLogs"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "controller JSON or binary/stream contract; unversioned",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/PlanController.test.ts",
+      "backend/__tests__/routes/backupHistory.test.ts",
+      "backend/__tests__/routes/plans.test.ts",
+      "backend/__tests__/services/DeleteReliability.test.ts"
+    ],
+    "source": "backend/src/controllers/PlanController.ts",
+    "routeSource": "backend/src/routes/plans.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "plans",
+    "method": "GET",
+    "route": "/api/plans/schedule-preview",
+    "handler": "PlanController.previewSchedule",
+    "services": [],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "query.interval"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/PlanController.test.ts",
+      "backend/__tests__/routes/backupHistory.test.ts",
+      "backend/__tests__/routes/plans.test.ts",
+      "backend/__tests__/services/DeleteReliability.test.ts"
+    ],
+    "source": "backend/src/controllers/PlanController.ts",
+    "routeSource": "backend/src/routes/plans.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "recoveryTests",
+    "method": "GET",
+    "route": "/api/recovery-testing/:planId/configuration",
+    "handler": "RecoveryTestController.configuration",
+    "services": [
+      "service.configuration"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.planId"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/dualOrigin.test.ts",
+      "backend/__tests__/routes/recoveryTests.test.ts"
+    ],
+    "source": "backend/src/controllers/RecoveryTestController.ts",
+    "routeSource": "backend/src/routes/recoveryTests.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "recoveryTests",
+    "method": "POST",
+    "route": "/api/recovery-testing/:planId/database-restores",
+    "handler": "RecoveryTestController.databaseRestore",
+    "services": [
+      "service.databaseRestoreUnavailable"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body",
+      "params.planId"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/dualOrigin.test.ts",
+      "backend/__tests__/routes/recoveryTests.test.ts"
+    ],
+    "source": "backend/src/controllers/RecoveryTestController.ts",
+    "routeSource": "backend/src/routes/recoveryTests.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "recoveryTests",
+    "method": "PUT",
+    "route": "/api/recovery-testing/:planId/policy",
+    "handler": "RecoveryTestController.savePolicy",
+    "services": [
+      "service.savePolicy"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.planId",
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/dualOrigin.test.ts",
+      "backend/__tests__/routes/recoveryTests.test.ts"
+    ],
+    "source": "backend/src/controllers/RecoveryTestController.ts",
+    "routeSource": "backend/src/routes/recoveryTests.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "recoveryTests",
+    "method": "POST",
+    "route": "/api/recovery-testing/:planId/preparation",
+    "handler": "RecoveryTestController.preparation",
+    "services": [
+      "service.preparation"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body",
+      "params.planId"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/dualOrigin.test.ts",
+      "backend/__tests__/routes/recoveryTests.test.ts"
+    ],
+    "source": "backend/src/controllers/RecoveryTestController.ts",
+    "routeSource": "backend/src/routes/recoveryTests.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "recoveryTests",
+    "method": "PUT",
+    "route": "/api/recovery-testing/:planId/target",
+    "handler": "RecoveryTestController.saveTarget",
+    "services": [
+      "service.saveTarget"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.planId",
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/dualOrigin.test.ts",
+      "backend/__tests__/routes/recoveryTests.test.ts"
+    ],
+    "source": "backend/src/controllers/RecoveryTestController.ts",
+    "routeSource": "backend/src/routes/recoveryTests.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "recoveryTests",
+    "method": "GET",
+    "route": "/api/recovery-testing/:planId/tests",
+    "handler": "RecoveryTestController.list",
+    "services": [
+      "service.list"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.planId"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "bounded recent 200, not general paging",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/dualOrigin.test.ts",
+      "backend/__tests__/routes/recoveryTests.test.ts"
+    ],
+    "source": "backend/src/controllers/RecoveryTestController.ts",
+    "routeSource": "backend/src/routes/recoveryTests.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "recoveryTests",
+    "method": "POST",
+    "route": "/api/recovery-testing/:planId/tests",
+    "handler": "RecoveryTestController.run",
+    "services": [
+      "service.enqueueManual",
+      "service.enqueue"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body",
+      "params.planId",
+      "body.backupId"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/dualOrigin.test.ts",
+      "backend/__tests__/routes/recoveryTests.test.ts"
+    ],
+    "source": "backend/src/controllers/RecoveryTestController.ts",
+    "routeSource": "backend/src/routes/recoveryTests.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "recoveryTests",
+    "method": "GET",
+    "route": "/api/recovery-testing/:planId/tests/:id",
+    "handler": "RecoveryTestController.get",
+    "services": [
+      "service.get"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.planId",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/dualOrigin.test.ts",
+      "backend/__tests__/routes/recoveryTests.test.ts"
+    ],
+    "source": "backend/src/controllers/RecoveryTestController.ts",
+    "routeSource": "backend/src/routes/recoveryTests.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "recoveryTests",
+    "method": "POST",
+    "route": "/api/recovery-testing/:planId/tests/:id/cancel",
+    "handler": "RecoveryTestController.cancel",
+    "services": [
+      "service.cancel"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.planId",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/dualOrigin.test.ts",
+      "backend/__tests__/routes/recoveryTests.test.ts"
+    ],
+    "source": "backend/src/controllers/RecoveryTestController.ts",
+    "routeSource": "backend/src/routes/recoveryTests.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "recoveryTests",
+    "method": "POST",
+    "route": "/api/recovery-testing/:planId/tests/lookup",
+    "handler": "RecoveryTestController.lookup",
+    "services": [
+      "service.list"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body",
+      "body.backupIds",
+      "params.planId"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/dualOrigin.test.ts",
+      "backend/__tests__/routes/recoveryTests.test.ts"
+    ],
+    "source": "backend/src/controllers/RecoveryTestController.ts",
+    "routeSource": "backend/src/routes/recoveryTests.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "restores",
+    "method": "GET",
+    "route": "/api/restores",
+    "handler": "RestoreController.listRestores",
+    "services": [
+      "restoreService.getAllRestores"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/RestoreController.test.ts",
+      "backend/__tests__/routes/restores.test.ts"
+    ],
+    "source": "backend/src/controllers/RestoreController.ts",
+    "routeSource": "backend/src/routes/restores.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "restores",
+    "method": "DELETE",
+    "route": "/api/restores/:id",
+    "handler": "RestoreController.deleteRestore",
+    "services": [
+      "restoreService.deleteRestore"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "destructive/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/RestoreController.test.ts",
+      "backend/__tests__/routes/restores.test.ts"
+    ],
+    "source": "backend/src/controllers/RestoreController.ts",
+    "routeSource": "backend/src/routes/restores.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "restores",
+    "method": "GET",
+    "route": "/api/restores/:id",
+    "handler": "RestoreController.getRestore",
+    "services": [
+      "restoreService.getRestore"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 404, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/RestoreController.test.ts",
+      "backend/__tests__/routes/restores.test.ts"
+    ],
+    "source": "backend/src/controllers/RestoreController.ts",
+    "routeSource": "backend/src/routes/restores.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "restores",
+    "method": "POST",
+    "route": "/api/restores/:id/action/cancel",
+    "handler": "RestoreController.cancelRestore",
+    "services": [
+      "restoreService.cancelRestore"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/RestoreController.test.ts",
+      "backend/__tests__/routes/restores.test.ts"
+    ],
+    "source": "backend/src/controllers/RestoreController.ts",
+    "routeSource": "backend/src/routes/restores.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "restores",
+    "method": "GET",
+    "route": "/api/restores/:id/progress",
+    "handler": "RestoreController.getRestoreProgress",
+    "services": [
+      "restoreService.getRestoreProgress"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "query.sourceId",
+      "query.sourceType",
+      "query.planId"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/RestoreController.test.ts",
+      "backend/__tests__/routes/restores.test.ts"
+    ],
+    "source": "backend/src/controllers/RestoreController.ts",
+    "routeSource": "backend/src/routes/restores.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "restores",
+    "method": "GET",
+    "route": "/api/restores/:id/stats",
+    "handler": "RestoreController.getRestoreStats",
+    "services": [
+      "restoreService.getRestoreStats"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 404, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/RestoreController.test.ts",
+      "backend/__tests__/routes/restores.test.ts"
+    ],
+    "source": "backend/src/controllers/RestoreController.ts",
+    "routeSource": "backend/src/routes/restores.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "restores",
+    "method": "POST",
+    "route": "/api/restores/action/dryrestore",
+    "handler": "RestoreController.performDryRestore",
+    "services": [
+      "restoreService.dryRestoreBackup"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/RestoreController.test.ts",
+      "backend/__tests__/routes/restores.test.ts"
+    ],
+    "source": "backend/src/controllers/RestoreController.ts",
+    "routeSource": "backend/src/routes/restores.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "restores",
+    "method": "POST",
+    "route": "/api/restores/action/restore",
+    "handler": "RestoreController.performRestore",
+    "services": [
+      "restoreService.restoreBackup"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/RestoreController.test.ts",
+      "backend/__tests__/routes/restores.test.ts"
+    ],
+    "source": "backend/src/controllers/RestoreController.ts",
+    "routeSource": "backend/src/routes/restores.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "settings",
+    "method": "GET",
+    "route": "/api/settings",
+    "handler": "SettingsController.getMainSettings",
+    "services": [
+      "settingsService.getMainSettings"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/SettingsController.test.ts",
+      "backend/__tests__/routes/settings.test.ts"
+    ],
+    "source": "backend/src/controllers/SettingsController.ts",
+    "routeSource": "backend/src/routes/settings.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "settings",
+    "method": "GET",
+    "route": "/api/settings/:id",
+    "handler": "SettingsController.getSettings",
+    "services": [
+      "settingsService.getSettings"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/SettingsController.test.ts",
+      "backend/__tests__/routes/settings.test.ts"
+    ],
+    "source": "backend/src/controllers/SettingsController.ts",
+    "routeSource": "backend/src/routes/settings.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "settings",
+    "method": "PUT",
+    "route": "/api/settings/:id",
+    "handler": "SettingsController.updateSettings",
+    "services": [
+      "settingsService.updateSettings"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "body.settings"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/SettingsController.test.ts",
+      "backend/__tests__/routes/settings.test.ts"
+    ],
+    "source": "backend/src/controllers/SettingsController.ts",
+    "routeSource": "backend/src/routes/settings.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "settings",
+    "method": "POST",
+    "route": "/api/settings/:id/2fa/finalize",
+    "handler": "SettingsController.finalizeTwoFactorSetup",
+    "services": [
+      "settingsService.finalizeTwoFactorSetup"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/SettingsController.test.ts",
+      "backend/__tests__/routes/settings.test.ts"
+    ],
+    "source": "backend/src/controllers/SettingsController.ts",
+    "routeSource": "backend/src/routes/settings.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "settings",
+    "method": "POST",
+    "route": "/api/settings/:id/2fa/setup",
+    "handler": "SettingsController.setupTwoFactorAuth",
+    "services": [
+      "settingsService.setupTwoFactorAuth"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/SettingsController.test.ts",
+      "backend/__tests__/routes/settings.test.ts"
+    ],
+    "source": "backend/src/controllers/SettingsController.ts",
+    "routeSource": "backend/src/routes/settings.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "settings",
+    "method": "GET",
+    "route": "/api/settings/:id/logs",
+    "handler": "SettingsController.getAppLogs",
+    "services": [
+      "settingsService.getAppLogs"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/SettingsController.test.ts",
+      "backend/__tests__/routes/settings.test.ts"
+    ],
+    "source": "backend/src/controllers/SettingsController.ts",
+    "routeSource": "backend/src/routes/settings.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "settings",
+    "method": "GET",
+    "route": "/api/settings/:id/logs/download",
+    "handler": "SettingsController.downloadAppLogs",
+    "services": [
+      "settingsService.getAppLogsFile"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "controller JSON or binary/stream contract; unversioned",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/SettingsController.test.ts",
+      "backend/__tests__/routes/settings.test.ts"
+    ],
+    "source": "backend/src/controllers/SettingsController.ts",
+    "routeSource": "backend/src/routes/settings.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "settings",
+    "method": "GET",
+    "route": "/api/settings/:id/self-backup/backups",
+    "handler": "SettingsController.listSelfBackups",
+    "services": [
+      "settingsService.listSelfBackups"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/SettingsController.test.ts",
+      "backend/__tests__/routes/settings.test.ts"
+    ],
+    "source": "backend/src/controllers/SettingsController.ts",
+    "routeSource": "backend/src/routes/settings.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "settings",
+    "method": "GET",
+    "route": "/api/settings/:id/self-backup/backups/:blobName/download",
+    "handler": "SettingsController.downloadSelfBackup",
+    "services": [
+      "settingsService.downloadSelfBackup"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.blobName"
+    ],
+    "requestSchemas": [],
+    "response": "controller JSON or binary/stream contract; unversioned",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/SettingsController.test.ts",
+      "backend/__tests__/routes/settings.test.ts"
+    ],
+    "source": "backend/src/controllers/SettingsController.ts",
+    "routeSource": "backend/src/routes/settings.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "settings",
+    "method": "POST",
+    "route": "/api/settings/:id/self-backup/run",
+    "handler": "SettingsController.runSelfBackup",
+    "services": [
+      "settingsService.runSelfBackupNow"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/SettingsController.test.ts",
+      "backend/__tests__/routes/settings.test.ts"
+    ],
+    "source": "backend/src/controllers/SettingsController.ts",
+    "routeSource": "backend/src/routes/settings.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "settings",
+    "method": "GET",
+    "route": "/api/settings/:id/self-backup/status",
+    "handler": "SettingsController.getSelfBackupStatus",
+    "services": [
+      "settingsService.getSelfBackupStatus"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/SettingsController.test.ts",
+      "backend/__tests__/routes/settings.test.ts"
+    ],
+    "source": "backend/src/controllers/SettingsController.ts",
+    "routeSource": "backend/src/routes/settings.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "settings",
+    "method": "POST",
+    "route": "/api/settings/integration/validate",
+    "handler": "SettingsController.validateIntegration",
+    "services": [
+      "settingsService.validateIntegration"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body.settingsID",
+      "body.type",
+      "body.settings",
+      "body.test"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/SettingsController.test.ts",
+      "backend/__tests__/routes/settings.test.ts"
+    ],
+    "source": "backend/src/controllers/SettingsController.ts",
+    "routeSource": "backend/src/routes/settings.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "settings",
+    "method": "GET",
+    "route": "/api/settings/version/latest",
+    "handler": "SettingsController.checkLatestVersion",
+    "services": [
+      "settingsService.checkLatestVersion"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/SettingsController.test.ts",
+      "backend/__tests__/routes/settings.test.ts"
+    ],
+    "source": "backend/src/controllers/SettingsController.ts",
+    "routeSource": "backend/src/routes/settings.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "setup",
+    "method": "POST",
+    "route": "/api/setup/complete",
+    "handler": "SetupController.completeSetup",
+    "services": [
+      "configService.isSetupPending",
+      "configService.completeSetup",
+      "configService.markSetupPending"
+    ],
+    "authentication": "public; setup/login state checks",
+    "authorization": "rate limits and setup/auth state",
+    "classification": "mutating/privileged",
+    "support": "Fully supported (special-purpose)",
+    "request": [
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "public contract (state restrictions)",
+    "testReferences": [
+      "backend/__tests__/controllers/SetupController.test.ts"
+    ],
+    "source": "backend/src/controllers/SetupController.ts",
+    "routeSource": "backend/src/routes/setup.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "setup",
+    "method": "GET",
+    "route": "/api/setup/keyring-check",
+    "handler": "SetupController.checkKeyringAvailability",
+    "services": [],
+    "authentication": "public; setup/login state checks",
+    "authorization": "rate limits and setup/auth state",
+    "classification": "read (may perform IO)",
+    "support": "Fully supported (special-purpose)",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "500",
+    "available": "public contract (state restrictions)",
+    "testReferences": [
+      "backend/__tests__/controllers/SetupController.test.ts"
+    ],
+    "source": "backend/src/controllers/SetupController.ts",
+    "routeSource": "backend/src/routes/setup.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "setup",
+    "method": "GET",
+    "route": "/api/setup/status",
+    "handler": "SetupController.getStatus",
+    "services": [
+      "configService.isSetupPending"
+    ],
+    "authentication": "public; setup/login state checks",
+    "authorization": "rate limits and setup/auth state",
+    "classification": "read (may perform IO)",
+    "support": "Fully supported (special-purpose)",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "500",
+    "available": "public contract (state restrictions)",
+    "testReferences": [
+      "backend/__tests__/controllers/SetupController.test.ts"
+    ],
+    "source": "backend/src/controllers/SetupController.ts",
+    "routeSource": "backend/src/routes/setup.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "storages",
+    "method": "GET",
+    "route": "/api/storages",
+    "handler": "StorageController.listStorages",
+    "services": [
+      "storageService.getStorages"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Partially exposed",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "500",
+    "available": "legacy key intended; mounted-path defect; use scoped v1 for reads",
+    "testReferences": [
+      "backend/__tests__/controllers/StorageController.test.ts",
+      "backend/__tests__/routes/storages.test.ts"
+    ],
+    "source": "backend/src/controllers/StorageController.ts",
+    "routeSource": "backend/src/routes/storages.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "storages",
+    "method": "POST",
+    "route": "/api/storages",
+    "handler": "StorageController.createStorage",
+    "services": [
+      "storageService.createStorage"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body.name",
+      "body.type",
+      "body.settings",
+      "body.credentials",
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/StorageController.test.ts",
+      "backend/__tests__/routes/storages.test.ts"
+    ],
+    "source": "backend/src/controllers/StorageController.ts",
+    "routeSource": "backend/src/routes/storages.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "storages",
+    "method": "DELETE",
+    "route": "/api/storages/:id",
+    "handler": "StorageController.deleteStorage",
+    "services": [
+      "storageService.deleteStorage"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "destructive/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/StorageController.test.ts",
+      "backend/__tests__/routes/storages.test.ts"
+    ],
+    "source": "backend/src/controllers/StorageController.ts",
+    "routeSource": "backend/src/routes/storages.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "storages",
+    "method": "GET",
+    "route": "/api/storages/:id",
+    "handler": "StorageController.getStorage",
+    "services": [
+      "storageService.getStorage"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/StorageController.test.ts",
+      "backend/__tests__/routes/storages.test.ts"
+    ],
+    "source": "backend/src/controllers/StorageController.ts",
+    "routeSource": "backend/src/routes/storages.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "storages",
+    "method": "PUT",
+    "route": "/api/storages/:id",
+    "handler": "StorageController.updateStorage",
+    "services": [
+      "storageService.updateStorage"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/StorageController.test.ts",
+      "backend/__tests__/routes/storages.test.ts"
+    ],
+    "source": "backend/src/controllers/StorageController.ts",
+    "routeSource": "backend/src/routes/storages.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "storages",
+    "method": "GET",
+    "route": "/api/storages/:id/browse",
+    "handler": "StorageController.browseStorage",
+    "services": [
+      "storageService.browseStorage"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "query.path"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/StorageController.test.ts",
+      "backend/__tests__/routes/storages.test.ts"
+    ],
+    "source": "backend/src/controllers/StorageController.ts",
+    "routeSource": "backend/src/routes/storages.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "storages",
+    "method": "POST",
+    "route": "/api/storages/authorize",
+    "handler": "StorageController.startAuthorize",
+    "services": [
+      "storageService.startAuthorize"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/StorageController.test.ts",
+      "backend/__tests__/routes/storages.test.ts"
+    ],
+    "source": "backend/src/controllers/StorageController.ts",
+    "routeSource": "backend/src/routes/storages.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "storages",
+    "method": "POST",
+    "route": "/api/storages/authorize/cancel",
+    "handler": "StorageController.cancelAuthorize",
+    "services": [
+      "storageService.cancelAuthorize"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/StorageController.test.ts",
+      "backend/__tests__/routes/storages.test.ts"
+    ],
+    "source": "backend/src/controllers/StorageController.ts",
+    "routeSource": "backend/src/routes/storages.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "storages",
+    "method": "GET",
+    "route": "/api/storages/authorize/status",
+    "handler": "StorageController.getAuthorizeStatus",
+    "services": [
+      "storageService.getAuthorizeStatus"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "query.sessionId"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/StorageController.test.ts",
+      "backend/__tests__/routes/storages.test.ts"
+    ],
+    "source": "backend/src/controllers/StorageController.ts",
+    "routeSource": "backend/src/routes/storages.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "storages",
+    "method": "GET",
+    "route": "/api/storages/available",
+    "handler": "StorageController.listAvailableStorageTypes",
+    "services": [
+      "storageService.getAvailableStorageTypes"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/StorageController.test.ts",
+      "backend/__tests__/routes/storages.test.ts"
+    ],
+    "source": "backend/src/controllers/StorageController.ts",
+    "routeSource": "backend/src/routes/storages.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "storages",
+    "method": "POST",
+    "route": "/api/storages/verify/:id",
+    "handler": "StorageController.verifyStorage",
+    "services": [
+      "storageService.verifyStorage"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 500",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/StorageController.test.ts",
+      "backend/__tests__/routes/storages.test.ts"
+    ],
+    "source": "backend/src/controllers/StorageController.ts",
+    "routeSource": "backend/src/routes/storages.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "users",
+    "method": "POST",
+    "route": "/api/user/login",
+    "handler": "UserController.loginUser",
+    "services": [
+      "configService.verifyPassword"
+    ],
+    "authentication": "public; setup/login state checks",
+    "authorization": "rate limits and setup/auth state",
+    "classification": "mutating/privileged",
+    "support": "Fully supported (special-purpose)",
+    "request": [
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "401",
+    "available": "public contract (state restrictions)",
+    "testReferences": [
+      "backend/__tests__/controllers/UserController.test.ts",
+      "backend/__tests__/routes/dualOrigin.test.ts",
+      "backend/__tests__/routes/users.test.ts"
+    ],
+    "source": "backend/src/controllers/UserController.ts",
+    "routeSource": "backend/src/routes/users.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "users",
+    "method": "POST",
+    "route": "/api/user/logout",
+    "handler": "UserController.logoutUser",
+    "services": [],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "403",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/UserController.test.ts",
+      "backend/__tests__/routes/dualOrigin.test.ts",
+      "backend/__tests__/routes/users.test.ts"
+    ],
+    "source": "backend/src/controllers/UserController.ts",
+    "routeSource": "backend/src/routes/users.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "users",
+    "method": "GET",
+    "route": "/api/user/validate",
+    "handler": "UserController.validateUser",
+    "services": [],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/UserController.test.ts",
+      "backend/__tests__/routes/dualOrigin.test.ts",
+      "backend/__tests__/routes/users.test.ts"
+    ],
+    "source": "backend/src/controllers/UserController.ts",
+    "routeSource": "backend/src/routes/users.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "users",
+    "method": "POST",
+    "route": "/api/user/verify-otp",
+    "handler": "UserController.verifyTotp",
+    "services": [
+      "settingsService.getMainSettings"
+    ],
+    "authentication": "public; setup/login state checks",
+    "authorization": "rate limits and setup/auth state",
+    "classification": "mutating/privileged",
+    "support": "Fully supported (special-purpose)",
+    "request": [
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400, 401, 500",
+    "available": "public contract (state restrictions)",
+    "testReferences": [
+      "backend/__tests__/controllers/UserController.test.ts",
+      "backend/__tests__/routes/dualOrigin.test.ts",
+      "backend/__tests__/routes/users.test.ts"
+    ],
+    "source": "backend/src/controllers/UserController.ts",
+    "routeSource": "backend/src/routes/users.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "scoped operations",
+    "method": "GET",
+    "route": "/api/v1/operations/agents",
+    "handler": "pluton_list_agents",
+    "services": [
+      "OperationalReadService.read"
+    ],
+    "authentication": "external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "agents:read in JWT AND local grant + exact resource IDs + tool policy",
+    "classification": "read-only stored evidence",
+    "support": "Fully supported (read MVP)",
+    "request": [
+      "explicit path IDs",
+      "limit 1–50, offset 0–10000 for collections"
+    ],
+    "requestSchemas": [
+      "toolCatalog.pluton_list_agents.input"
+    ],
+    "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
+    "pagination": "collections: limit/offset/hasMore; SQL-bounded",
+    "errors": "400,401,403,404,429,500; stable code + traceId",
+    "available": "external OAuth clients; service policy must be enabled",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts"
+    ],
+    "source": "backend/src/mcp/OperationalReadService.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "No credentials, names, paths or raw error text. Same projection and audit as MCP."
+  },
+  {
+    "feature": "scoped operations",
+    "method": "GET",
+    "route": "/api/v1/operations/agents/:id",
+    "handler": "pluton_get_agent_status",
+    "services": [
+      "OperationalReadService.read"
+    ],
+    "authentication": "external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "agents:read in JWT AND local grant + exact resource IDs + tool policy",
+    "classification": "read-only stored evidence",
+    "support": "Fully supported (read MVP)",
+    "request": [
+      "explicit path IDs",
+      "limit 1–50, offset 0–10000 for collections"
+    ],
+    "requestSchemas": [
+      "toolCatalog.pluton_get_agent_status.input"
+    ],
+    "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
+    "pagination": "collections: limit/offset/hasMore; SQL-bounded",
+    "errors": "400,401,403,404,429,500; stable code + traceId",
+    "available": "external OAuth clients; service policy must be enabled",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts"
+    ],
+    "source": "backend/src/mcp/OperationalReadService.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "No credentials, names, paths or raw error text. Same projection and audit as MCP."
+  },
+  {
+    "feature": "scoped operations",
+    "method": "GET",
+    "route": "/api/v1/operations/agents/:id/source-access",
+    "handler": "pluton_get_source_access_status",
+    "services": [
+      "OperationalReadService.read"
+    ],
+    "authentication": "external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "agents:read in JWT AND local grant + exact resource IDs + tool policy",
+    "classification": "read-only stored evidence",
+    "support": "Fully supported (read MVP)",
+    "request": [
+      "explicit path IDs",
+      "limit 1–50, offset 0–10000 for collections"
+    ],
+    "requestSchemas": [
+      "toolCatalog.pluton_get_source_access_status.input"
+    ],
+    "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
+    "pagination": "collections: limit/offset/hasMore; SQL-bounded",
+    "errors": "400,401,403,404,429,500; stable code + traceId",
+    "available": "external OAuth clients; service policy must be enabled",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts"
+    ],
+    "source": "backend/src/mcp/OperationalReadService.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "No credentials, names, paths or raw error text. Same projection and audit as MCP."
+  },
+  {
+    "feature": "scoped operations",
+    "method": "GET",
+    "route": "/api/v1/operations/backups/:id",
+    "handler": "pluton_get_backup_status",
+    "services": [
+      "OperationalReadService.read"
+    ],
+    "authentication": "external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "backups:read in JWT AND local grant + exact resource IDs + tool policy",
+    "classification": "read-only stored evidence",
+    "support": "Fully supported (read MVP)",
+    "request": [
+      "explicit path IDs",
+      "limit 1–50, offset 0–10000 for collections"
+    ],
+    "requestSchemas": [
+      "toolCatalog.pluton_get_backup_status.input"
+    ],
+    "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
+    "pagination": "collections: limit/offset/hasMore; SQL-bounded",
+    "errors": "400,401,403,404,429,500; stable code + traceId",
+    "available": "external OAuth clients; service policy must be enabled",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts"
+    ],
+    "source": "backend/src/mcp/OperationalReadService.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "No credentials, names, paths or raw error text. Same projection and audit as MCP."
+  },
+  {
+    "feature": "scoped operations",
+    "method": "GET",
+    "route": "/api/v1/operations/plans",
+    "handler": "pluton_list_plans",
+    "services": [
+      "OperationalReadService.read"
+    ],
+    "authentication": "external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "plans:read in JWT AND local grant + exact resource IDs + tool policy",
+    "classification": "read-only stored evidence",
+    "support": "Fully supported (read MVP)",
+    "request": [
+      "explicit path IDs",
+      "limit 1–50, offset 0–10000 for collections"
+    ],
+    "requestSchemas": [
+      "toolCatalog.pluton_list_plans.input"
+    ],
+    "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
+    "pagination": "collections: limit/offset/hasMore; SQL-bounded",
+    "errors": "400,401,403,404,429,500; stable code + traceId",
+    "available": "external OAuth clients; service policy must be enabled",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts"
+    ],
+    "source": "backend/src/mcp/OperationalReadService.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "No credentials, names, paths or raw error text. Same projection and audit as MCP."
+  },
+  {
+    "feature": "scoped operations",
+    "method": "GET",
+    "route": "/api/v1/operations/plans/:id",
+    "handler": "pluton_get_plan",
+    "services": [
+      "OperationalReadService.read"
+    ],
+    "authentication": "external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "plans:read in JWT AND local grant + exact resource IDs + tool policy",
+    "classification": "read-only stored evidence",
+    "support": "Fully supported (read MVP)",
+    "request": [
+      "explicit path IDs",
+      "limit 1–50, offset 0–10000 for collections"
+    ],
+    "requestSchemas": [
+      "toolCatalog.pluton_get_plan.input"
+    ],
+    "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
+    "pagination": "collections: limit/offset/hasMore; SQL-bounded",
+    "errors": "400,401,403,404,429,500; stable code + traceId",
+    "available": "external OAuth clients; service policy must be enabled",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts"
+    ],
+    "source": "backend/src/mcp/OperationalReadService.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "No credentials, names, paths or raw error text. Same projection and audit as MCP."
+  },
+  {
+    "feature": "scoped operations",
+    "method": "GET",
+    "route": "/api/v1/operations/plans/:planId/backups",
+    "handler": "pluton_list_backups",
+    "services": [
+      "OperationalReadService.read"
+    ],
+    "authentication": "external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "backups:read in JWT AND local grant + exact resource IDs + tool policy",
+    "classification": "read-only stored evidence",
+    "support": "Fully supported (read MVP)",
+    "request": [
+      "explicit path IDs",
+      "limit 1–50, offset 0–10000 for collections"
+    ],
+    "requestSchemas": [
+      "toolCatalog.pluton_list_backups.input"
+    ],
+    "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
+    "pagination": "collections: limit/offset/hasMore; SQL-bounded",
+    "errors": "400,401,403,404,429,500; stable code + traceId",
+    "available": "external OAuth clients; service policy must be enabled",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts"
+    ],
+    "source": "backend/src/mcp/OperationalReadService.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "No credentials, names, paths or raw error text. Same projection and audit as MCP."
+  },
+  {
+    "feature": "scoped operations",
+    "method": "GET",
+    "route": "/api/v1/operations/plans/:planId/recovery-tests",
+    "handler": "pluton_list_recovery_tests",
+    "services": [
+      "OperationalReadService.read"
+    ],
+    "authentication": "external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "recovery:read in JWT AND local grant + exact resource IDs + tool policy",
+    "classification": "read-only stored evidence",
+    "support": "Fully supported (read MVP)",
+    "request": [
+      "explicit path IDs",
+      "limit 1–50, offset 0–10000 for collections"
+    ],
+    "requestSchemas": [
+      "toolCatalog.pluton_list_recovery_tests.input"
+    ],
+    "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
+    "pagination": "collections: limit/offset/hasMore; SQL-bounded",
+    "errors": "400,401,403,404,429,500; stable code + traceId",
+    "available": "external OAuth clients; service policy must be enabled",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts"
+    ],
+    "source": "backend/src/mcp/OperationalReadService.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "No credentials, names, paths or raw error text. Same projection and audit as MCP."
+  },
+  {
+    "feature": "scoped operations",
+    "method": "GET",
+    "route": "/api/v1/operations/plans/:planId/replications",
+    "handler": "pluton_list_replications",
+    "services": [
+      "OperationalReadService.read"
+    ],
+    "authentication": "external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "replication:read in JWT AND local grant + exact resource IDs + tool policy",
+    "classification": "read-only stored evidence",
+    "support": "Fully supported (read MVP)",
+    "request": [
+      "explicit path IDs",
+      "limit 1–50, offset 0–10000 for collections"
+    ],
+    "requestSchemas": [
+      "toolCatalog.pluton_list_replications.input"
+    ],
+    "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
+    "pagination": "collections: limit/offset/hasMore; SQL-bounded",
+    "errors": "400,401,403,404,429,500; stable code + traceId",
+    "available": "external OAuth clients; service policy must be enabled",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts"
+    ],
+    "source": "backend/src/mcp/OperationalReadService.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "No credentials, names, paths or raw error text. Same projection and audit as MCP."
+  },
+  {
+    "feature": "scoped operations",
+    "method": "GET",
+    "route": "/api/v1/operations/recovery-tests/:id",
+    "handler": "pluton_get_recovery_status",
+    "services": [
+      "OperationalReadService.read"
+    ],
+    "authentication": "external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "recovery:read in JWT AND local grant + exact resource IDs + tool policy",
+    "classification": "read-only stored evidence",
+    "support": "Fully supported (read MVP)",
+    "request": [
+      "explicit path IDs",
+      "limit 1–50, offset 0–10000 for collections"
+    ],
+    "requestSchemas": [
+      "toolCatalog.pluton_get_recovery_status.input"
+    ],
+    "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
+    "pagination": "collections: limit/offset/hasMore; SQL-bounded",
+    "errors": "400,401,403,404,429,500; stable code + traceId",
+    "available": "external OAuth clients; service policy must be enabled",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts"
+    ],
+    "source": "backend/src/mcp/OperationalReadService.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "No credentials, names, paths or raw error text. Same projection and audit as MCP."
+  },
+  {
+    "feature": "scoped operations",
+    "method": "GET",
+    "route": "/api/v1/operations/replications/:id",
+    "handler": "pluton_get_replication_status",
+    "services": [
+      "OperationalReadService.read"
+    ],
+    "authentication": "external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "replication:read in JWT AND local grant + exact resource IDs + tool policy",
+    "classification": "read-only stored evidence",
+    "support": "Fully supported (read MVP)",
+    "request": [
+      "explicit path IDs",
+      "limit 1–50, offset 0–10000 for collections"
+    ],
+    "requestSchemas": [
+      "toolCatalog.pluton_get_replication_status.input"
+    ],
+    "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
+    "pagination": "collections: limit/offset/hasMore; SQL-bounded",
+    "errors": "400,401,403,404,429,500; stable code + traceId",
+    "available": "external OAuth clients; service policy must be enabled",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts"
+    ],
+    "source": "backend/src/mcp/OperationalReadService.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "No credentials, names, paths or raw error text. Same projection and audit as MCP."
+  },
+  {
+    "feature": "scoped operations",
+    "method": "GET",
+    "route": "/api/v1/operations/storages",
+    "handler": "pluton_list_storages",
+    "services": [
+      "OperationalReadService.read"
+    ],
+    "authentication": "external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "storages:read in JWT AND local grant + exact resource IDs + tool policy",
+    "classification": "read-only stored evidence",
+    "support": "Fully supported (read MVP)",
+    "request": [
+      "explicit path IDs",
+      "limit 1–50, offset 0–10000 for collections"
+    ],
+    "requestSchemas": [
+      "toolCatalog.pluton_list_storages.input"
+    ],
+    "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
+    "pagination": "collections: limit/offset/hasMore; SQL-bounded",
+    "errors": "400,401,403,404,429,500; stable code + traceId",
+    "available": "external OAuth clients; service policy must be enabled",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts"
+    ],
+    "source": "backend/src/mcp/OperationalReadService.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "No credentials, names, paths or raw error text. Same projection and audit as MCP."
+  },
+  {
+    "feature": "MCP protocol",
+    "method": "DELETE",
+    "route": "/mcp",
+    "handler": "authenticated 405; no server session",
+    "services": [
+      "official SDK",
+      "OperationalReadService",
+      "McpStore"
+    ],
+    "authentication": "resource-bound OAuth JWT",
+    "authorization": "per-tool scope intersection and exact local resource grant",
+    "classification": "protocol/read-only",
+    "support": "Fully supported within documented protocol versions",
+    "request": [
+      "official SDK schemas; 16 KiB JSON; exact Host/Origin; TLS"
+    ],
+    "requestSchemas": [
+      "SDK types + toolCatalog"
+    ],
+    "response": "SDK JSON-RPC; tools: schemaVersion 1 evidence DTO",
+    "pagination": "tools bounded catalog; collections limit/offset",
+    "errors": "transport HTTP codes; SDK JSON-RPC; generic sanitized tool admission errors",
+    "available": "external MCP clients; disabled by default",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts"
+    ],
+    "source": "backend/src/mcp/gateway.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "No arbitrary API proxy, filesystem, SQL, shell, backup export or writes."
+  },
+  {
+    "feature": "MCP protocol",
+    "method": "GET",
+    "route": "/mcp",
+    "handler": "authenticated 405; no standalone SSE stream",
+    "services": [
+      "official SDK",
+      "OperationalReadService",
+      "McpStore"
+    ],
+    "authentication": "resource-bound OAuth JWT",
+    "authorization": "per-tool scope intersection and exact local resource grant",
+    "classification": "protocol/read-only",
+    "support": "Fully supported within documented protocol versions",
+    "request": [
+      "official SDK schemas; 16 KiB JSON; exact Host/Origin; TLS"
+    ],
+    "requestSchemas": [
+      "SDK types + toolCatalog"
+    ],
+    "response": "SDK JSON-RPC; tools: schemaVersion 1 evidence DTO",
+    "pagination": "tools bounded catalog; collections limit/offset",
+    "errors": "transport HTTP codes; SDK JSON-RPC; generic sanitized tool admission errors",
+    "available": "external MCP clients; disabled by default",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts"
+    ],
+    "source": "backend/src/mcp/gateway.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "No arbitrary API proxy, filesystem, SQL, shell, backup export or writes."
+  },
+  {
+    "feature": "MCP protocol",
+    "method": "OPTIONS",
+    "route": "/mcp",
+    "handler": "validated HTTPS Host/Origin preflight; no operational data",
+    "services": [
+      "official SDK",
+      "OperationalReadService",
+      "McpStore"
+    ],
+    "authentication": "public transport/discovery only when enabled",
+    "authorization": "per-tool scope intersection and exact local resource grant",
+    "classification": "protocol/read-only",
+    "support": "Fully supported within documented protocol versions",
+    "request": [
+      "official SDK schemas; 16 KiB JSON; exact Host/Origin; TLS"
+    ],
+    "requestSchemas": [
+      "SDK types + toolCatalog"
+    ],
+    "response": "SDK JSON-RPC; tools: schemaVersion 1 evidence DTO",
+    "pagination": "tools bounded catalog; collections limit/offset",
+    "errors": "transport HTTP codes; SDK JSON-RPC; generic sanitized tool admission errors",
+    "available": "external MCP clients; disabled by default",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts"
+    ],
+    "source": "backend/src/mcp/gateway.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "No arbitrary API proxy, filesystem, SQL, shell, backup export or writes."
+  },
+  {
+    "feature": "MCP protocol",
+    "method": "POST",
+    "route": "/mcp",
+    "handler": "official SDK Streamable HTTP; initialize/tools/list/tools/call/ping/notifications",
+    "services": [
+      "official SDK",
+      "OperationalReadService",
+      "McpStore"
+    ],
+    "authentication": "resource-bound OAuth JWT",
+    "authorization": "per-tool scope intersection and exact local resource grant",
+    "classification": "protocol/read-only",
+    "support": "Fully supported within documented protocol versions",
+    "request": [
+      "official SDK schemas; 16 KiB JSON; exact Host/Origin; TLS"
+    ],
+    "requestSchemas": [
+      "SDK types + toolCatalog"
+    ],
+    "response": "SDK JSON-RPC; tools: schemaVersion 1 evidence DTO",
+    "pagination": "tools bounded catalog; collections limit/offset",
+    "errors": "transport HTTP codes; SDK JSON-RPC; generic sanitized tool admission errors",
+    "available": "external MCP clients; disabled by default",
+    "testReferences": [
+      "backend/__tests__/mcp/gateway.integration.ts"
+    ],
+    "source": "backend/src/mcp/gateway.ts",
+    "routeSource": "backend/src/mcp/gateway.ts",
+    "security": "No arbitrary API proxy, filesystem, SQL, shell, backup export or writes."
+  }
+]

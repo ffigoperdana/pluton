@@ -1,0 +1,4117 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Pluton scoped operational reads",
+    "version": "1.0.0",
+    "description": "Only new scoped REST read contracts. Legacy UI routes are inventoried separately. Tokens come from a separately reviewed existing OAuth provider."
+  },
+  "servers": [
+    {
+      "url": "https://backup.example.internal"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "resourceToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "RFC 9068 JWT",
+        "description": "Resource audience must equal MCP_RESOURCE_URL. Discover the configured issuer at /.well-known/oauth-protected-resource/mcp."
+      }
+    }
+  },
+  "paths": {
+    "/api/v1/operations/plans": {
+      "get": {
+        "operationId": "pluton_list_plans",
+        "summary": "List explicitly authorized plan records. Configuration does not prove completion.",
+        "security": [
+          {
+            "resourceToken": []
+          }
+        ],
+        "x-required-scope": "plans:read",
+        "x-resource-policy": "Exact IDs from local subject/client grant; tool must be enabled",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored evidence, not a live repository probe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "string",
+                      "const": "1"
+                    },
+                    "observedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "evidence": {
+                      "type": "string",
+                      "const": "stored_records"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "maxItems": 50,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "maxLength": 128
+                              },
+                              "active": {
+                                "type": "boolean"
+                              },
+                              "inProgress": {
+                                "anyOf": [
+                                  {
+                                    "type": "boolean"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "createdAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "lastBackupTime": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "active",
+                              "inProgress",
+                              "createdAt",
+                              "lastBackupTime"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "limit": {
+                          "type": "number"
+                        },
+                        "offset": {
+                          "type": "number"
+                        },
+                        "hasMore": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "items",
+                        "limit",
+                        "offset",
+                        "hasMore"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "observedAt",
+                    "evidence",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/plans/{id}": {
+      "get": {
+        "operationId": "pluton_get_plan",
+        "summary": "Read plan activity and last recorded backup time.",
+        "security": [
+          {
+            "resourceToken": []
+          }
+        ],
+        "x-required-scope": "plans:read",
+        "x-resource-policy": "Exact IDs from local subject/client grant; tool must be enabled",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored evidence, not a live repository probe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "string",
+                      "const": "1"
+                    },
+                    "observedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "evidence": {
+                      "type": "string",
+                      "const": "stored_records"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "maxLength": 128
+                        },
+                        "active": {
+                          "type": "boolean"
+                        },
+                        "inProgress": {
+                          "anyOf": [
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "createdAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "lastBackupTime": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "active",
+                        "inProgress",
+                        "createdAt",
+                        "lastBackupTime"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "observedAt",
+                    "evidence",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/agents": {
+      "get": {
+        "operationId": "pluton_list_agents",
+        "summary": "List authorized Agent identities. Last seen does not prove Source Access applied.",
+        "security": [
+          {
+            "resourceToken": []
+          }
+        ],
+        "x-required-scope": "agents:read",
+        "x-resource-policy": "Exact IDs from local subject/client grant; tool must be enabled",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored evidence, not a live repository probe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "string",
+                      "const": "1"
+                    },
+                    "observedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "evidence": {
+                      "type": "string",
+                      "const": "stored_records"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "maxItems": 50,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "maxLength": 128
+                              },
+                              "deviceId": {
+                                "type": "string",
+                                "maxLength": 128
+                              },
+                              "version": {
+                                "type": "string",
+                                "maxLength": 40
+                              },
+                              "lastSeen": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "revokedAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "deviceId",
+                              "version",
+                              "lastSeen",
+                              "revokedAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "limit": {
+                          "type": "number"
+                        },
+                        "offset": {
+                          "type": "number"
+                        },
+                        "hasMore": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "items",
+                        "limit",
+                        "offset",
+                        "hasMore"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "observedAt",
+                    "evidence",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/agents/{id}": {
+      "get": {
+        "operationId": "pluton_get_agent_status",
+        "summary": "Read Agent version, revocation and last authenticated heartbeat timestamp.",
+        "security": [
+          {
+            "resourceToken": []
+          }
+        ],
+        "x-required-scope": "agents:read",
+        "x-resource-policy": "Exact IDs from local subject/client grant; tool must be enabled",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored evidence, not a live repository probe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "string",
+                      "const": "1"
+                    },
+                    "observedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "evidence": {
+                      "type": "string",
+                      "const": "stored_records"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "maxLength": 128
+                        },
+                        "deviceId": {
+                          "type": "string",
+                          "maxLength": 128
+                        },
+                        "version": {
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "lastSeen": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "revokedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "deviceId",
+                        "version",
+                        "lastSeen",
+                        "revokedAt"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "observedAt",
+                    "evidence",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/agents/{id}/source-access": {
+      "get": {
+        "operationId": "pluton_get_source_access_status",
+        "summary": "Read stored Source Access report version and application evidence without paths. Report freshness is not evaluated.",
+        "security": [
+          {
+            "resourceToken": []
+          }
+        ],
+        "x-required-scope": "agents:read",
+        "x-resource-policy": "Exact IDs from local subject/client grant; tool must be enabled",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored evidence, not a live repository probe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "string",
+                      "const": "1"
+                    },
+                    "observedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "evidence": {
+                      "type": "string",
+                      "const": "stored_records"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "maxLength": 128
+                        },
+                        "receivedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "effectiveVersion": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "hasAppliedRequest": {
+                          "type": "boolean"
+                        },
+                        "freshness": {
+                          "type": "string",
+                          "const": "not_evaluated"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "receivedAt",
+                        "effectiveVersion",
+                        "hasAppliedRequest",
+                        "freshness"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "observedAt",
+                    "evidence",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/plans/{planId}/backups": {
+      "get": {
+        "operationId": "pluton_list_backups",
+        "summary": "List authorized plan backup receipts. Snapshot IDs are historical records, not live repository inventory. Artifact count does not prove recoverability.",
+        "security": [
+          {
+            "resourceToken": []
+          }
+        ],
+        "x-required-scope": "backups:read",
+        "x-resource-policy": "Exact IDs from local subject/client grant; tool must be enabled",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            }
+          },
+          {
+            "name": "planId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored evidence, not a live repository probe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "string",
+                      "const": "1"
+                    },
+                    "observedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "evidence": {
+                      "type": "string",
+                      "const": "stored_records"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "maxItems": 50,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "maxLength": 128
+                              },
+                              "planId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "maxLength": 128
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "createdAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "started": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "ended": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "inProgress": {
+                                "anyOf": [
+                                  {
+                                    "type": "boolean"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "success": {
+                                "anyOf": [
+                                  {
+                                    "type": "boolean"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "snapshotId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^[a-f0-9]{64}$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "databaseArtifactCount": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "hasError": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "planId",
+                              "createdAt",
+                              "started",
+                              "ended",
+                              "inProgress",
+                              "success",
+                              "snapshotId",
+                              "databaseArtifactCount",
+                              "hasError"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "limit": {
+                          "type": "number"
+                        },
+                        "offset": {
+                          "type": "number"
+                        },
+                        "hasMore": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "items",
+                        "limit",
+                        "offset",
+                        "hasMore"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "observedAt",
+                    "evidence",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/backups/{id}": {
+      "get": {
+        "operationId": "pluton_get_backup_status",
+        "summary": "Read stored primary backup outcome and artifact count. Success does not prove redundancy or recovery.",
+        "security": [
+          {
+            "resourceToken": []
+          }
+        ],
+        "x-required-scope": "backups:read",
+        "x-resource-policy": "Exact IDs from local subject/client grant; tool must be enabled",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored evidence, not a live repository probe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "string",
+                      "const": "1"
+                    },
+                    "observedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "evidence": {
+                      "type": "string",
+                      "const": "stored_records"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "maxLength": 128
+                        },
+                        "planId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 128
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "createdAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "started": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "ended": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "inProgress": {
+                          "anyOf": [
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "success": {
+                          "anyOf": [
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "snapshotId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[a-f0-9]{64}$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "databaseArtifactCount": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "hasError": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "planId",
+                        "createdAt",
+                        "started",
+                        "ended",
+                        "inProgress",
+                        "success",
+                        "snapshotId",
+                        "databaseArtifactCount",
+                        "hasError"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "observedAt",
+                    "evidence",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/storages": {
+      "get": {
+        "operationId": "pluton_list_storages",
+        "summary": "List authorized storage IDs. Health is not measured; credentials and endpoints are omitted.",
+        "security": [
+          {
+            "resourceToken": []
+          }
+        ],
+        "x-required-scope": "storages:read",
+        "x-resource-policy": "Exact IDs from local subject/client grant; tool must be enabled",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored evidence, not a live repository probe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "string",
+                      "const": "1"
+                    },
+                    "observedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "evidence": {
+                      "type": "string",
+                      "const": "stored_records"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "maxItems": 50,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "maxLength": 128
+                              },
+                              "createdAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "health": {
+                                "type": "string",
+                                "const": "not_measured"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "createdAt",
+                              "health"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "limit": {
+                          "type": "number"
+                        },
+                        "offset": {
+                          "type": "number"
+                        },
+                        "hasMore": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "items",
+                        "limit",
+                        "offset",
+                        "hasMore"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "observedAt",
+                    "evidence",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/plans/{planId}/replications": {
+      "get": {
+        "operationId": "pluton_list_replications",
+        "summary": "List durable managed replication jobs for an authorized plan. Completion is distinct from primary backup success.",
+        "security": [
+          {
+            "resourceToken": []
+          }
+        ],
+        "x-required-scope": "replication:read",
+        "x-resource-policy": "Exact IDs from local subject/client grant; tool must be enabled",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            }
+          },
+          {
+            "name": "planId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored evidence, not a live repository probe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "string",
+                      "const": "1"
+                    },
+                    "observedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "evidence": {
+                      "type": "string",
+                      "const": "stored_records"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "maxItems": 50,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "maxLength": 128
+                              },
+                              "planId": {
+                                "type": "string",
+                                "maxLength": 128
+                              },
+                              "backupId": {
+                                "type": "string",
+                                "maxLength": 128
+                              },
+                              "status": {
+                                "type": "string",
+                                "enum": [
+                                  "pending",
+                                  "running",
+                                  "completed",
+                                  "failed",
+                                  "uncertain",
+                                  "cancelled"
+                                ]
+                              },
+                              "attempts": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "verifiedAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "updatedAt": {
+                                "type": "number"
+                              },
+                              "lastErrorCode": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "maxLength": 80,
+                                    "pattern": "^[a-z0-9_-]+$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "planId",
+                              "backupId",
+                              "status",
+                              "attempts",
+                              "verifiedAt",
+                              "updatedAt",
+                              "lastErrorCode"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "limit": {
+                          "type": "number"
+                        },
+                        "offset": {
+                          "type": "number"
+                        },
+                        "hasMore": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "items",
+                        "limit",
+                        "offset",
+                        "hasMore"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "observedAt",
+                    "evidence",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/replications/{id}": {
+      "get": {
+        "operationId": "pluton_get_replication_status",
+        "summary": "Read managed replica status and verification timestamp. This is not recovery-test evidence.",
+        "security": [
+          {
+            "resourceToken": []
+          }
+        ],
+        "x-required-scope": "replication:read",
+        "x-resource-policy": "Exact IDs from local subject/client grant; tool must be enabled",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored evidence, not a live repository probe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "string",
+                      "const": "1"
+                    },
+                    "observedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "evidence": {
+                      "type": "string",
+                      "const": "stored_records"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "maxLength": 128
+                        },
+                        "planId": {
+                          "type": "string",
+                          "maxLength": 128
+                        },
+                        "backupId": {
+                          "type": "string",
+                          "maxLength": 128
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "running",
+                            "completed",
+                            "failed",
+                            "uncertain",
+                            "cancelled"
+                          ]
+                        },
+                        "attempts": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "verifiedAt": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "updatedAt": {
+                          "type": "number"
+                        },
+                        "lastErrorCode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 80,
+                              "pattern": "^[a-z0-9_-]+$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "planId",
+                        "backupId",
+                        "status",
+                        "attempts",
+                        "verifiedAt",
+                        "updatedAt",
+                        "lastErrorCode"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "observedAt",
+                    "evidence",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/plans/{planId}/recovery-tests": {
+      "get": {
+        "operationId": "pluton_list_recovery_tests",
+        "summary": "List recorded recovery tests for an authorized plan. Inspect exact status; snapshot existence is not a passed recovery test.",
+        "security": [
+          {
+            "resourceToken": []
+          }
+        ],
+        "x-required-scope": "recovery:read",
+        "x-resource-policy": "Exact IDs from local subject/client grant; tool must be enabled",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            }
+          },
+          {
+            "name": "planId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored evidence, not a live repository probe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "string",
+                      "const": "1"
+                    },
+                    "observedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "evidence": {
+                      "type": "string",
+                      "const": "stored_records"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "maxItems": 50,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "maxLength": 128
+                              },
+                              "planId": {
+                                "type": "string",
+                                "maxLength": 128
+                              },
+                              "backupId": {
+                                "type": "string",
+                                "maxLength": 128
+                              },
+                              "status": {
+                                "type": "string",
+                                "enum": [
+                                  "queued",
+                                  "running",
+                                  "passed",
+                                  "failed",
+                                  "cancelled",
+                                  "passed_with_warning"
+                                ]
+                              },
+                              "createdAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "completedAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "failureCode": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "maxLength": 80,
+                                    "pattern": "^[a-z0-9_-]+$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "databaseValidation": {
+                                "anyOf": [
+                                  {
+                                    "maxItems": 50,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "artifactValidation": {
+                                          "type": "string",
+                                          "enum": [
+                                            "pending",
+                                            "passed",
+                                            "failed"
+                                          ]
+                                        },
+                                        "importValidation": {
+                                          "type": "string",
+                                          "enum": [
+                                            "pending",
+                                            "passed",
+                                            "failed",
+                                            "disabled",
+                                            "not_configured"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "artifactValidation",
+                                        "importValidation"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "planId",
+                              "backupId",
+                              "status",
+                              "createdAt",
+                              "completedAt",
+                              "failureCode",
+                              "databaseValidation"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "limit": {
+                          "type": "number"
+                        },
+                        "offset": {
+                          "type": "number"
+                        },
+                        "hasMore": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "items",
+                        "limit",
+                        "offset",
+                        "hasMore"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "observedAt",
+                    "evidence",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/recovery-tests/{id}": {
+      "get": {
+        "operationId": "pluton_get_recovery_status",
+        "summary": "Read exact recovery outcome and safe failure code. Does not claim current repository availability.",
+        "security": [
+          {
+            "resourceToken": []
+          }
+        ],
+        "x-required-scope": "recovery:read",
+        "x-resource-policy": "Exact IDs from local subject/client grant; tool must be enabled",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored evidence, not a live repository probe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "string",
+                      "const": "1"
+                    },
+                    "observedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "evidence": {
+                      "type": "string",
+                      "const": "stored_records"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "maxLength": 128
+                        },
+                        "planId": {
+                          "type": "string",
+                          "maxLength": 128
+                        },
+                        "backupId": {
+                          "type": "string",
+                          "maxLength": 128
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "queued",
+                            "running",
+                            "passed",
+                            "failed",
+                            "cancelled",
+                            "passed_with_warning"
+                          ]
+                        },
+                        "createdAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "completedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "failureCode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 80,
+                              "pattern": "^[a-z0-9_-]+$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "databaseValidation": {
+                          "anyOf": [
+                            {
+                              "maxItems": 50,
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "artifactValidation": {
+                                    "type": "string",
+                                    "enum": [
+                                      "pending",
+                                      "passed",
+                                      "failed"
+                                    ]
+                                  },
+                                  "importValidation": {
+                                    "type": "string",
+                                    "enum": [
+                                      "pending",
+                                      "passed",
+                                      "failed",
+                                      "disabled",
+                                      "not_configured"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "artifactValidation",
+                                  "importValidation"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "planId",
+                        "backupId",
+                        "status",
+                        "createdAt",
+                        "completedAt",
+                        "failureCode",
+                        "databaseValidation"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "observedAt",
+                    "evidence",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Stable sanitized error code and trace identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "success",
+                    "error",
+                    "traceId"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "const": "1"
+                    },
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

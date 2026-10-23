@@ -234,6 +234,18 @@ hook for `main` also builds the frontend. The root build orders the frontend bui
 and copying frontend assets). Backend build cleans `backend/dist/` and
 `backend/public/`; keep local data out of those generated directories.
 
+## MCP read-only integration
+
+The additive MCP gateway and scoped v1 operational reads share explicit stored-evidence
+projections, external OAuth JWT verification and durable per-user/client resource grants.
+MCP defaults disabled and exposes no write/approval tools or repository operations.
+Administrator controls use the existing local administrator cookie and same-origin JSON.
+See [API coverage matrix](API_COVERAGE_MATRIX.md), [security audit](API_SECURITY_AUDIT.md),
+[MCP configuration/client runbook](MCP.md), and [OpenAPI reads](mcp-openapi.json).
+Run `pnpm --filter @plutonhq/core-backend test:mcp` in addition to existing checks,
+`node --test scripts/__tests__/apiInventory.test.mjs`, and
+`node --experimental-strip-types --test frontend/__tests__/mcp.test.ts`.
+
 ## Configuration and remaining questions
 
 The root [.env.template](../.env.template) already provides generic placeholders;
