@@ -1,0 +1,33 @@
+.details {
+   overflow-wrap: anywhere;
+   p {
+      margin: 12px 0;
+   }
+   dl {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 8px;
+   }
+   dd {
+      margin: 0;
+   }
+   summary {
+      cursor: pointer;
+   }
+   ul {
+      max-height: 300px;
+      overflow: auto;
+      padding-left: 24px;
+   }
+   li {
+      margin: 12px 0;
+   }
+   code {
+      white-space: pre-wrap;
+      unicode-bidi: plaintext;
+   }
+   button {
+      margin-right: 10px;
+      cursor: pointer;
+   }
+}

@@ -3,6 +3,7 @@ import { agentDistribution } from '../utils/agentDistribution';
 import Cryptr from 'cryptr';
 import { z } from 'zod';
 import { remoteBackupFailure } from '../utils/remoteBackupDiagnostics';
+import { sourceDiagnosticsSchema } from '../utils/sourceDiagnostics';
 import { remoteBackupStages } from '../utils/remoteBackupProgress';
 import { type AgentCommand, type AgentIdentity } from '../db/schema/agents';
 import { AgentStore } from '../stores/AgentStore';
@@ -603,6 +604,7 @@ export class AgentService {
 				error: z.string().trim().min(1).max(500).optional(),
 				failureStage: backupFailureStageSchema.optional(),
 				failureCode: backupFailureCodeSchema.optional(),
+				sourceDiagnostics: sourceDiagnosticsSchema.optional(),
 				databaseId: databaseIdSchema.optional(),
 				engine: z.enum(['mysql', 'mariadb', 'postgresql']).optional(),
 				cancelled: z.boolean().optional(),
@@ -661,6 +663,19 @@ export class AgentService {
 		if (!parsed.success || (!parsed.data.success && !parsed.data.error)) {
 			throw new AppError(400, 'Command completion is invalid.');
 		}
+		if (parsed.data.sourceDiagnostics) {
+			const command = await this.agentStore.getCommandForAgent(agentId, commandId);
+			if (
+				parsed.data.success ||
+				parsed.data.cancelled ||
+				command?.type !== 'BACKUP_FILESYSTEM' ||
+				!['source-entry-inaccessible', 'source-root-not-readable', 'source-missing'].includes(
+					parsed.data.failureCode || ''
+				) ||
+				!['source-validation', 'restic-backup'].includes(parsed.data.failureStage || '')
+			)
+				throw new AppError(400, 'Command source diagnostics are invalid.');
+		}
 		// Phase 5 diagnostics use closed codes, not agent-supplied provider text.
 		const safeError = parsed.data.success ? undefined : remoteBackupFailure(parsed.data);
 		const command = await this.agentStore.completeCommand(
@@ -698,6 +713,9 @@ export class AgentService {
 			error: safeError,
 			failureStage: parsed.data.failureStage,
 			failureCode: parsed.data.failureCode,
+			...(parsed.data.sourceDiagnostics
+				? { sourceDiagnostics: parsed.data.sourceDiagnostics }
+				: {}),
 			...(parsed.data.databaseId
 				? { databaseId: parsed.data.databaseId, engine: parsed.data.engine }
 				: {}),

@@ -92,6 +92,14 @@ export function backupExclusionMatches(patterns: string[], relative: string): bo
    return compileBackupExclusions(patterns)(relative);
 }
 
+/** Warn about a copied host-absolute prefix with its leading slash omitted.
+ * This is advisory: never rewrite a saved pattern or broaden exclusions. */
+export function sourcePrefixedExclusions(source: string, patterns: string[]): string[] {
+   const prefix = source.replace(/^\/+|\/+$/g, '');
+   if (!prefix) return [];
+   return patterns.filter((pattern) => pattern === prefix || pattern.startsWith(`${prefix}/`));
+}
+
 /** Anchor every user filter to the canonical source. Never filter the separate
  * lifecycle workspace containing SQL dumps, manifests, or private credentials. */
 export function sourceResticExclusions(source: string, patterns: string[]): string[] {

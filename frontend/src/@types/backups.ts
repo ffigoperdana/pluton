@@ -116,6 +116,7 @@ export interface ReplicationProgressData {
 }
 
 export interface BackupProgressData {
+   sourceFailure?: import('../utils/sourceDiagnostics').SourceFailure;
    remote?: boolean;
    backupStage?: string;
    attempt?: number;

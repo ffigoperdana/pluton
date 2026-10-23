@@ -866,4 +866,62 @@ describe('RemoteBackupService', () => {
 		expect(repositories.createBackupAndCommand).toHaveBeenCalledTimes(1);
 	});
 
+	it.each(['0.7.0', '0.7.1'])(
+		'negotiates diagnostics for %s without altering old payload versions or durable command references',
+		async agentVersion => {
+			agentStore.getAgentByDeviceId.mockResolvedValue({
+				...capableAgent,
+				agentVersion,
+				lastSeen: new Date(),
+			});
+			const payload = await service.materializeCommand(capableAgent.agentId, backupCommand());
+			expect(payload.version).toBe(1);
+			expect(payload.sourceDiagnosticsVersion).toBe(agentVersion === '0.7.1' ? 1 : undefined);
+			expect(backupCommand().payload).toEqual({
+				backupId: 'backup-example-01',
+				planId: plan.id,
+				repositoryId: 'remote-repo-example-01',
+			});
+		}
+	);
+	it('passes diagnostics only to the terminal failure update; cancelled and finalized jobs stay terminal', async () => {
+		const sourceDiagnostics = {
+			version: 1 as const,
+			origin: 'restic' as const,
+			problemCount: 1,
+			countIsLowerBound: true,
+			entries: [
+				{
+					relativePath: 'app/logs/id_rsa',
+					entryType: 'unknown' as const,
+					errno: 'EACCES' as const,
+					excluded: false as const,
+				},
+			],
+		};
+		const completion = {
+			success: false,
+			failureStage: 'restic-backup',
+			failureCode: 'source-entry-inaccessible',
+			sourceDiagnostics,
+		};
+		await service.completeCommand(backupCommand(), completion);
+		expect((service as any).eventService.onBackupFailure).toHaveBeenCalledWith(
+			expect.objectContaining({
+				sourceFailure: {
+					failureStage: completion.failureStage,
+					failureCode: completion.failureCode,
+					sourceDiagnostics,
+				},
+				error: expect.not.stringContaining('app/logs/id_rsa'),
+			})
+		);
+		(service as any).eventService.onBackupFailure.mockClear();
+		for (const status of ['failed', 'completed', 'cancelled']) {
+			backupStore.getById.mockResolvedValue({ status });
+			await service.completeCommand(backupCommand(), completion);
+		}
+		expect((service as any).eventService.onBackupFailure).not.toHaveBeenCalled();
+		expect((service as any).eventService.onBackupComplete).not.toHaveBeenCalled();
+	});
 });

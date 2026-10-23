@@ -109,6 +109,12 @@ proprietary implementations.
 
 ## Validation commands
 
+Backup source diagnostic transport, private persistence, historical UI behavior,
+standalone Agent 0.7.1 negotiation and the explicit preflight audit are documented
+in [SOURCE_ACCESS_DIAGNOSTICS.md](SOURCE_ACCESS_DIAGNOSTICS.md). The Agent patch is
+separate from the monorepo Agent. Source Access Validate retains its root-validation
+meaning; no remote recursive scan command is added.
+
 New standalone Agent enrollment distribution (configured HTTPS Git + immutable
 SHA + Agent 0.7.0) is described in
 [AGENT_ENROLLMENT_DISTRIBUTION.md](AGENT_ENROLLMENT_DISTRIBUTION.md). It leaves

@@ -358,7 +358,12 @@ export class BackupEventService {
 		}
 	}
 
-	async onBackupFailure(data: { planId: string; backupId: string; error: string }): Promise<void> {
+	async onBackupFailure(data: {
+		planId: string;
+		backupId: string;
+		error: string;
+		sourceFailure?: import('../../utils/sourceDiagnostics').SourceFailure;
+	}): Promise<void> {
 		const { planId, backupId, error } = data;
 		try {
 			if (await this.wasFinalized(backupId)) {
@@ -369,9 +374,22 @@ export class BackupEventService {
 			}
 
 			// Update DB with Error
+			const current = data.sourceFailure ? await this.backupStore.getById(backupId) : null;
 			const backup = await this.backupStore.update(backupId, {
 				status: 'failed',
 				errorMsg: error,
+				...(data.sourceFailure
+					? {
+							progressStats: {
+								bytesProcessed: 0,
+								filesProcessed: 0,
+								total_files_processed: 0,
+								total_bytes_processed: 0,
+								...current?.progressStats,
+								sourceFailure: data.sourceFailure,
+							},
+						}
+					: {}),
 				success: false,
 				inProgress: false,
 				ended: eventDate((data as { occurredAt?: number }).occurredAt),

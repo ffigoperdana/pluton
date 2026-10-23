@@ -462,4 +462,39 @@ describe('Backup Routes', () => {
 			expect(mockBackupService.cancelBackupDownload).toHaveBeenCalledWith('plan-1', 'backup-1');
 		});
 	});
+
+	it('exposes saved path diagnostics only through an authenticated no-store progress response', async () => {
+		const sourceFailure = {
+			failureStage: 'restic-backup',
+			failureCode: 'source-entry-inaccessible',
+			sourceDiagnostics: {
+				version: 1,
+				origin: 'restic',
+				problemCount: 1,
+				countIsLowerBound: true,
+				entries: [
+					{
+						relativePath: 'app/logs/id_rsa',
+						entryType: 'unknown',
+						errno: 'EACCES',
+						excluded: false,
+					},
+				],
+			},
+		};
+		mockBackupService.getBackupProgress.mockResolvedValue({ sourceFailure });
+		const url = '/api/backups/backup-01/progress?sourceId=app-01&sourceType=device';
+		setupAuthMock(false);
+		for (const authorization of ['', 'Bearer synthetic-invalid-api-key']) {
+			const response = await request(app).get(url).set('Authorization', authorization);
+			expect(response.status).toBe(401);
+			expect(JSON.stringify(response.body)).not.toContain('app/logs/id_rsa');
+		}
+		expect(mockBackupService.getBackupProgress).not.toHaveBeenCalled();
+		setupAuthMock(true);
+		const response = await request(app).get(url);
+		expect(response.status).toBe(200);
+		expect(response.headers['cache-control']).toBe('private, no-store');
+		expect(response.body.sourceFailure).toEqual(sourceFailure);
+	});
 });

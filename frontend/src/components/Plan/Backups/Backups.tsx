@@ -1,3 +1,4 @@
+import BackupErrorDetails from '../BackupEvents/BackupErrorDetails';
 import { useState } from 'react';
 import { toast } from 'react-toastify';
 import { Plan } from '../../../@types/plans';
@@ -116,7 +117,7 @@ const Backups = ({
    const [showRestoreModal, setShowRestoreModal] = useState<Backup | false>(false);
    const [showBackupEvents, setShowBackupEvents] = useState<false | string>(false);
    const [showSnapshotViewer, setShowSnapshotViewer] = useState<Backup | false>(false);
-   const [showBackupError, setShowBackupError] = useState<string | false>(false);
+   const [showBackupError, setShowBackupError] = useState<{ id: string; message: string } | false>(false);
    const [showEditModal, setShowEditModal] = useState<Backup | false>(false);
    const [showStorageSelector, setShowStorageSelector] = useState<Backup | false>(false);
    const queryClient = useQueryClient();
@@ -267,7 +268,13 @@ const Backups = ({
                               </span>
                            )}
                            {(snapshot.mirrors?.length || (replicationSettings?.enabled && replicationSettings.storages.length > 0)) && (
-                              <MirrorStatusBadge mirrors={snapshot.mirrors || []} planId={planId} backupId={id} replicationSettings={replicationSettings} managedAgent={isRemoteManaged} />
+                              <MirrorStatusBadge
+                                 mirrors={snapshot.mirrors || []}
+                                 planId={planId}
+                                 backupId={id}
+                                 replicationSettings={replicationSettings}
+                                 managedAgent={isRemoteManaged}
+                              />
                            )}
                            {!isRemoteManaged && download && (
                               <DownloadLabel download={download} downloadBackup={() => getDownloadMutation.mutate(id)} />
@@ -278,7 +285,7 @@ const Backups = ({
                            data-tooltip-id="htmlToolTip"
                            data-tooltip-html={`<div class="linebreak-tooltip-content"><string>Error</string>: ${errorMsg?.slice(0, 120) + (errorMsg && errorMsg.length > 120 ? '...' : '')}</div>`}
                            data-tooltip-hidden={!errorMsg}
-                           onClick={() => errorMsg && (lifecycleWarning || errorMsg.length > 120) && setShowBackupError(errorMsg)}
+                           onClick={() => errorMsg && setShowBackupError({ id, message: errorMsg })}
                         >
                            {lifecycleWarning ? (
                               <span title="Snapshot completed; post-backup/cleanup needs attention">Complete · Cleanup warning</span>
@@ -583,9 +590,7 @@ const Backups = ({
          {showBackupError && (
             <Modal title="Error Details" closeModal={() => setShowBackupError(false)} width={'600px'}>
                <div className={`${classes.errorDetailsModal} styled__scrollbar`}>
-                  {showBackupError.split('\n').map((line, index) => (
-                     <p key={index}>{line}</p>
-                  ))}
+                  <BackupErrorDetails message={showBackupError.message} backup={{ id: showBackupError.id, planId, sourceId, sourceType }} />
                </div>
             </Modal>
          )}

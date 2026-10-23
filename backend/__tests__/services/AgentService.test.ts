@@ -91,11 +91,15 @@ describe('AgentService', () => {
 		const original = config.AGENT_INSTALL_COMMIT;
 		delete config.AGENT_INSTALL_COMMIT;
 		try {
-			await expect(service.createEnrollment({ name: 'app-01' })).rejects.toMatchObject({ statusCode: 503 });
+			await expect(service.createEnrollment({ name: 'app-01' })).rejects.toMatchObject({
+				statusCode: 503,
+			});
 			expect(store.createEnrollment).not.toHaveBeenCalled();
 			expect(store.updateHeartbeat).not.toHaveBeenCalled();
 			expect(store.enrollAgent).not.toHaveBeenCalled();
-		} finally { config.AGENT_INSTALL_COMMIT = original; }
+		} finally {
+			config.AGENT_INSTALL_COMMIT = original;
+		}
 	});
 
 	it('reports the explicit server-side HTTP exception with an enrollment response', async () => {
@@ -712,6 +716,88 @@ describe('AgentService', () => {
 				warn.mock.calls,
 			])
 				expect(JSON.stringify(output)).not.toContain('synthetic-provider-secret');
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it('validates diagnostic completion before mutation, keeps paths out of logs and forwards only the private field', async () => {
+		const sourceDiagnostics = {
+			version: 1,
+			origin: 'restic',
+			problemCount: 1,
+			countIsLowerBound: true,
+			entries: [
+				{ relativePath: 'app/logs/id_rsa', entryType: 'unknown', errno: 'EACCES', excluded: false },
+			],
+		};
+		const command = {
+			id: 'command-diagnostics',
+			type: 'BACKUP_FILESYSTEM',
+			state: 'failed',
+			payload: { backupId: 'backup-01', planId: 'plan-01', repositoryId: 'repo-01' },
+		} as any;
+		store.getCommandForAgent = jest.fn().mockResolvedValue(command);
+		store.completeCommand.mockResolvedValue(command);
+		const remote = { completeCommand: jest.fn() } as any;
+		service = new AgentService(
+			store,
+			'agent-service-test-secret-that-is-long-enough',
+			() => now,
+			remote
+		);
+		const warn = jest.spyOn(serverLogger, 'warn').mockImplementation(() => undefined as any);
+		const input = {
+			sequence: 2,
+			leaseToken: 'a'.repeat(32),
+			success: false,
+			error: 'Remote filesystem backup failed.',
+			failureStage: 'restic-backup',
+			failureCode: 'source-entry-inaccessible',
+			sourceDiagnostics,
+		};
+		try {
+			for (const invalid of [
+				{ ...input, success: true },
+				{ ...input, cancelled: true },
+				{ ...input, failureCode: 'restic-backup-failed' },
+				{ ...input, failureStage: 'repository-check' },
+				{
+					...input,
+					sourceDiagnostics: {
+						...sourceDiagnostics,
+						entries: Array(21).fill(sourceDiagnostics.entries[0]),
+					},
+				},
+			])
+				await expect(service.complete(agent.agentId, command.id, invalid)).rejects.toMatchObject({
+					statusCode: 400,
+				});
+			expect(store.completeCommand).not.toHaveBeenCalled();
+			store.getCommandForAgent.mockResolvedValue({ ...command, type: 'PING' });
+			await expect(service.complete(agent.agentId, command.id, input)).rejects.toMatchObject({
+				statusCode: 400,
+			});
+			store.getCommandForAgent.mockResolvedValue(null);
+			await expect(service.complete(agent.agentId, command.id, input)).rejects.toMatchObject({
+				statusCode: 400,
+			});
+			expect(store.completeCommand).not.toHaveBeenCalled();
+			store.getCommandForAgent.mockResolvedValue(command);
+			await service.complete(agent.agentId, command.id, input);
+			expect(remote.completeCommand).toHaveBeenCalledWith(
+				command,
+				expect.objectContaining({ sourceDiagnostics, success: false })
+			);
+			expect(JSON.stringify(warn.mock.calls)).not.toContain('app/logs/id_rsa');
+			expect(JSON.stringify(store.completeCommand.mock.calls)).not.toContain('app/logs/id_rsa');
+			// Lease/sequence rejection still prevents persistence and forwarding.
+			remote.completeCommand.mockClear();
+			store.completeCommand.mockResolvedValue(null);
+			await expect(service.complete(agent.agentId, command.id, input)).rejects.toMatchObject({
+				statusCode: 404,
+			});
+			expect(remote.completeCommand).not.toHaveBeenCalled();
 		} finally {
 			warn.mockRestore();
 		}
