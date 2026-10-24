@@ -1,5 +1,7 @@
 # API coverage and security audit
 
+V2 follow-up: this original audit records v1. The current [172-contract matrix](API_COVERAGE_MATRIX.md) adds separate native tokens and human-approved operational requests through existing services. See [MCP v2](MCP_V2.md) for permissions, security boundaries, client evidence, rollout and rollback. OAuth remains read-only. No arbitrary API proxy, command/path access or destructive tool is added.
+
 Reviewed baseline: fetched `origin/main` at `5126fb7`. The [160-contract matrix](API_COVERAGE_MATRIX.md) and [JSON inventory](api-inventory.json) are generated from the actual mounted route modules, controllers and explicit MCP catalog. Run `node scripts/api-inventory.mjs --check` to detect drift. All 15 existing mounted route modules are accounted for, including inline notification and persistent restore handlers. Dynamic provision/stop/resume routes are expanded.
 
 This audit covers the public fork only. No proprietary code, production storage, infrastructure or credentials were used. The runtime delivered here is an additive read-only integration. It does not certify all existing APIs as production-ready or change managed backup/legacy repository lifecycles.

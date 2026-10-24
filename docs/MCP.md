@@ -1,4 +1,6 @@
-# MCP and scoped operational reads
+# MCP v1 OAuth reference
+
+This document records the original v1 behavior. For current native tokens, operational actions, human approvals, proxy/client compatibility, rollout and rollback, use [MCP v2](MCP_V2.md). The v1-only statements below do not describe native v2 capabilities. External OAuth remains available and read-only. Browser HTML GET `/mcp` now reaches the administration SPA; machine GET still returns 405.
 
 This release provides a disabled-by-default, read-only MCP integration and an administrator MCP page. It uses the official TypeScript SDK `@modelcontextprotocol/sdk` **1.32.1**, with stateless Streamable HTTP and JSON responses. It supports `2025-11-25`, `2025-06-18` and `2025-03-26` HTTP protocol revisions. The SDK negotiates initialization; a requested unsupported revision may negotiate down, and clients must accept the negotiated revision. Unsupported `MCP-Protocol-Version` headers are refused. No legacy HTTP+SSE endpoint or persistent session is implemented; authenticated GET/DELETE `/mcp` return 405.
 

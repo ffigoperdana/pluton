@@ -11,7 +11,7 @@
     ],
     "authentication": "public transport/discovery only when enabled",
     "authorization": "per-tool scope intersection and exact local resource grant",
-    "classification": "protocol/read-only",
+    "classification": "protocol; scoped reads and human-approved operational writes",
     "support": "Fully supported within documented protocol versions",
     "request": [
       "official SDK schemas; 16 KiB JSON; exact Host/Origin; TLS"
@@ -28,7 +28,7 @@
     ],
     "source": "backend/src/mcp/gateway.ts",
     "routeSource": "backend/src/mcp/gateway.ts",
-    "security": "No arbitrary API proxy, filesystem, SQL, shell, backup export or writes."
+    "security": "No arbitrary API proxy, filesystem, SQL, shell or backup export. Native operational writes create bounded pending approval only."
   },
   {
     "feature": "agentAdmin",
@@ -1650,6 +1650,134 @@
     "security": "Existing admission rules apply. No external write tools or approval bypass."
   },
   {
+    "feature": "MCP native administration",
+    "method": "GET",
+    "route": "/api/mcp-admin/actions",
+    "handler": "strict native token / approval administrator action",
+    "services": [
+      "NativeTokenStore",
+      "McpActionService",
+      "existing domain services"
+    ],
+    "authentication": "browser administrator cookie JWT only",
+    "authorization": "parent administrator + same-origin JSON guard; approval hash and live token/resource recheck",
+    "classification": "privileged read",
+    "support": "Supported internal administrator API",
+    "request": [
+      "strict bounded zod body/query and exact path ID"
+    ],
+    "requestSchemas": [
+      "tokenInput / pageInput / v2AdminRouter inline schema"
+    ],
+    "response": "schemaVersion 1, success, result; sanitized error and trace ID; token plaintext only on creation/rotation",
+    "pagination": "tokens/actions/resources: limit 1-50, offset 0-10000",
+    "errors": "400,401,403,404,409,429,500",
+    "available": "authenticated human administrator only",
+    "testReferences": [
+      "backend/__tests__/mcp/native.integration.ts",
+      "frontend/__tests__/mcp.test.ts"
+    ],
+    "source": "backend/src/mcp/v2AdminRouter.ts",
+    "routeSource": "backend/src/mcp/v2AdminRouter.ts",
+    "security": "At-most-once approval dispatch; no machine self-approval; copy-once token verifier; no arbitrary commands or paths"
+  },
+  {
+    "feature": "MCP native administration",
+    "method": "POST",
+    "route": "/api/mcp-admin/actions/:id/approve",
+    "handler": "strict native token / approval administrator action",
+    "services": [
+      "NativeTokenStore",
+      "McpActionService",
+      "existing domain services"
+    ],
+    "authentication": "browser administrator cookie JWT only",
+    "authorization": "parent administrator + same-origin JSON guard; approval hash and live token/resource recheck",
+    "classification": "privileged mutation",
+    "support": "Supported internal administrator API",
+    "request": [
+      "strict bounded zod body/query and exact path ID"
+    ],
+    "requestSchemas": [
+      "tokenInput / pageInput / v2AdminRouter inline schema"
+    ],
+    "response": "schemaVersion 1, success, result; sanitized error and trace ID; token plaintext only on creation/rotation",
+    "pagination": "tokens/actions/resources: limit 1-50, offset 0-10000",
+    "errors": "400,401,403,404,409,429,500",
+    "available": "authenticated human administrator only",
+    "testReferences": [
+      "backend/__tests__/mcp/native.integration.ts",
+      "frontend/__tests__/mcp.test.ts"
+    ],
+    "source": "backend/src/mcp/v2AdminRouter.ts",
+    "routeSource": "backend/src/mcp/v2AdminRouter.ts",
+    "security": "At-most-once approval dispatch; no machine self-approval; copy-once token verifier; no arbitrary commands or paths"
+  },
+  {
+    "feature": "MCP native administration",
+    "method": "POST",
+    "route": "/api/mcp-admin/actions/:id/reconcile",
+    "handler": "strict native token / approval administrator action",
+    "services": [
+      "NativeTokenStore",
+      "McpActionService",
+      "existing domain services"
+    ],
+    "authentication": "browser administrator cookie JWT only",
+    "authorization": "parent administrator + same-origin JSON guard; approval hash and live token/resource recheck",
+    "classification": "privileged mutation",
+    "support": "Supported internal administrator API",
+    "request": [
+      "strict bounded zod body/query and exact path ID"
+    ],
+    "requestSchemas": [
+      "tokenInput / pageInput / v2AdminRouter inline schema"
+    ],
+    "response": "schemaVersion 1, success, result; sanitized error and trace ID; token plaintext only on creation/rotation",
+    "pagination": "tokens/actions/resources: limit 1-50, offset 0-10000",
+    "errors": "400,401,403,404,409,429,500",
+    "available": "authenticated human administrator only",
+    "testReferences": [
+      "backend/__tests__/mcp/native.integration.ts",
+      "frontend/__tests__/mcp.test.ts"
+    ],
+    "source": "backend/src/mcp/v2AdminRouter.ts",
+    "routeSource": "backend/src/mcp/v2AdminRouter.ts",
+    "security": "At-most-once approval dispatch; no machine self-approval; copy-once token verifier; no arbitrary commands or paths"
+  },
+  {
+    "feature": "MCP native administration",
+    "method": "POST",
+    "route": "/api/mcp-admin/actions/:id/reject",
+    "handler": "strict native token / approval administrator action",
+    "services": [
+      "NativeTokenStore",
+      "McpActionService",
+      "existing domain services"
+    ],
+    "authentication": "browser administrator cookie JWT only",
+    "authorization": "parent administrator + same-origin JSON guard; approval hash and live token/resource recheck",
+    "classification": "privileged mutation",
+    "support": "Supported internal administrator API",
+    "request": [
+      "strict bounded zod body/query and exact path ID"
+    ],
+    "requestSchemas": [
+      "tokenInput / pageInput / v2AdminRouter inline schema"
+    ],
+    "response": "schemaVersion 1, success, result; sanitized error and trace ID; token plaintext only on creation/rotation",
+    "pagination": "tokens/actions/resources: limit 1-50, offset 0-10000",
+    "errors": "400,401,403,404,409,429,500",
+    "available": "authenticated human administrator only",
+    "testReferences": [
+      "backend/__tests__/mcp/native.integration.ts",
+      "frontend/__tests__/mcp.test.ts"
+    ],
+    "source": "backend/src/mcp/v2AdminRouter.ts",
+    "routeSource": "backend/src/mcp/v2AdminRouter.ts",
+    "security": "At-most-once approval dispatch; no machine self-approval; copy-once token verifier; no arbitrary commands or paths"
+  },
+  {
     "feature": "MCP administration",
     "method": "GET",
     "route": "/api/mcp-admin/activity",
@@ -1858,6 +1986,262 @@
     "source": "backend/src/mcp/gateway.ts",
     "routeSource": "backend/src/mcp/gateway.ts",
     "security": "Durable atomic audit on grants/revocation/policy. Never issues or accepts a model-provider key."
+  },
+  {
+    "feature": "MCP native administration",
+    "method": "GET",
+    "route": "/api/mcp-admin/resources",
+    "handler": "strict native token / approval administrator action",
+    "services": [
+      "NativeTokenStore",
+      "McpActionService",
+      "existing domain services"
+    ],
+    "authentication": "browser administrator cookie JWT only",
+    "authorization": "parent administrator + same-origin JSON guard; approval hash and live token/resource recheck",
+    "classification": "privileged read",
+    "support": "Supported internal administrator API",
+    "request": [
+      "strict bounded zod body/query and exact path ID"
+    ],
+    "requestSchemas": [
+      "tokenInput / pageInput / v2AdminRouter inline schema"
+    ],
+    "response": "schemaVersion 1, success, result; sanitized error and trace ID; token plaintext only on creation/rotation",
+    "pagination": "tokens/actions/resources: limit 1-50, offset 0-10000",
+    "errors": "400,401,403,404,409,429,500",
+    "available": "authenticated human administrator only",
+    "testReferences": [
+      "backend/__tests__/mcp/native.integration.ts",
+      "frontend/__tests__/mcp.test.ts"
+    ],
+    "source": "backend/src/mcp/v2AdminRouter.ts",
+    "routeSource": "backend/src/mcp/v2AdminRouter.ts",
+    "security": "At-most-once approval dispatch; no machine self-approval; copy-once token verifier; no arbitrary commands or paths"
+  },
+  {
+    "feature": "MCP native administration",
+    "method": "GET",
+    "route": "/api/mcp-admin/tokens",
+    "handler": "strict native token / approval administrator action",
+    "services": [
+      "NativeTokenStore",
+      "McpActionService",
+      "existing domain services"
+    ],
+    "authentication": "browser administrator cookie JWT only",
+    "authorization": "parent administrator + same-origin JSON guard; approval hash and live token/resource recheck",
+    "classification": "privileged read",
+    "support": "Supported internal administrator API",
+    "request": [
+      "strict bounded zod body/query and exact path ID"
+    ],
+    "requestSchemas": [
+      "tokenInput / pageInput / v2AdminRouter inline schema"
+    ],
+    "response": "schemaVersion 1, success, result; sanitized error and trace ID; token plaintext only on creation/rotation",
+    "pagination": "tokens/actions/resources: limit 1-50, offset 0-10000",
+    "errors": "400,401,403,404,409,429,500",
+    "available": "authenticated human administrator only",
+    "testReferences": [
+      "backend/__tests__/mcp/native.integration.ts",
+      "frontend/__tests__/mcp.test.ts"
+    ],
+    "source": "backend/src/mcp/v2AdminRouter.ts",
+    "routeSource": "backend/src/mcp/v2AdminRouter.ts",
+    "security": "At-most-once approval dispatch; no machine self-approval; copy-once token verifier; no arbitrary commands or paths"
+  },
+  {
+    "feature": "MCP native administration",
+    "method": "POST",
+    "route": "/api/mcp-admin/tokens",
+    "handler": "strict native token / approval administrator action",
+    "services": [
+      "NativeTokenStore",
+      "McpActionService",
+      "existing domain services"
+    ],
+    "authentication": "browser administrator cookie JWT only",
+    "authorization": "parent administrator + same-origin JSON guard; approval hash and live token/resource recheck",
+    "classification": "privileged mutation",
+    "support": "Supported internal administrator API",
+    "request": [
+      "strict bounded zod body/query and exact path ID"
+    ],
+    "requestSchemas": [
+      "tokenInput / pageInput / v2AdminRouter inline schema"
+    ],
+    "response": "schemaVersion 1, success, result; sanitized error and trace ID; token plaintext only on creation/rotation",
+    "pagination": "tokens/actions/resources: limit 1-50, offset 0-10000",
+    "errors": "400,401,403,404,409,429,500",
+    "available": "authenticated human administrator only",
+    "testReferences": [
+      "backend/__tests__/mcp/native.integration.ts",
+      "frontend/__tests__/mcp.test.ts"
+    ],
+    "source": "backend/src/mcp/v2AdminRouter.ts",
+    "routeSource": "backend/src/mcp/v2AdminRouter.ts",
+    "security": "At-most-once approval dispatch; no machine self-approval; copy-once token verifier; no arbitrary commands or paths"
+  },
+  {
+    "feature": "MCP native administration",
+    "method": "PUT",
+    "route": "/api/mcp-admin/tokens/:id",
+    "handler": "strict native token / approval administrator action",
+    "services": [
+      "NativeTokenStore",
+      "McpActionService",
+      "existing domain services"
+    ],
+    "authentication": "browser administrator cookie JWT only",
+    "authorization": "parent administrator + same-origin JSON guard; approval hash and live token/resource recheck",
+    "classification": "privileged mutation",
+    "support": "Supported internal administrator API",
+    "request": [
+      "strict bounded zod body/query and exact path ID"
+    ],
+    "requestSchemas": [
+      "tokenInput / pageInput / v2AdminRouter inline schema"
+    ],
+    "response": "schemaVersion 1, success, result; sanitized error and trace ID; token plaintext only on creation/rotation",
+    "pagination": "tokens/actions/resources: limit 1-50, offset 0-10000",
+    "errors": "400,401,403,404,409,429,500",
+    "available": "authenticated human administrator only",
+    "testReferences": [
+      "backend/__tests__/mcp/native.integration.ts",
+      "frontend/__tests__/mcp.test.ts"
+    ],
+    "source": "backend/src/mcp/v2AdminRouter.ts",
+    "routeSource": "backend/src/mcp/v2AdminRouter.ts",
+    "security": "At-most-once approval dispatch; no machine self-approval; copy-once token verifier; no arbitrary commands or paths"
+  },
+  {
+    "feature": "MCP native administration",
+    "method": "POST",
+    "route": "/api/mcp-admin/tokens/:id/revoke",
+    "handler": "strict native token / approval administrator action",
+    "services": [
+      "NativeTokenStore",
+      "McpActionService",
+      "existing domain services"
+    ],
+    "authentication": "browser administrator cookie JWT only",
+    "authorization": "parent administrator + same-origin JSON guard; approval hash and live token/resource recheck",
+    "classification": "privileged mutation",
+    "support": "Supported internal administrator API",
+    "request": [
+      "strict bounded zod body/query and exact path ID"
+    ],
+    "requestSchemas": [
+      "tokenInput / pageInput / v2AdminRouter inline schema"
+    ],
+    "response": "schemaVersion 1, success, result; sanitized error and trace ID; token plaintext only on creation/rotation",
+    "pagination": "tokens/actions/resources: limit 1-50, offset 0-10000",
+    "errors": "400,401,403,404,409,429,500",
+    "available": "authenticated human administrator only",
+    "testReferences": [
+      "backend/__tests__/mcp/native.integration.ts",
+      "frontend/__tests__/mcp.test.ts"
+    ],
+    "source": "backend/src/mcp/v2AdminRouter.ts",
+    "routeSource": "backend/src/mcp/v2AdminRouter.ts",
+    "security": "At-most-once approval dispatch; no machine self-approval; copy-once token verifier; no arbitrary commands or paths"
+  },
+  {
+    "feature": "MCP native administration",
+    "method": "POST",
+    "route": "/api/mcp-admin/tokens/:id/rotate",
+    "handler": "strict native token / approval administrator action",
+    "services": [
+      "NativeTokenStore",
+      "McpActionService",
+      "existing domain services"
+    ],
+    "authentication": "browser administrator cookie JWT only",
+    "authorization": "parent administrator + same-origin JSON guard; approval hash and live token/resource recheck",
+    "classification": "privileged mutation",
+    "support": "Supported internal administrator API",
+    "request": [
+      "strict bounded zod body/query and exact path ID"
+    ],
+    "requestSchemas": [
+      "tokenInput / pageInput / v2AdminRouter inline schema"
+    ],
+    "response": "schemaVersion 1, success, result; sanitized error and trace ID; token plaintext only on creation/rotation",
+    "pagination": "tokens/actions/resources: limit 1-50, offset 0-10000",
+    "errors": "400,401,403,404,409,429,500",
+    "available": "authenticated human administrator only",
+    "testReferences": [
+      "backend/__tests__/mcp/native.integration.ts",
+      "frontend/__tests__/mcp.test.ts"
+    ],
+    "source": "backend/src/mcp/v2AdminRouter.ts",
+    "routeSource": "backend/src/mcp/v2AdminRouter.ts",
+    "security": "At-most-once approval dispatch; no machine self-approval; copy-once token verifier; no arbitrary commands or paths"
+  },
+  {
+    "feature": "MCP native administration",
+    "method": "POST",
+    "route": "/api/mcp-admin/tokens/:id/state",
+    "handler": "strict native token / approval administrator action",
+    "services": [
+      "NativeTokenStore",
+      "McpActionService",
+      "existing domain services"
+    ],
+    "authentication": "browser administrator cookie JWT only",
+    "authorization": "parent administrator + same-origin JSON guard; approval hash and live token/resource recheck",
+    "classification": "privileged mutation",
+    "support": "Supported internal administrator API",
+    "request": [
+      "strict bounded zod body/query and exact path ID"
+    ],
+    "requestSchemas": [
+      "tokenInput / pageInput / v2AdminRouter inline schema"
+    ],
+    "response": "schemaVersion 1, success, result; sanitized error and trace ID; token plaintext only on creation/rotation",
+    "pagination": "tokens/actions/resources: limit 1-50, offset 0-10000",
+    "errors": "400,401,403,404,409,429,500",
+    "available": "authenticated human administrator only",
+    "testReferences": [
+      "backend/__tests__/mcp/native.integration.ts",
+      "frontend/__tests__/mcp.test.ts"
+    ],
+    "source": "backend/src/mcp/v2AdminRouter.ts",
+    "routeSource": "backend/src/mcp/v2AdminRouter.ts",
+    "security": "At-most-once approval dispatch; no machine self-approval; copy-once token verifier; no arbitrary commands or paths"
+  },
+  {
+    "feature": "MCP native administration",
+    "method": "POST",
+    "route": "/api/mcp-admin/tokens/revoke-all",
+    "handler": "strict native token / approval administrator action",
+    "services": [
+      "NativeTokenStore",
+      "McpActionService",
+      "existing domain services"
+    ],
+    "authentication": "browser administrator cookie JWT only",
+    "authorization": "parent administrator + same-origin JSON guard; approval hash and live token/resource recheck",
+    "classification": "privileged mutation",
+    "support": "Supported internal administrator API",
+    "request": [
+      "strict bounded zod body/query and exact path ID"
+    ],
+    "requestSchemas": [
+      "tokenInput / pageInput / v2AdminRouter inline schema"
+    ],
+    "response": "schemaVersion 1, success, result; sanitized error and trace ID; token plaintext only on creation/rotation",
+    "pagination": "tokens/actions/resources: limit 1-50, offset 0-10000",
+    "errors": "400,401,403,404,409,429,500",
+    "available": "authenticated human administrator only",
+    "testReferences": [
+      "backend/__tests__/mcp/native.integration.ts",
+      "frontend/__tests__/mcp.test.ts"
+    ],
+    "source": "backend/src/mcp/v2AdminRouter.ts",
+    "routeSource": "backend/src/mcp/v2AdminRouter.ts",
+    "security": "At-most-once approval dispatch; no machine self-approval; copy-once token verifier; no arbitrary commands or paths"
   },
   {
     "feature": "MCP administration",
@@ -4114,8 +4498,8 @@
     "services": [
       "OperationalReadService.read"
     ],
-    "authentication": "external OAuth resource-bound RFC 9068 JWT",
-    "authorization": "agents:read in JWT AND local grant + exact resource IDs + tool policy",
+    "authentication": "native MCP bearer token or external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "agents:read intersection or native exact tool grant + exact resource IDs + tool policy",
     "classification": "read-only stored evidence",
     "support": "Fully supported (read MVP)",
     "request": [
@@ -4128,7 +4512,7 @@
     "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
     "pagination": "collections: limit/offset/hasMore; SQL-bounded",
     "errors": "400,401,403,404,429,500; stable code + traceId",
-    "available": "external OAuth clients; service policy must be enabled",
+    "available": "external authenticated clients; service policy must be enabled",
     "testReferences": [
       "backend/__tests__/mcp/gateway.integration.ts"
     ],
@@ -4144,8 +4528,8 @@
     "services": [
       "OperationalReadService.read"
     ],
-    "authentication": "external OAuth resource-bound RFC 9068 JWT",
-    "authorization": "agents:read in JWT AND local grant + exact resource IDs + tool policy",
+    "authentication": "native MCP bearer token or external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "agents:read intersection or native exact tool grant + exact resource IDs + tool policy",
     "classification": "read-only stored evidence",
     "support": "Fully supported (read MVP)",
     "request": [
@@ -4158,7 +4542,7 @@
     "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
     "pagination": "collections: limit/offset/hasMore; SQL-bounded",
     "errors": "400,401,403,404,429,500; stable code + traceId",
-    "available": "external OAuth clients; service policy must be enabled",
+    "available": "external authenticated clients; service policy must be enabled",
     "testReferences": [
       "backend/__tests__/mcp/gateway.integration.ts"
     ],
@@ -4174,8 +4558,8 @@
     "services": [
       "OperationalReadService.read"
     ],
-    "authentication": "external OAuth resource-bound RFC 9068 JWT",
-    "authorization": "agents:read in JWT AND local grant + exact resource IDs + tool policy",
+    "authentication": "native MCP bearer token or external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "agents:read intersection or native exact tool grant + exact resource IDs + tool policy",
     "classification": "read-only stored evidence",
     "support": "Fully supported (read MVP)",
     "request": [
@@ -4188,7 +4572,7 @@
     "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
     "pagination": "collections: limit/offset/hasMore; SQL-bounded",
     "errors": "400,401,403,404,429,500; stable code + traceId",
-    "available": "external OAuth clients; service policy must be enabled",
+    "available": "external authenticated clients; service policy must be enabled",
     "testReferences": [
       "backend/__tests__/mcp/gateway.integration.ts"
     ],
@@ -4204,8 +4588,8 @@
     "services": [
       "OperationalReadService.read"
     ],
-    "authentication": "external OAuth resource-bound RFC 9068 JWT",
-    "authorization": "backups:read in JWT AND local grant + exact resource IDs + tool policy",
+    "authentication": "native MCP bearer token or external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "backups:read intersection or native exact tool grant + exact resource IDs + tool policy",
     "classification": "read-only stored evidence",
     "support": "Fully supported (read MVP)",
     "request": [
@@ -4218,7 +4602,7 @@
     "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
     "pagination": "collections: limit/offset/hasMore; SQL-bounded",
     "errors": "400,401,403,404,429,500; stable code + traceId",
-    "available": "external OAuth clients; service policy must be enabled",
+    "available": "external authenticated clients; service policy must be enabled",
     "testReferences": [
       "backend/__tests__/mcp/gateway.integration.ts"
     ],
@@ -4234,8 +4618,8 @@
     "services": [
       "OperationalReadService.read"
     ],
-    "authentication": "external OAuth resource-bound RFC 9068 JWT",
-    "authorization": "plans:read in JWT AND local grant + exact resource IDs + tool policy",
+    "authentication": "native MCP bearer token or external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "plans:read intersection or native exact tool grant + exact resource IDs + tool policy",
     "classification": "read-only stored evidence",
     "support": "Fully supported (read MVP)",
     "request": [
@@ -4248,7 +4632,7 @@
     "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
     "pagination": "collections: limit/offset/hasMore; SQL-bounded",
     "errors": "400,401,403,404,429,500; stable code + traceId",
-    "available": "external OAuth clients; service policy must be enabled",
+    "available": "external authenticated clients; service policy must be enabled",
     "testReferences": [
       "backend/__tests__/mcp/gateway.integration.ts"
     ],
@@ -4264,8 +4648,8 @@
     "services": [
       "OperationalReadService.read"
     ],
-    "authentication": "external OAuth resource-bound RFC 9068 JWT",
-    "authorization": "plans:read in JWT AND local grant + exact resource IDs + tool policy",
+    "authentication": "native MCP bearer token or external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "plans:read intersection or native exact tool grant + exact resource IDs + tool policy",
     "classification": "read-only stored evidence",
     "support": "Fully supported (read MVP)",
     "request": [
@@ -4278,7 +4662,7 @@
     "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
     "pagination": "collections: limit/offset/hasMore; SQL-bounded",
     "errors": "400,401,403,404,429,500; stable code + traceId",
-    "available": "external OAuth clients; service policy must be enabled",
+    "available": "external authenticated clients; service policy must be enabled",
     "testReferences": [
       "backend/__tests__/mcp/gateway.integration.ts"
     ],
@@ -4294,8 +4678,8 @@
     "services": [
       "OperationalReadService.read"
     ],
-    "authentication": "external OAuth resource-bound RFC 9068 JWT",
-    "authorization": "backups:read in JWT AND local grant + exact resource IDs + tool policy",
+    "authentication": "native MCP bearer token or external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "backups:read intersection or native exact tool grant + exact resource IDs + tool policy",
     "classification": "read-only stored evidence",
     "support": "Fully supported (read MVP)",
     "request": [
@@ -4308,7 +4692,7 @@
     "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
     "pagination": "collections: limit/offset/hasMore; SQL-bounded",
     "errors": "400,401,403,404,429,500; stable code + traceId",
-    "available": "external OAuth clients; service policy must be enabled",
+    "available": "external authenticated clients; service policy must be enabled",
     "testReferences": [
       "backend/__tests__/mcp/gateway.integration.ts"
     ],
@@ -4324,8 +4708,8 @@
     "services": [
       "OperationalReadService.read"
     ],
-    "authentication": "external OAuth resource-bound RFC 9068 JWT",
-    "authorization": "recovery:read in JWT AND local grant + exact resource IDs + tool policy",
+    "authentication": "native MCP bearer token or external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "recovery:read intersection or native exact tool grant + exact resource IDs + tool policy",
     "classification": "read-only stored evidence",
     "support": "Fully supported (read MVP)",
     "request": [
@@ -4338,7 +4722,7 @@
     "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
     "pagination": "collections: limit/offset/hasMore; SQL-bounded",
     "errors": "400,401,403,404,429,500; stable code + traceId",
-    "available": "external OAuth clients; service policy must be enabled",
+    "available": "external authenticated clients; service policy must be enabled",
     "testReferences": [
       "backend/__tests__/mcp/gateway.integration.ts"
     ],
@@ -4354,8 +4738,8 @@
     "services": [
       "OperationalReadService.read"
     ],
-    "authentication": "external OAuth resource-bound RFC 9068 JWT",
-    "authorization": "replication:read in JWT AND local grant + exact resource IDs + tool policy",
+    "authentication": "native MCP bearer token or external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "replication:read intersection or native exact tool grant + exact resource IDs + tool policy",
     "classification": "read-only stored evidence",
     "support": "Fully supported (read MVP)",
     "request": [
@@ -4368,7 +4752,7 @@
     "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
     "pagination": "collections: limit/offset/hasMore; SQL-bounded",
     "errors": "400,401,403,404,429,500; stable code + traceId",
-    "available": "external OAuth clients; service policy must be enabled",
+    "available": "external authenticated clients; service policy must be enabled",
     "testReferences": [
       "backend/__tests__/mcp/gateway.integration.ts"
     ],
@@ -4384,8 +4768,8 @@
     "services": [
       "OperationalReadService.read"
     ],
-    "authentication": "external OAuth resource-bound RFC 9068 JWT",
-    "authorization": "recovery:read in JWT AND local grant + exact resource IDs + tool policy",
+    "authentication": "native MCP bearer token or external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "recovery:read intersection or native exact tool grant + exact resource IDs + tool policy",
     "classification": "read-only stored evidence",
     "support": "Fully supported (read MVP)",
     "request": [
@@ -4398,7 +4782,7 @@
     "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
     "pagination": "collections: limit/offset/hasMore; SQL-bounded",
     "errors": "400,401,403,404,429,500; stable code + traceId",
-    "available": "external OAuth clients; service policy must be enabled",
+    "available": "external authenticated clients; service policy must be enabled",
     "testReferences": [
       "backend/__tests__/mcp/gateway.integration.ts"
     ],
@@ -4414,8 +4798,8 @@
     "services": [
       "OperationalReadService.read"
     ],
-    "authentication": "external OAuth resource-bound RFC 9068 JWT",
-    "authorization": "replication:read in JWT AND local grant + exact resource IDs + tool policy",
+    "authentication": "native MCP bearer token or external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "replication:read intersection or native exact tool grant + exact resource IDs + tool policy",
     "classification": "read-only stored evidence",
     "support": "Fully supported (read MVP)",
     "request": [
@@ -4428,7 +4812,7 @@
     "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
     "pagination": "collections: limit/offset/hasMore; SQL-bounded",
     "errors": "400,401,403,404,429,500; stable code + traceId",
-    "available": "external OAuth clients; service policy must be enabled",
+    "available": "external authenticated clients; service policy must be enabled",
     "testReferences": [
       "backend/__tests__/mcp/gateway.integration.ts"
     ],
@@ -4444,8 +4828,8 @@
     "services": [
       "OperationalReadService.read"
     ],
-    "authentication": "external OAuth resource-bound RFC 9068 JWT",
-    "authorization": "storages:read in JWT AND local grant + exact resource IDs + tool policy",
+    "authentication": "native MCP bearer token or external OAuth resource-bound RFC 9068 JWT",
+    "authorization": "storages:read intersection or native exact tool grant + exact resource IDs + tool policy",
     "classification": "read-only stored evidence",
     "support": "Fully supported (read MVP)",
     "request": [
@@ -4458,7 +4842,7 @@
     "response": "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
     "pagination": "collections: limit/offset/hasMore; SQL-bounded",
     "errors": "400,401,403,404,429,500; stable code + traceId",
-    "available": "external OAuth clients; service policy must be enabled",
+    "available": "external authenticated clients; service policy must be enabled",
     "testReferences": [
       "backend/__tests__/mcp/gateway.integration.ts"
     ],
@@ -4476,9 +4860,9 @@
       "OperationalReadService",
       "McpStore"
     ],
-    "authentication": "resource-bound OAuth JWT",
+    "authentication": "native MCP bearer token or resource-bound OAuth JWT; HTML dashboard uses normal web boundary",
     "authorization": "per-tool scope intersection and exact local resource grant",
-    "classification": "protocol/read-only",
+    "classification": "protocol; scoped reads and human-approved operational writes",
     "support": "Fully supported within documented protocol versions",
     "request": [
       "official SDK schemas; 16 KiB JSON; exact Host/Origin; TLS"
@@ -4495,21 +4879,21 @@
     ],
     "source": "backend/src/mcp/gateway.ts",
     "routeSource": "backend/src/mcp/gateway.ts",
-    "security": "No arbitrary API proxy, filesystem, SQL, shell, backup export or writes."
+    "security": "No arbitrary API proxy, filesystem, SQL, shell or backup export. Native operational writes create bounded pending approval only."
   },
   {
     "feature": "MCP protocol",
     "method": "GET",
     "route": "/mcp",
-    "handler": "authenticated 405; no standalone SSE stream",
+    "handler": "HTML browser dashboard; authenticated machine GET returns 405; no standalone SSE stream",
     "services": [
       "official SDK",
       "OperationalReadService",
       "McpStore"
     ],
-    "authentication": "resource-bound OAuth JWT",
+    "authentication": "native MCP bearer token or resource-bound OAuth JWT; HTML dashboard uses normal web boundary",
     "authorization": "per-tool scope intersection and exact local resource grant",
-    "classification": "protocol/read-only",
+    "classification": "protocol; scoped reads and human-approved operational writes",
     "support": "Fully supported within documented protocol versions",
     "request": [
       "official SDK schemas; 16 KiB JSON; exact Host/Origin; TLS"
@@ -4526,7 +4910,7 @@
     ],
     "source": "backend/src/mcp/gateway.ts",
     "routeSource": "backend/src/mcp/gateway.ts",
-    "security": "No arbitrary API proxy, filesystem, SQL, shell, backup export or writes."
+    "security": "No arbitrary API proxy, filesystem, SQL, shell or backup export. Native operational writes create bounded pending approval only."
   },
   {
     "feature": "MCP protocol",
@@ -4540,7 +4924,7 @@
     ],
     "authentication": "public transport/discovery only when enabled",
     "authorization": "per-tool scope intersection and exact local resource grant",
-    "classification": "protocol/read-only",
+    "classification": "protocol; scoped reads and human-approved operational writes",
     "support": "Fully supported within documented protocol versions",
     "request": [
       "official SDK schemas; 16 KiB JSON; exact Host/Origin; TLS"
@@ -4557,7 +4941,7 @@
     ],
     "source": "backend/src/mcp/gateway.ts",
     "routeSource": "backend/src/mcp/gateway.ts",
-    "security": "No arbitrary API proxy, filesystem, SQL, shell, backup export or writes."
+    "security": "No arbitrary API proxy, filesystem, SQL, shell or backup export. Native operational writes create bounded pending approval only."
   },
   {
     "feature": "MCP protocol",
@@ -4569,9 +4953,9 @@
       "OperationalReadService",
       "McpStore"
     ],
-    "authentication": "resource-bound OAuth JWT",
+    "authentication": "native MCP bearer token or resource-bound OAuth JWT; HTML dashboard uses normal web boundary",
     "authorization": "per-tool scope intersection and exact local resource grant",
-    "classification": "protocol/read-only",
+    "classification": "protocol; scoped reads and human-approved operational writes",
     "support": "Fully supported within documented protocol versions",
     "request": [
       "official SDK schemas; 16 KiB JSON; exact Host/Origin; TLS"
@@ -4588,6 +4972,6 @@
     ],
     "source": "backend/src/mcp/gateway.ts",
     "routeSource": "backend/src/mcp/gateway.ts",
-    "security": "No arbitrary API proxy, filesystem, SQL, shell, backup export or writes."
+    "security": "No arbitrary API proxy, filesystem, SQL, shell or backup export. Native operational writes create bounded pending approval only."
   }
 ]

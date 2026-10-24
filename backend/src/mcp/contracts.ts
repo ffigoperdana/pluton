@@ -41,7 +41,12 @@ export type Grant = GrantInput & {
 	revokedAt: number | null;
 	lastUsedAt: number | null;
 };
-export type Principal = { grant: Grant; tokenScopes: string[]; expiresAt: number };
+export type Principal = {
+	grant: Grant;
+	tokenScopes: string[];
+	expiresAt: number;
+	nativeTokenId?: string;
+};
 export class McpFault extends Error {
 	constructor(
 		public status: number,

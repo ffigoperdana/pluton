@@ -2,14 +2,29 @@ import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from 'jose';
 import { McpFault, type Principal } from './contracts';
 import type { McpStore } from './McpStore';
 
-export type McpConfig = { resource: string; issuer: string; jwksUrl: string };
+export type McpConfig = {
+	resource: string;
+	issuer?: string;
+	jwksUrl?: string;
+	nativeTokens?: boolean;
+};
 export function mcpConfig(env: {
 	MCP_RESOURCE_URL?: string;
 	MCP_OAUTH_ISSUER?: string;
 	MCP_OAUTH_JWKS_URL?: string;
+	MCP_NATIVE_TOKENS_ENABLED?: string;
 }): McpConfig | undefined {
-	const values = [env.MCP_RESOURCE_URL, env.MCP_OAUTH_ISSUER, env.MCP_OAUTH_JWKS_URL];
-	if (values.some(value => !value)) return undefined;
+	const nativeTokens = env.MCP_NATIVE_TOKENS_ENABLED === 'true';
+	const oauth = !!env.MCP_OAUTH_ISSUER && !!env.MCP_OAUTH_JWKS_URL;
+	if (
+		!env.MCP_RESOURCE_URL ||
+		(!nativeTokens && !oauth) ||
+		!!env.MCP_OAUTH_ISSUER !== !!env.MCP_OAUTH_JWKS_URL
+	)
+		return undefined;
+	const values = oauth
+		? [env.MCP_RESOURCE_URL, env.MCP_OAUTH_ISSUER, env.MCP_OAUTH_JWKS_URL]
+		: [env.MCP_RESOURCE_URL];
 	try {
 		const urls = values.map(value => new URL(value!));
 		if (
@@ -25,7 +40,11 @@ export function mcpConfig(env: {
 		)
 			return undefined;
 		if (urls[0].pathname !== '/mcp') return undefined;
-		return { resource: values[0]!, issuer: values[1]!, jwksUrl: values[2]! };
+		return {
+			resource: values[0]!,
+			...(oauth ? { issuer: values[1]!, jwksUrl: values[2]! } : {}),
+			nativeTokens,
+		};
 	} catch {
 		return undefined;
 	}
@@ -34,13 +53,14 @@ export function mcpConfig(env: {
 export function createTokenVerifier(
 	config: McpConfig,
 	store: McpStore,
-	key: JWTVerifyGetKey = createRemoteJWKSet(new URL(config.jwksUrl), {
+	key: JWTVerifyGetKey = createRemoteJWKSet(new URL(config.jwksUrl!), {
 		timeoutDuration: 3000,
 		cooldownDuration: 30000,
 	})
 ) {
 	return async (token: string): Promise<Principal> => {
 		try {
+			if (!config.issuer || !config.jwksUrl) throw new Error();
 			const { payload, protectedHeader } = await jwtVerify(token, key, {
 				issuer: config.issuer,
 				audience: config.resource,

@@ -50,6 +50,7 @@ const baseConfigSchema = z.object({
 	MCP_RESOURCE_URL: z.string().optional(),
 	MCP_OAUTH_ISSUER: z.string().optional(),
 	MCP_OAUTH_JWKS_URL: z.string().optional(),
+	MCP_NATIVE_TOKENS_ENABLED: z.enum(['true', 'false']).default('false'),
 
 	// Security (optional in setup mode)
 	ENCRYPTION_KEY: z

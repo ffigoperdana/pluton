@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { grantInput, McpFault, parse, type Grant, type Principal } from './contracts';
+import { NativeTokenStore } from './NativeTokenStore';
 
 type GrantRow = {
 	id: string;
@@ -17,7 +18,12 @@ const decode = (row: GrantRow): Grant => ({
 	lastUsedAt: row.last_used_at,
 });
 export class McpStore {
-	constructor(private readonly db: Database.Database) {}
+	readonly nativeTokens: NativeTokenStore;
+	constructor(private readonly db: Database.Database) {
+		this.nativeTokens = new NativeTokenStore(db, (actor, id, operation) => {
+			this.audit(actor, `native-${id}`, operation, id, 'success');
+		});
+	}
 	policy(): { enabled: boolean; disabledTools: string[] } {
 		const row = this.db
 			.prepare('SELECT enabled,disabled_tools FROM mcp_policy WHERE id=1')
@@ -106,6 +112,8 @@ export class McpStore {
 		})();
 	}
 	assertActive(principal: Principal) {
+		if (principal.nativeTokenId)
+			return this.nativeTokens.grant(this.nativeTokens.active(principal.nativeTokenId));
 		const current = this.get(principal.grant.id);
 		if (
 			!current ||
@@ -160,5 +168,16 @@ export class McpStore {
 			configuredClients: number;
 			recentlyActive: number | null;
 		};
+	}
+	resources(kind: 'plans' | 'agents' | 'storages', limit: number, offset: number) {
+		// Fixed projections and identifiers: storage credentials and Agent credentials never leave here.
+		const queries = {
+			plans: 'SELECT id,title AS name FROM plans ORDER BY id LIMIT ? OFFSET ?',
+			agents:
+				'SELECT agent_id AS id,device_id AS name FROM agent_identities WHERE revoked_at IS NULL ORDER BY agent_id LIMIT ? OFFSET ?',
+			storages: 'SELECT id,name FROM storages ORDER BY id LIMIT ? OFFSET ?',
+		};
+		const rows = this.db.prepare(queries[kind]).all(limit + 1, offset);
+		return { items: rows.slice(0, limit), hasMore: rows.length > limit, limit, offset };
 	}
 }

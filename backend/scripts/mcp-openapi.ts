@@ -59,7 +59,7 @@ const document = {
 		title: 'Pluton scoped operational reads',
 		version: '1.0.0',
 		description:
-			'Only new scoped REST read contracts. Legacy UI routes are inventoried separately. Tokens come from a separately reviewed existing OAuth provider.',
+			'Only scoped REST read contracts. Native tokens and external OAuth tokens are separate supported modes. Native operational write tools use MCP with human approvals, not these REST read endpoints. Administration routes are inventoried separately.',
 	},
 	servers: [{ url: 'https://backup.example.internal' }],
 	components: {
@@ -67,9 +67,9 @@ const document = {
 			resourceToken: {
 				type: 'http',
 				scheme: 'bearer',
-				bearerFormat: 'RFC 9068 JWT',
+				bearerFormat: 'Native Pluton MCP token or RFC 9068 JWT',
 				description:
-					'Resource audience must equal MCP_RESOURCE_URL. Discover the configured issuer at /.well-known/oauth-protected-resource/mcp.',
+					'Native tokens require MCP_NATIVE_TOKENS_ENABLED=true and exact tool/resource grants. OAuth resource audience must equal MCP_RESOURCE_URL; issuer discovery is available only when OAuth is configured.',
 			},
 		},
 	},

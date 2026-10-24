@@ -16,8 +16,18 @@ export type McpOverview = {
    transport: string;
    pendingApprovals: number;
    scopes: string[];
+   nativeTokensEnabled: boolean;
+   oauthEnabled: boolean;
 };
-export type McpTool = { name: string; description: string; scope: string; enabled: boolean; classification: string; approvalRequired: boolean };
+export type McpTool = {
+   name: string;
+   description: string;
+   scope: string;
+   enabled: boolean;
+   classification: string;
+   approvalRequired: boolean;
+   implicit?: boolean;
+};
 export type McpActivity = {
    id: number;
    timestamp: number;
