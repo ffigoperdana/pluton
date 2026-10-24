@@ -129,29 +129,28 @@ export function useGetDevice(id: string, metrics = false) {
 
 // Update Device
 export async function updateDevice(updatePayload: { id: string; data: Record<string, any> }) {
+   if (!updatePayload.id?.trim()) throw new Error('Device ID is required');
    const header = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
-   const res = await fetch(`${API_URL}/devices/${updatePayload.id}`, {
-      method: 'PUT',
-      credentials: 'include',
-      headers: header,
-      body: JSON.stringify(updatePayload.data),
-   });
-   const data = await res.json();
-   console.log('data :', data);
-   if (!data.success) {
-      throw new Error(data.error);
-   }
-   return data;
+   return mutationResponse(
+      `${API_URL}/devices/${encodeURIComponent(updatePayload.id)}`,
+      {
+         method: 'PUT',
+         credentials: 'include',
+         headers: header,
+         body: JSON.stringify(updatePayload.data),
+      },
+      { allowAccepted: false },
+   );
 }
 
 export function useUpdateDevice() {
    const queryClient = useQueryClient();
    return useMutation({
+      retry: false,
       mutationFn: updateDevice,
-      onSuccess: (res) => {
-         // TODO: Should Display a Notification Bubble.
-         console.log('# Device Updated! :', res);
+      onSuccess: (_result, variables) => {
          queryClient.invalidateQueries({ queryKey: ['devices'] });
+         queryClient.invalidateQueries({ queryKey: ['device', variables.id] });
       },
    });
 }

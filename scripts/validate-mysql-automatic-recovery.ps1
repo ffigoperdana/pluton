@@ -1,7 +1,7 @@
 param([string]$RuntimeImage='pluton-persistent-ci:local',[string]$WorkerImage='pluton-mysql-internal-worker:review',
   [ValidateSet('disposable','persistent')][string]$Mode='disposable',
   [switch]$WorkingTreeCode,
-  [ValidateSet('success','wrong-password','bad-tls','invalid-marker','existing-database','cancel')][string[]]$Scenarios=@('success','wrong-password','bad-tls','invalid-marker','existing-database','cancel'))
+  [ValidateSet('success','wrong-password','bad-tls','invalid-marker','existing-database','cancel','resource-refused')][string[]]$Scenarios=@('success','wrong-password','bad-tls','invalid-marker','existing-database','cancel','resource-refused'))
 # Nonprivileged containers only: no Docker socket, host mount/loop/systemd operations or host ports.
 # Bounded tmpfs proves native compatibility, NOT production ext4/ENOSPC/cold-boot acceptance.
 $ErrorActionPreference='Stop'
@@ -36,7 +36,8 @@ foreach($scenario in $Scenarios){
     # Separate TEST authority publishes real, fresh measurements of its own
     # bounded cgroup. It has no Docker socket, host paths, keys or mount privilege.
     $observer="$scope-observer"
-    & docker run -d --pull never --name $observer --network none --read-only --user '0:0' --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges:true --memory 4g --memory-swap 4g --cpus 2 --pids-limit 32 --label "org.pluton.fixture=$scope" --mount "type=volume,source=$($names.public),target=/fixture/images" --mount "type=bind,source=$(Join-Path $repo 'deploy'),target=/fixture-deploy,readonly" --mount "type=bind,source=$(Join-Path $repo 'backend/__tests__/integration/mysqlAutomaticRecovery.observe.mjs'),target=/fixture-code/observe.mjs,readonly" --entrypoint node $WorkerImage /fixture-code/observe.mjs | Out-Null
+    $observerMemory=if($scenario -eq 'resource-refused'){'2g'}else{'4g'}
+    & docker run -d --pull never --name $observer --network none --read-only --user '0:0' --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges:true --memory $observerMemory --memory-swap $observerMemory --cpus 2 --pids-limit 32 --label "org.pluton.fixture=$scope" --mount "type=volume,source=$($names.public),target=/fixture/images" --mount "type=bind,source=$(Join-Path $repo 'deploy'),target=/fixture-deploy,readonly" --mount "type=bind,source=$(Join-Path $repo 'backend/__tests__/integration/mysqlAutomaticRecovery.observe.mjs'),target=/fixture-code/observe.mjs,readonly" --entrypoint node $WorkerImage /fixture-code/observe.mjs | Out-Null
     Check 'Bounded fixture observation failed.';$containers+=$observer
     for($attempt=0;$attempt -lt 50;$attempt++){
       & docker exec $observer node -e "process.exit(require('fs').existsSync('/fixture/images/capacity.json')?0:1)" 2>$null
@@ -76,7 +77,7 @@ foreach($scenario in $Scenarios){
       & docker exec $worker node -e "process.exit(require('fs').existsSync('/run/pluton-mysql-worker/worker.sock')?0:1)" 2>$null
       if($LASTEXITCODE -eq 0){break};Start-Sleep -Milliseconds 100
     };if($attempt -eq 60){throw 'Worker startup failed.'}
-    & docker create --init --name $app --network none --read-only --user '10001:10001' --cap-drop ALL --security-opt no-new-privileges:true --memory 768m --memory-swap 768m --pids-limit 64 --label "org.pluton.fixture=$scope" --tmpfs '/tmp:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=700,size=16m' --tmpfs '/data:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=700,size=16m' -e PLUTON_MYSQL_WORKER=enabled --mount "type=volume,source=$($names.ipc),target=/run/pluton-mysql-worker,readonly" --mount "type=volume,source=$($names.public),target=/fixture/public,readonly" --mount "type=volume,source=$($names.public),target=/run/pluton-automatic-recovery,readonly" --mount "type=volume,source=$($names.state),target=/fixture/state" @applicationCode --mount "type=bind,source=$(Join-Path $repo 'backend/__tests__/integration/mysqlAutomaticRecovery.smoke.mjs'),target=/fixture-code/smoke.mjs,readonly" --entrypoint node $RuntimeImage --loader /app/backend/loader.mjs /fixture-code/smoke.mjs | Out-Null
+    & docker create --init --name $app --network none --read-only --user '10001:10001' --cap-drop ALL --security-opt no-new-privileges:true --memory 768m --memory-swap 768m --pids-limit 64 --label "org.pluton.fixture=$scope" --tmpfs '/tmp:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=700,size=16m' --tmpfs '/data:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=700,size=16m' -e PLUTON_MYSQL_WORKER=enabled --mount "type=volume,source=$($names.ipc),target=/run/pluton-mysql-worker,readonly" --mount "type=volume,source=$($names.public),target=/fixture/public,readonly" --mount "type=volume,source=$($names.public),target=/run/pluton-automatic-recovery,readonly" --mount "type=volume,source=$($names.state),target=/fixture/state" @applicationCode --mount "type=bind,source=$(Join-Path $repo 'backend/__tests__/integration/mysqlAutomaticRecovery.smoke.mjs'),target=/fixture-code/smoke.mjs,readonly" --mount "type=bind,source=$(Join-Path $repo 'backend/__tests__/integration/mysqlAutomaticRecovery.capacity.mjs'),target=/fixture-code/capacity.mjs,readonly" --entrypoint node $RuntimeImage --loader /app/backend/loader.mjs /fixture-code/smoke.mjs | Out-Null
     Check 'Application fixture creation failed.';$containers+=$app
     if($Mode -eq 'persistent' -and $scenario -eq 'success'){
       & docker start $app | Out-Null;Check 'Retained fixture start failed.'

@@ -1,5 +1,5 @@
 import path from 'path';
-import { Device, deviceUpdateSchema } from '../db/schema/devices';
+import { Device } from '../db/schema/devices';
 import { BaseSystemManager } from '../managers/BaseSystemManager';
 import { DeviceStore } from '../stores/DeviceStore';
 import { PlanStore } from '../stores/PlanStore';
@@ -10,6 +10,7 @@ import { StorageStore } from '../stores/StorageStore';
 import { providers } from '../utils/providers';
 import { configService } from './ConfigService';
 import { AppError } from '../utils/AppError';
+import { deviceSettingsUpdate } from '../utils/deviceSettingsUpdate';
 import { AgentService, type AgentPublic } from './AgentService';
 
 export class DeviceService {
@@ -113,42 +114,39 @@ export class DeviceService {
 	/**
 	 * Updates a device.
 	 */
-	async updateDevice(
-		id: string,
-		data: { name?: string; settings?: any; tags?: string[] }
-	): Promise<Device | null> {
+	async updateDevice(id: string, data: unknown): Promise<Device | null> {
 		const existingDevice = await this.deviceStore.getById(id);
 
 		if (!existingDevice) {
-			throw new Error('Device not found.');
+			throw new AppError(404, 'Device not found.');
 		}
 
-		// Validate the update object against the schema
-		let updatedObj: Partial<Device> = {};
-		try {
-			updatedObj = deviceUpdateSchema.parse({
-				name: data.name ?? existingDevice.name,
-				settings: data.settings ?? existingDevice.settings,
-				tags: data.tags ?? existingDevice.tags,
-			});
-		} catch (error) {
-			console.error('Error parsing Device data:', error);
-			throw new AppError(400, 'Invalid device data provided');
-		}
-
-		if (data.settings) {
+		const { updates, settingsChanged } = deviceSettingsUpdate(data, existingDevice);
+		if (settingsChanged) {
+			// This legacy remote command is not implemented by the outbound Agent protocol.
+			// A display rename must never send it (or depend on Agent connectivity).
+			if (id !== 'main')
+				throw new AppError(
+					501,
+					'Remote runtime settings cannot be changed here. Configure the Agent on its host; display name updates are supported.'
+				);
 			try {
 				const strategy = this.getSystemStrategy(id);
-				const updateResp = await strategy.updateSettings(data.settings);
+				const updateResp = await strategy.updateSettings(updates.settings!);
 				if (!updateResp.success) {
 					throw new Error('Failed to update device settings');
 				}
-			} catch (error: any) {
-				throw new Error('Failed to update device settings');
+			} catch {
+				throw new AppError(
+					503,
+					'Device runtime settings could not be applied. Check the host configuration before retrying.'
+				);
 			}
 		}
 
-		const device = await this.deviceStore.update(id, updatedObj);
+		if (!Object.keys(updates).length) return existingDevice;
+		const device = await this.deviceStore.updateMetadata(id, updates);
+		if (!device) throw new AppError(404, 'Device not found.');
 		return device;
 	}
 
