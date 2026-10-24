@@ -6,6 +6,8 @@ import { MysqlRecoveryWorkerClient } from '/app/backend/dist/utils/mysqlRecovery
 import { RecoveryTestStore } from '/app/backend/dist/stores/RecoveryTestStore.js';
 import { DatabaseRestoreStore } from '/app/backend/dist/stores/DatabaseRestoreStore.js';
 import { MysqlPersistentDatabaseImporter } from '/app/backend/dist/utils/mysqlPersistentDatabaseImporter.js';
+import { assertInternalMysqlCapacity } from '/app/backend/dist/mysql-worker/internal.js';
+import { waitForFixtureCapacity } from './capacity.mjs';
 const require = createRequire('/app/backend/package.json'),
 	Database = require('better-sqlite3'),
 	{ drizzle } = require('drizzle-orm/better-sqlite3'),
@@ -91,7 +93,42 @@ const entry = {
 const controller = new AbortController();
 let stage = 'preflight',
 	timer;
+let lastCapacity, reportedBlocked = false;
+const readCapacity = async (name, max) => {
+	assert.equal(name, 'capacity.json');
+	const buffer = await fs.readFile('/fixture/public/capacity.json');
+	assert(buffer.length <= max);
+	try { lastCapacity = JSON.parse(buffer.toString()); } catch { lastCapacity = null; }
+	return buffer;
+};
+const resourceDiagnostic = state => {
+	const sample = lastCapacity?.sample;
+	const finite = value => Number.isFinite(value) ? value : null;
+	console.log('CHECK Oracle Internal resources ' + JSON.stringify({
+		mode: c.mode, scenario: c.scenario, state,
+		ageMs: finite(Date.now() - lastCapacity?.observedAt),
+		totalMiB: finite(sample?.total / 1024 ** 2), availableMiB: finite(sample?.available / 1024 ** 2),
+		pressure: finite(sample?.pressure), cpuAvailable: finite(sample?.cpuAvailable),
+		swapMiB: finite(sample?.swapUsed / 1024 ** 2), cgroupSwapMiB: finite(sample?.cgroupSwap / 1024 ** 2),
+		diskMiB: finite(sample?.diskAvailable / 1024 ** 2),
+	}));
+};
+const safeCode = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(value) ? value : 'unknown';
+let expectedCode, actualCode;
 try {
+	stage = 'resource-admission';
+	if (c.scenario === 'resource-refused') {
+		// A real 2 GiB observer cgroup must be refused, never promoted to a successful import.
+		await readCapacity('capacity.json', 2048);
+		resourceDiagnostic('expected-refusal');
+	} else {
+		await waitForFixtureCapacity({
+			check: () => assertInternalMysqlCapacity(readCapacity),
+			blocked: () => { if (!reportedBlocked) { reportedBlocked = true; resourceDiagnostic('blocked'); } },
+		});
+		resourceDiagnostic('ready');
+	}
+	stage = 'preflight';
 	if (c.mode === 'persistent') {
 		const persistentStore = new DatabaseRestoreStore(sqlite, key);
 		let row = {
@@ -150,7 +187,10 @@ try {
 			'invalid-marker': 'restore-purpose-guard-mismatch',
 			'existing-database': 'database-already-exists',
 			'cancel': 'cancelled',
+			'resource-refused': 'internal-resources-insufficient',
 		}[c.scenario];
+		expectedCode = expected;
+		actualCode = failed?.code;
 		if (expected) assert.equal(failed?.code, expected);
 		else {
 			if (failed) throw failed;
@@ -188,7 +228,9 @@ try {
 		console.log(
 			'PASS Oracle MySQL Internal persistent/' +
 				c.scenario +
-				' native import, retained identity and owner cleanup. Host ext4 NOT tested.'
+				(c.scenario === 'resource-refused'
+					? ' expected resource refusal; no validated import or durable lease. Host ext4 NOT tested.'
+					: ' native import, retained identity and owner cleanup. Host ext4 NOT tested.')
 		);
 	} else {
 		let failed;
@@ -217,7 +259,10 @@ try {
 			'invalid-marker': 'recovery-target-unsafe',
 			'existing-database': 'database-already-exists',
 			'cancel': 'cancelled',
+			'resource-refused': 'internal-resources-insufficient',
 		}[c.scenario];
+		expectedCode = expected;
+		actualCode = failed?.code;
 		if (expected) assert.equal(failed?.code, expected);
 		else {
 			if (failed) throw failed;
@@ -230,18 +275,29 @@ try {
 			for (const lease of await store.leases(c.id)) await client.cleanup(lease);
 			assert.equal((await store.leases(c.id)).length, 0);
 			await client.verifyEmptyTarget(target, c.id);
-		} else assert.equal((await store.leases(c.id)).length, 0);
+		} else {
+			assert.equal((await store.leases(c.id)).length, 0);
+			if (c.scenario === 'resource-refused') {
+				assert.equal(entry.importValidation, 'failed');
+				assert.equal(entry.tables, undefined);
+				await client.verifyEmptyTarget(target, c.id);
+			}
+		}
 		console.log(
 			'PASS Oracle MySQL Internal ' +
 				c.mode +
 				'/' +
 				c.scenario +
-				' native SQL/lease guard; no host quota acceptance claimed.'
+				(c.scenario === 'resource-refused'
+					? ' expected resource refusal; target empty, import failed and no lease. Not a successful recovery.'
+					: ' native SQL/lease guard; no host quota acceptance claimed.')
 		);
 	}
 } catch (error) {
 	console.error(
-		'FAIL Oracle Internal fixture stage=' + stage + ' code=' + (error.code || 'assertion')
+		'FAIL Oracle Internal fixture mode=' + c.mode + ' scenario=' + c.scenario +
+		' stage=' + stage + ' code=' + safeCode(error.code) +
+		' expected=' + safeCode(expectedCode) + ' actual=' + safeCode(actualCode)
 	);
 	process.exitCode = 1;
 } finally {

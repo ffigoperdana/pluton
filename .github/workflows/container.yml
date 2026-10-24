@@ -73,7 +73,7 @@ jobs:
           node --test scripts/__tests__/automaticRecoveryLifecycle.test.cjs scripts/__tests__/automaticRecoveryNamespace.test.cjs scripts/__tests__/automaticRecoveryPublication.test.cjs scripts/__tests__/automaticRecoveryBoot.test.cjs scripts/__tests__/automaticRecoveryVisual.test.cjs scripts/__tests__/automaticRecoveryRequests.test.cjs scripts/__tests__/persistentRestore.test.cjs
           python3 scripts/__tests__/automaticRecoveryBoot.test.py
           node --test scripts/__tests__/runtimeReleaseBoundaries.test.cjs
-          node --test scripts/__tests__/mysqlAutomaticRecovery.test.cjs
+          node --test scripts/__tests__/mysqlAutomaticRecovery.test.cjs scripts/__tests__/mysqlAutomaticRecoveryCapacity.test.mjs
           python3 -c "import ast,pathlib; ast.parse(pathlib.Path('deploy/persistent-restore/mysql-lock.py').read_text())"
           bash -n deploy/persistent-restore/bootstrap.sh
 

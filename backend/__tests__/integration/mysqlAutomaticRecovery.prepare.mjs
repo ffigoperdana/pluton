@@ -17,6 +17,7 @@ if (
 		'invalid-marker',
 		'existing-database',
 		'cancel',
+		'resource-refused',
 	].includes(scenario)
 )
 	throw new Error('Invalid isolated fixture.');
@@ -212,4 +213,4 @@ fs.writeFileSync('/state/artifact.sql', sql, { mode: 0o600 });
 fs.chownSync('/state/artifact.sql', 10001, 10001);
 fs.chownSync('/state', 10001, 10001);
 fs.chmodSync('/state', 0o700);
-console.log('PASS private synthetic Oracle ' + mode + ' fixture prepared.');
+console.log('PASS private synthetic Oracle ' + mode + '/' + scenario + ' fixture prepared.');
