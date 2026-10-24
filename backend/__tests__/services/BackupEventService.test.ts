@@ -631,4 +631,65 @@ describe('BackupEventService', () => {
 			expect(mockPlanStore.update).not.toHaveBeenCalled();
 		});
 	});
+
+	it('persists private diagnostics together with failed state while preserving counters and keeping notifications path-free', async () => {
+		const sourceFailure = {
+			failureStage: 'restic-backup',
+			failureCode: 'source-entry-inaccessible',
+			sourceDiagnostics: {
+				version: 1 as const,
+				origin: 'restic' as const,
+				problemCount: 1,
+				countIsLowerBound: true,
+				entries: [
+					{
+						relativePath: 'app/logs/id_rsa',
+						entryType: 'unknown' as const,
+						errno: 'EACCES' as const,
+						excluded: false as const,
+					},
+				],
+			},
+		};
+		const current = {
+			id: 'backup-01',
+			status: 'started',
+			inProgress: true,
+			progressStats: { bytesProcessed: 1234 },
+		} as any;
+		mockBackupStore.getById.mockResolvedValue(current);
+		mockBackupStore.update.mockResolvedValue({ ...current, status: 'failed' });
+		mockPlanStore.getById.mockResolvedValue({
+			id: 'plan-01',
+			settings: { notification: { email: { enabled: true } } },
+		} as any);
+		jest.spyOn(backupEventService, 'afterPermanentFailure').mockResolvedValue();
+		await backupEventService.onBackupFailure({
+			planId: 'plan-01',
+			backupId: current.id,
+			error: 'Safe generic failure.',
+			sourceFailure,
+		});
+		expect(mockBackupStore.update).toHaveBeenCalledWith(
+			current.id,
+			expect.objectContaining({
+				status: 'failed',
+				success: false,
+				inProgress: false,
+				progressStats: expect.objectContaining({ bytesProcessed: 1234, sourceFailure }),
+			})
+		);
+		expect(JSON.stringify(mockBackupNotification.send.mock.calls)).not.toContain('app/logs/id_rsa');
+		for (const status of ['cancelled', 'completed', 'failed']) {
+			mockBackupStore.update.mockClear();
+			mockBackupStore.getById.mockResolvedValue({ ...current, status, inProgress: false });
+			await backupEventService.onBackupFailure({
+				planId: 'plan-01',
+				backupId: current.id,
+				error: 'Safe generic failure.',
+				sourceFailure,
+			});
+			expect(mockBackupStore.update).not.toHaveBeenCalled();
+		}
+	});
 });

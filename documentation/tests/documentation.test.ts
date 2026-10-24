@@ -11,6 +11,7 @@ import {
   createLocalSearch,
   readArticles,
   preserveMarkdown,
+  preserveCodeCopyPolicy,
 } from "../plugins/content.ts";
 import { copyCode } from "../src/clipboard.ts";
 
@@ -90,6 +91,24 @@ test("Markdown security plugin escapes raw HTML and refuses executable MDX nodes
   assert.deepEqual(
     root.children.map((node: any) => node.data.hProperties.id),
     ["title", "setup", "setup-1"],
+  );
+});
+
+test("command policy survives highlighting and fails closed on a structural mismatch", () => {
+  const value =
+    '```bash readonly\nstat "$FILE"\n```\n\n```bash review\nsudo setfacl -x u:pluton-agent "$FILE"\n```';
+  const first: any = { type: "element", tagName: "pre", children: [] };
+  const second: any = { type: "element", tagName: "pre", children: [] };
+  preserveCodeCopyPolicy()(
+    { type: "root", children: [first, second] },
+    { value },
+  );
+  assert.equal(first.properties["data-copy-policy"], "readonly");
+  assert.equal(second.properties["data-copy-policy"], "review");
+  assert.throws(
+    () =>
+      preserveCodeCopyPolicy()({ type: "root", children: [first] }, { value }),
+    /could not be bound safely/,
   );
 });
 
@@ -180,7 +199,7 @@ test(
       );
       const jsx = await import("react/jsx-runtime");
       const compiled = await mdx.compile(
-        "# Synthetic\n\n<script>alert(1)</script>\n\n[unsafe](javascript:alert%281%29)\n\n![remote](https://example.internal/image.png)\n\n- one\n- two\n\n```sh\necho synthetic\n```",
+        '# Synthetic\n\n<script>alert(1)</script>\n\n[unsafe](javascript:alert%281%29)\n\n![remote](https://example.internal/image.png)\n\n- one\n- two\n\n```sh\necho synthetic\n```\n\n```bash readonly\nsystemctl is-active pluton-agent.service\n```\n\n```bash review\nsudo setfacl -m u:pluton-agent:r-- "$FILE"\n```',
         {
           format: "md",
           outputFormat: "function-body",
@@ -207,6 +226,16 @@ test(
       assert(!safeHtml.includes('src="https://example.internal'));
       assert(safeHtml.includes("<ul>") && safeHtml.includes("echo synthetic"));
       assert(safeHtml.includes("Salin kode"));
+      assert(safeHtml.includes("Copy read-only command"));
+      assert(safeHtml.includes("Manual review required"));
+      assert.equal(
+        (safeHtml.match(/aria-label="Salin kode"/g) || []).length,
+        1,
+      );
+      assert.equal(
+        (safeHtml.match(/aria-label="Copy read-only command"/g) || []).length,
+        1,
+      );
       securityRouter.dispose();
       for (const article of readArticles()) {
         const compiled = await source.loadArticle(article.slug);
@@ -227,6 +256,7 @@ test(
         "/docs/replication/managed-agent",
         "/docs/storage/hcp",
         "/docs/migration/cutover",
+        "/docs/troubleshooting/source#1-understand-the-error",
         "/docs/not-a-page",
       ]) {
         const router = createMemoryRouter(
@@ -257,6 +287,28 @@ test(
         assert(!/api\/settings|onerror=|javascript:/.test(html), route);
         if (route === "/docs/getting-started")
           assert(html.includes('id="mengenal-pluton-mandiri"'));
+        if (route.startsWith("/docs/troubleshooting/source")) {
+          assert(html.includes('id="1-understand-the-error"'));
+          assert(html.includes('id="9-configure-backup-exclusions"'));
+          assert(html.includes("Copy read-only command"));
+          assert(html.includes("Manual review required"));
+          const blocks = readArticles()
+            .find((article) => article.slug === "troubleshooting/source")!
+            .tokens.filter((token) => token.type === "code");
+          assert.equal(
+            (html.match(/aria-label="Copy read-only command"/g) || []).length,
+            blocks.filter((block) => block.lang === "bash readonly").length,
+          );
+          assert.equal(
+            (html.match(/Manual review required · no command copy/g) || [])
+              .length,
+            blocks.filter((block) => block.lang?.endsWith(" review")).length,
+          );
+          assert.equal(
+            (html.match(/aria-label="Salin kode"/g) || []).length,
+            0,
+          );
+        }
         router.dispose();
       }
     } finally {
