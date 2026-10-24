@@ -245,6 +245,8 @@ Administrator controls use the existing local administrator cookie and same-orig
 See [API coverage matrix](API_COVERAGE_MATRIX.md), [security audit](API_SECURITY_AUDIT.md),
 [MCP v2 configuration/client/rollback runbook](MCP_V2.md),
 [v1 OAuth reference](MCP.md), and [OpenAPI reads](mcp-openapi.json).
+The [v2 delivery report](MCP_V2_DELIVERY_REPORT.md) records local validation,
+implementation identity and remaining staging acceptance gates.
 Run `pnpm --filter @plutonhq/core-backend test:mcp` in addition to existing checks,
 `node --test scripts/__tests__/apiInventory.test.mjs`, and
 `node --experimental-strip-types --test frontend/__tests__/mcp.test.ts`.
