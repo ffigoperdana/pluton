@@ -1,8 +1,9 @@
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, ne, sql } from 'drizzle-orm';
 import { DatabaseType } from '../db';
 import { Device, NewDevice, devices } from '../db/schema/devices';
 import { providers } from '../utils/providers';
 import { plans } from '../db/schema/plans';
+import { AppError } from '../utils/AppError';
 
 /**
  * DeviceStore is a class for managing device records in the database.
@@ -117,6 +118,44 @@ export class DeviceStore {
 			.returning();
 
 		return result[0] || null;
+	}
+
+	/** Separate from telemetry updates: atomically check display-name collisions and whitelist metadata. */
+	async updateMetadata(
+		id: string,
+		updates: Pick<Partial<Device>, 'name' | 'settings' | 'tags'>
+	): Promise<Device | null> {
+		return this.db.transaction(tx => {
+			const current = tx.select().from(devices).where(eq(devices.id, id)).get();
+			if (!current) return null;
+			if (updates.name !== undefined && updates.name !== current.name) {
+				const collision = tx
+					.select({ id: devices.id })
+					.from(devices)
+					.where(
+						and(ne(devices.id, id), sql`lower(trim(${devices.name})) = lower(${updates.name})`)
+					)
+					.get();
+				if (collision)
+					throw new AppError(
+						409,
+						'A device with this name already exists. Choose a different display name.'
+					);
+			}
+			return (
+				tx
+					.update(devices)
+					.set({
+						name: updates.name,
+						settings: updates.settings,
+						tags: updates.tags,
+						updatedAt: sql`(unixepoch())`,
+					})
+					.where(eq(devices.id, id))
+					.returning()
+					.get() || null
+			);
+		});
 	}
 
 	async delete(id: string): Promise<boolean> {

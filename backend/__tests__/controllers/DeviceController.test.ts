@@ -185,7 +185,7 @@ describe('DeviceController', () => {
 			expect(mockStatus).toHaveBeenCalledWith(500);
 			expect(mockJson).toHaveBeenCalledWith({
 				success: false,
-				error: 'Update failed',
+				error: 'Failed to update device',
 			});
 		});
 	});

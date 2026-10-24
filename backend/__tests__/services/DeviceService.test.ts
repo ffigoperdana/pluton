@@ -168,25 +168,26 @@ describe('DeviceService', () => {
 
 		it('should update a device in the store', async () => {
 			mockDeviceStore.getById.mockResolvedValue(mockDevice);
-			mockDeviceStore.update.mockResolvedValue({ ...mockDevice, ...updateData });
+			mockDeviceStore.updateMetadata.mockResolvedValue({ ...mockDevice, ...updateData });
 
 			const result = await deviceService.updateDevice(deviceId, updateData);
 
 			expect(mockDeviceStore.getById).toHaveBeenCalledWith(deviceId);
-			expect(mockDeviceStore.update).toHaveBeenCalledWith(deviceId, updateData);
+			expect(mockDeviceStore.updateMetadata).toHaveBeenCalledWith(deviceId, updateData);
 			expect(result?.name).toBe('New Name');
 		});
 
-		it('should call updateSettings on the strategy for a remote device', async () => {
+		it('preserves the supported local runtime settings path', async () => {
 			const settingsUpdate = { settings: { general: { tempDir: '/new/temp' } } };
-			mockDeviceStore.getById.mockResolvedValue(mockDevice);
-			mockRemoteStrategy.updateSettings.mockResolvedValue({ success: true, result: 'Updated' });
+			mockDeviceStore.getById.mockResolvedValue({ ...mockDevice, id: 'main' });
+			mockDeviceStore.updateMetadata.mockResolvedValue({ ...mockDevice, ...settingsUpdate });
+			mockLocalStrategy.updateSettings.mockResolvedValue({ success: true, result: 'Updated' });
 
-			await deviceService.updateDevice(deviceId, settingsUpdate);
+			await deviceService.updateDevice('main', settingsUpdate);
 
-			expect(mockRemoteStrategy.updateSettings).toHaveBeenCalledWith(settingsUpdate.settings);
-			expect(mockDeviceStore.update).toHaveBeenCalledWith(
-				deviceId,
+			expect(mockLocalStrategy.updateSettings).toHaveBeenCalledWith(settingsUpdate.settings);
+			expect(mockDeviceStore.updateMetadata).toHaveBeenCalledWith(
+				'main',
 				expect.objectContaining({ settings: settingsUpdate.settings })
 			);
 		});
@@ -198,7 +199,7 @@ describe('DeviceService', () => {
 			);
 		});
 
-		it('should throw an error if updating settings on a remote device fails', async () => {
+		it('rejects unsupported remote runtime changes without sending a command or writing metadata', async () => {
 			const settingsUpdate = { settings: { general: { tempDir: '/new/temp' } } };
 			mockDeviceStore.getById.mockResolvedValue(mockDevice);
 			mockRemoteStrategy.updateSettings.mockResolvedValue({
@@ -206,9 +207,25 @@ describe('DeviceService', () => {
 				result: 'Failed',
 			});
 
-			await expect(deviceService.updateDevice(deviceId, settingsUpdate)).rejects.toThrow(
-				'Failed to update device settings'
-			);
+			await expect(deviceService.updateDevice(deviceId, settingsUpdate)).rejects.toMatchObject({
+				statusCode: 501,
+			});
+			expect(mockRemoteStrategy.updateSettings).not.toHaveBeenCalled();
+			expect(mockDeviceStore.updateMetadata).not.toHaveBeenCalled();
+		});
+
+		it('sanitizes a failed local settings operation without writing metadata', async () => {
+			mockDeviceStore.getById.mockResolvedValue({ ...mockDevice, id: 'main' });
+			mockLocalStrategy.updateSettings.mockRejectedValue(new Error('private subprocess detail'));
+			await expect(
+				deviceService.updateDevice('main', {
+					settings: { general: { tempDir: '/srv/example-app' } },
+				})
+			).rejects.toMatchObject({
+				statusCode: 503,
+				message: expect.not.stringContaining('private subprocess detail'),
+			});
+			expect(mockDeviceStore.updateMetadata).not.toHaveBeenCalled();
 		});
 	});
 

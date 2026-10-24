@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'react-toastify';
 import Icon from '../../common/Icon/Icon';
 import SidePanel from '../../common/SidePanel/SidePanel';
@@ -10,6 +10,7 @@ import FolderPicker from '../../common/FolderPicker/FolderPicker';
 import DeviceRcloneSettings from '../DeviceRcloneSettings/DeviceRcloneSettings';
 import DeviceResticSettings from '../DeviceResticSettings/DeviceResticSettings';
 import Tabs, { Tab, TabList, TabPanel } from '../../common/Tabs/Tabs';
+import { deviceSettingsPayload } from '../../../utils/deviceSettingsUpdate';
 
 type EditDeviceProps = {
    device: Device;
@@ -24,6 +25,8 @@ const EditDevice = ({ close, device }: EditDeviceProps) => {
    }));
    const [showFileManager, setShowFileManager] = useState(false);
    const updateDeviceMutation = useUpdateDevice();
+   const submitting = useRef(false);
+   const remote = device.id !== 'main';
 
    useEffect(() => {
       if (newDevice.name) {
@@ -32,31 +35,37 @@ const EditDevice = ({ close, device }: EditDeviceProps) => {
    }, [newDevice.name]);
 
    const updateDevice = () => {
-      console.log('newDevice :', newDevice);
+      if (submitting.current) return;
       setInputErrors({ name: '' });
 
       const errors = { ...inputError };
 
-      if (!newDevice.name) {
-         errors.name = 'Required';
+      if (
+         !newDevice.name.trim() ||
+         newDevice.name.trim().length > 100 ||
+         [...newDevice.name].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
+      ) {
+         errors.name = 'Enter a name of 1–100 characters without control characters.';
       }
 
       setInputErrors(errors);
 
       if (Object.values(errors).some((error) => error !== '') === false) {
+         submitting.current = true;
          updateDeviceMutation.mutate(
             {
                id: device.id,
-               data: newDevice,
+               data: deviceSettingsPayload(device, newDevice, remote),
             },
             {
                onError: (error: any) => {
-                  console.log('error :', error);
                   toast.error(error.message || `Error Updating Device.`);
                },
-               onSuccess: (data: any) => {
-                  console.log('Success :', data);
+               onSuccess: () => {
                   toast.success(`Device Updated!`, { autoClose: 5000 });
+               },
+               onSettled: () => {
+                  submitting.current = false;
                },
             },
          );
@@ -73,7 +82,7 @@ const EditDevice = ({ close, device }: EditDeviceProps) => {
                   <div className={classes.summary}></div>
                </div>
                <div className={classes.footerRight}>
-                  <button className={classes.createButton} onClick={() => updateDevice()}>
+                  <button className={classes.createButton} disabled={updateDeviceMutation.isPending} onClick={() => updateDevice()}>
                      <Icon type="check" size={12} /> Update Device
                   </button>
                </div>
@@ -92,56 +101,64 @@ const EditDevice = ({ close, device }: EditDeviceProps) => {
                className={classes.titleInput}
                type="text"
                placeholder="Device Name"
+               maxLength={100}
                value={newDevice.name || ''}
                onChange={(e) => setNewDevice({ ...newDevice, name: e.target.value })}
             />
          </div>
-         <Tabs defaultValue="general">
-            <TabList>
-               <Tab value="general" label="General" icon="settings" />
-               <Tab value="restic" label="Restic" icon="restic" />
-               <Tab value="rclone" label="Rclone" icon="rclone" />
-            </TabList>
-            <TabPanel value="general">
-               <>
-                  <div className={classes.field}>
-                     <Input
-                        label="Temporary Working Directory"
-                        fieldValue={newDevice.settings?.general?.tempDir || ''}
-                        onUpdate={(val) =>
-                           setNewDevice({
-                              ...newDevice,
-                              settings: { ...newDevice.settings, general: { ...newDevice.settings?.general, tempDir: val } },
-                           })
-                        }
-                        full={true}
-                        hint="Where the backup, restores and downloads will be temporarily stored."
-                     />
-                     <button
-                        className={classes.fileManagerBtn}
-                        data-tooltip-id="appTooltip"
-                        data-tooltip-content="Open FileManager to Select Directory"
-                        data-tooltip-place="top"
-                        onClick={() => setShowFileManager(true)}
-                     >
-                        <Icon type="folders" size={16} />
-                     </button>
-                  </div>
-               </>
-            </TabPanel>
-            <TabPanel value="restic">
-               <DeviceResticSettings
-                  settings={newDevice.settings?.restic}
-                  onUpdate={(resticSettings) => setNewDevice({ ...newDevice, settings: { ...newDevice.settings, restic: resticSettings } })}
-               />
-            </TabPanel>
-            <TabPanel value="rclone">
-               <DeviceRcloneSettings
-                  settings={newDevice.settings?.rclone}
-                  onUpdate={(rcloneSettings) => setNewDevice({ ...newDevice, settings: { ...newDevice.settings, rclone: rcloneSettings } })}
-               />
-            </TabPanel>
-         </Tabs>
+         {remote ? (
+            <p role="note">
+               This changes the display name only, including while the Agent is offline. Runtime directories and Restic/Rclone settings are managed on
+               the Agent host; identity, approved source roots and backup plans are unchanged.
+            </p>
+         ) : (
+            <Tabs defaultValue="general">
+               <TabList>
+                  <Tab value="general" label="General" icon="settings" />
+                  <Tab value="restic" label="Restic" icon="restic" />
+                  <Tab value="rclone" label="Rclone" icon="rclone" />
+               </TabList>
+               <TabPanel value="general">
+                  <>
+                     <div className={classes.field}>
+                        <Input
+                           label="Temporary Working Directory"
+                           fieldValue={newDevice.settings?.general?.tempDir || ''}
+                           onUpdate={(val) =>
+                              setNewDevice({
+                                 ...newDevice,
+                                 settings: { ...newDevice.settings, general: { ...newDevice.settings?.general, tempDir: val } },
+                              })
+                           }
+                           full={true}
+                           hint="Where the backup, restores and downloads will be temporarily stored."
+                        />
+                        <button
+                           className={classes.fileManagerBtn}
+                           data-tooltip-id="appTooltip"
+                           data-tooltip-content="Open FileManager to Select Directory"
+                           data-tooltip-place="top"
+                           onClick={() => setShowFileManager(true)}
+                        >
+                           <Icon type="folders" size={16} />
+                        </button>
+                     </div>
+                  </>
+               </TabPanel>
+               <TabPanel value="restic">
+                  <DeviceResticSettings
+                     settings={newDevice.settings?.restic}
+                     onUpdate={(resticSettings) => setNewDevice({ ...newDevice, settings: { ...newDevice.settings, restic: resticSettings } })}
+                  />
+               </TabPanel>
+               <TabPanel value="rclone">
+                  <DeviceRcloneSettings
+                     settings={newDevice.settings?.rclone}
+                     onUpdate={(rcloneSettings) => setNewDevice({ ...newDevice, settings: { ...newDevice.settings, rclone: rcloneSettings } })}
+                  />
+               </TabPanel>
+            </Tabs>
+         )}
 
          {showFileManager && (
             <FolderPicker

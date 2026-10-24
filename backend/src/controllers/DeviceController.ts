@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { DeviceService } from '../services/DeviceService';
+import { AppError } from '../utils/AppError';
 
 export class DeviceController {
 	constructor(protected deviceService: DeviceService) {}
@@ -59,20 +60,31 @@ export class DeviceController {
 				return;
 			}
 
-			const { name, settings, tags } = req.body;
-			const deviceRes = await this.deviceService.updateDevice(req.params.id, {
-				name,
-				settings,
-				tags,
-			});
+			const deviceRes = await this.deviceService.updateDevice(req.params.id, req.body);
 
-			res.json({ success: true, result: deviceRes });
+			// Do not echo stored credentials with a metadata update response.
+			const result = deviceRes
+				? {
+						...deviceRes,
+						key: undefined,
+						settings: deviceRes.settings
+							? {
+									...deviceRes.settings,
+									rclone: deviceRes.settings.rclone
+										? { ...deviceRes.settings.rclone, configPass: undefined }
+										: undefined,
+								}
+							: deviceRes.settings,
+					}
+				: deviceRes;
+			res.json({ success: true, result });
 			return;
-		} catch (error: any) {
-			res.status(500).json({
-				success: false,
-				error: error?.message || 'Failed to update device',
-			});
+		} catch (error: unknown) {
+			if (error instanceof AppError) {
+				res.status(error.statusCode).json({ success: false, error: error.message });
+				return;
+			}
+			res.status(500).json({ success: false, error: 'Failed to update device' });
 			return;
 		}
 	}
