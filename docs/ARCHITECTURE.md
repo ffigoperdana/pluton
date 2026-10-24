@@ -195,7 +195,7 @@ Additional isolated checks are `scripts/validate-phase7.ps1` and
 
 ## Build validation
 
-`frontend/src/docs` supplies 97 Bahasa Indonesia Markdown articles in
+`frontend/src/docs` supplies 98 Bahasa Indonesia Markdown articles in
 15 manifest-ordered categories. All 77 original article URLs are retained; new
 guides cover Persistent Restore, replication, storage and SYS MON migration.
 `documentation/` compiles these article sources
@@ -234,14 +234,17 @@ hook for `main` also builds the frontend. The root build orders the frontend bui
 and copying frontend assets). Backend build cleans `backend/dist/` and
 `backend/public/`; keep local data out of those generated directories.
 
-## MCP read-only integration
+## MCP integration
 
 The additive MCP gateway and scoped v1 operational reads share explicit stored-evidence
 projections, external OAuth JWT verification and durable per-user/client resource grants.
-MCP defaults disabled and exposes no write/approval tools or repository operations.
+MCP defaults disabled. V2 adds an explicitly enabled native-token mode and immutable,
+human-approved operational requests through existing domain services. OAuth remains
+read-only. No arbitrary repository, shell, SQL, path or privileged/destructive tool is exposed.
 Administrator controls use the existing local administrator cookie and same-origin JSON.
 See [API coverage matrix](API_COVERAGE_MATRIX.md), [security audit](API_SECURITY_AUDIT.md),
-[MCP configuration/client runbook](MCP.md), and [OpenAPI reads](mcp-openapi.json).
+[MCP v2 configuration/client/rollback runbook](MCP_V2.md),
+[v1 OAuth reference](MCP.md), and [OpenAPI reads](mcp-openapi.json).
 Run `pnpm --filter @plutonhq/core-backend test:mcp` in addition to existing checks,
 `node --test scripts/__tests__/apiInventory.test.mjs`, and
 `node --experimental-strip-types --test frontend/__tests__/mcp.test.ts`.

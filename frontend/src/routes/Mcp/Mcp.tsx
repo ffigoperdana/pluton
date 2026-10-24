@@ -5,6 +5,7 @@ import Modal from '../../components/common/Modal/Modal';
 import { useMcpOverview, useMcpTools, useMcpClients, useMcpActivity, mcpRequest } from '../../services/mcp';
 import { authorizationStatus, connectionInstructions, type McpGrant, type McpGrantInput } from '../../utils/mcp';
 import classes from './Mcp.module.scss';
+import McpV2Panel from './McpV2Panel';
 
 const blank: McpGrantInput = {
    name: '',
@@ -206,7 +207,9 @@ export default function Mcp() {
                <h3 id="mcp-overview">Secure operational access</h3>
                <span className={classes.badge}>{state.enabled ? 'Enabled' : 'Disabled'}</span>
             </div>
-            <p>Let approved assistants inspect selected operational records. All tools are read-only.</p>
+            <p>
+               Let approved assistants inspect selected records and request operational actions. Native write actions require separate human approval.
+            </p>
             <div className={classes.overview}>
                <dl>
                   <dt>Service</dt>
@@ -228,12 +231,14 @@ export default function Mcp() {
             <p>
                <strong>Endpoint</strong>
                <br />
-               <code>{state.endpoint || 'Configure an HTTPS resource URL and OAuth provider first.'}</code>
+               <code>{state.endpoint || 'Configure an HTTPS resource URL and native tokens or OAuth first.'}</code>
             </p>
             <p className={classes.muted}>
                {state.transport} · Protocols {state.protocols.join(', ')}
                <br />
-               {state.configured ? 'OAuth configuration present. Connectivity has not been verified.' : 'OAuth configuration required.'}
+               {state.configured
+                  ? 'Server configuration present. Provider connectivity has not been verified.'
+                  : 'Configure HTTPS and native tokens or an OAuth provider.'}
             </p>
             <div className={classes.actions}>
                {state.endpoint && <button onClick={() => void copy(state.endpoint!)}>Copy endpoint</button>}
@@ -246,10 +251,12 @@ export default function Mcp() {
             </div>
             <p role="status">{copyMessage}</p>
          </section>
+         <McpV2Panel enabled={!!state.nativeTokensEnabled} endpoint={state.endpoint} />
          <section className={classes.card} aria-labelledby="mcp-clients">
             <div className={classes.heading}>
-               <h3 id="mcp-clients">Connected clients</h3>
+               <h3 id="mcp-clients">OAuth client authorizations</h3>
                <button
+                  disabled={state.oauthEnabled === false}
                   onClick={() => {
                      mutation.reset();
                      setEditor('new');
@@ -357,7 +364,7 @@ export default function Mcp() {
                         <input
                            type="checkbox"
                            checked={tool.enabled}
-                           disabled={mutation.isPending}
+                           disabled={mutation.isPending || tool.implicit}
                            onChange={(event) =>
                               policy(
                                  state.enabled,
@@ -370,7 +377,14 @@ export default function Mcp() {
                         <code>{tool.name}</code>
                      </label>
                      <p>{tool.description}</p>
-                     <span className={classes.badge}>{tool.scope}</span> <span className={classes.muted}>Read · No approval required</span>
+                     <span className={classes.badge}>{tool.scope}</span>{' '}
+                     <span className={classes.muted}>
+                        {tool.implicit
+                           ? 'Own action status · Available with write permission'
+                           : tool.approvalRequired
+                             ? 'Operational · Human approval required'
+                             : 'Read · No approval required'}
+                     </span>
                   </div>
                ))
             )}
@@ -399,11 +413,24 @@ export default function Mcp() {
                      }}
                   >
                      <option value="">All outcomes</option>
-                     {['success', 'started', 'insufficient_scope', 'not_found', 'invalid_request', 'protocol_rejected', 'internal_error'].map(
-                        (value) => (
-                           <option key={value}>{value}</option>
-                        ),
-                     )}
+                     {[
+                        'success',
+                        'started',
+                        'pending_approval',
+                        'executing',
+                        'dispatched',
+                        'rejected',
+                        'expired',
+                        'uncertain',
+                        'failed',
+                        'insufficient_scope',
+                        'not_found',
+                        'invalid_request',
+                        'protocol_rejected',
+                        'internal_error',
+                     ].map((value) => (
+                        <option key={value}>{value}</option>
+                     ))}
                   </select>
                </label>
             </div>
@@ -463,13 +490,6 @@ export default function Mcp() {
                </button>
             </div>
          </section>
-         <section className={classes.card}>
-            <h3>Pending approvals</h3>
-            <p>
-               Write requests and approvals are unavailable in this release. Backup Now, pause/resume, source validation and replication retry remain
-               in their existing administrator workflows.
-            </p>
-         </section>
          {editor && (
             <Modal
                stableLayout
@@ -510,17 +530,17 @@ export default function Mcp() {
          {enableConfirmation && (
             <Modal
                stableLayout
-               title="Enable read-only MCP"
+               title="Enable MCP service"
                width="450px"
                closeDisabled={mutation.isPending}
                closeModal={() => setEnableConfirmation(false)}
             >
                <p>
-                  Enable access for registered OAuth subjects and clients with their exact scopes and resource lists. Verify your identity provider,
-                  TLS and reverse proxy settings before connecting clients.
+                  Enable access for native tokens and registered OAuth clients with their exact permissions and resource lists. Verify your
+                  authentication settings, TLS and reverse proxy settings before connecting clients.
                </p>
                <button disabled={mutation.isPending} onClick={() => policy(true)}>
-                  Enable read-only service
+                  Enable service
                </button>
             </Modal>
          )}

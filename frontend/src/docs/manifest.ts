@@ -203,6 +203,7 @@ export const docCategories: DocCategory[] = [
          page("reference", "Cakupan fitur dan cara membaca panduan"),
          page("reference/configuration", "Referensi konfigurasi operator"),
          page("reference/api", "Referensi API untuk diagnosis operator"),
+         page("reference/mcp", "MCP: token, izin, approval, dan koneksi assistant", "operator-setup"),
          page("reference/status-codes", "Mengenali status dan kode error"),
          page("reference/version", "Memastikan versi dan identitas build"),
          page("reference/limitations", "Batasan fitur dan validasi yang masih diperlukan"),

@@ -148,6 +148,13 @@
       "when": 1792713600000,
       "tag": "0020_mcp_authorizations",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1792800000000,
+      "tag": "0021_mcp_native_tokens_actions",
+      "breakpoints": true
     }
   ]
 }

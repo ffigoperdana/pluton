@@ -1,10 +1,10 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import ts from 'typescript';
-import { fileURLToPath } from 'node:url';
+import fs from "node:fs";
+import path from "node:path";
+import ts from "typescript";
+import { fileURLToPath } from "node:url";
 
-const root = fileURLToPath(new URL('../', import.meta.url));
-const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
+const root = fileURLToPath(new URL("../", import.meta.url));
+const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 const source = (file) =>
   ts.createSourceFile(
     file,
@@ -17,13 +17,13 @@ const walk = (node, callback) => {
   callback(node);
   ts.forEachChild(node, (child) => walk(child, callback));
 };
-const text = (node) => node?.getText() || '';
+const text = (node) => node?.getText() || "";
 const literal = (node) =>
   node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
     ? node.text
     : undefined;
 const join = (a, b) =>
-  `${a}/${b}`.replaceAll(/\/{2,}/g, '/').replace(/\/$/, '') || '/';
+  `${a}/${b}`.replaceAll(/\/{2,}/g, "/").replace(/\/$/, "") || "/";
 const files = (directory) =>
   fs
     .readdirSync(path.join(root, directory), { withFileTypes: true })
@@ -32,25 +32,25 @@ const files = (directory) =>
         ? files(`${directory}/${entry.name}`)
         : [`${directory}/${entry.name}`],
     );
-const tests = files('backend/__tests__')
+const tests = files("backend/__tests__")
   .filter((file) => /\.(test|integration)\.ts$/.test(file))
   .map((file) => ({ file, body: read(file) }));
-const app = source('backend/src/createApp.ts');
+const app = source("backend/src/createApp.ts");
 const factories = new Map();
 walk(app, (node) => {
   if (
     ts.isImportDeclaration(node) &&
-    literal(node.moduleSpecifier)?.startsWith('./routes/')
+    literal(node.moduleSpecifier)?.startsWith("./routes/")
   )
     for (const element of node.importClause?.namedBindings?.elements || [])
       factories.set(
         element.name.text,
-        literal(node.moduleSpecifier).replace('./', 'backend/src/') + '.ts',
+        literal(node.moduleSpecifier).replace("./", "backend/src/") + ".ts",
       );
 });
 const mounts = new Map();
 walk(app, (node) => {
-  if (!ts.isCallExpression(node) || text(node.expression) !== 'app.use') return;
+  if (!ts.isCallExpression(node) || text(node.expression) !== "app.use") return;
   const mount = literal(node.arguments[0]);
   if (!mount) return;
   for (const arg of node.arguments.slice(1))
@@ -58,15 +58,15 @@ walk(app, (node) => {
       mounts.set(factories.get(text(arg.expression)), mount);
 });
 const legacyAllowed = new Set([
-  'GET /api/plans',
-  'GET /api/storages',
-  'GET /api/devices',
-  'GET /api/health',
-  'POST /api/plans',
+  "GET /api/plans",
+  "GET /api/storages",
+  "GET /api/devices",
+  "GET /api/health",
+  "POST /api/plans",
 ]);
 const controllerMethods = new Map();
-for (const file of files('backend/src/controllers').filter((file) =>
-  file.endsWith('.ts'),
+for (const file of files("backend/src/controllers").filter((file) =>
+  file.endsWith(".ts"),
 ))
   walk(source(file), (node) => {
     if (ts.isClassDeclaration(node) && node.name)
@@ -91,14 +91,14 @@ export function inventory() {
   for (const [file, mount] of mounts) {
     const ast = source(file),
       body = read(file);
-    let controller = '';
+    let controller = "";
     walk(ast, (node) => {
       if (
         ts.isImportDeclaration(node) &&
-        literal(node.moduleSpecifier)?.includes('/controllers/')
+        literal(node.moduleSpecifier)?.includes("/controllers/")
       )
         controller =
-          node.importClause?.namedBindings?.elements?.[0]?.name.text || '';
+          node.importClause?.namedBindings?.elements?.[0]?.name.text || "";
     });
     walk(ast, (node) => {
       if (
@@ -106,13 +106,13 @@ export function inventory() {
         !/^router\.(get|post|put|delete|patch|all)$/.test(text(node.expression))
       )
         return;
-      const method = text(node.expression).split('.')[1].toUpperCase();
+      const method = text(node.expression).split(".")[1].toUpperCase();
       let routes = [literal(node.arguments[0])];
       if (
         routes[0] === undefined &&
-        text(node.arguments[0]) === '`/:id/${operation}`'
+        text(node.arguments[0]) === "`/:id/${operation}`"
       )
-        routes = ['provision', 'stop', 'resume'].map(
+        routes = ["provision", "stop", "resume"].map(
           (operation) => `/:id/${operation}`,
         );
       if (routes.some((route) => route === undefined))
@@ -133,7 +133,9 @@ export function inventory() {
           ].map((match) => `${match[1]}.${match[2]}`),
         ),
       ];
-      for (const match of contract.matchAll(/this\.sourceAccess\(\)\.([A-Za-z]+)\(/g))
+      for (const match of contract.matchAll(
+        /this\.sourceAccess\(\)\.([A-Za-z]+)\(/g,
+      ))
         serviceCalls.push(`AgentSourceAccessService.${match[1]}`);
       const contracts = [
         ...contract.matchAll(
@@ -142,100 +144,100 @@ export function inventory() {
       ].map((match) => (match[2] ? `${match[1]}.${match[2]}` : match[1]));
       for (const route of routes) {
         const full = join(mount, route);
-        const machine = file.endsWith('/agents.ts');
+        const machine = file.endsWith("/agents.ts");
         const publicRoute =
-          full === '/api/health' ||
-          full.startsWith('/api/setup/') ||
-          ['/api/user/login', '/api/user/verify-otp'].includes(full);
+          full === "/api/health" ||
+          full.startsWith("/api/setup/") ||
+          ["/api/user/login", "/api/user/verify-otp"].includes(full);
         const auth = machine
-          ? route === '/enroll'
-            ? 'one-time enrollment + transport policy'
-            : 'Agent HMAC, timestamp, nonce + TLS policy'
+          ? route === "/enroll"
+            ? "one-time enrollment + transport policy"
+            : "Agent HMAC, timestamp, nonce + TLS policy"
           : publicRoute
-            ? 'public; setup/login state checks'
-            : 'administrator cookie JWT';
+            ? "public; setup/login state checks"
+            : "administrator cookie JWT";
         const mode =
-          /delete|prune|repair|unlock/.test(full) || method === 'DELETE'
-            ? 'destructive/privileged'
-            : method === 'GET'
-              ? 'read (may perform IO)'
-              : 'mutating/privileged';
+          /delete|prune|repair|unlock/.test(full) || method === "DELETE"
+            ? "destructive/privileged"
+            : method === "GET"
+              ? "read (may perform IO)"
+              : "mutating/privileged";
         const references = tests
           .filter(
             (test) =>
               (test.body.includes(`${controller}`) && controller) ||
-              test.body.includes(`routes/${path.basename(file, '.ts')}`),
+              test.body.includes(`routes/${path.basename(file, ".ts")}`),
           )
           .map((test) => test.file);
         const pagination = /\/plans\/:id\/backups$/.test(full)
-          ? 'page/pageSize, dates, timezone; bounded'
-          : /source-access\/requests$/.test(full) && method === 'GET'
-            ? 'bounded keyset cursor'
+          ? "page/pageSize, dates, timezone; bounded"
+          : /source-access\/requests$/.test(full) && method === "GET"
+            ? "bounded keyset cursor"
             : /notifications\/deliveries$/.test(full)
-              ? '50 rows; page 0–400'
+              ? "50 rows; page 0–400"
               : /legacy.*snapshots$/.test(full)
-                ? 'bounded adapter result; inspect service cursor'
-                : /recovery-testing.*tests$/.test(full) && method === 'GET'
-                  ? 'bounded recent 200, not general paging'
-                  : 'no common pagination contract; see implementation';
+                ? "bounded adapter result; inspect service cursor"
+                : /recovery-testing.*tests$/.test(full) && method === "GET"
+                  ? "bounded recent 200, not general paging"
+                  : "no common pagination contract; see implementation";
         const available = machine
-          ? 'Agent protocol only; not general API'
+          ? "Agent protocol only; not general API"
           : publicRoute
-            ? 'public contract (state restrictions)'
+            ? "public contract (state restrictions)"
             : legacyAllowed.has(`${method} ${full}`)
-              ? 'legacy key intended; mounted-path defect; use scoped v1 for reads'
-              : 'session-only; unavailable with legacy key';
+              ? "legacy key intended; mounted-path defect; use scoped v1 for reads"
+              : "session-only; unavailable with legacy key";
         entries.push({
-          feature: path.basename(file, '.ts'),
+          feature: path.basename(file, ".ts"),
           method,
           route: full,
           handler: handler
             ? `${controller}.${handler}`
-            : 'inline route handler',
+            : "inline route handler",
           services: serviceCalls,
           authentication: auth,
           authorization: machine
-            ? 'Agent identity/command binding'
+            ? "Agent identity/command binding"
             : publicRoute
-              ? 'rate limits and setup/auth state'
-              : 'single local administrator; no tenant RBAC',
+              ? "rate limits and setup/auth state"
+              : "single local administrator; no tenant RBAC",
           classification: mode,
           support:
             publicRoute || machine
-              ? 'Fully supported (special-purpose)'
+              ? "Fully supported (special-purpose)"
               : legacyAllowed.has(`${method} ${full}`)
-                ? 'Partially exposed'
-                : 'Supported but internal-only',
+                ? "Partially exposed"
+                : "Supported but internal-only",
           request: [...new Set(contracts)],
           requestSchemas: schemaHints(contract),
           response: /download|\/files$/.test(full)
-            ? 'controller JSON or binary/stream contract; unversioned'
-            : 'handwritten controller JSON; no common versioned output schema',
+            ? "controller JSON or binary/stream contract; unversioned"
+            : "handwritten controller JSON; no common versioned output schema",
           pagination,
           errors:
             [
               ...new Set(
-                [
-                  ...contract.matchAll(/(?:status\(|AppError\()\s*(\d{3})/g),
-                  ].map((match) => match[1]).filter((status) => Number(status) >= 400),
+                [...contract.matchAll(/(?:status\(|AppError\()\s*(\d{3})/g)]
+                  .map((match) => match[1])
+                  .filter((status) => Number(status) >= 400),
               ),
-            ].join(', ') || 'delegated; inspect controller/service',
+            ].join(", ") || "delegated; inspect controller/service",
           available,
           testReferences: references,
           source: implementation?.file || file,
           routeSource: file,
           security: machine
-            ? 'Never reuse device/enrollment credentials for MCP.'
+            ? "Never reuse device/enrollment credentials for MCP."
             : /browse|logs|download|files|settings|storages/.test(full)
-              ? 'Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy.'
-              : mode.startsWith('read')
-                ? 'Existing DTOs may contain operational details; use explicit v1 projection.'
-                : 'Existing admission rules apply. No external write tools or approval bypass.',
+              ? "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+              : mode.startsWith("read")
+                ? "Existing DTOs may contain operational details; use explicit v1 projection."
+                : "Existing admission rules apply. No external write tools or approval bypass.",
         });
       }
     });
   }
-  const operations = source('backend/src/mcp/OperationalReadService.ts');
+  const operations = source("backend/src/mcp/OperationalReadService.ts");
   walk(operations, (node) => {
     if (!ts.isObjectLiteralExpression(node)) return;
     const properties = Object.fromEntries(
@@ -246,39 +248,82 @@ export function inventory() {
           literal(property.initializer),
         ]),
     );
-    if (!properties.name?.startsWith('pluton_')) return;
+    if (!properties.name?.startsWith("pluton_")) return;
     entries.push({
-      feature: 'scoped operations',
-      method: 'GET',
+      feature: "scoped operations",
+      method: "GET",
       route: `/api/v1/operations${properties.route}`,
       handler: properties.name,
-      services: ['OperationalReadService.read'],
-      authentication: 'external OAuth resource-bound RFC 9068 JWT',
-      authorization: `${properties.scope} in JWT AND local grant + exact resource IDs + tool policy`,
-      classification: 'read-only stored evidence',
-      support: 'Fully supported (read MVP)',
+      services: ["OperationalReadService.read"],
+      authentication:
+        "native MCP bearer token or external OAuth resource-bound RFC 9068 JWT",
+      authorization: `${properties.scope} intersection or native exact tool grant + exact resource IDs + tool policy`,
+      classification: "read-only stored evidence",
+      support: "Fully supported (read MVP)",
       request: [
-        'explicit path IDs',
-        'limit 1–50, offset 0–10000 for collections',
+        "explicit path IDs",
+        "limit 1–50, offset 0–10000 for collections",
       ],
       requestSchemas: [`toolCatalog.${properties.name}.input`],
       response:
-        'schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema',
-      pagination: 'collections: limit/offset/hasMore; SQL-bounded',
-      errors: '400,401,403,404,429,500; stable code + traceId',
-      available: 'external OAuth clients; service policy must be enabled',
-      testReferences: ['backend/__tests__/mcp/gateway.integration.ts'],
-      source: 'backend/src/mcp/OperationalReadService.ts',
-      routeSource: 'backend/src/mcp/gateway.ts',
+        "schemaVersion 1, observedAt, evidence, data; runtime-validated explicit output schema",
+      pagination: "collections: limit/offset/hasMore; SQL-bounded",
+      errors: "400,401,403,404,429,500; stable code + traceId",
+      available:
+        "external authenticated clients; service policy must be enabled",
+      testReferences: ["backend/__tests__/mcp/gateway.integration.ts"],
+      source: "backend/src/mcp/OperationalReadService.ts",
+      routeSource: "backend/src/mcp/gateway.ts",
       security:
-        'No credentials, names, paths or raw error text. Same projection and audit as MCP.',
+        "No credentials, names, paths or raw error text. Same projection and audit as MCP.",
     });
   });
-  const gateway = source('backend/src/mcp/gateway.ts');
+  const v2Admin = source("backend/src/mcp/v2AdminRouter.ts");
+  walk(v2Admin, (node) => {
+    if (
+      !ts.isCallExpression(node) ||
+      !/^router\.(get|post|put)$/.test(text(node.expression))
+    )
+      return;
+    entries.push({
+      feature: "MCP native administration",
+      method: text(node.expression).split(".")[1].toUpperCase(),
+      route: `/api/mcp-admin${literal(node.arguments[0])}`,
+      handler: "strict native token / approval administrator action",
+      services: [
+        "NativeTokenStore",
+        "McpActionService",
+        "existing domain services",
+      ],
+      authentication: "browser administrator cookie JWT only",
+      authorization:
+        "parent administrator + same-origin JSON guard; approval hash and live token/resource recheck",
+      classification: text(node.expression).endsWith("get")
+        ? "privileged read"
+        : "privileged mutation",
+      support: "Supported internal administrator API",
+      request: ["strict bounded zod body/query and exact path ID"],
+      requestSchemas: ["tokenInput / pageInput / v2AdminRouter inline schema"],
+      response:
+        "schemaVersion 1, success, result; sanitized error and trace ID; token plaintext only on creation/rotation",
+      pagination: "tokens/actions/resources: limit 1-50, offset 0-10000",
+      errors: "400,401,403,404,409,429,500",
+      available: "authenticated human administrator only",
+      testReferences: [
+        "backend/__tests__/mcp/native.integration.ts",
+        "frontend/__tests__/mcp.test.ts",
+      ],
+      source: "backend/src/mcp/v2AdminRouter.ts",
+      routeSource: "backend/src/mcp/v2AdminRouter.ts",
+      security:
+        "At-most-once approval dispatch; no machine self-approval; copy-once token verifier; no arbitrary commands or paths",
+    });
+  });
+  const gateway = source("backend/src/mcp/gateway.ts");
   const adminFunction = gateway.statements.find(
     (node) =>
       ts.isFunctionDeclaration(node) &&
-      node.name?.text === 'createMcpAdminRouter',
+      node.name?.text === "createMcpAdminRouter",
   );
   walk(adminFunction, (node) => {
     if (
@@ -287,78 +332,83 @@ export function inventory() {
     )
       return;
     entries.push({
-      feature: 'MCP administration',
-      method: text(node.expression).split('.')[1].toUpperCase(),
+      feature: "MCP administration",
+      method: text(node.expression).split(".")[1].toUpperCase(),
       route: `/api/mcp-admin${literal(node.arguments[0])}`,
-      handler: 'explicit administration action',
-      services: ['McpStore'],
-      authentication: 'administrator cookie JWT; machine tokens refused',
-      authorization: 'single administrator; same-origin JSON on writes',
-      classification: text(node.expression).endsWith('get')
-        ? 'privileged read'
-        : 'privileged mutation',
-      support: 'Supported but internal-only',
-      request: ['strict policy/grant/page schema; path ID'],
-      requestSchemas: ['grantInput / pageInput / inline zod schema'],
-      response: 'schemaVersion 1, success, result; failure: error, traceId',
-      pagination: 'clients/activity: limit 1–50, offset 0–10000; SQL-bounded',
-      errors: '400,401,403,404,409,500; stable codes',
-      available: 'administrator web session only',
+      handler: "explicit administration action",
+      services: ["McpStore"],
+      authentication: "administrator cookie JWT; machine tokens refused",
+      authorization: "single administrator; same-origin JSON on writes",
+      classification: text(node.expression).endsWith("get")
+        ? "privileged read"
+        : "privileged mutation",
+      support: "Supported but internal-only",
+      request: ["strict policy/grant/page schema; path ID"],
+      requestSchemas: ["grantInput / pageInput / inline zod schema"],
+      response: "schemaVersion 1, success, result; failure: error, traceId",
+      pagination: "clients/activity: limit 1–50, offset 0–10000; SQL-bounded",
+      errors: "400,401,403,404,409,500; stable codes",
+      available: "administrator web session only",
       testReferences: [
-        'backend/__tests__/mcp/gateway.integration.ts',
-        'frontend/__tests__/mcp.test.ts',
+        "backend/__tests__/mcp/gateway.integration.ts",
+        "frontend/__tests__/mcp.test.ts",
       ],
-      source: 'backend/src/mcp/gateway.ts',
-      routeSource: 'backend/src/mcp/gateway.ts',
+      source: "backend/src/mcp/gateway.ts",
+      routeSource: "backend/src/mcp/gateway.ts",
       security:
-        'Durable atomic audit on grants/revocation/policy. Never issues or accepts a model-provider key.',
+        "Durable atomic audit on grants/revocation/policy. Never issues or accepts a model-provider key.",
     });
   });
   for (const [method, route, description] of [
     [
-      'POST',
-      '/mcp',
-      'official SDK Streamable HTTP; initialize/tools/list/tools/call/ping/notifications',
-    ],
-    ['GET', '/mcp', 'authenticated 405; no standalone SSE stream'],
-    ['DELETE', '/mcp', 'authenticated 405; no server session'],
-    [
-      'OPTIONS',
-      '/mcp',
-      'validated HTTPS Host/Origin preflight; no operational data',
+      "POST",
+      "/mcp",
+      "official SDK Streamable HTTP; initialize/tools/list/tools/call/ping/notifications",
     ],
     [
-      'GET',
-      '/.well-known/oauth-protected-resource/mcp',
-      'RFC 9728 metadata; public only when enabled',
+      "GET",
+      "/mcp",
+      "HTML browser dashboard; authenticated machine GET returns 405; no standalone SSE stream",
+    ],
+    ["DELETE", "/mcp", "authenticated 405; no server session"],
+    [
+      "OPTIONS",
+      "/mcp",
+      "validated HTTPS Host/Origin preflight; no operational data",
+    ],
+    [
+      "GET",
+      "/.well-known/oauth-protected-resource/mcp",
+      "RFC 9728 metadata; public only when enabled",
     ],
   ])
     entries.push({
-      feature: 'MCP protocol',
+      feature: "MCP protocol",
       method,
       route,
       handler: description,
-      services: ['official SDK', 'OperationalReadService', 'McpStore'],
+      services: ["official SDK", "OperationalReadService", "McpStore"],
       authentication:
-        method === 'OPTIONS' || route.includes('well-known')
-          ? 'public transport/discovery only when enabled'
-          : 'resource-bound OAuth JWT',
+        method === "OPTIONS" || route.includes("well-known")
+          ? "public transport/discovery only when enabled"
+          : "native MCP bearer token or resource-bound OAuth JWT; HTML dashboard uses normal web boundary",
       authorization:
-        'per-tool scope intersection and exact local resource grant',
-      classification: 'protocol/read-only',
-      support: 'Fully supported within documented protocol versions',
-      request: ['official SDK schemas; 16 KiB JSON; exact Host/Origin; TLS'],
-      requestSchemas: ['SDK types + toolCatalog'],
-      response: 'SDK JSON-RPC; tools: schemaVersion 1 evidence DTO',
-      pagination: 'tools bounded catalog; collections limit/offset',
+        "per-tool scope intersection and exact local resource grant",
+      classification:
+        "protocol; scoped reads and human-approved operational writes",
+      support: "Fully supported within documented protocol versions",
+      request: ["official SDK schemas; 16 KiB JSON; exact Host/Origin; TLS"],
+      requestSchemas: ["SDK types + toolCatalog"],
+      response: "SDK JSON-RPC; tools: schemaVersion 1 evidence DTO",
+      pagination: "tools bounded catalog; collections limit/offset",
       errors:
-        'transport HTTP codes; SDK JSON-RPC; generic sanitized tool admission errors',
-      available: 'external MCP clients; disabled by default',
-      testReferences: ['backend/__tests__/mcp/gateway.integration.ts'],
-      source: 'backend/src/mcp/gateway.ts',
-      routeSource: 'backend/src/mcp/gateway.ts',
+        "transport HTTP codes; SDK JSON-RPC; generic sanitized tool admission errors",
+      available: "external MCP clients; disabled by default",
+      testReferences: ["backend/__tests__/mcp/gateway.integration.ts"],
+      source: "backend/src/mcp/gateway.ts",
+      routeSource: "backend/src/mcp/gateway.ts",
       security:
-        'No arbitrary API proxy, filesystem, SQL, shell, backup export or writes.',
+        "No arbitrary API proxy, filesystem, SQL, shell or backup export. Native operational writes create bounded pending approval only.",
     });
   return entries.sort(
     (a, b) =>
@@ -368,10 +418,10 @@ export function inventory() {
 export function render(entries) {
   const cell = (value) =>
     String(
-      Array.isArray(value) ? value.join('; ') || 'none declared here' : value,
+      Array.isArray(value) ? value.join("; ") || "none declared here" : value,
     )
-      .replaceAll('|', '\\|')
-      .replaceAll(/\r?\n/g, ' ');
+      .replaceAll("|", "\\|")
+      .replaceAll(/\r?\n/g, " ");
   return (
     `# REST API coverage matrix\n\nGenerated from route/controller ASTs by \`node scripts/api-inventory.mjs\`. Baseline: latest fetched main \`5126fb7\`, plus this branch. No application startup or production data reads are used.\n\n${entries.length} concrete HTTP method/path contracts. Explicit dynamic lifecycle routes and shared read-catalog routes are expanded. This is an inventory, not a claim that legacy contracts are uniformly secure or fully typed. See [audit findings](API_SECURITY_AUDIT.md), [MCP runbook](MCP.md), and the machine-readable [inventory](api-inventory.json).\n\nEach row names the real implementation. Legacy request/response schemas are frequently handwritten or delegated; source links are the authoritative schema evidence. “Test references” identifies relevant test modules by imports, not verified per-endpoint assertion coverage. Missing runtime response validation and uniform pagination are recorded as gaps rather than fabricated schemas.\n\n| Feature / class | Method / route | Handler / service | Authentication / authorization | Request contract | Response contract | Pagination | Errors | External availability / support | Test references | Security implications / evidence |\n|---|---|---|---|---|---|---|---|---|---|---|\n` +
     entries
@@ -379,8 +429,8 @@ export function render(entries) {
         (entry) =>
           `| ${cell(entry.feature)} / ${cell(entry.classification)} | ${entry.method} \`${cell(entry.route)}\` | ${cell(entry.handler)}; ${cell(entry.services)} | ${cell(entry.authentication)}; ${cell(entry.authorization)} | ${cell(entry.request)}; ${cell(entry.requestSchemas)} | ${cell(entry.response)} | ${cell(entry.pagination)} | ${cell(entry.errors)} | ${cell(entry.available)}; ${cell(entry.support)} | ${cell(entry.testReferences)} | ${cell(entry.security)} [source](../${entry.source}) / [route](../${entry.routeSource}) |`,
       )
-      .join('\n') +
-    '\n'
+      .join("\n") +
+    "\n"
   );
 }
 if (
@@ -389,11 +439,11 @@ if (
 ) {
   const entries = inventory();
   const outputs = [
-    ['docs/api-inventory.json', JSON.stringify(entries, null, 2) + '\n'],
-    ['docs/API_COVERAGE_MATRIX.md', render(entries)],
+    ["docs/api-inventory.json", JSON.stringify(entries, null, 2) + "\n"],
+    ["docs/API_COVERAGE_MATRIX.md", render(entries)],
   ];
   for (const [file, content] of outputs) {
-    if (process.argv.includes('--check')) {
+    if (process.argv.includes("--check")) {
       if (read(file) !== content) throw new Error(`Stale inventory: ${file}`);
     } else fs.writeFileSync(path.join(root, file), content);
   }

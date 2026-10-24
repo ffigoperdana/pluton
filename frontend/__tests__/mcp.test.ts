@@ -61,7 +61,7 @@ async function compile(file = 'routes/Mcp/Mcp.tsx', stub = true) {
                }));
                if (stub)
                   builder.onLoad({ filter: /services[\\/]mcp\.ts$/ }, () => ({
-                     contents: `const f=()=>globalThis.__mcpFixture; export const useMcpOverview=()=>f().overview; export const useMcpTools=()=>f().tools; export const useMcpClients=()=>f().clients; export const useMcpActivity=()=>f().activity; export const mcpRequest=async(...args)=>{globalThis.__mcpRequests.push(args); return {}};`,
+                     contents: `const f=()=>globalThis.__mcpFixture; export const useMcpOverview=()=>f().overview; export const useMcpTools=()=>f().tools; export const useMcpClients=()=>f().clients; export const useMcpActivity=()=>f().activity; export const mcpRequest=async(...args)=>{if(!args[1]||args[1]==='GET')return {items:[],hasMore:false};globalThis.__mcpRequests.push(args); return globalThis.__mcpResponse||{}};`,
                      loader: 'js',
                   }));
             },
@@ -96,7 +96,7 @@ test('connection examples use documented fields and identify unverified Grok con
    assert.match(connectionInstructions('Custom', null), /Authorization: Bearer/);
    assert.ok(!connectionInstructions('Codex', overview.endpoint).includes('OPENAI_API_KEY'));
 });
-test('overview, client evidence, tool controls, paginated activity and unavailable approvals render honest states', async () => {
+test('overview, client evidence, tool controls, paginated activity and approval controls render honest states', async () => {
    const Component = (await compile()).default;
    fixture();
    const client = new QueryClient();
@@ -110,7 +110,8 @@ test('overview, client evidence, tool controls, paginated activity and unavailab
       'No activity matches',
       'Next activity',
       'Next clients',
-      'Write requests and approvals are unavailable',
+      'Approvals and action history',
+      'API Tokens',
    ])
       assert.ok(html.includes(text), text);
    assert.ok(!html.includes('Online'));
@@ -252,5 +253,94 @@ test('API client uses cookie-authenticated JSON and rejects WAF HTML rather than
       await assert.rejects(service.mcpRequest('policy', 'PUT', {}), /HTML instead of JSON/);
    } finally {
       globalThis.fetch = original;
+   }
+});
+
+test('native token create/copy-once dismissal and exact-hash human approval stay out of query caches', async () => {
+   const { JSDOM } = req('jsdom');
+   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { url: 'https://backup.example.internal' });
+   const keys = ['window', 'document', 'HTMLElement', 'HTMLInputElement', 'Event', 'MouseEvent'];
+   const saved = Object.getOwnPropertyDescriptors(globalThis);
+   for (const key of keys) Object.defineProperty(globalThis, key, { value: dom.window[key], configurable: true });
+   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+   const { createRoot } = req('react-dom/client');
+   const Component = (await compile('routes/Mcp/McpV2Panel.tsx')).default;
+   fixture({ tools: { data: [{ name: 'pluton_request_backup_now', approvalRequired: true, enabled: true }] } });
+   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } } });
+   const pending = {
+      id: 'action-01',
+      tokenId: 'token-01',
+      action: 'backup_now',
+      planId: 'plan-01',
+      status: 'pending_approval',
+      expiresAt: Date.now() + 60000,
+      argumentsHash: 'a'.repeat(64),
+      arguments: { planId: 'plan-01', idempotencyKey: 'example-intent-01' },
+      preview: { before: {}, after: { operation: 'backup_now' }, warnings: ['Human review required.'] },
+   };
+   client.setQueryData(['mcp', 'tokens', 0], { items: [], hasMore: false });
+   client.setQueryData(['mcp', 'actions', 0, true], { items: [pending], hasMore: false });
+   const root = createRoot(document.getElementById('root'));
+   const click = async (text: string) => {
+      const element = [...document.querySelectorAll('button')].find((item) => item.textContent === text);
+      assert.ok(element, text);
+      await React.act(async () => element.click());
+   };
+   try {
+      await React.act(async () =>
+         root.render(
+            React.createElement(QueryClientProvider, { client }, React.createElement(Component, { enabled: true, endpoint: overview.endpoint })),
+         ),
+      );
+      await click('Review action');
+      assert.match(document.body.textContent!, /Exact request/);
+      await click('Approve this exact action');
+      assert.deepEqual((globalThis as any).__mcpRequests[0], ['actions/action-01/approve', 'POST', { argumentsHash: 'a'.repeat(64) }]);
+      (globalThis as any).__mcpRequests = [];
+      (globalThis as any).__mcpResponse = { token: 'synthetic-copy-once-value' };
+      await click('Create API token');
+      const dialog = document.querySelector('[role=dialog]')!;
+      const name = dialog.querySelector('input')!;
+      await React.act(async () => {
+         Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!.call(name, 'Example token');
+         name.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+      });
+      const mode = dialog.querySelector('select')!;
+      await React.act(async () => {
+         mode.value = 'write';
+         mode.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+      });
+      await React.act(async () => {
+         (dialog.querySelector('input[type=checkbox]') as HTMLInputElement).click();
+      });
+      await React.act(async () => {
+         dialog.querySelector('form')!.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+      });
+      assert.equal((globalThis as any).__mcpRequests[0][0], 'tokens');
+      assert.equal((globalThis as any).__mcpRequests[0][2].mode, 'write');
+      assert.deepEqual((globalThis as any).__mcpRequests[0][2].planIds, []);
+      assert.equal((document.querySelector('[aria-label="New API token"]') as HTMLTextAreaElement)?.value, 'synthetic-copy-once-value');
+      assert.ok(
+         !JSON.stringify(
+            client
+               .getQueryCache()
+               .getAll()
+               .map((query: any) => query.state.data),
+         ).includes('synthetic-copy-once-value'),
+      );
+      assert.ok(!JSON.stringify(client.getMutationCache().getAll()).includes('synthetic-copy-once-value'));
+      assert.equal(window.localStorage.length, 0);
+      await click('I have saved it');
+      assert.equal(document.querySelector('[aria-label="New API token"]'), null);
+   } finally {
+      await React.act(async () => root.unmount());
+      client.clear();
+      dom.window.close();
+      for (const key of keys) {
+         if (saved[key]) Object.defineProperty(globalThis, key, saved[key]);
+         else delete (globalThis as any)[key];
+      }
+      delete (globalThis as any).__mcpResponse;
+      delete (globalThis as any).IS_REACT_ACT_ENVIRONMENT;
    }
 });
