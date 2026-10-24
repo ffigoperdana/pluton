@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { remoteBackupFailure } from '../utils/remoteBackupDiagnostics';
+import { supportsSourceDiagnostics, type SourceDiagnostics } from '../utils/sourceDiagnostics';
 import Cryptr from 'cryptr';
 import { parseBackupExclusions, sourceResticExclusions } from '../utils/backupExclusions';
 import { Plan, NewPlan } from '../db/schema/plans';
@@ -70,6 +71,7 @@ type RemoteCompletion = {
 	/** Closed, non-secret diagnostics sent by the Phase 4 agent. */
 	failureStage?: string;
 	failureCode?: string;
+	sourceDiagnostics?: SourceDiagnostics;
 	databaseId?: string;
 	engine?: 'mysql' | 'mariadb' | 'postgresql';
 	result?: {
@@ -435,10 +437,10 @@ export class RemoteBackupService {
 					'Backup source or exclusions changed after queuing. Start a new backup.'
 				);
 			}
+			const agent = await this.getCapableAgent(plan.sourceId);
 			let lifecycle;
 			if (plan.settings.remoteLifecycle) {
 				setStage('database-credential-preparation');
-				const agent = await this.getCapableAgent(plan.sourceId);
 				lifecycle =
 					plan.settings.remoteLifecycle.version === 1
 						? materializeRemoteLifecycle(
@@ -470,6 +472,7 @@ export class RemoteBackupService {
 			setStage('payload');
 			return {
 				version: excludes.length ? 4 : lifecycle ? (lifecycle.version === 2 ? 3 : 2) : 1,
+				...(supportsSourceDiagnostics(agent.agentVersion) ? { sourceDiagnosticsVersion: 1 } : {}),
 				...(lifecycle ? { lifecycle } : {}),
 				backupId: backup.id,
 				planId: plan.id,
@@ -557,6 +560,17 @@ export class RemoteBackupService {
 				planId: reference.planId,
 				backupId: reference.backupId,
 				error: remoteBackupFailure(completion),
+				...(completion.failureStage && completion.failureCode
+					? {
+							sourceFailure: {
+								failureStage: completion.failureStage,
+								failureCode: completion.failureCode,
+								...(completion.sourceDiagnostics
+									? { sourceDiagnostics: completion.sourceDiagnostics }
+									: {}),
+							},
+						}
+					: {}),
 			});
 			return;
 		}

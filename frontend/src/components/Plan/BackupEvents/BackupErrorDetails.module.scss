@@ -1,0 +1,88 @@
+.details {
+   overflow-wrap: anywhere;
+   h4 {
+      margin: 0 0 16px;
+      font-size: 1.15rem;
+   }
+   .message {
+      white-space: pre-wrap;
+   }
+   p {
+      margin: 12px 0;
+   }
+   dl {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 8px;
+   }
+   dd {
+      margin: 0;
+   }
+   summary {
+      cursor: pointer;
+   }
+   ul {
+      max-height: 300px;
+      overflow: auto;
+      padding-left: 24px;
+   }
+   li {
+      margin: 12px 0;
+   }
+   code {
+      white-space: pre-wrap;
+      unicode-bidi: plaintext;
+   }
+   button {
+      margin-right: 10px;
+      cursor: pointer;
+   }
+   a,
+   button,
+   summary,
+   ul {
+      &:focus-visible {
+         outline: 2px solid var(--primary-color);
+         outline-offset: 3px;
+      }
+   }
+   .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin: 18px 0 10px;
+   }
+   .actions button,
+   .help a {
+      padding: 10px 14px;
+      border: 1px solid var(--line-color);
+      border-radius: 6px;
+   }
+   .help,
+   .warning {
+      padding: 14px;
+      border: 1px solid var(--line-color);
+      border-radius: 6px;
+      margin-top: 16px;
+   }
+   .help a {
+      display: inline-block;
+      color: var(--content-text-color);
+      text-decoration: underline;
+   }
+   .warning {
+      border-left: 4px solid var(--error-button-color);
+   }
+   @media (max-width: 600px) {
+      dl {
+         grid-template-columns: 1fr;
+         gap: 4px;
+      }
+      dd {
+         margin-bottom: 8px;
+      }
+      .actions button {
+         width: 100%;
+      }
+   }
+}

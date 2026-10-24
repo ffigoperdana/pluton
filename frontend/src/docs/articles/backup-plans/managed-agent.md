@@ -4,6 +4,8 @@ Gunakan plan Managed Agent untuk mencadangkan satu folder aplikasi pada mesin Li
 
 Contoh fiktif: mesin `app-01`, source `/srv/example-app`, storage `SFTP contoh`, dan destination `daily/app-01`. Siapkan file latihan dahulu agar Anda dapat menguji backup serta restore tanpa mengubah aplikasi aktif.
 
+Bila entry tidak terbaca, gunakan [Permission Troubleshooting dan Backup Exclusions](/docs/troubleshooting/source#9-configure-backup-exclusions); jangan otomatis membuat private key readable.
+
 ## Sebelum membuka formulir
 
 Periksa mode pada **Source Access** mesin. Server-Managed memungkinkan validasi

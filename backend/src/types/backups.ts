@@ -42,6 +42,8 @@ export interface BackupTaskStats {
 }
 
 export interface BackupProgressStats {
+	/** Private diagnostics: never copy into notifications or general logs. */
+	sourceFailure?: import('../utils/sourceDiagnostics').SourceFailure;
 	backupStage?: string;
 	remoteCommandId?: string;
 	remoteAttempt?: number;

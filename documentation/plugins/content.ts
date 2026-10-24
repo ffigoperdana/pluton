@@ -77,6 +77,11 @@ export function preserveMarkdown() {
         node.data.hProperties ??= {};
         node.data.hProperties.id = headings[ordinal++]?.id;
       }
+      if (node.type === "code" && ["readonly", "review"].includes(node.meta)) {
+        node.data ??= {};
+        node.data.hProperties ??= {};
+        node.data.hProperties["data-copy-policy"] = node.meta;
+      }
       for (const child of node.children || []) visit(child);
     };
     visit(tree);
@@ -89,6 +94,43 @@ export function removeBodyTitle() {
       tree.children.shift();
     if (Array.isArray(file.data.toc))
       file.data.toc = file.data.toc.filter((item: any) => item.depth > 1);
+  };
+}
+
+/** Highlighting may replace code/pre properties. Apply the authored copy policy
+ * after all highlighting plugins. Any structural mismatch fails the build for
+ * a policy-bearing article instead of accidentally enabling mutation copying. */
+export function preserveCodeCopyPolicy() {
+  return (tree: any, file: any) => {
+    const policies: (string | undefined)[] = [];
+    const collect = (tokens: any[]) => {
+      for (const token of tokens) {
+        if (token.type === "code")
+          policies.push(
+            /^(?:bash|sh|text) (readonly|review)$/.exec(token.lang || "")?.[1],
+          );
+        if (token.tokens) collect(token.tokens);
+        if (token.items) collect(token.items);
+      }
+    };
+    collect(parseDoc(String(file.value)).tokens);
+    if (!policies.some(Boolean)) return;
+    const blocks: any[] = [];
+    const visit = (node: any) => {
+      if (node.type === "element" && node.tagName === "pre") blocks.push(node);
+      for (const child of node.children || []) visit(child);
+    };
+    visit(tree);
+    if (blocks.length !== policies.length)
+      throw new Error(
+        "Documentation command copy policy could not be bound safely.",
+      );
+    blocks.forEach((block, index) => {
+      if (policies[index]) {
+        block.properties ??= {};
+        block.properties["data-copy-policy"] = policies[index];
+      }
+    });
   };
 }
 

@@ -1,5 +1,12 @@
 import type { Backup } from '../db/schema/backups';
 import type { BackupProgressStats } from '../types/backups';
+import { remoteBackupFailure } from './remoteBackupDiagnostics';
+
+function historicalFailure(message?: string | null) {
+	// Extract only identifiers. Old persisted provider text is never forwarded.
+	const match = /\(([a-z-]{1,60})\/([a-z-]{1,80})(?:;[^)]*)?\)\.?$/.exec(message || '');
+	return match ? { failureStage: match[1], failureCode: match[2] } : {};
+}
 
 export const remoteBackupStages = [
 	'preparing-backup',
@@ -145,7 +152,11 @@ export function projectRemoteProgress(backup: Backup) {
 							total_bytes: stats?.total_bytes_processed || 0,
 						},
 				...(backup.status === 'failed'
-					? { error: 'Remote backup failed. Review the sanitized backup failure stage/code.' }
+					? {
+							error: remoteBackupFailure(
+								stats?.sourceFailure || historicalFailure(backup.errorMsg)
+							),
+						}
 					: {}),
 			},
 		],

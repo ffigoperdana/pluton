@@ -109,6 +109,12 @@ proprietary implementations.
 
 ## Validation commands
 
+Backup source diagnostic transport, private persistence, historical UI behavior,
+standalone Agent 0.7.1 negotiation and the explicit preflight audit are documented
+in [SOURCE_ACCESS_DIAGNOSTICS.md](SOURCE_ACCESS_DIAGNOSTICS.md). The Agent patch is
+separate from the monorepo Agent. Source Access Validate retains its root-validation
+meaning; no remote recursive scan command is added.
+
 New standalone Agent enrollment distribution (configured HTTPS Git + immutable
 SHA + Agent 0.7.0) is described in
 [AGENT_ENROLLMENT_DISTRIBUTION.md](AGENT_ENROLLMENT_DISTRIBUTION.md). It leaves
@@ -208,6 +214,11 @@ local static Fumadocs index, without a hosted service.
 
 `pnpm test:docs` checks articles/routes/anchors/evidence/security/rendering. The
 frontend production build runs it automatically before bundling the articles.
+
+Source Diagnostics V2 adds actionable source error details and static shortcuts
+inside this same documentation system. See
+[SOURCE_DIAGNOSTICS_V2.md](SOURCE_DIAGNOSTICS_V2.md) for the presentation, access,
+command-copy boundaries, validation and Agent compatibility audit.
 
 Start with `/docs/getting-started/complete-backup-setup` for the authoritative
 15-step operator journey. It links existing feature references rather than

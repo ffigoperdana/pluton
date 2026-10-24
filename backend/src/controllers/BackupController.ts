@@ -210,6 +210,7 @@ export class BackupController {
 
 		try {
 			const progressRes = await this.backupService.getBackupProgress(req.params.id);
+			res.setHeader('Cache-Control', 'private, no-store');
 			res.status(200).json(progressRes);
 		} catch (error: any) {
 			res.status(500).json({

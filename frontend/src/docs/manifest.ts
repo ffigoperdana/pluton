@@ -187,7 +187,7 @@ export const docCategories: DocCategory[] = [
          page("security/credentials", "Menjaga SECRET, ENCRYPTION_KEY, dan kredensial"),
          page("security/boundaries", "Memisahkan source, staging, database, dan endpoint"),
          page("troubleshooting", "Diagnostik yang aman"),
-         page("troubleshooting/source", "Source tidak terbaca atau symlink ditolak"),
+         page("troubleshooting/source", "Troubleshooting: Source Files or Directories Are Inaccessible"),
          page("troubleshooting/database", "Login berhasil tetapi dump database gagal"),
          page("troubleshooting/incremental", "New Files berulang dan progress yang belum pasti"),
          page("troubleshooting/sftp", "Memeriksa SFTP path, permission, dan transport"),

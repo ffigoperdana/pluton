@@ -21,6 +21,7 @@ import { tree, loadArticle } from "./source.ts";
 import { mdxComponents } from "./mdx.tsx";
 import { ThemeCompatibility } from "./theme.tsx";
 import LocalSearch from "./Search.tsx";
+import { backupRecoveryTopics } from "../../frontend/src/docs/troubleshootingTopics.ts";
 
 export async function docsLoader({ request }: { request: Request }) {
   const pathname = new URL(request.url).pathname.replace(/\/$/, "");
@@ -195,6 +196,12 @@ export default function Docs() {
               <Card title="Kelola database hasil Restore" href="/docs/database-restores">
                 Buat Persistent Restore, Inspect, Stop, Resume, dan Delete.
               </Card>
+            </Cards>
+            <h2>Backup &amp; Recovery</h2>
+            <Cards>
+              {backupRecoveryTopics.map((topic) => (
+                <Card key={topic.title} title={topic.title} href={topic.href} />
+              ))}
             </Cards>
             <h2>Panduan berdasarkan tugas</h2>
             <Cards>

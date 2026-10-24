@@ -1,3 +1,4 @@
+import BackupErrorDetails from './BackupErrorDetails';
 import Icon from '../../common/Icon/Icon';
 import SidePanel from '../../common/SidePanel/SidePanel';
 import { getBackupEventActionMessage, getRestoreEventActionMessage } from '../../../utils/progressHelpers';
@@ -39,7 +40,7 @@ const BackupEvents = ({ id, type = 'backup', sourceId, sourceType, planId, inPro
             finishedEvent = 'Completed';
          } else if (event.action === 'TASK_CANCELLED') {
             finishedEvent = 'Cancelled';
-         } else if (event.action === 'FAILED_PERMANENTLY') {
+         } else if (event.action === 'FAILED_PERMANENTLY' || (event.phase === 'finished' && event.action === 'TASK_FAILED')) {
             finishedEvent = 'Failed';
          }
       });
@@ -74,7 +75,7 @@ const BackupEvents = ({ id, type = 'backup', sourceId, sourceType, planId, inPro
                <ul className={classes.eventList}>
                   {progressDataToUse.events.map((event: any, index: number) => {
                      const completed = event.phase === 'finished' && event.action === 'TASK_COMPLETED';
-                     const failed = event.phase === 'finished' && event.action === 'FAILED_PERMANENTLY';
+                     const failed = event.phase === 'finished' && (event.action === 'FAILED_PERMANENTLY' || event.action === 'TASK_FAILED');
                      const retrying = event.action.includes('RETRY_ATTEMPT_');
                      const isError = event.action === 'TASK_FAILED';
                      const isWarning =
@@ -99,9 +100,9 @@ const BackupEvents = ({ id, type = 'backup', sourceId, sourceType, planId, inPro
                            <span className={classes.action}>
                               {type === 'backup' ? getBackupEventActionMessage(event.action) : getRestoreEventActionMessage(event.action)}
                               {event.error && (
-                                 <span className={classes.viewError} onClick={() => setShowError(`main-${index}`)}>
+                                 <button type="button" className={classes.viewError} onClick={() => setShowError(`main-${index}`)}>
                                     View Error
-                                 </span>
+                                 </button>
                               )}
                            </span>
                         </li>
@@ -138,9 +139,13 @@ const BackupEvents = ({ id, type = 'backup', sourceId, sourceType, planId, inPro
                                        <span className={classes.action}>
                                           {getBackupEventActionMessage(event.action, mirror.storageName)}
                                           {event.error && (
-                                             <span className={classes.viewError} onClick={() => setShowError(`mirror-${storageId}-${index}`)}>
+                                             <button
+                                                type="button"
+                                                className={classes.viewError}
+                                                onClick={() => setShowError(`mirror-${storageId}-${index}`)}
+                                             >
                                                 View Error
-                                             </span>
+                                             </button>
                                           )}
                                        </span>
                                     </li>
@@ -156,13 +161,20 @@ const BackupEvents = ({ id, type = 'backup', sourceId, sourceType, planId, inPro
             )}
          </div>
          {showError && (
-            <Modal title="Error Details" closeModal={() => setShowError(false)} width={'400px'}>
-               <div className={classes.errorDetails} data-length={showError.length}>
+            <Modal title="Error Details" stableLayout closeModal={() => setShowError(false)} width={'680px'}>
+               <div className={showError.startsWith('main-') ? undefined : classes.errorDetails} data-length={showError.length}>
                   {(() => {
                      if (typeof showError === 'string') {
                         if (showError.startsWith('main-')) {
                            const idx = parseInt(showError.replace('main-', ''));
-                           return progressDataToUse?.events[idx]?.error || 'Unknown error occurred.';
+                           return (
+                              <BackupErrorDetails
+                                 message={progressDataToUse?.events[idx]?.error || 'Unknown error occurred.'}
+                                 failure={progressDataToUse?.sourceFailure}
+                                 planId={planId}
+                                 onClose={() => setShowError(false)}
+                              />
+                           );
                         }
                         if (showError.startsWith('mirror-')) {
                            const parts = showError.replace('mirror-', '').split('-');

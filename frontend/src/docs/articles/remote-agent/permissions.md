@@ -6,6 +6,8 @@ Contoh berikut menggunakan `/srv/example-app`. Semua pemeriksaan dijalankan pada
 
 Instalasi [standalone baru](/docs/remote-agent/enrollment) 0.7.0 memakai planned initial roots dan mulai dalam Host-Approved. Memilih Server-Managed di enrollment hanya mencatat intent pada dialog: selesaikan receipt-bound host setup setelah ONLINE, lalu Validate, Apply, dan tunggu effective confirmation. Tidak ada permission otomatis dari radio, distribusi repository atau versi Agent. Agent existing mempertahankan identity, policy revision dan jalur updater asalnya.
 
+Lihat [panduan Source Access Troubleshooting](/docs/troubleshooting/source#1-understand-the-error) untuk path-level diagnostics, pemeriksaan file, ACL minimum dan rollback yang disetujui.
+
 ## Canonical containment
 
 Agent menyelesaikan source dan allowed roots ke path sebenarnya sebelum memeriksa batas. Misalnya source `/var/www/example-app` adalah symlink ke `/srv/example-app`; lokasi yang harus diizinkan adalah lokasi hasil resolusinya. Mengizinkan nama symlink saja tidak membolehkan akses ke target di luar allowed roots.

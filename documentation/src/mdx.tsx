@@ -1,4 +1,10 @@
-import { useRef, useState, type ComponentProps } from "react";
+import {
+  Children,
+  isValidElement,
+  useRef,
+  useState,
+  type ComponentProps,
+} from "react";
 import defaults from "fumadocs-ui/mdx";
 import { CodeBlock, Pre } from "fumadocs-ui/components/codeblock";
 import { Callout } from "fumadocs-ui/components/callout";
@@ -6,9 +12,25 @@ import { Check, Clipboard } from "lucide-react";
 import { safeDocUrl } from "../../frontend/src/docs/model.ts";
 import { copyCode } from "./clipboard.ts";
 
-function Code(props: ComponentProps<typeof CodeBlock>) {
+function Code(
+  props: ComponentProps<typeof CodeBlock> & {
+    "data-copy-policy"?: "readonly" | "review";
+  },
+) {
   const pre = useRef<HTMLPreElement>(null);
-  const [status, setStatus] = useState("Salin kode");
+  const code = Children.toArray(props.children).find((child) =>
+    isValidElement(child),
+  );
+  // Plain Markdown attaches hProperties to code; highlighted compilation can
+  // promote them to pre. Support both without evaluating command contents.
+  const policy =
+    props["data-copy-policy"] ||
+    (isValidElement<{ "data-copy-policy"?: string }>(code)
+      ? code.props["data-copy-policy"]
+      : undefined);
+  const [status, setStatus] = useState(
+    policy === "readonly" ? "Copy read-only command" : "Salin kode",
+  );
   return (
     <CodeBlock
       {...props}
@@ -16,28 +38,36 @@ function Code(props: ComponentProps<typeof CodeBlock>) {
       allowCopy={false}
       Actions={({ className }) => (
         <div className={className}>
-          <button
-            type="button"
-            className="inline-flex size-8 items-center justify-center rounded-md hover:bg-fd-accent focus-visible:ring-2"
-            aria-label={status}
-            onClick={async () => {
-              try {
-                await copyCode(pre.current?.textContent || "");
-                setStatus("Tersalin");
-              } catch {
-                setStatus("Pilih teks untuk menyalin");
-              }
-            }}
-          >
-            {status === "Tersalin" ? (
-              <Check className="size-4" />
-            ) : (
-              <Clipboard className="size-4" />
-            )}
-          </button>
-          <span className="sr-only" aria-live="polite">
-            {status}
-          </span>
+          {policy === "review" ? (
+            <span className="px-3 text-xs font-medium" role="note">
+              Manual review required · no command copy
+            </span>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="inline-flex size-8 items-center justify-center rounded-md hover:bg-fd-accent focus-visible:ring-2"
+                aria-label={status}
+                onClick={async () => {
+                  try {
+                    await copyCode(pre.current?.textContent || "");
+                    setStatus("Tersalin");
+                  } catch {
+                    setStatus("Pilih teks untuk menyalin");
+                  }
+                }}
+              >
+                {status === "Tersalin" ? (
+                  <Check className="size-4" />
+                ) : (
+                  <Clipboard className="size-4" />
+                )}
+              </button>
+              <span className="sr-only" aria-live="polite">
+                {status}
+              </span>
+            </>
+          )}
         </div>
       )}
     >

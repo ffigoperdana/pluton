@@ -2,6 +2,8 @@
 
 Mulai dari pekerjaan dan tahap yang gagal, lalu kumpulkan bukti minimum sebelum mengubah konfigurasi. Status ONLINE, login storage, login database, dan queued notification menguji bagian yang berbeda. Jangan menganggap salah satunya membuktikan seluruh alur backup atau pemulihan.
 
+Untuk filesystem source, buka [Troubleshooting: Source Files or Directories Are Inaccessible](/docs/troubleshooting/source#1-understand-the-error). Panduan mencakup safe path diagnostics, service identity, POSIX ACL dan exclusion review.
+
 ## Mulai dari stage
 
 1. Buka plan → **Backups**, temukan baris berdasarkan tanggal/zona waktu, lalu catat status, backup ID, snapshot bila tersedia, waktu, serta warning.
