@@ -1,6 +1,8 @@
-param([string]$WorkerImage = 'pluton-mysql-worker:local', [string]$RuntimeImage = 'pluton-mysql-server:local')
+param([string]$WorkerImage = 'pluton-mysql-worker:local', [string]$RuntimeImage = 'pluton-mysql-server:local',
+    [ValidateRange(1,10)][int]$StartupRepeats = 3)
 # Disposable, internal network; no host ports/socket/data, real secrets or repositories.
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'mysql-worker-readiness.ps1')
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $fixtureId = [Guid]::NewGuid().ToString('N')
 $prefix = 'pluton-mysql-fixture-' + $fixtureId
@@ -15,12 +17,7 @@ function Require-Success([string]$message) { if ($LASTEXITCODE -ne 0) { throw $m
 function Start-Worker {
     & docker run -d --name $worker --init --network $network --read-only --user '10001:10001' --cap-drop ALL --security-opt no-new-privileges --pids-limit 64 --memory 512m --tmpfs '/tmp:rw,noexec,nosuid,nodev,size=32m' --mount "type=volume,source=$configVolume,target=/run/pluton-mysql-config,readonly" --mount "type=volume,source=$ipcVolume,target=/run/pluton-mysql-worker" --mount "type=bind,source=$fixtureSource,target=/fixture-code,readonly" $WorkerImage | Out-Null
     Require-Success 'Could not start disposable worker.'
-    for ($attempt = 0; $attempt -lt 60; $attempt++) {
-        & docker exec $worker node -e "process.exit(require('fs').existsSync('/run/pluton-mysql-worker/worker.sock')?0:1)" 2>$null
-        if ($LASTEXITCODE -eq 0) { return }
-        Start-Sleep -Milliseconds 250
-    }
-    throw 'Disposable worker refused startup (no provider output exposed).'
+    Wait-MysqlFixtureWorker -Container $worker
 }
 function Fixture-Sql([string]$sql) {
     $sql | & docker exec -i $db mysql --no-defaults --protocol=socket --socket=/var/run/mysqld/mysqld.sock --batch --skip-column-names 2>$null | Out-Null
@@ -44,6 +41,12 @@ try {
         Start-Sleep -Milliseconds 500
     }
     Start-Worker
+    for ($repeat = 1; $repeat -lt $StartupRepeats; $repeat++) {
+        & docker rm -f $worker | Out-Null
+        Require-Success 'Could not recreate disposable worker.'
+        Start-Worker
+    }
+    Write-Output "PASS $StartupRepeats repeated private worker startups; UID/GID 10001, IPC directory 0700, socket 0600."
     foreach ($mode in @('success','wrong-password','invalid-marker','existing-database','sql-failure','client-command','bad-digest','target-mismatch','cancel','restart','bad-tls','unavailable')) {
         if ($mode -eq 'invalid-marker') { Fixture-Sql "UPDATE pluton_recovery_guard.pluton_recovery_guard SET purpose='not-recovery';" }
         if ($mode -eq 'existing-database') { Fixture-Sql 'CREATE DATABASE example_db; CREATE TABLE example_db.protected_fixture(id INT); INSERT INTO example_db.protected_fixture VALUES(1);' }

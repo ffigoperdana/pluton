@@ -8,7 +8,7 @@ import type { SnapShotFile } from '../types/restic';
 import type { RecoveryCode, RecoveryStage, RecoveryDatabaseResult } from '../types/recoveryTests';
 import { z } from 'zod';
 import { recoveryEngineSchema } from './recoveryTestPolicy';
-import { ManagedSnapshotIndex } from './restic/ManagedSnapshotIndex';
+import type { ManagedSnapshotIndex } from './restic/ManagedSnapshotIndex';
 
 export class RecoveryTestError extends AppError {
 	constructor(
@@ -29,7 +29,9 @@ export async function validateRestoredFiles(
 	signal: AbortSignal
 ) {
 	const realTarget = await fs.realpath(target);
-	const indexed = files instanceof ManagedSnapshotIndex;
+	// The manifest is provided only by internal callers. Keep its implementation
+	// out of this shared validator: the standalone MySQL worker has no SQLite.
+	const indexed = !Array.isArray(files);
 	const expected = indexed ? files : new Map(files.map(file => [file.path, file]));
 	const get = (relative: string) => expected.get(`/${relative}`);
 	const hasChildren = (relative: string) =>

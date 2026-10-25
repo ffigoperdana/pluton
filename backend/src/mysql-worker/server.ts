@@ -49,10 +49,18 @@ const ackSchema = z
 const endSchema = z.object({ type: z.literal('end') }).strict();
 
 /** UID-only socket volume is the IPC authorization boundary. No TCP listener. */
-export async function startMysqlWorker(config: WorkerConfig, trust: () => string) {
+export async function startMysqlWorker(
+	config: WorkerConfig,
+	trust: () => string,
+	startupStage: (
+		stage: 'identity' | 'native-client' | 'ipc-directory' | 'ipc-socket'
+	) => void = () => {}
+) {
 	workerConfigSchema.parse(config);
+	startupStage('identity');
 	if (process.platform !== 'linux' || process.getuid?.() !== 10001 || process.getgid?.() !== 10001)
 		throw protocolError();
+	startupStage('native-client');
 	const binary = detectRecoveryClient('mysql');
 	// Narrow worker support to the reviewed LTS client; MariaDB aliases were already refused.
 	const { spawnSync } = await import('child_process');
@@ -63,6 +71,7 @@ export async function startMysqlWorker(config: WorkerConfig, trust: () => string
 	});
 	if (probe.status !== 0 || !/Ver 8\.4\.11\b.*MySQL Community/.test(probe.stdout))
 		throw new RecoveryTestError('database-target-preflight', 'database-client-incompatible');
+	startupStage('ipc-directory');
 	const root = path.dirname(SOCKET);
 	const stat = await fs.lstat(root);
 	if (
@@ -72,6 +81,7 @@ export async function startMysqlWorker(config: WorkerConfig, trust: () => string
 		(stat.mode & 0o777) !== 0o700
 	)
 		throw protocolError();
+	startupStage('ipc-socket');
 	try {
 		const old = await fs.lstat(SOCKET);
 		if (!old.isSocket() || old.uid !== 10001 || (old.mode & 0o777) !== 0o600) throw protocolError();

@@ -1,5 +1,9 @@
 # Optional Oracle MySQL Recovery Worker — Phase 6
 
+The standalone bundle startup regression introduced by the managed snapshot index,
+its reproduced cause, safe readiness diagnostics and current validation evidence
+are documented in [the CI startup fix report](MYSQL_WORKER_CI_STARTUP_FIX.md).
+
 ## Scope and baseline
 
 Implemented on `codex/mysql-recovery-worker` from reviewed main `091ad70`. No commit,

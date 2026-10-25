@@ -29,4 +29,32 @@ for (const name of ['authentication_kerberos_client.so', 'authentication_ldap_sa
 for (const name of ['/usr/sbin/mysqld', '/usr/bin/mysqld', '/usr/bin/mariadbd', '/usr/lib/postgresql', '/var/run/docker.sock', '/data']) assert.equal(existsSync(name), false, name);
 assert.equal(statSync('/app/worker.mjs').uid, 0);
 assert.equal(statSync('/app/worker.mjs').mode & 0o022, 0);
+// Exercise the actual standalone entrypoint, not only mysql --version. Missing
+// config must reach its closed refusal; import/native dependency crashes may not.
+const startup = spawnSync(process.execPath, ["/app/worker.mjs"], {
+  encoding: "utf8",
+  timeout: 5000,
+  maxBuffer: 4096,
+  env: { PATH: "/usr/bin:/bin", NODE_ENV: "production" },
+  shell: false,
+});
+assert.equal(
+  startup.status,
+  1,
+  "Worker must refuse missing synthetic configuration.",
+);
+assert.equal(
+  startup.stdout,
+  "",
+  "Worker must not claim readiness without configuration.",
+);
+assert.equal(
+  startup.stderr.trim(),
+  JSON.stringify({
+    event: "mysql-worker-startup",
+    stage: "configuration",
+    status: "refused",
+  }),
+  "Standalone worker must reach its guarded configuration stage.",
+);
 console.log('UID 10001: genuine Oracle MySQL Community 8.4.11 client-only worker verified.');
