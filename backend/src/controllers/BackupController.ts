@@ -2,6 +2,33 @@ import { Request, Response } from 'express';
 import { BackupService } from '../services/BackupServices';
 import { AppError } from '../utils/AppError';
 import { RetainedRestoreDependencyError } from '../utils/retainedRestoreDependency';
+import { z } from 'zod';
+import { normalizeLegacySnapshotPath } from '../utils/legacySnapshotPath';
+import { SnapshotIndexError } from '../utils/restic/ManagedSnapshotIndex';
+import { ManagedRepositoryAccessError } from '../utils/restic/ManagedSftpRepositorySession';
+
+const pageQuery = z.strictObject({
+	path: z.string().max(1025).optional(),
+	search: z.string().trim().max(128).optional(),
+	offset: z
+		.string()
+		.regex(/^\d{1,6}$/)
+		.transform(Number)
+		.pipe(z.number().int().min(0).max(500000))
+		.optional(),
+	limit: z
+		.string()
+		.regex(/^\d{1,3}$/)
+		.transform(Number)
+		.pipe(z.number().int().min(1).max(500))
+		.optional(),
+	sort: z.enum(['name', 'size', 'modifiedAt']).optional(),
+	order: z.enum(['asc', 'desc']).optional(),
+});
+const failureCode = (error: unknown) =>
+	error instanceof SnapshotIndexError || error instanceof ManagedRepositoryAccessError
+		? { code: error.code }
+		: {};
 
 export class BackupController {
 	constructor(protected backupService: BackupService) {}
@@ -39,6 +66,7 @@ export class BackupController {
 						res.status(error instanceof AppError ? error.statusCode : 502).json({
 							success: false,
 							error: error instanceof AppError ? error.message : 'Remote download failed.',
+							...failureCode(error),
 						});
 					}
 				} finally {
@@ -60,6 +88,7 @@ export class BackupController {
 			res.status(error instanceof AppError ? error.statusCode : 500).json({
 				success: false,
 				error: error instanceof AppError ? error.message : 'Failed to get Downloaded file.',
+				...failureCode(error),
 			});
 		}
 	}
@@ -91,6 +120,7 @@ export class BackupController {
 				res.status(error instanceof AppError ? error.statusCode : 500).json({
 					success: false,
 					error: error instanceof AppError ? error.message : 'Failed to generate Download Link.',
+					...failureCode(error),
 				});
 		} finally {
 			request.cleanup();
@@ -142,15 +172,56 @@ export class BackupController {
 		}
 
 		try {
+			if (
+				Object.keys(req.query).some(key => key !== 'replicationId') ||
+				(req.query.replicationId !== undefined && typeof req.query.replicationId !== 'string')
+			)
+				throw new AppError(400, 'Invalid snapshot request.');
 			const replicationId = req.query.replicationId as string | undefined;
 			const snapshotFiles = await this.backupService.getSnapshotFiles(req.params.id, replicationId);
 
 			res.status(200).json({ success: true, result: snapshotFiles });
 		} catch (error: any) {
-			res.status(500).json({
+			res.status(error instanceof AppError ? error.statusCode : 500).json({
 				success: false,
-				error: 'Failed to get Snapshot Files. ' + (error.message || ''),
+				error: error instanceof AppError ? error.message : 'Snapshot metadata is unavailable.',
+				...failureCode(error),
 			});
+		}
+	}
+
+	async getSnapshotPage(req: Request, res: Response): Promise<void> {
+		const request = this.downloadRequest(req, res);
+		try {
+			const parsed = pageQuery.safeParse(req.query);
+			if (!req.params.id || !parsed.success)
+				throw new AppError(400, 'Invalid snapshot page request.');
+			const query = parsed.data;
+			if (query.path) {
+				if (!query.path.startsWith('/')) throw new AppError(400, 'Invalid snapshot directory.');
+				normalizeLegacySnapshotPath(query.path.slice(1), false);
+			}
+			if (
+				query.search &&
+				[...query.search].some(
+					character => character.charCodeAt(0) <= 31 || character.charCodeAt(0) === 127
+				)
+			)
+				throw new AppError(400, 'Invalid filename search.');
+			const result = await this.backupService.getSnapshotPage(req.params.id, query, request.signal);
+			res.setHeader('Cache-Control', 'private, no-store');
+			if (result.status === 'indexing') res.setHeader('Retry-After', '1');
+			if (!res.destroyed)
+				res.status(result.status === 'indexing' ? 202 : 200).json({ success: true, result });
+		} catch (error) {
+			if (!res.destroyed)
+				res.status(error instanceof AppError ? error.statusCode : 500).json({
+					success: false,
+					error: error instanceof AppError ? error.message : 'Snapshot metadata is unavailable.',
+					...failureCode(error),
+				});
+		} finally {
+			request.cleanup();
 		}
 	}
 

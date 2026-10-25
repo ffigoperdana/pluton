@@ -252,6 +252,18 @@ export class BackupService {
 		}
 		return progressResult.result;
 	}
+	async getSnapshotPage(
+		backupId: string,
+		query: import('../utils/restic/ManagedSnapshotIndex').SnapshotPageQuery,
+		signal?: AbortSignal
+	) {
+		const backup = await this.backupStore.getById(backupId);
+		if (!backup) throw new NotFoundError('Backup not found.');
+		if (backup.method !== 'backup' || !RemoteBackupService.isRemoteFilesystemPlan(backup))
+			throw new AppError(400, 'Paginated browsing requires a managed remote filesystem snapshot.');
+		if (!this.remoteRecovery) throw new AppError(501, 'REMOTE_CAPABILITY_NOT_IMPLEMENTED');
+		return this.remoteRecovery.browsePage(backupId, query, signal);
+	}
 	async getSnapshotFiles(backupId: string, replicationId?: string): Promise<SnapShotFile[]> {
 		const backup = await this.backupStore.getById(backupId);
 		if (!backup) {

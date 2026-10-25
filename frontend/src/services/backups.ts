@@ -91,11 +91,15 @@ export function useGetBackupDownload() {
 
 // Cancel Download
 export async function cancelBackupDownload({ backupId }: { backupId: string; planId: string }) {
-   return mutationResponse<{ success: boolean; message?: string }>(`${API_URL}/backups/${encodeURIComponent(backupId)}/action/download`, {
-      method: 'DELETE',
-      credentials: 'include',
-      // headers: header,
-   }, { allowNoContent: true, allowAccepted: false });
+   return mutationResponse<{ success: boolean; message?: string }>(
+      `${API_URL}/backups/${encodeURIComponent(backupId)}/action/download`,
+      {
+         method: 'DELETE',
+         credentials: 'include',
+         // headers: header,
+      },
+      { allowNoContent: true, allowAccepted: false },
+   );
 }
 export function useCancelBackupDownload() {
    const queryClient = useQueryClient();
@@ -112,11 +116,15 @@ export function useCancelBackupDownload() {
 // Remove Backup
 export async function deleteBackup(id: string) {
    const header = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
-   return mutationResponse<{ success: boolean; message?: string }>(`${API_URL}/backups/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      credentials: 'include',
-      headers: header,
-   }, { allowNoContent: true, allowAccepted: false });
+   return mutationResponse<{ success: boolean; message?: string }>(
+      `${API_URL}/backups/${encodeURIComponent(id)}`,
+      {
+         method: 'DELETE',
+         credentials: 'include',
+         headers: header,
+      },
+      { allowNoContent: true, allowAccepted: false },
+   );
 }
 
 export function useDeleteBackup() {
@@ -130,7 +138,10 @@ export function useDeleteBackup() {
 }
 
 // Get Backup Progress
-export async function getBackupProgress({ id, sourceId, sourceType, planId }: { id: string; sourceId: string; sourceType: string; planId: string }, signal?: AbortSignal) {
+export async function getBackupProgress(
+   { id, sourceId, sourceType, planId }: { id: string; sourceId: string; sourceType: string; planId: string },
+   signal?: AbortSignal,
+) {
    const url = new URL(`${API_URL}/backups/${encodeURIComponent(id)}/progress`);
    url.search = new URLSearchParams({ sourceId, sourceType, planId }).toString();
    return fetchProgress(url, signal);
@@ -139,7 +150,10 @@ export async function getBackupProgress({ id, sourceId, sourceType, planId }: { 
 export function useGetBackupProgress(payload: { id: string; sourceId: string; sourceType: string; planId: string }) {
    const queryClient = useQueryClient();
    const { id, sourceId, sourceType, planId } = payload;
-   const polling = useMemo(() => progressPollingFor(queryClient, ['progress-backup', id], (signal) => getBackupProgress({ id, sourceId, sourceType, planId }, signal)), [queryClient, id, sourceId, sourceType, planId]);
+   const polling = useMemo(
+      () => progressPollingFor(queryClient, ['progress-backup', id], (signal) => getBackupProgress({ id, sourceId, sourceType, planId }, signal)),
+      [queryClient, id, sourceId, sourceType, planId],
+   );
    const query = useQuery({
       queryKey: ['progress-backup', payload.id],
       ...polling,
@@ -155,7 +169,8 @@ export function useGetBackupProgress(payload: { id: string; sourceId: string; so
                   queryClient.invalidateQueries({ queryKey: ['plan', planId] });
                }
                if (progressData?.status === 'cancelled') toast.info('Backup cancelled.');
-               else if (progressData?.status === 'failed' || progressData?.success === false) toast.error('Backup failed. Review the backup details.');
+               else if (progressData?.status === 'failed' || progressData?.success === false)
+                  toast.error('Backup failed. Review the backup details.');
                else toast.success('Process Complete!');
             }
             return false;
@@ -164,7 +179,12 @@ export function useGetBackupProgress(payload: { id: string; sourceId: string; so
          return polling.refetchInterval();
       },
    });
-   return { ...query, retryProgress: () => { if (polling.resume()) void query.refetch(); } };
+   return {
+      ...query,
+      retryProgress: () => {
+         if (polling.resume()) void query.refetch();
+      },
+   };
 }
 
 export function useGetBackupProgressOnce(payload: { id: string; sourceId: string; sourceType: string; planId: string }) {
@@ -238,10 +258,11 @@ export async function getSnapshotFiles({ backupId, replicationId }: { backupId: 
    }
    return data;
 }
-export function useGetSnapshotFiles(payload: { backupId: string }) {
+export function useGetSnapshotFiles(payload: { backupId: string; enabled?: boolean }) {
    return useQuery({
       queryKey: ['snapshot-files', payload.backupId],
       queryFn: () => getSnapshotFiles(payload),
+      enabled: payload.enabled !== false,
       refetchOnMount: true,
       staleTime: 1000 * 60 * 60, // Cache the data for 60 minutes
       retry: false,

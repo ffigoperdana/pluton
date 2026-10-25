@@ -21,12 +21,15 @@ export type RecoveryFailureCode =
 	| 'output-limit'
 	| 'timeout'
 	| 'cancelled'
+	| 'repository-busy'
+	| 'archive-failed'
+	| 'stream-interrupted'
 	| 'cleanup-failed';
 
 /** Only closed error categories cross the process/credential boundary. */
 export class ManagedRepositoryAccessError extends AppError {
 	constructor(public readonly code: RecoveryFailureCode) {
-		super(502, `Managed repository access failed (${code}).`);
+		super(code === 'repository-busy' ? 429 : 502, `Managed repository access failed (${code}).`);
 		// AppError sets its own prototype; retain this closed-category subclass.
 		Object.setPrototypeOf(this, new.target.prototype);
 	}
@@ -40,11 +43,14 @@ const snapshotSchema = z.object({
 });
 const nodeSchema = z.object({
 	struct_type: z.literal('node'),
-	name: z.string(),
-	path: z.string(),
-	type: z.string(),
-	size: z.number().int().nonnegative().optional().default(0),
-	mtime: z.string(),
+	name: z.string().max(1024),
+	path: z.string().max(1025),
+	type: z.enum(['file', 'dir', 'symlink', 'dev', 'chardev', 'fifo', 'socket']),
+	size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional().default(0),
+	mtime: z
+		.string()
+		.max(64)
+		.refine(value => Number.isFinite(Date.parse(value))),
 	mode: z.number().int().nonnegative().optional(),
 });
 export type ManagedSnapshot = z.infer<typeof snapshotSchema>;
@@ -53,7 +59,12 @@ export type ManagedRestoreSummary = { files_restored: number; bytes_restored: nu
 
 export interface ManagedRepositorySession {
 	snapshot(id: string): Promise<ManagedSnapshot>;
+	/** Bounded compatibility helper. Production consumers use streamFiles. */
 	files(id: string): Promise<ManagedSnapshotNode[]>;
+	streamFiles(
+		id: string,
+		consume: (node: ManagedSnapshotNode) => void | Promise<void>
+	): Promise<void>;
 	restore(id: string, selectedFiles: string[], stagingPath: string): Promise<ManagedRestoreSummary>;
 	/** Full snapshot TAR only; no client-controlled path, format or command. */
 	archive(id: string, destination: Writable): Promise<void>;
@@ -95,7 +106,25 @@ function hasControlCharacters(value: string): boolean {
  * Credentials exist only for the callback lifetime and never in argv/output.
  */
 export class ManagedSftpRepositorySession implements ManagedRepositorySessionProvider {
+	private static active = 0;
+	/** Bound Restic/Rclone memory as well as index construction concurrency. */
 	async withSession<T>(
+		access: ManagedSftpAccess,
+		consume: (session: ManagedRepositorySession) => Promise<T>,
+		signal?: AbortSignal,
+		limits?: { restoreTimeoutMs: number; temporaryRoot?: string; cleanupWarning?: () => void }
+	): Promise<T> {
+		if (signal?.aborted) throw new ManagedRepositoryAccessError('cancelled');
+		if (ManagedSftpRepositorySession.active >= 2)
+			throw new ManagedRepositoryAccessError('repository-busy');
+		ManagedSftpRepositorySession.active++;
+		try {
+			return await this.scopedSession(access, consume, signal, limits);
+		} finally {
+			ManagedSftpRepositorySession.active--;
+		}
+	}
+	private async scopedSession<T>(
 		access: ManagedSftpAccess,
 		consume: (session: ManagedRepositorySession) => Promise<T>,
 		signal?: AbortSignal,
@@ -174,7 +203,33 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 				if (!fullSnapshotId.safeParse(id).success)
 					throw new ManagedRepositoryAccessError('configuration-invalid');
 			};
+			const streamFiles: ManagedRepositorySession['streamFiles'] = async (id, onNode) => {
+				checkId(id);
+				let header = false;
+				await this.streamMetadata(
+					restic,
+					[...prefix, 'ls', id, '--long'],
+					resticEnvironment,
+					async line => {
+						const record = this.parse(z.record(z.string(), z.unknown()), line);
+						if (record.message_type !== undefined && record.message_type !== record.struct_type)
+							throw new ManagedRepositoryAccessError('invalid-output');
+						if (record.struct_type === 'snapshot' && !header) {
+							const snapshot = this.parse(snapshotSchema, line);
+							if (snapshot.id !== id) throw new ManagedRepositoryAccessError('invalid-output');
+							header = true;
+						} else if (record.struct_type === 'node' && header) {
+							if (record.type === 'file' && record.size === undefined)
+								throw new ManagedRepositoryAccessError('invalid-output');
+							await onNode(this.parse(nodeSchema, line));
+						} else throw new ManagedRepositoryAccessError('invalid-output');
+					},
+					signal
+				);
+				if (!header) throw new ManagedRepositoryAccessError('invalid-output');
+			};
 			return await consume({
+				streamFiles,
 				archive: async (id, destination) => {
 					checkId(id);
 					await this.streamArchive(
@@ -200,15 +255,11 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 					return snapshots[0];
 				},
 				files: async id => {
-					checkId(id);
-					const output = await execute(['ls', id, '--long']);
 					const nodes: ManagedSnapshotNode[] = [];
-					for (const line of output.split(/\r?\n/).filter(Boolean)) {
-						const record = this.parse(z.record(z.string(), z.unknown()), line);
-						if (record.struct_type === 'node') nodes.push(this.parse(nodeSchema, line));
-						else if (record.struct_type !== 'snapshot')
-							throw new ManagedRepositoryAccessError('invalid-output');
-					}
+					await streamFiles(id, node => {
+						if (nodes.length >= 5000) throw new ManagedRepositoryAccessError('output-limit');
+						nodes.push(node);
+					});
 					return nodes;
 				},
 				restore: async (id, selectedFiles, stagingPath) => {
@@ -274,6 +325,77 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		}
 	}
 
+	private async streamMetadata(
+		binary: string,
+		args: string[],
+		env: NodeJS.ProcessEnv,
+		consume: (line: string) => Promise<void>,
+		signal?: AbortSignal
+	) {
+		if (signal?.aborted) throw new ManagedRepositoryAccessError('cancelled');
+		const child = spawn(binary, args, {
+			env,
+			shell: false,
+			windowsHide: true,
+			detached: process.platform !== 'win32',
+			stdio: ['ignore', 'pipe', 'pipe'],
+		});
+		const processId = `managed-metadata-${crypto.randomUUID()}`;
+		processManager.trackProcess(processId, child);
+		let failure: unknown;
+		let hasClosed = false;
+		const stop = (error: unknown) => {
+			failure ||= error;
+			if (!hasClosed) killProcessTree(child, 'SIGKILL');
+		};
+		const abort = () => stop(new ManagedRepositoryAccessError('cancelled'));
+		const closed = new Promise<void>(resolve => {
+			child.once('close', code => {
+				hasClosed = true;
+				if (code !== 0)
+					failure ||= new ManagedRepositoryAccessError(
+						code === 12
+							? 'wrong-password'
+							: code === 10
+								? 'repository-unavailable'
+								: 'execution-failed'
+					);
+				resolve();
+			});
+		});
+		child.on('error', () => stop(new ManagedRepositoryAccessError('execution-failed')));
+		child.stderr?.on('data', () => undefined);
+		signal?.addEventListener('abort', abort, { once: true });
+		const timer = setTimeout(() => stop(new ManagedRepositoryAccessError('timeout')), 15 * 60_000);
+		timer.unref();
+		try {
+			if (!child.stdout) throw new ManagedRepositoryAccessError('execution-failed');
+			await consumeMetadataLines(child.stdout, async line => {
+				if (failure) throw failure;
+				await consume(line);
+			});
+			await closed;
+			if (failure) throw failure;
+		} catch (error) {
+			stop(error);
+			await closed;
+			throw failure instanceof AppError
+				? failure
+				: new ManagedRepositoryAccessError('invalid-output');
+		} finally {
+			clearTimeout(timer);
+			signal?.removeEventListener('abort', abort);
+			if (process.platform !== 'win32' && child.pid) {
+				try {
+					process.kill(-child.pid, 'SIGKILL');
+				} catch {
+					/* Already stopped. */
+				}
+			}
+			processManager.untrackProcess(processId);
+		}
+	}
+
 	private async streamArchive(
 		binary: string,
 		args: string[],
@@ -325,7 +447,7 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 							? 'wrong-password'
 							: code === 10
 								? 'repository-unavailable'
-								: 'execution-failed';
+								: 'archive-failed';
 				resolve();
 			});
 		});
@@ -346,7 +468,7 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			await closed;
 			if (failure) throw new ManagedRepositoryAccessError(failure);
 		} catch {
-			stop(signal?.aborted ? 'cancelled' : failure || 'execution-failed');
+			stop(signal?.aborted ? 'cancelled' : failure || 'stream-interrupted');
 			await closed; // config cleanup must wait until Restic/Rclone have stopped
 			throw new ManagedRepositoryAccessError(failure || 'execution-failed');
 		} finally {
@@ -434,4 +556,44 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			// Cleanup is intentionally AFTER close, never while rclone still uses config.
 		});
 	}
+}
+
+/** Fixed working set, including split UTF-8 and JSON records. No complete stdout copy. */
+export async function consumeMetadataLines(
+	chunks: AsyncIterable<Buffer | string>,
+	consume: (line: string) => Promise<void>,
+	maxLineBytes = 256 * 1024,
+	maxStreamBytes = 1024 ** 3
+) {
+	let pending = Buffer.alloc(0),
+		total = 0,
+		lines = 0;
+	const decoder = new TextDecoder('utf-8', { fatal: true });
+	for await (const chunk of chunks) {
+		const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+		total += bytes.length;
+		if (total > maxStreamBytes) throw new ManagedRepositoryAccessError('output-limit');
+		let start = 0;
+		for (let end = bytes.indexOf(10); end !== -1; end = bytes.indexOf(10, start)) {
+			if (pending.length + end - start > maxLineBytes)
+				throw new ManagedRepositoryAccessError('output-limit');
+			const line = Buffer.concat([pending, bytes.subarray(start, end)]);
+			pending = Buffer.alloc(0);
+			if (!line.length) throw new ManagedRepositoryAccessError('invalid-output');
+			try {
+				await consume(decoder.decode(line));
+			} catch (error) {
+				throw error instanceof AppError
+					? error
+					: new ManagedRepositoryAccessError('invalid-output');
+			}
+			start = end + 1;
+			if (++lines % 256 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+		}
+		if (pending.length + bytes.length - start > maxLineBytes)
+			throw new ManagedRepositoryAccessError('output-limit');
+		pending = Buffer.concat([pending, bytes.subarray(start)]);
+	}
+	// Restic's encoder always terminates records. EOF inside a record is truncation.
+	if (pending.length) throw new ManagedRepositoryAccessError('invalid-output');
 }

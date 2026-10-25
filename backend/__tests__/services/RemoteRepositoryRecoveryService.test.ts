@@ -128,6 +128,11 @@ describe('Phase 4 remote managed repository recovery', () => {
 				paths: ['/srv/example-app'],
 			})),
 			files: jest.fn(async () => nodes as any),
+			streamFiles: jest.fn(async (id, consume) => {
+				// Restic emits the basename with each logical path.
+				for (const node of await session.files(id))
+					await consume({ ...node, name: path.posix.basename(node.path) });
+			}),
 			restore: jest.fn(async (_, includes, target) => {
 				const files = nodes.filter(
 					file =>
@@ -178,6 +183,7 @@ describe('Phase 4 remote managed repository recovery', () => {
 			job.controller.abort();
 			await job.done;
 		}
+		await service.close();
 		await fs.rm(scratch, { recursive: true, force: true });
 	});
 	it.each(['mariadb', 'postgresql', 'mysql'])(
@@ -227,23 +233,52 @@ describe('Phase 4 remote managed repository recovery', () => {
 			);
 		}
 	});
-	it('persistent restore stages only the selected receipt-proven SQL from the exact repository/snapshot',async()=>{
-		const entry={databaseId:'db_example',engine:'mariadb',database:'example_db',path:'/pluton/database/db_example.sql',bytes:10,sha256:'c'.repeat(64)};
-		backup.completionStats.lifecycle={databases:[entry]};
-		session.files.mockResolvedValue([...nodes,{...nodes[2],path:entry.path,size:10}] as any);
-		session.restore.mockImplementation(async(_snapshot,includes,target)=>{
+	it('persistent restore stages only the selected receipt-proven SQL from the exact repository/snapshot', async () => {
+		const entry = {
+			databaseId: 'db_example',
+			engine: 'mariadb',
+			database: 'example_db',
+			path: '/pluton/database/db_example.sql',
+			bytes: 10,
+			sha256: 'c'.repeat(64),
+		};
+		backup.completionStats.lifecycle = { databases: [entry] };
+		session.files.mockResolvedValue([...nodes, { ...nodes[2], path: entry.path, size: 10 }] as any);
+		session.restore.mockImplementation(async (_snapshot, includes, target) => {
 			expect(includes).toEqual([entry.path]);
-			await fs.mkdir(path.join(target,'pluton/database'),{recursive:true});
-			await fs.writeFile(path.join(target,'pluton/database/db_example.sql'),'0123456789');
-			return {files_restored:1,bytes_restored:10};
+			await fs.mkdir(path.join(target, 'pluton/database'), { recursive: true });
+			await fs.writeFile(path.join(target, 'pluton/database/db_example.sql'), '0123456789');
+			return { files_restored: 1, bytes_restored: 10 };
 		});
-		const target=path.join(scratch,'persistent-sql');await fs.mkdir(target);
-		const binding={backupId:backup.id,planId:plan.id,repositoryId:repository.id,snapshotId,databaseId:entry.databaseId,sha256:entry.sha256};
-		await expect(service.databaseRestoreArtifact(binding,target,new AbortController().signal,jest.fn())).resolves.toMatchObject(entry);
-		expect(session.restore).toHaveBeenCalledWith(snapshotId,[entry.path],target);
+		const target = path.join(scratch, 'persistent-sql');
+		await fs.mkdir(target);
+		const binding = {
+			backupId: backup.id,
+			planId: plan.id,
+			repositoryId: repository.id,
+			snapshotId,
+			databaseId: entry.databaseId,
+			sha256: entry.sha256,
+		};
+		await expect(
+			service.databaseRestoreArtifact(binding, target, new AbortController().signal, jest.fn())
+		).resolves.toMatchObject(entry);
+		expect(session.restore).toHaveBeenCalledWith(snapshotId, [entry.path], target);
 		expect(stores.restores.create).not.toHaveBeenCalled();
-		for(const patch of [{repositoryId:'foreign-repo'},{snapshotId:'d'.repeat(64)},{databaseId:'db_other'},{sha256:'e'.repeat(64)}])
-			await expect(service.databaseRestoreArtifact({...binding,...patch},target,new AbortController().signal,jest.fn())).rejects.toBeDefined();
+		for (const patch of [
+			{ repositoryId: 'foreign-repo' },
+			{ snapshotId: 'd'.repeat(64) },
+			{ databaseId: 'db_other' },
+			{ sha256: 'e'.repeat(64) },
+		])
+			await expect(
+				service.databaseRestoreArtifact(
+					{ ...binding, ...patch },
+					target,
+					new AbortController().signal,
+					jest.fn()
+				)
+			).rejects.toBeDefined();
 		expect(session.restore).toHaveBeenCalledTimes(1);
 	});
 	it('refuses a foreign plan, repository snapshot or changed tags during metadata resolution', async () => {
@@ -253,33 +288,46 @@ describe('Phase 4 remote managed repository recovery', () => {
 		await expect(service.testMetadata(backup.id, plan.id, snapshotId)).rejects.toThrow();
 		expect(session.restore).not.toHaveBeenCalled();
 	});
-	it('counts regular files separately and preserves empty directories without including a partial parent subtree', () => {
-		const entries = [...nodes, { path: '/srv/example-app/empty', type: 'dir', size: 0 }];
-		const all = (service as any).select(entries, config);
-		expect(all.files).toHaveLength(6);
-		expect(all.stats.files_restored).toBe(2);
-		const selected = (service as any).select(entries, {
-			...config,
-			includes: ['/srv/example-app/empty', '/srv/example-app/nested/data.txt'],
-		});
-		expect(selected.stats.files_restored).toBe(1);
-		expect(selected.includes).toEqual(
-			expect.arrayContaining(['/srv/example-app/empty', '/srv/example-app/nested'])
+	it('counts regular files separately and preserves empty directories without including a partial parent subtree', async () => {
+		const entries = [
+			...nodes,
+			{ ...nodes[1], path: '/srv/example-app/empty', type: 'dir', size: 0 },
+		];
+		session.files.mockResolvedValue(entries as any);
+		await (service as any).withIndex(
+			await (service as any).context('backup-01'),
+			async (index: any) => {
+				const all = (service as any).select(index, config);
+				expect([...all.files]).toHaveLength(6);
+				expect(all.stats.files_restored).toBe(2);
+				const selected = (service as any).select(index, {
+					...config,
+					includes: ['/srv/example-app/empty', '/srv/example-app/nested/data.txt'],
+				});
+				expect(selected.stats.files_restored).toBe(1);
+				expect(selected.includes).toEqual(
+					expect.arrayContaining(['/srv/example-app/empty', '/srv/example-app/nested'])
+				);
+				expect(selected.includes).not.toContain('/srv/example-app');
+				const empty = (service as any).select(index, {
+					...config,
+					includes: ['/srv/example-app/empty'],
+				});
+				expect(empty.stats.files_restored).toBe(0);
+				expect(empty.includes).toEqual(['/srv/example-app/empty']);
+				expect(() =>
+					(service as any).select(index, {
+						...config,
+						includes: ['/srv/example-app'],
+						excludes: [
+							'/srv/example-app/index.txt',
+							'/srv/example-app/nested',
+							'/srv/example-app/empty',
+						],
+					})
+				).toThrow('No safely restorable entries');
+			}
 		);
-		expect(selected.includes).not.toContain('/srv/example-app');
-		const empty = (service as any).select(entries, {
-			...config,
-			includes: ['/srv/example-app/empty'],
-		});
-		expect(empty.stats.files_restored).toBe(0);
-		expect(empty.includes).toEqual(['/srv/example-app/empty']);
-		expect(() =>
-			(service as any).select(nodes, {
-				...config,
-				includes: ['/srv/example-app'],
-				excludes: ['/srv/example-app/index.txt', '/srv/example-app/nested'],
-			})
-		).toThrow('No safely restorable entries');
 	});
 
 	describe('Phase 6 reuse of exact staged restore', () => {
@@ -311,7 +359,9 @@ describe('Phase 4 remote managed repository recovery', () => {
 			expect(session.restore).toHaveBeenCalledWith(snapshotId, [], target);
 			expect(stores.restores.create).not.toHaveBeenCalled();
 			expect(Object.keys(stores.agents)).toEqual(['getAgentById']);
-			expect(withSession.mock.calls[0][3]).toEqual(
+			expect(
+				withSession.mock.calls.find(call => call[3]?.restoreTimeoutMs === 24 * 60 * 60_000)?.[3]
+			).toEqual(
 				expect.objectContaining({
 					restoreTimeoutMs: 24 * 60 * 60_000,
 					temporaryRoot: path.dirname(target),
@@ -376,7 +426,7 @@ describe('Phase 4 remote managed repository recovery', () => {
 		it('refuses wrong snapshot tags, unsupported special files and staging escapes before restore', async () => {
 			session.files.mockResolvedValue([
 				...nodes,
-				{ path: '/srv/example-app/link', type: 'symlink' },
+				{ ...nodes[2], path: '/srv/example-app/link', type: 'symlink' },
 			] as any);
 			await expect(
 				service.testRestore(
@@ -550,14 +600,15 @@ describe('Phase 4 remote managed repository recovery', () => {
 			async type => {
 				session.files.mockResolvedValue([{ ...nodes[2], type } as any]);
 				await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({
-					statusCode: 400,
+					statusCode: 409,
+					code: 'unsupported-snapshot-file',
 				});
 				const descriptor = await service.download('backup-01');
 				const { destination } = sink();
 				const ready = jest.fn();
 				await expect(
 					descriptor.streamTo(destination, new AbortController().signal, ready)
-				).rejects.toMatchObject({ statusCode: 400 });
+				).rejects.toMatchObject({ statusCode: 409, code: 'unsupported-snapshot-file' });
 				expect(ready).not.toHaveBeenCalled();
 				expect(session.archive).not.toHaveBeenCalled();
 				destination.destroy();
@@ -571,8 +622,11 @@ describe('Phase 4 remote managed repository recovery', () => {
 			'relative/file',
 		])('refuses traversal/unsafe path %s before archive', async unsafe => {
 			session.files.mockResolvedValue([{ ...nodes[2], path: unsafe } as any]);
-			await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({ statusCode: 400 });
-			await expect(transfer()).rejects.toMatchObject({ statusCode: 400 });
+			const expected = unsafe.includes(':')
+				? { statusCode: 409, code: 'unsupported-snapshot-file' }
+				: { statusCode: 422, code: 'metadata-invalid' };
+			await expect(service.prepareDownload('backup-01')).rejects.toMatchObject(expected);
+			await expect(transfer()).rejects.toMatchObject(expected);
 			expect(session.archive).not.toHaveBeenCalled();
 		});
 		it('sanitizes the filename even for malformed stored identifiers', async () => {
@@ -624,15 +678,81 @@ describe('Phase 4 remote managed repository recovery', () => {
 			await expect(
 				service.prepareDownload('backup-01', undefined, controller.signal)
 			).rejects.toMatchObject({ code: 'cancelled' });
-			expect(withSession).toHaveBeenCalledWith(
-				expect.any(Object),
-				expect.any(Function),
-				controller.signal
-			);
+			expect(withSession).not.toHaveBeenCalled();
 			expect(session.archive).not.toHaveBeenCalled();
 		});
 	});
 
+	it('pages and downloads a 100,000-file snapshot without invoking the array listing helper', async () => {
+		session.files.mockImplementation(async () => {
+			throw new Error('Whole listing must not be buffered.');
+		});
+		session.streamFiles.mockImplementation(async (_id, append) => {
+			await append(nodes[0]);
+			await append(nodes[1]);
+			for (let i = 0; i < 100000; i++)
+				await append({
+					...nodes[2],
+					name: `file-${String(i).padStart(6, '0')}.txt`,
+					path: `/srv/example-app/file-${String(i).padStart(6, '0')}.txt`,
+				});
+		});
+		await expect(
+			service.browsePage('backup-01', { path: '/srv/example-app', limit: 200 })
+		).resolves.toMatchObject({ status: 'indexing' });
+		await service.prepareDownload('backup-01');
+		const page = await service.browsePage('backup-01', {
+			path: '/srv/example-app',
+			limit: 200,
+			offset: 200,
+		});
+		expect(page).toMatchObject({ status: 'ready', total: 100000, offset: 200 });
+		expect('files' in page && page.files.length).toBe(200);
+		await expect(service.browse('backup-01')).rejects.toMatchObject({
+			code: 'pagination-required',
+		});
+		const preview = await service.preview('backup-01', config);
+		expect(preview.stats.total_files).toBe(100000);
+		expect(preview.files).toHaveLength(5000);
+		expect(preview.truncated).toBe(true);
+		expect(session.files).not.toHaveBeenCalled();
+		expect(session.streamFiles).toHaveBeenCalledTimes(1);
+	}, 30000);
+	it('validates the complete manifest beyond any displayed browse or preview page', async () => {
+		session.streamFiles.mockImplementation(async (_id, append) => {
+			await append(nodes[0]);
+			await append(nodes[1]);
+			for (let i = 0; i < 6000; i++)
+				await append({
+					...nodes[2],
+					name: `file-${i}.txt`,
+					path: `/srv/example-app/file-${i}.txt`,
+				});
+			await append({
+				...nodes[2],
+				name: 'unsafe-link',
+				path: '/srv/example-app/unsafe-link',
+				type: 'symlink',
+			});
+		});
+		await expect(service.preview('backup-01', config)).rejects.toMatchObject({
+			code: 'unsupported-snapshot-file',
+		});
+		await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({
+			code: 'unsupported-snapshot-file',
+		});
+		expect(session.archive).not.toHaveBeenCalled();
+		expect(session.restore).not.toHaveBeenCalled();
+	});
+	it('refuses a cached index after repository binding or exact snapshot ownership changes', async () => {
+		await service.prepareDownload('backup-01');
+		repository.storagePath = 'changed-repository';
+		await expect(service.browsePage('backup-01', {})).rejects.toMatchObject({ statusCode: 409 });
+		repository.storagePath = 'application';
+		session.snapshot.mockResolvedValue({ id: snapshotId, tags: ['foreign-plan'], paths: [] });
+		await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({ statusCode: 409 });
+		expect(session.streamFiles).toHaveBeenCalledTimes(1);
+	});
 	it('browses a historical completed backup by its persisted FULL ID, never latest or tag search', async () => {
 		const files = await service.browse('backup-01');
 		expect(session.snapshot).toHaveBeenCalledWith(snapshotId);
@@ -712,9 +832,15 @@ describe('Phase 4 remote managed repository recovery', () => {
 	);
 	it('rejects snapshot traversal and duplicate logical paths', async () => {
 		session.files.mockResolvedValue([{ ...nodes[0], path: '/srv/../outside' }] as any);
-		await expect(service.browse('backup-01')).rejects.toMatchObject({ statusCode: 400 });
+		await expect(service.browse('backup-01')).rejects.toMatchObject({
+			statusCode: 422,
+			code: 'metadata-invalid',
+		});
 		session.files.mockResolvedValue([nodes[0], nodes[0]] as any);
-		await expect(service.browse('backup-01')).rejects.toMatchObject({ statusCode: 409 });
+		await expect(service.browse('backup-01')).rejects.toMatchObject({
+			statusCode: 422,
+			code: 'metadata-invalid',
+		});
 	});
 
 	it('previews selected paths without creating a job or writing staging', async () => {

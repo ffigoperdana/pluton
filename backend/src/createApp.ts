@@ -482,6 +482,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 			await managedReplicationService.shutdown();
 			await recoveryTestService.shutdown();
 			await databaseRestoreService.shutdown();
+			await remoteRecoveryService.close();
 		},
 	};
 }

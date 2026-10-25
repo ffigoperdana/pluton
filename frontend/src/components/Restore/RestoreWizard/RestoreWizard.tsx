@@ -10,6 +10,7 @@ import { useGetSnapshotFiles } from '../../../services/backups';
 import RestoreFileSelectorStep from './RestoreFileSelectorStep';
 import { Backup, Plan } from '../../..';
 import { restoreSelectionSummary } from '../../../utils/restoreSelection';
+import ManagedSnapshotViewer from '../../Plan/SnapshotViewer/ManagedSnapshotViewer';
 
 interface RestoreWizardProps {
    backupId: string;
@@ -32,11 +33,14 @@ const RestoreWizard = ({ backupId, planId, deviceId, mirrors, planStorage, stagi
       delete: false,
       storageId: undefined,
    });
-   const [restorePreview, setRestorePreview] = useState<{ stats: RestoredItemsStats | null; files: RestoredFileItem[] }>({ stats: null, files: [] });
+   const [restorePreview, setRestorePreview] = useState<{ stats: RestoredItemsStats | null; files: RestoredFileItem[]; truncated?: boolean }>({
+      stats: null,
+      files: [],
+   });
    const isFetching = useIsFetching();
    const isMutating = useIsMutating();
    const isLoading = isFetching > 0 || isMutating > 0;
-   const { data: snapshotData, error: snapShotError } = useGetSnapshotFiles({ backupId });
+   const { data: snapshotData, error: snapShotError } = useGetSnapshotFiles({ backupId, enabled: !stagingOnly });
    const files: RestoreFileItem[] = snapshotData?.result && Array.isArray(snapshotData.result) ? snapshotData.result : [];
 
    const snapShotsStats = useMemo(() => {
@@ -100,7 +104,32 @@ const RestoreWizard = ({ backupId, planId, deviceId, mirrors, planStorage, stagi
                   close={close}
                />
             )}
-            {step === 2 && (
+            {step === 2 && stagingOnly && (
+               <div className={classes.stepContent}>
+                  <div className={classes.step} style={{ height: '60vh' }}>
+                     <ManagedSnapshotViewer
+                        backup={{ id: backupId, totalSize: 0 } as Backup}
+                        planId={planId}
+                        files={[]}
+                        stagingOnly
+                        onClose={close}
+                        selection={{
+                           includes: restoreSettings.includes || [],
+                           excludes: restoreSettings.excludes || [],
+                           onChange: (includes, excludes) => {
+                              setRestoreSettings({ ...restoreSettings, includes, excludes });
+                              setRestorePreview({ stats: null, files: [] });
+                           },
+                        }}
+                     />
+                  </div>
+                  <div className={classes.footer}>
+                     <button onClick={() => setStep(1)}>Back</button>
+                     <button onClick={() => setStep(3)}>Next: Preview Restore</button>
+                  </div>
+               </div>
+            )}
+            {step === 2 && !stagingOnly && (
                <RestoreFileSelectorStep
                   backupId={backupId}
                   settings={restoreSettings}

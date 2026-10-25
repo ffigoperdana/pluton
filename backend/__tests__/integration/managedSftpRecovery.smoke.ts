@@ -88,6 +88,7 @@ async function waitForServer(port: number) {
 }
 
 let sftp: ReturnType<typeof spawn> | undefined;
+let recovery: RemoteRepositoryRecoveryService | undefined;
 try {
 	assert.match(await execute(restic, ['version']), /restic 0\.19\.1/);
 	assert.match(await execute(rclone, ['version']), /rclone v1\.75\.1/);
@@ -257,6 +258,7 @@ try {
 		secret,
 		path.join(scratch, 'staging')
 	);
+	recovery = service;
 	const files = await service.browse('backup-01');
 	assert.equal(files.filter(file => file.type === 'file').length, 14);
 	assert.equal(
@@ -365,6 +367,7 @@ try {
 		'PASS: real Restic 0.19.1 + Rclone 1.75.1, read-only SFTP, two historical TAR downloads, cancellation, 14 files, full/granular/custom staging, matching hashes, repository/source unchanged, credential cleanup.'
 	);
 } finally {
+	await recovery?.close();
 	if (sftp && sftp.exitCode === null && sftp.signalCode === null) {
 		const closed = new Promise<void>(resolve => sftp!.once('close', () => resolve()));
 		sftp.kill('SIGTERM');

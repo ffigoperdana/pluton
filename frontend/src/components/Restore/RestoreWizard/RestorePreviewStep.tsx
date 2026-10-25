@@ -10,7 +10,7 @@ interface RestorePreviewStepProps {
    planId: string;
    stagingOnly?: boolean;
    settings: RestoreSettings;
-   preview: { stats: RestoredItemsStats | null; files: RestoredFileItem[] };
+   preview: { stats: RestoredItemsStats | null; files: RestoredFileItem[]; truncated?: boolean };
    nextLabel?: string;
    updatePreview: (preview: RestorePreviewStepProps['preview']) => void;
    goBack: () => void;
@@ -75,7 +75,7 @@ const RestorePreviewStep = ({
          {
             onSuccess: (data) => {
                console.log('getDryRestoreStats Data :', data);
-               updatePreview({ files: data?.result?.files || [], stats: data?.result?.stats || null });
+               updatePreview({ files: data?.result?.files || [], stats: data?.result?.stats || null, truncated: data?.result?.truncated === true });
                (window as any)[`pluton-restore-prev-${backupId}-settings`] = settings;
             },
          },
@@ -113,6 +113,9 @@ const RestorePreviewStep = ({
                      )}
                   </button>
                </div>
+            )}
+            {preview.truncated && (
+               <p role="status">Showing the first 5,000 entries. Totals and staged restoration cover the complete validated selection.</p>
             )}
             {restoreStats && <RestoredFileBrowser files={restoredFiles} stats={restoreStats} isPreview={true} />}
          </div>

@@ -9,6 +9,7 @@ import { RetainedRestoreDependencyError } from '../../src/utils/retainedRestoreD
 import http from 'http';
 import { AddressInfo } from 'net';
 import { ManagedRepositoryAccessError } from '../../src/utils/restic/ManagedSftpRepositorySession';
+import { SnapshotIndexError } from '../../src/utils/restic/ManagedSnapshotIndex';
 
 jest.mock('jsonwebtoken');
 jest.mock('cookies');
@@ -52,6 +53,7 @@ describe('Backup Routes', () => {
 		mockBackupService = {
 			deleteBackup: jest.fn(),
 			getSnapshotFiles: jest.fn(),
+			getSnapshotPage: jest.fn(),
 			getBackupProgress: jest.fn(),
 			cancelBackup: jest.fn(),
 			getBackupDownload: jest.fn(),
@@ -69,6 +71,83 @@ describe('Backup Routes', () => {
 		setupAuthMock(true);
 	});
 
+	describe('bounded managed snapshot pages', () => {
+		it('requires authentication before any metadata work', async () => {
+			setupAuthMock(false);
+			expect((await request(app).get('/api/backups/backup-01/files/page')).status).toBe(401);
+			expect(mockBackupService.getSnapshotPage).not.toHaveBeenCalled();
+		});
+		it.each([
+			'limit=501',
+			'limit=0',
+			'offset=-1',
+			'offset=500001',
+			'offset=1.5',
+			'sort=command',
+			'order=other',
+			'replicationId=mirror',
+			'repository=other',
+			'path=../escape',
+			'path=%2Fsrv%2F..%2Fescape',
+			'limit=2&limit=3',
+			`search=${'a'.repeat(129)}`,
+		])('rejects invalid parameters: %s', async query => {
+			expect((await request(app).get(`/api/backups/backup-01/files/page?${query}`)).status).toBe(
+				400
+			);
+			expect(mockBackupService.getSnapshotPage).not.toHaveBeenCalled();
+		});
+		it('returns indexing status without a partial listing, with a bounded retry hint', async () => {
+			mockBackupService.getSnapshotPage.mockResolvedValue({
+				status: 'indexing',
+				retryAfterMs: 1000,
+			});
+			const response = await request(app).get('/api/backups/backup-01/files/page');
+			expect(response.status).toBe(202);
+			expect(response.headers['retry-after']).toBe('1');
+			expect(response.body.result).toEqual({ status: 'indexing', retryAfterMs: 1000 });
+		});
+		it('passes only validated page arguments and request cancellation to the service', async () => {
+			mockBackupService.getSnapshotPage.mockResolvedValue({
+				status: 'ready',
+				files: [],
+				total: 0,
+			} as any);
+			const response = await request(app).get(
+				'/api/backups/backup-01/files/page?path=%2Fsrv&limit=20&offset=40&sort=size&order=desc'
+			);
+			expect(response.status).toBe(200);
+			expect(response.headers['cache-control']).toBe('private, no-store');
+			expect(mockBackupService.getSnapshotPage).toHaveBeenCalledWith(
+				'backup-01',
+				{ path: '/srv', limit: 20, offset: 40, sort: 'size', order: 'desc' },
+				expect.any(AbortSignal)
+			);
+		});
+		it.each([
+			['index-resource-limit', 429],
+			['metadata-invalid', 422],
+			['index-unavailable', 503],
+		] as const)('retains the closed %s error and status', async (code, status) => {
+			mockBackupService.getSnapshotPage.mockRejectedValue(new SnapshotIndexError(code));
+			const response = await request(app).get('/api/backups/backup-01/files/page');
+			expect(response.status).toBe(status);
+			expect(response.body.code).toBe(code);
+		});
+		it('sanitizes unknown failures on both metadata endpoints', async () => {
+			mockBackupService.getSnapshotPage.mockRejectedValue(
+				new Error('synthetic-private-provider-config')
+			);
+			mockBackupService.getSnapshotFiles.mockRejectedValue(
+				new Error('synthetic-private-provider-config')
+			);
+			for (const route of ['files', 'files/page']) {
+				const response = await request(app).get(`/api/backups/backup-01/${route}`);
+				expect(response.status).toBe(500);
+				expect(JSON.stringify(response.body)).not.toContain('synthetic-private');
+			}
+		});
+	});
 	describe('DELETE /api/backups/:id', () => {
 		it('returns the retained database dependency code with HTTP 409', async () => {
 			mockBackupService.deleteBackup.mockRejectedValue(new RetainedRestoreDependencyError());
@@ -242,6 +321,7 @@ describe('Backup Routes', () => {
 				expect(response.body).toEqual({
 					success: false,
 					error: `Managed repository access failed (${code}).`,
+					code,
 				});
 			}
 		);

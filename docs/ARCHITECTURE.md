@@ -245,6 +245,15 @@ hook for `main` also builds the frontend. The root build orders the frontend bui
 and copying frontend assets). Backend build cleans `backend/dist/` and
 `backend/public/`; keep local data out of those generated directories.
 
+## Managed snapshot browsing
+
+Managed remote snapshot browsing uses a private bounded SQLite metadata cache,
+streamed Restic 0.19.1 NDJSON validation, and authenticated server pagination.
+Downloads and recovery consume complete verified manifests without whole-list
+buffering. See [managed snapshot streaming](MANAGED_SNAPSHOT_STREAMING.md) for
+limits, errors, measured load tests, compatibility, deployment and rollback.
+No application migration or new environment setting is required.
+
 ## MCP integration
 
 The additive MCP gateway and scoped v1 operational reads share explicit stored-evidence

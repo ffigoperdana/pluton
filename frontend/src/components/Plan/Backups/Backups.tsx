@@ -407,10 +407,11 @@ const Backups = ({
                               {actions.browse && (
                                  <button
                                     onClick={() => {
-                                       toast.promise(browseSnapshotMutation.mutateAsync({ backupId: id }), {
-                                          pending: 'Getting Snapshot Data...',
-                                          error: 'Failed to Get Snapshot Data.',
-                                       });
+                                       if (!isRemoteManaged)
+                                          toast.promise(browseSnapshotMutation.mutateAsync({ backupId: id }), {
+                                             pending: 'Getting Snapshot Data...',
+                                             error: 'Failed to Get Snapshot Data.',
+                                          });
                                        setShowSnapOptions(false);
                                        setShowSnapshotViewer(snapshot);
                                     }}
@@ -582,7 +583,7 @@ const Backups = ({
                onClose={() => setShowStorageSelector(false)}
             />
          )}
-         {showSnapshotViewer && showSnapshotViewer.id && browseSnapshotMutation.isSuccess && (
+         {showSnapshotViewer && showSnapshotViewer.id && (isRemoteManaged || browseSnapshotMutation.isSuccess) && (
             <SidePanel width="100%" title="Browse Snapshot" icon={<Icon type={'folders'} size={20} />} close={() => setShowSnapshotViewer(false)}>
                <SnapshotViewer
                   files={snapshotFiles || []}

@@ -734,12 +734,42 @@
     "support": "Supported but internal-only",
     "request": [
       "params.id",
+      "query",
       "query.replicationId"
     ],
     "requestSchemas": [],
     "response": "controller JSON or binary/stream contract; unversioned",
     "pagination": "no common pagination contract; see implementation",
-    "errors": "400, 500",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "backups",
+    "method": "GET",
+    "route": "/api/backups/:id/files/page",
+    "handler": "BackupController.getSnapshotPage",
+    "services": [
+      "backupService.getSnapshotPage"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
     "available": "session-only; unavailable with legacy key",
     "testReferences": [
       "backend/__tests__/controllers/BackupController.test.ts",

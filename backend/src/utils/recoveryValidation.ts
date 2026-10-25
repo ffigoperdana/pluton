@@ -8,6 +8,7 @@ import type { SnapShotFile } from '../types/restic';
 import type { RecoveryCode, RecoveryStage, RecoveryDatabaseResult } from '../types/recoveryTests';
 import { z } from 'zod';
 import { recoveryEngineSchema } from './recoveryTestPolicy';
+import { ManagedSnapshotIndex } from './restic/ManagedSnapshotIndex';
 
 export class RecoveryTestError extends AppError {
 	constructor(
@@ -23,28 +24,32 @@ export function checkRecoveryCancellation(signal: AbortSignal) {
 }
 
 export async function validateRestoredFiles(
-	files: SnapShotFile[],
+	files: SnapShotFile[] | ManagedSnapshotIndex,
 	target: string,
 	signal: AbortSignal
 ) {
 	const realTarget = await fs.realpath(target);
-	const expected = new Map(files.map(file => [file.path.slice(1), file]));
-	const ancestors = new Set<string>();
-	for (const relative of expected.keys()) {
-		let parent = path.posix.dirname(relative);
-		while (parent !== '.') {
-			ancestors.add(parent);
-			parent = path.posix.dirname(parent);
-		}
-	}
+	const indexed = files instanceof ManagedSnapshotIndex;
+	const expected = indexed ? files : new Map(files.map(file => [file.path, file]));
+	const get = (relative: string) => expected.get(`/${relative}`);
+	const hasChildren = (relative: string) =>
+		indexed
+			? files.hasDescendant(`/${relative}`)
+			: files.some(file => file.path.startsWith(`/${relative}/`));
+	const expectedFiles = indexed
+		? files.stats.total_files
+		: files.filter(file => file.type === 'file').length;
+	const expectedDirectories = indexed
+		? files.count - expectedFiles
+		: files.filter(file => file.type === 'dir').length;
 	let count = 0,
 		bytes = 0;
-	const seen = new Set<string>();
-	const seenDirectories = new Set<string>();
+	let directories = 0;
 	const walk = async (directory: string): Promise<void> => {
 		checkRecoveryCancellation(signal);
-		for (const entry of await fs.readdir(directory)) {
-			const candidate = path.join(directory, entry);
+		for await (const entry of await fs.opendir(directory)) {
+			checkRecoveryCancellation(signal);
+			const candidate = path.join(directory, entry.name);
 			const relative = path.relative(target, candidate).split(path.sep).join('/');
 			const stat = await fs.lstat(candidate);
 			if (
@@ -55,28 +60,27 @@ export async function validateRestoredFiles(
 				throw new RecoveryTestError('filesystem-validation', 'unsupported-snapshot-file');
 			if (stat.isDirectory()) {
 				// Ancestors may be implicit in a granular selection. Files never may.
-				if (!expected.has(relative) && !ancestors.has(relative))
+				if (!get(relative) && !hasChildren(relative))
 					throw new RecoveryTestError('filesystem-validation', 'restored-file-count-mismatch');
-				if (expected.get(relative)?.type === 'file')
+				if (get(relative)?.type === 'file')
 					throw new RecoveryTestError('filesystem-validation', 'restored-file-count-mismatch');
-				seenDirectories.add(relative);
+				if (get(relative)?.type === 'dir') directories++;
 				await walk(candidate);
 			} else {
-				const file = expected.get(relative);
+				const file = get(relative);
 				if (!file || file.type !== 'file')
 					throw new RecoveryTestError('filesystem-validation', 'restored-file-count-mismatch');
 				if (file.size !== stat.size)
 					throw new RecoveryTestError('filesystem-validation', 'restored-file-size-mismatch');
-				seen.add(relative);
 				count++;
 				bytes += stat.size;
 			}
 		}
 	};
 	await walk(target);
-	if (seen.size !== files.filter(file => file.type === 'file').length)
+	if (count !== expectedFiles)
 		throw new RecoveryTestError('filesystem-validation', 'restored-file-count-mismatch');
-	if (files.some(file => file.type === 'dir' && !seenDirectories.has(file.path.slice(1))))
+	if (directories !== expectedDirectories)
 		throw new RecoveryTestError('filesystem-validation', 'restored-file-count-mismatch');
 	return { files: count, bytes };
 }

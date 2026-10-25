@@ -142,7 +142,13 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 			stdout: JSON.stringify({ message_type: 'summary', files_restored: 1, bytes_restored: 7 }),
 		});
 		await new ManagedSftpRepositorySession().withSession(access, async session => {
-			expect(Object.keys(session).sort()).toEqual(['archive', 'files', 'restore', 'snapshot']);
+			expect(Object.keys(session).sort()).toEqual([
+				'archive',
+				'files',
+				'restore',
+				'snapshot',
+				'streamFiles',
+			]);
 			await expect(
 				session.restore(id, ['/srv/example-app/index.txt'], path.resolve('synthetic-staging'))
 			).resolves.toEqual({ files_restored: 1, bytes_restored: 7 });
@@ -161,6 +167,104 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 		expect(args).not.toEqual(
 			expect.arrayContaining(['init', 'backup', 'forget', 'prune', 'unlock', 'repair', '--delete'])
 		);
+	});
+	it.each([
+		'not-json\n',
+		`${JSON.stringify(node)}\n`,
+		`${JSON.stringify({ struct_type: 'snapshot', ...snapshot, id: 'b'.repeat(64) })}\n`,
+		`${JSON.stringify({ struct_type: 'snapshot', ...snapshot })}\n${JSON.stringify({ ...node, size: undefined })}\n`,
+		`${JSON.stringify({ struct_type: 'snapshot', ...snapshot })}\n${JSON.stringify({ ...node, type: 'unknown' })}\n`,
+		`${JSON.stringify({ struct_type: 'snapshot', ...snapshot })}\n${JSON.stringify({ ...node, message_type: 'snapshot' })}\n`,
+		`${JSON.stringify({ struct_type: 'snapshot', ...snapshot })}\n${JSON.stringify(node)}`,
+	])(
+		'rejects malformed, incomplete or mismatched metadata before reporting success',
+		async stdout => {
+			responses.push({ stdout });
+			await expect(
+				new ManagedSftpRepositorySession().withSession(access, session =>
+					session.streamFiles(id, () => undefined)
+				)
+			).rejects.toMatchObject({ code: 'invalid-output' });
+			const config = (spawn as jest.Mock).mock.calls[1][2].env.RCLONE_CONFIG;
+			await expect(fs.stat(config)).rejects.toMatchObject({ code: 'ENOENT' });
+		}
+	);
+	it('does not accept valid partial records from a failed listing process', async () => {
+		responses.push({
+			stdout: `${JSON.stringify({ struct_type: 'snapshot', ...snapshot })}\n${JSON.stringify(node)}\n`,
+			code: 1,
+		});
+		await expect(
+			new ManagedSftpRepositorySession().withSession(access, session =>
+				session.streamFiles(id, () => undefined)
+			)
+		).rejects.toMatchObject({ code: 'execution-failed' });
+	});
+	it('cancels a metadata process tree and cleans credentials after close', async () => {
+		responses.push({ held: true });
+		const controller = new AbortController();
+		const transfer = new ManagedSftpRepositorySession().withSession(
+			access,
+			session => session.streamFiles(id, () => undefined),
+			controller.signal
+		);
+		const failure = expect(transfer).rejects.toMatchObject({ code: 'cancelled' });
+		while (children.length < 2) await new Promise<void>(resolve => setImmediate(resolve));
+		controller.abort();
+		await failure;
+		expect(killProcessTree).toHaveBeenCalledWith(children[1], 'SIGKILL');
+		await expect(
+			fs.stat((spawn as jest.Mock).mock.calls[1][2].env.RCLONE_CONFIG)
+		).rejects.toMatchObject({ code: 'ENOENT' });
+	});
+	it('times out listing construction and cleans credentials after the process tree closes', async () => {
+		responses.push({ held: true });
+		const original = setTimeout;
+		let timeout: (() => void) | undefined;
+		const timer = jest.spyOn(global, 'setTimeout').mockImplementation(((
+			callback: any,
+			ms: number,
+			...args: any[]
+		) => {
+			if (ms === 15 * 60_000) timeout = callback;
+			return original(callback, ms, ...args);
+		}) as any);
+		try {
+			const transfer = new ManagedSftpRepositorySession().withSession(access, session =>
+				session.streamFiles(id, () => undefined)
+			);
+			const failed = expect(transfer).rejects.toMatchObject({ code: 'timeout' });
+			while (!timeout) await new Promise<void>(resolve => setImmediate(resolve));
+			timeout();
+			await failed;
+			expect(killProcessTree).toHaveBeenCalledWith(children[1], 'SIGKILL');
+			await expect(
+				fs.stat((spawn as jest.Mock).mock.calls[1][2].env.RCLONE_CONFIG)
+			).rejects.toMatchObject({ code: 'ENOENT' });
+		} finally {
+			timer.mockRestore();
+		}
+	});
+	it('bounds concurrent repository sessions before spawning more processes', async () => {
+		let release!: () => void;
+		const gate = new Promise<void>(resolve => {
+			release = resolve;
+		});
+		responses.push({ stdout: 'Obscured_synthetic-value\n' });
+		const provider = new ManagedSftpRepositorySession();
+		const a = provider.withSession(access, async () => {
+			await gate;
+		});
+		const b = provider.withSession(access, async () => {
+			await gate;
+		});
+		await expect(provider.withSession(access, async () => undefined)).rejects.toMatchObject({
+			code: 'repository-busy',
+			statusCode: 429,
+		});
+		release();
+		await Promise.all([a, b]);
+		expect(spawn).toHaveBeenCalledTimes(2);
 	});
 	function sink() {
 		const chunks: Buffer[] = [];
@@ -206,7 +310,7 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 		destination.end();
 	});
 	it.each([
-		[1, 'execution-failed'],
+		[1, 'archive-failed'],
 		[12, 'wrong-password'],
 		[10, 'repository-unavailable'],
 	])('sanitizes archive exit %s and cleans after process close', async (code, category) => {
@@ -277,7 +381,7 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 				controller.signal
 			);
 			const assertion = expect(transfer).rejects.toMatchObject({
-				code: mode === 'abort' ? 'cancelled' : 'execution-failed',
+				code: mode === 'abort' ? 'cancelled' : 'stream-interrupted',
 			});
 			while (children.length < 2) await new Promise<void>(resolve => setImmediate(resolve));
 			const configPath = (spawn as jest.Mock).mock.calls[1][2].env.RCLONE_CONFIG;

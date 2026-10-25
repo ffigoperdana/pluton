@@ -19,8 +19,9 @@ import { useSnapshotDatabase } from '../../common/SnapshotBrowser/hooks/useSnaps
 import { useSnapshotNavigation } from '../../common/SnapshotBrowser/hooks/useSnapshotNavigation';
 import { useSnapshotSort } from '../../common/SnapshotBrowser/hooks/useSnapshotSort';
 import classes from '../../common/SnapshotBrowser/SnapshotBrowser.module.scss';
+import ManagedSnapshotViewer from './ManagedSnapshotViewer';
 
-interface SnapshotViewerProps {
+export interface SnapshotViewerProps {
    files: FileItem[];
    backup: Backup;
    planId: string;
@@ -45,7 +46,7 @@ const isMobileDevice = isMobile();
 const GRID_COLUMNS = '1fr 120px minmax(100px, auto) 120px';
 const GRID_COLUMNS_SYNC = '1fr 120px minmax(100px, auto)';
 
-const SnapshotViewer = ({
+const LocalSnapshotViewer = ({
    files,
    backup,
    planId,
@@ -347,4 +348,6 @@ const SnapshotViewer = ({
    );
 };
 
+const SnapshotViewer = (props: SnapshotViewerProps) =>
+   props.stagingOnly ? <ManagedSnapshotViewer {...props} /> : <LocalSnapshotViewer {...props} />;
 export default SnapshotViewer;

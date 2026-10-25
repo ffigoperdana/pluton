@@ -9,6 +9,7 @@ export function createBackupRouter(
 	router.delete('/:id', authM, controller.deleteBackup.bind(controller));
 	router.post('/:id/', authM, controller.updateBackup.bind(controller));
 	router.get('/:id/files', authM, controller.getSnapshotFiles.bind(controller));
+	router.get('/:id/files/page', authM, controller.getSnapshotPage.bind(controller));
 	router.get('/:id/progress', authM, controller.getBackupProgress.bind(controller));
 	router.post('/:id/action/cancel', authM, controller.cancelBackup.bind(controller));
 	router.get('/:id/action/download', authM, controller.getBackupDownload.bind(controller));

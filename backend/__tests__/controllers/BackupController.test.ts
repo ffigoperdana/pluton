@@ -183,7 +183,7 @@ describe('BackupController', () => {
 			expect(mockStatus).toHaveBeenCalledWith(500);
 			expect(mockJson).toHaveBeenCalledWith({
 				success: false,
-				error: 'Failed to get Snapshot Files. Failed to get files',
+				error: 'Snapshot metadata is unavailable.',
 			});
 		});
 	});
