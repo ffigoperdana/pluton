@@ -16,7 +16,12 @@ export class SnapshotIndexError extends AppError {
 			| 'unsupported-snapshot-file'
 			| 'snapshot-indexing'
 			| 'pagination-required'
-			| 'cancelled'
+			| 'cancelled',
+		readonly reason: SnapshotIndexReason = code === 'metadata-invalid'
+			? 'metadata-invalid'
+			: code === 'cancelled'
+				? 'cancelled'
+				: 'unavailable'
 	) {
 		const messages = {
 			'index-resource-limit':
@@ -30,20 +35,55 @@ export class SnapshotIndexError extends AppError {
 			'cancelled': 'Snapshot operation was cancelled.',
 		};
 		super(
-			code === 'index-resource-limit'
-				? 429
-				: code === 'metadata-invalid'
-					? 422
-					: code === 'snapshot-indexing'
-						? 202
-						: code === 'index-unavailable'
-							? 503
-							: 409,
-			messages[code]
+			reason === 'database-size' || reason === 'entry-count'
+				? 413
+				: reason === 'disk-capacity' || reason === 'storage-full'
+					? 507
+					: reason === 'timeout'
+						? 504
+						: code === 'index-resource-limit'
+							? 429
+							: code === 'metadata-invalid'
+								? 422
+								: code === 'snapshot-indexing'
+									? 202
+									: code === 'index-unavailable'
+										? 503
+										: 409,
+			reasonMessages[reason] || messages[code]
 		);
 		Object.setPrototypeOf(this, new.target.prototype);
 	}
 }
+
+export type SnapshotIndexReason =
+	| 'cache-active'
+	| 'build-busy'
+	| 'admission-busy'
+	| 'disk-capacity'
+	| 'storage-full'
+	| 'database-size'
+	| 'entry-count'
+	| 'cleanup-failed'
+	| 'unavailable'
+	| 'metadata-invalid'
+	| 'timeout'
+	| 'cancelled';
+const reasonMessages: Partial<Record<SnapshotIndexReason, string>> = {
+	'cache-active':
+		'Snapshot cache is busy with active readers. Retry after those operations finish.',
+	'build-busy': 'Another snapshot is being indexed. Retry shortly.',
+	'admission-busy': 'Snapshot cache is busy handling requests. Retry shortly.',
+	'disk-capacity':
+		'Snapshot indexing needs 320 MiB of available cache filesystem space. Free cache filesystem space and retry.',
+	'database-size':
+		'Snapshot metadata index exceeds the bounded database size limit (256 MiB by default).',
+	'entry-count': 'Snapshot metadata exceeds the maximum entry count (500,000 by default).',
+	'cleanup-failed': 'Snapshot index cleanup failed. Check cache filesystem access and retry.',
+	'storage-full':
+		'SQLite index storage is full or quota-limited. Check available cache capacity and filesystem quota before retrying.',
+	'timeout': 'Snapshot indexing timed out. Retry indexing.',
+};
 
 export const SNAPSHOT_INDEX_LIMITS = Object.freeze({
 	maxEntries: 500_000,
@@ -62,6 +102,8 @@ export type SnapshotPageQuery = {
 	limit?: number;
 	sort?: 'name' | 'size' | 'modifiedAt';
 	order?: 'asc' | 'desc';
+	directoriesOnly?: boolean;
+	retry?: boolean;
 };
 type Row = {
 	path: string;
@@ -150,7 +192,9 @@ export class ManagedSnapshotIndex implements Iterable<SnapShotFile> {
 			(query.search !== undefined &&
 				(typeof query.search !== 'string' || query.search.length > 128)) ||
 			(query.sort !== undefined && !['name', 'size', 'modifiedAt'].includes(query.sort)) ||
-			(query.order !== undefined && !['asc', 'desc'].includes(query.order))
+			(query.order !== undefined && !['asc', 'desc'].includes(query.order)) ||
+			(query.directoriesOnly !== undefined && typeof query.directoriesOnly !== 'boolean') ||
+			(query.retry !== undefined && typeof query.retry !== 'boolean')
 		)
 			throw new AppError(400, 'Invalid snapshot page parameters.');
 		const directory = query.path || '';
@@ -160,7 +204,9 @@ export class ManagedSnapshotIndex implements Iterable<SnapShotFile> {
 		}
 		if (directory && this.get(directory)?.type !== 'dir')
 			throw new AppError(404, 'Snapshot directory not found.');
-		const where = 'parent=? AND instr(lower(name),lower(?))>0';
+		const where =
+			'parent=? AND instr(lower(name),lower(?))>0' +
+			(query.directoriesOnly ? " AND type='dir'" : '');
 		const params = [directory, query.search || ''];
 		const total = (
 			this.db.prepare(`SELECT count(*) AS n FROM nodes WHERE ${where}`).get(...params) as {
@@ -204,6 +250,7 @@ export class ManagedSnapshotIndex implements Iterable<SnapShotFile> {
 	}
 }
 
+type Populate = (append: (node: ManagedSnapshotNode) => void, signal: AbortSignal) => Promise<void>;
 type Entry = {
 	promise: Promise<ManagedSnapshotIndex>;
 	controller: AbortController;
@@ -212,8 +259,24 @@ type Entry = {
 	error?: AppError;
 	updated: number;
 	readers: number;
+	settled: boolean;
 	directory?: string;
-	removing?: Promise<void>;
+	count: number;
+	bytes: number;
+	started: number;
+	idle?: () => void;
+};
+export type SnapshotIndexDiagnostic = {
+	event: 'snapshot_index';
+	stage: 'building' | 'ready' | 'failed' | 'evicted' | 'refused';
+	reason?: SnapshotIndexReason;
+	indexes: number;
+	builds: number;
+	readers: number;
+	entries: number;
+	databaseBytes: number;
+	availableBytes: number;
+	durationMs: number;
 };
 
 /** Single server process owns the cache. No persisted index is trusted on restart. */
@@ -221,13 +284,18 @@ export class ManagedSnapshotIndexCache {
 	private readonly entries = new Map<string, Entry>();
 	private initialized?: Promise<void>;
 	private builds = 0;
+	private availableBytes = 0;
+	private closed = false;
+	private admissions = 0;
+	private admission: Promise<unknown> = Promise.resolve();
 	private readonly timer: ReturnType<typeof setInterval>;
 	constructor(
 		private readonly root: string,
-		private readonly limits = SNAPSHOT_INDEX_LIMITS
+		private readonly limits = SNAPSHOT_INDEX_LIMITS,
+		private readonly diagnostic: (record: SnapshotIndexDiagnostic) => void = () => {}
 	) {
 		this.timer = setInterval(() => {
-			void this.expire().catch(() => undefined);
+			void this.exclusive(() => this.expire()).catch(() => undefined);
 		}, 60_000);
 		this.timer.unref();
 	}
@@ -241,70 +309,150 @@ export class ManagedSnapshotIndexCache {
 	failure(key: string) {
 		return this.entries.get(key)?.error;
 	}
-	start(
-		key: string,
-		populate: (append: (node: ManagedSnapshotNode) => void, signal: AbortSignal) => Promise<void>,
-		background = false
+	private report(
+		stage: SnapshotIndexDiagnostic['stage'],
+		entry?: Entry,
+		reason?: SnapshotIndexReason
 	) {
-		let entry = this.entries.get(key);
-		if (
-			entry &&
-			!entry.error &&
-			(entry.readers || Date.now() - entry.updated < this.limits.ttlMs)
-		) {
-			entry.background ||= background;
-			return entry;
-		}
-		if (entry) {
-			// Removal finishes before a new index reserves this slot.
-			throw new SnapshotIndexError('index-unavailable');
-		}
-		if (this.builds >= this.limits.maxBuilds || this.entries.size >= this.limits.maxIndexes)
-			throw new SnapshotIndexError('index-resource-limit');
-		entry = {
-			promise: undefined!,
-			controller: new AbortController(),
-			background,
-			updated: Date.now(),
-			readers: 0,
-		};
-		this.entries.set(key, entry);
-		this.builds++;
-		const owned = entry;
-		owned.promise = this.build(key, owned, populate)
-			.then(index => {
-				owned.index = index;
-				owned.updated = Date.now();
-				return index;
-			})
-			.catch(error => {
-				owned.error =
-					error instanceof AppError ? error : new SnapshotIndexError('index-unavailable');
-				owned.updated = Date.now();
-				throw owned.error;
-			})
-			.finally(() => {
-				this.builds--;
+		// Closed numeric projection: no key, paths, binding, credentials or raw errors.
+		try {
+			this.diagnostic({
+				event: 'snapshot_index',
+				stage,
+				reason,
+				indexes: this.entries.size,
+				builds: this.builds,
+				readers: [...this.entries.values()].reduce((n, value) => n + value.readers, 0),
+				entries: entry?.count || 0,
+				databaseBytes: entry?.bytes || 0,
+				availableBytes: this.availableBytes,
+				durationMs: entry ? Math.max(0, Date.now() - entry.started) : 0,
 			});
-		void owned.promise.catch(() => undefined);
-		return owned;
+		} catch {
+			/* Observability must never leak a lease or fail an otherwise valid build. */
+		}
+	}
+	private exclusive<T>(action: () => Promise<T>): Promise<T> {
+		// Serialize admission/cleanup only, never a build or consumer; bound the queue.
+		if (this.closed) return Promise.reject(new SnapshotIndexError('index-unavailable'));
+		if (this.admissions >= 16) {
+			this.report('refused', undefined, 'admission-busy');
+			return Promise.reject(new SnapshotIndexError('index-resource-limit', 'admission-busy'));
+		}
+		this.admissions++;
+		const next = this.admission.then(action).finally(() => {
+			this.admissions--;
+		});
+		this.admission = next.catch(() => undefined);
+		return next;
+	}
+	async start(key: string, populate: Populate, background = false) {
+		return this.acquire(key, populate, background, false, false);
+	}
+	private acquire(
+		key: string,
+		populate: Populate,
+		background: boolean,
+		lease: boolean,
+		retry: boolean
+	) {
+		return this.exclusive(async () => {
+			if (!/^[a-f0-9]{64}$/.test(key)) throw new SnapshotIndexError('index-unavailable');
+			try {
+				await this.expire();
+				let entry = this.entries.get(key);
+				if (entry?.error && retry && !entry.readers && entry.settled) {
+					await this.remove(key, entry);
+					entry = undefined;
+				}
+				if (entry?.error) throw entry.error;
+				if (!entry) {
+					if (this.builds >= this.limits.maxBuilds)
+						throw new SnapshotIndexError('index-resource-limit', 'build-busy');
+					if (this.entries.size >= this.limits.maxIndexes) {
+						// Stable map order resolves equal timestamps. Readers and builds are pinned.
+						const victim = [...this.entries]
+							.filter(([, value]) => value.settled && !value.readers)
+							.sort((a, b) => a[1].updated - b[1].updated)[0];
+						if (!victim) throw new SnapshotIndexError('index-resource-limit', 'cache-active');
+						await this.remove(...victim);
+					}
+					await this.initialize();
+					let disk = await fs.statfs(this.root);
+					this.availableBytes = disk.bavail * disk.bsize;
+					while (disk.bavail * disk.bsize < this.limits.maxBytes + 64 * 1024 ** 2) {
+						const victim = [...this.entries]
+							.filter(([, value]) => value.settled && !value.readers)
+							.sort((a, b) => a[1].updated - b[1].updated)[0];
+						if (!victim) throw new SnapshotIndexError('index-resource-limit', 'disk-capacity');
+						await this.remove(...victim);
+						disk = await fs.statfs(this.root);
+						this.availableBytes = disk.bavail * disk.bsize;
+					}
+					entry = {
+						promise: undefined!,
+						controller: new AbortController(),
+						background,
+						updated: Date.now(),
+						started: Date.now(),
+						readers: 0,
+						settled: false,
+						count: 0,
+						bytes: 0,
+					};
+					this.entries.set(key, entry);
+					this.builds++;
+					const owned = entry;
+					owned.promise = this.build(key, owned, populate)
+						.then(index => {
+							owned.index = index;
+							this.report('ready', owned);
+							return index;
+						})
+						.catch(error => {
+							owned.error =
+								error instanceof AppError ? error : new SnapshotIndexError('index-unavailable');
+							this.report(
+								'failed',
+								owned,
+								error instanceof SnapshotIndexError ? error.reason : 'unavailable'
+							);
+							throw owned.error;
+						})
+						.finally(() => {
+							owned.settled = true;
+							owned.updated = Date.now();
+							this.builds--;
+						});
+					void owned.promise.catch(() => undefined);
+					this.report('building', owned);
+				}
+				entry.background ||= background;
+				entry.updated = Date.now();
+				if (lease) entry.readers++; // Atomic with eviction/admission.
+				return entry;
+			} catch (error) {
+				const failure = error instanceof AppError ? error : new SnapshotIndexError('index-unavailable');
+				if (failure instanceof SnapshotIndexError) this.report('refused', undefined, failure.reason);
+				throw failure;
+			}
+		});
 	}
 	async retry(key: string) {
-		const entry = this.entries.get(key);
-		if (entry?.removing) await entry.removing;
-		if (entry?.error && !entry.readers) await this.remove(key, entry);
-		await this.expire();
+		await this.exclusive(async () => {
+			const entry = this.entries.get(key);
+			if (entry?.error && !entry.readers && entry.settled) await this.remove(key, entry);
+			await this.expire();
+		});
 	}
 	async use<T>(
 		key: string,
-		populate: (append: (node: ManagedSnapshotNode) => void, signal: AbortSignal) => Promise<void>,
+		populate: Populate,
 		consume: (index: ManagedSnapshotIndex) => Promise<T> | T,
 		signal?: AbortSignal
 	) {
 		if (signal?.aborted) throw new SnapshotIndexError('cancelled');
-		await this.retry(key);
-		const entry = this.start(key, populate);
-		entry.readers++;
+		const entry = await this.acquire(key, populate, false, true, true);
 		let abort: (() => void) | undefined;
 		try {
 			const cancelled = new Promise<never>((_, reject) => {
@@ -313,15 +461,15 @@ export class ManagedSnapshotIndexCache {
 				if (signal?.aborted) abort();
 			});
 			const index = await Promise.race([entry.promise, cancelled]);
+			if (signal?.aborted) throw new SnapshotIndexError('cancelled');
 			return await consume(index);
 		} finally {
 			if (abort) signal?.removeEventListener('abort', abort);
 			entry.readers--;
 			entry.updated = Date.now();
-			if (!entry.readers && !entry.background && !entry.index && !entry.error && signal?.aborted)
+			if (!entry.readers) entry.idle?.();
+			if (!entry.readers && !entry.background && !entry.settled && signal?.aborted)
 				entry.controller.abort();
-			// An indexing request is background work. The fixed timeout/disk cap own
-			// its lifetime even if one browser or download disconnects.
 		}
 	}
 	private async initialize() {
@@ -331,12 +479,15 @@ export class ManagedSnapshotIndexCache {
 			if (!stat.isDirectory() || stat.isSymbolicLink())
 				throw new SnapshotIndexError('index-unavailable');
 			await fs.chmod(this.root, 0o700);
-			// Exact generated names only; no application DB, restored data or secrets.
-			for (const name of await fs.readdir(this.root)) {
-				if (/^index-[a-f0-9]{64}-[a-f0-9]{24}$/.test(name))
-					await this.removeDirectory(path.join(this.root, name));
+			// Exact generated names only; never application DB, restored data or secrets.
+			for await (const item of await fs.opendir(this.root)) {
+				if (/^index-[a-f0-9]{64}-[a-f0-9]{24}$/.test(item.name))
+					await this.removeDirectory(path.join(this.root, item.name));
 			}
-		})();
+		})().catch(() => {
+			this.initialized = undefined;
+			throw new SnapshotIndexError('index-unavailable', 'cleanup-failed');
+		});
 		return this.initialized;
 	}
 	private async build(
@@ -349,7 +500,7 @@ export class ManagedSnapshotIndexCache {
 			await this.initialize();
 			const disk = await fs.statfs(this.root);
 			if (disk.bavail * disk.bsize < this.limits.maxBytes + 64 * 1024 ** 2)
-				throw new SnapshotIndexError('index-resource-limit');
+				throw new SnapshotIndexError('index-resource-limit', 'disk-capacity');
 			entry.directory = path.join(
 				this.root,
 				`index-${key}-${crypto.randomBytes(12).toString('hex')}`
@@ -364,6 +515,9 @@ export class ManagedSnapshotIndexCache {
 			db.pragma('temp_store=FILE');
 			db.pragma('journal_mode=OFF');
 			db.pragma('synchronous=OFF');
+			// Even one non-empty SQLite table needs the schema and a table page.
+			if (this.limits.maxBytes < 2 * 4096)
+				throw new SnapshotIndexError('index-resource-limit', 'database-size');
 			db.exec(`CREATE TABLE nodes(path TEXT PRIMARY KEY, parent TEXT NOT NULL, name TEXT NOT NULL,
 				type TEXT NOT NULL, size INTEGER NOT NULL, modifiedAt TEXT NOT NULL, permissions TEXT NOT NULL, modifiedTime INTEGER NOT NULL,
 				isDirectory INTEGER NOT NULL) WITHOUT ROWID;
@@ -381,7 +535,11 @@ export class ManagedSnapshotIndexCache {
 				logicalBytes = 0;
 			const appendNode = (node: ManagedSnapshotNode) => {
 				if (entry.controller.signal.aborted) throw new SnapshotIndexError('cancelled');
-				if (++count > this.limits.maxEntries) throw new SnapshotIndexError('index-resource-limit');
+				if (entry.bytes >= this.limits.maxBytes)
+					throw new SnapshotIndexError('index-resource-limit', 'database-size');
+				entry.count = ++count;
+				if (count > this.limits.maxEntries)
+					throw new SnapshotIndexError('index-resource-limit', 'entry-count');
 				if (!node.path.startsWith('/')) throw new SnapshotIndexError('metadata-invalid');
 				let relative: string;
 				try {
@@ -424,6 +582,9 @@ export class ManagedSnapshotIndexCache {
 					ancestor.run(parentPath);
 					parentPath = path.posix.dirname(parentPath);
 				}
+				// Preserve a bounded allocation sample before SQLite can roll back on FULL.
+				if (count % 256 === 0 || this.limits.maxBytes < 1024 ** 2)
+					entry.bytes = (db!.pragma('page_count', { simple: true }) as number) * 4096;
 			};
 			await populate(node => {
 				try {
@@ -433,7 +594,8 @@ export class ManagedSnapshotIndexCache {
 					throw new SnapshotIndexError(
 						(error as { code?: string }).code === 'SQLITE_FULL'
 							? 'index-resource-limit'
-							: 'index-unavailable'
+							: 'index-unavailable',
+						(error as { code?: string }).code === 'SQLITE_FULL' ? 'storage-full' : 'unavailable'
 					);
 				}
 			}, entry.controller.signal);
@@ -445,12 +607,42 @@ export class ManagedSnapshotIndexCache {
 			)
 				throw new SnapshotIndexError('metadata-invalid');
 			db.exec('DROP TABLE ancestors; COMMIT;');
+			entry.bytes = (db.pragma('page_count', { simple: true }) as number) * 4096;
 			return new ManagedSnapshotIndex(db);
 		} catch (error) {
-			db?.close();
-			if (entry.directory) await this.removeDirectory(entry.directory);
-			if ((error as { code?: string }).code === 'SQLITE_FULL')
-				throw new SnapshotIndexError('index-resource-limit');
+			if (db?.open) {
+				entry.bytes = Math.max(
+					entry.bytes,
+					(db.pragma('page_count', { simple: true }) as number) * 4096
+				);
+				db.close();
+			}
+			try {
+				if (entry.directory) await this.removeDirectory(entry.directory);
+			} catch {
+				throw new SnapshotIndexError('index-unavailable', 'cleanup-failed');
+			}
+			if (
+				(error as { code?: string }).code === 'SQLITE_FULL' ||
+				(error instanceof SnapshotIndexError && error.reason === 'storage-full')
+			) {
+				const disk = await fs.statfs(this.root).catch(() => undefined);
+				if (disk) this.availableBytes = disk.bavail * disk.bsize;
+				throw new SnapshotIndexError(
+					'index-resource-limit',
+					entry.bytes >= this.limits.maxBytes
+						? 'database-size'
+						: disk && this.availableBytes < 64 * 1024 ** 2
+							? 'disk-capacity'
+							: 'storage-full'
+				);
+			}
+			if ((error as { code?: string }).code === 'timeout')
+				throw new SnapshotIndexError('index-unavailable', 'timeout');
+			if ((error as { code?: string }).code === 'cancelled')
+				throw new SnapshotIndexError('cancelled');
+			if ((error as { code?: string }).code === 'invalid-output')
+				throw new SnapshotIndexError('metadata-invalid');
 			throw error;
 		}
 	}
@@ -462,37 +654,38 @@ export class ManagedSnapshotIndexCache {
 			throw new SnapshotIndexError('index-unavailable');
 		await fs.rm(directory, { recursive: true, force: true });
 	}
-	private remove(key: string, entry: Entry): Promise<void> {
-		if (entry.removing) return entry.removing;
-		entry.removing = (async () => {
-			entry.index?.close();
+	private async remove(key: string, entry: Entry) {
+		if (entry.readers || !entry.settled)
+			throw new SnapshotIndexError('index-resource-limit', 'cache-active');
+		try {
+			entry.index?.close(); // Release native handle before deleting generated files.
 			entry.index = undefined;
-			try {
-				if (entry.directory) await this.removeDirectory(entry.directory);
-			} catch {
-				entry.error = new SnapshotIndexError('index-unavailable');
-				throw entry.error;
-			}
-			if (this.entries.get(key) === entry) this.entries.delete(key);
-		})().finally(() => {
-			entry.removing = undefined;
-		});
-		return entry.removing;
+			if (entry.directory) await this.removeDirectory(entry.directory);
+		} catch {
+			entry.error = new SnapshotIndexError('index-unavailable', 'cleanup-failed');
+			throw entry.error;
+		}
+		if (this.entries.get(key) === entry) this.entries.delete(key);
+		this.report('evicted', entry);
 	}
 	private async expire() {
 		for (const [key, entry] of this.entries) {
-			if (
-				!entry.readers &&
-				(entry.index || entry.error) &&
-				Date.now() - entry.updated >= this.limits.ttlMs
-			)
+			if (!entry.readers && entry.settled && Date.now() - entry.updated >= this.limits.ttlMs)
 				await this.remove(key, entry);
 		}
 	}
 	async close() {
 		clearInterval(this.timer);
+		this.closed = true;
+		await this.admission;
 		for (const entry of this.entries.values()) entry.controller.abort();
 		await Promise.allSettled([...this.entries.values()].map(entry => entry.promise));
-		for (const [key, entry] of this.entries) await this.remove(key, entry);
+		for (const [key, entry] of this.entries) {
+			if (entry.readers)
+				await new Promise<void>(resolve => {
+					entry.idle = resolve;
+				});
+			await this.remove(key, entry);
+		}
 	}
 }

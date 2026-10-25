@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { BackupController } from '../../src/controllers/BackupController';
 import { BackupService } from '../../src/services/BackupServices';
+import { SnapshotIndexError } from '../../src/utils/restic/ManagedSnapshotIndex';
 
 jest.mock('../../src/services/BackupServices');
 
@@ -45,6 +46,61 @@ describe('BackupController', () => {
 		backupController = new BackupController(mockBackupService);
 	});
 
+	describe('bounded managed directory pages', () => {
+		it('passes only bounded directory and explicit retry selectors to the authorized service', async () => {
+			mockRequest.params = { id: 'backup-01' };
+			mockRequest.query = {
+				path: '/srv/example-app',
+				directoriesOnly: 'true',
+				retry: 'true',
+				offset: '200',
+				limit: '200',
+			};
+			mockBackupService.getSnapshotPage.mockResolvedValue({
+				status: 'indexing',
+				retryAfterMs: 1000,
+			});
+			await backupController.getSnapshotPage(mockRequest as Request, mockResponse as Response);
+			expect(mockBackupService.getSnapshotPage).toHaveBeenCalledWith(
+				'backup-01',
+				{ path: '/srv/example-app', directoriesOnly: true, retry: true, offset: 200, limit: 200 },
+				expect.any(AbortSignal)
+			);
+			expect(mockStatus).toHaveBeenCalledWith(202);
+		});
+		it.each([
+			{ directoriesOnly: 'yes' },
+			{ retry: '1' },
+			{ limit: '501' },
+			{ path: '/srv/../escape' },
+			{ repository: 'other' },
+		])('rejects unsafe page input %j', async query => {
+			mockRequest.params = { id: 'backup-01' };
+			mockRequest.query = query;
+			await backupController.getSnapshotPage(mockRequest as Request, mockResponse as Response);
+			expect(mockStatus).toHaveBeenCalledWith(400);
+			expect(mockBackupService.getSnapshotPage).not.toHaveBeenCalled();
+		});
+		it.each([
+			['build-busy', 429],
+			['disk-capacity', 507],
+			['entry-count', 413],
+			['database-size', 413],
+			['cleanup-failed', 503],
+		] as const)('exposes the safe %s category with the correct status', async (reason, status) => {
+			mockRequest.params = { id: 'backup-01' };
+			mockBackupService.getSnapshotPage.mockRejectedValue(
+				new SnapshotIndexError(
+					status === 503 ? 'index-unavailable' : 'index-resource-limit',
+					reason
+				)
+			);
+			await backupController.getSnapshotPage(mockRequest as Request, mockResponse as Response);
+			expect(mockStatus).toHaveBeenCalledWith(status);
+			expect(mockJson).toHaveBeenCalledWith(expect.objectContaining({ success: false, reason }));
+			if (status === 429) expect(mockSetHeader).toHaveBeenCalledWith('Retry-After', '2');
+		});
+	});
 	describe('getBackupDownload', () => {
 		it('should return 400 if backup ID is missing', async () => {
 			mockRequest.params = {};

@@ -14,7 +14,7 @@ import type { RestoreConfig } from '../../src/types/restores';
 
 jest.mock('../../src/utils/logger', () => ({
 	initializeLogger: jest.fn(),
-	planLogger: jest.fn(() => ({ warn: jest.fn() })),
+	planLogger: jest.fn(() => ({ warn: jest.fn(), info: jest.fn() })),
 }));
 
 const secret = 'synthetic-recovery-encryption-key';
@@ -683,6 +683,24 @@ describe('Phase 4 remote managed repository recovery', () => {
 		});
 	});
 
+	it('reports a failed build until explicit retry, then polls the new attempt without throwing the cleared error', async () => {
+		session.streamFiles.mockRejectedValueOnce(new ManagedRepositoryAccessError('timeout'));
+		await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({ reason: 'timeout' });
+		await expect(service.browsePage('backup-01', {})).rejects.toMatchObject({ reason: 'timeout' });
+		expect(session.streamFiles).toHaveBeenCalledTimes(1);
+		await expect(service.browsePage('backup-01', { retry: true })).resolves.toMatchObject({
+			status: 'indexing',
+		});
+		await service.prepareDownload('backup-01');
+		await expect(
+			service.browsePage('backup-01', { path: '/srv/example-app', directoriesOnly: true })
+		).resolves.toMatchObject({
+			status: 'ready',
+			total: 1,
+			files: [expect.objectContaining({ path: '/srv/example-app/nested', type: 'dir' })],
+		});
+		expect(session.streamFiles).toHaveBeenCalledTimes(2);
+	});
 	it('pages and downloads a 100,000-file snapshot without invoking the array listing helper', async () => {
 		session.files.mockImplementation(async () => {
 			throw new Error('Whole listing must not be buffered.');

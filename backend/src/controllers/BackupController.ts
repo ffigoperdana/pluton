@@ -24,11 +24,21 @@ const pageQuery = z.strictObject({
 		.optional(),
 	sort: z.enum(['name', 'size', 'modifiedAt']).optional(),
 	order: z.enum(['asc', 'desc']).optional(),
+	directoriesOnly: z
+		.enum(['true', 'false'])
+		.transform(value => value === 'true')
+		.optional(),
+	retry: z
+		.enum(['true', 'false'])
+		.transform(value => value === 'true')
+		.optional(),
 });
 const failureCode = (error: unknown) =>
-	error instanceof SnapshotIndexError || error instanceof ManagedRepositoryAccessError
-		? { code: error.code }
-		: {};
+	error instanceof SnapshotIndexError
+		? { code: error.code, reason: error.reason }
+		: error instanceof ManagedRepositoryAccessError
+			? { code: error.code }
+			: {};
 
 export class BackupController {
 	constructor(protected backupService: BackupService) {}
@@ -214,6 +224,8 @@ export class BackupController {
 			if (!res.destroyed)
 				res.status(result.status === 'indexing' ? 202 : 200).json({ success: true, result });
 		} catch (error) {
+			if (error instanceof SnapshotIndexError && error.statusCode === 429)
+				res.setHeader('Retry-After', '2');
 			if (!res.destroyed)
 				res.status(error instanceof AppError ? error.statusCode : 500).json({
 					success: false,

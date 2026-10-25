@@ -12,16 +12,21 @@ import ActionModal from '../../common/ActionModal/ActionModal';
 import SnapshotBrowserToolbar from '../../common/SnapshotBrowser/SnapshotBrowserToolbar';
 import SnapshotBrowserFileList from '../../common/SnapshotBrowser/SnapshotBrowserFileList';
 import SnapshotViewerFile from './SnapshotViewerFile';
+import ManagedSnapshotDirectories from './ManagedSnapshotDirectories';
 import type { SnapshotViewerProps } from './SnapshotViewer';
 import classes from '../../common/SnapshotBrowser/SnapshotBrowser.module.scss';
 
+const consumeRetry = (request: { current: boolean }) => {
+   const retry = request.current;
+   request.current = false;
+   return retry;
+};
+
 /** Only the current page is retained. Managed metadata never enters Dexie. */
-export default function ManagedSnapshotViewer({
-   backup,
+export default function ManagedSnapshotViewer({backup,
    planId,
    onClose,
-   selection,
-}: SnapshotViewerProps & {
+   selection,}: SnapshotViewerProps & {
    selection?: { includes: string[]; excludes: string[]; onChange: (includes: string[], excludes: string[]) => void };
 }) {
    const [directory, setDirectory] = useState('');
@@ -32,6 +37,16 @@ export default function ManagedSnapshotViewer({
    const [order, setOrder] = useState<ManagedSnapshotQuery['order']>('asc');
    const [selected, setSelected] = useState<FileItem | null>(null);
    const content = useRef<HTMLDivElement>(null);
+   const retryIndex = useRef(false);
+   const [treeReady, setTreeReady] = useState(false);
+   const [showFolders, setShowFolders] = useState(false);
+   const [height, setHeight] = useState(520);
+   useEffect(() => {
+      if (!content.current || typeof ResizeObserver === 'undefined') return;
+      const observer = new ResizeObserver(([entry]) => setHeight(Math.max(120, entry.contentRect.height - 110)));
+      observer.observe(content.current);
+      return () => observer.disconnect();
+   }, []);
    const restore = useRestoreBackup();
    const navigate = useNavigate();
    useEffect(() => {
@@ -41,17 +56,26 @@ export default function ManagedSnapshotViewer({
       }, 300);
       return () => clearTimeout(timer);
    }, [search]);
-   const query = useQuery({
-      queryKey: ['managed-snapshot-page', backup.id, directory, debouncedSearch, offset, sort, order],
-      queryFn: ({ signal }) =>
-         fetchManagedSnapshotPage(API_URL, backup.id, { path: directory, search: debouncedSearch, offset, limit: 200, sort, order }, signal),
+   const query = useQuery({queryKey: ['managed-snapshot-page', backup.id, directory, debouncedSearch, offset, sort, order],
+      meta: { retryIndex },
+      queryFn: async ({ signal, meta }) => {
+         const retry = consumeRetry(meta!.retryIndex as { current: boolean });
+         const result = await fetchManagedSnapshotPage(
+            API_URL,
+            backup.id,
+            { path: directory, search: debouncedSearch, offset, limit: 200, sort, order, ...(retry ? { retry: true } : {}) },
+            signal,
+         );
+         if (result.status === 'ready') setTreeReady(true);
+         return result;
+      },
       gcTime: 0,
       staleTime: 30_000,
       retry: false,
-      refetchInterval: (state) => (state.state.status !== 'error' && state.state.data?.status === 'indexing' ? 1000 : false),
-   });
+      refetchInterval: (state) => (state.state.status !== 'error' && state.state.data?.status === 'indexing' ? 1000 : false),});
    const page = query.data?.status === 'ready' ? query.data : null;
    const openDirectory = (value: string) => {
+      setShowFolders(false);
       setDirectory(value);
       setOffset(0);
       setSearch('');
@@ -68,10 +92,6 @@ export default function ManagedSnapshotViewer({
          ? [{ isGoUp: true as const, path: '..', name: '..', isDirectory: true as const }, ...page.files]
          : page.files
       : [];
-   const breadcrumbs = directory
-      .split('/')
-      .filter(Boolean)
-      .map((_, index, parts) => `/${parts.slice(0, index + 1).join('/')}`);
    const gridColumns = '1fr 120px minmax(100px, auto) 120px';
    const toggleSelection = (file: FileItem, exclude = false) => {
       if (!selection) return;
@@ -84,11 +104,29 @@ export default function ManagedSnapshotViewer({
       selection.onChange(exclude ? selection.includes : updated, exclude ? updated : selection.excludes);
    };
    return (
-      <div className={classes.snapshotBrowser}>
+      <div className={`${classes.snapshotBrowser} ${classes.managedBrowser}`}>
          <SnapshotBrowserToolbar
             search={search}
             onSearchChange={setSearch}
             isLoading={query.isFetching}
+            rightContent={
+               <div className={classes.mobileSort}>
+                  <select aria-label="Sort files" value={sort} onChange={(event) => changeSort(event.target.value as ManagedSnapshotQuery['sort'])}>
+                     <option value="name">Name</option>
+                     <option value="modifiedAt">Last Modified</option>
+                     <option value="size">Size</option>
+                  </select>
+                  <button
+                     aria-label="Reverse file sort"
+                     onClick={() => {
+                        setOrder((value) => (value === 'asc' ? 'desc' : 'asc'));
+                        setOffset(0);
+                     }}
+                  >
+                     {order === 'asc' ? '↑' : '↓'}
+                  </button>
+               </div>
+            }
             leftContent={
                <div className={classes.stats}>
                   <Icon type="box" />
@@ -96,14 +134,12 @@ export default function ManagedSnapshotViewer({
                </div>
             }
          />
-         <nav aria-label="Snapshot directory" style={{ display: 'flex', gap: 10, padding: 12, flexWrap: 'wrap' }}>
-            <button onClick={() => openDirectory('')}>Snapshot root</button>
-            {breadcrumbs.map((value) => (
-               <button key={value} onClick={() => openDirectory(value)}>
-                  {value.split('/').pop()}
-               </button>
-            ))}
-         </nav>
+         <div className={classes.managedNavigation}>
+            <button className={classes.folderToggle} disabled={!treeReady} aria-expanded={showFolders} onClick={() => setShowFolders((value) => !value)}>
+               Folders
+            </button>
+            <span title={directory || '/'}>{directory || 'All files'}</span>
+         </div>
          {selection && (
             <div style={{ padding: 12 }}>
                <button onClick={() => selection.onChange([], [])}>Recover entire snapshot</button>{' '}
@@ -117,25 +153,35 @@ export default function ManagedSnapshotViewer({
                </p>
             </div>
          )}
-         {query.isError ? (
-            <div className={classes.errorState} role="alert">
-               <p>{query.error.message}</p>
-               <button onClick={() => void query.refetch()}>Retry indexing</button>
-            </div>
-         ) : !page ? (
-            <div className={classes.loadingState} role="status">
-               <Icon type="loading" size={24} />
-               <p>{query.data?.status === 'indexing' ? 'Indexing snapshot metadata…' : 'Loading snapshot metadata…'}</p>
-               <small>You can close this view and return while indexing finishes.</small>
-            </div>
-         ) : (
-            <>
-               <div className={classes.browserContent}>
-                  <div className={`${classes.content} styled__scrollbar`} ref={content}>
+         <div className={`${classes.browserContent} ${classes.managedContent} ${showFolders ? classes.showFolders : ''}`}>
+            {treeReady && (
+               <ManagedSnapshotDirectories key={backup.id} backupId={backup.id} selectedFolder={directory} onDirectoryClick={openDirectory} />
+            )}
+            <div className={`${classes.content} styled__scrollbar`} ref={content}>
+               {query.isError ? (
+                  <div className={classes.errorState} role="alert">
+                     <p>{query.error.message}</p>
+                     <button
+                        onClick={() => {
+                           retryIndex.current = true;
+                           void query.refetch();
+                        }}
+                     >
+                        Retry indexing
+                     </button>
+                  </div>
+               ) : !page ? (
+                  <div className={classes.loadingState} role="status">
+                     <Icon type="loading" size={24} />
+                     <p>{query.data?.status === 'indexing' ? 'Indexing snapshot metadata…' : 'Loading snapshot metadata…'}</p>
+                     <small>You can close this view and return while indexing finishes.</small>
+                  </div>
+               ) : (
+                  <>
                      <SnapshotBrowserFileList
                         files={files}
                         selectedFolder={directory}
-                        height={content.current?.clientHeight ? content.current.clientHeight - 50 : 520}
+                        height={height}
                         itemSize={isMobile() ? 65 : 46}
                         gridTemplateColumns={gridColumns}
                         isLoading={query.isFetching}
@@ -173,22 +219,22 @@ export default function ManagedSnapshotViewer({
                            />
                         )}
                      />
-                  </div>
-               </div>
-               <div aria-label="Snapshot pages" style={{ display: 'flex', gap: 16, padding: 12, alignItems: 'center' }}>
-                  <button disabled={!offset || query.isFetching} onClick={() => setOffset(Math.max(0, offset - 200))}>
-                     Previous
-                  </button>
-                  <span>
-                     {page.total ? `${offset + 1}–${offset + page.files.length} of ${page.total.toLocaleString()}` : 'No matching files'} •{' '}
-                     {page.entries.toLocaleString()} snapshot entries
-                  </span>
-                  <button disabled={page.nextOffset === null || query.isFetching} onClick={() => setOffset(page.nextOffset!)}>
-                     Next
-                  </button>
-               </div>
-            </>
-         )}
+                     <div aria-label="Snapshot pages" className={classes.managedPages}>
+                        <button disabled={!offset || query.isFetching} onClick={() => setOffset(Math.max(0, offset - 200))}>
+                           Previous
+                        </button>
+                        <span>
+                           {page.total ? `${offset + 1}–${offset + page.files.length} of ${page.total.toLocaleString()}` : 'No matching files'} •{' '}
+                           {page.entries.toLocaleString()} snapshot entries
+                        </span>
+                        <button disabled={page.nextOffset === null || query.isFetching} onClick={() => setOffset(page.nextOffset!)}>
+                           Next
+                        </button>
+                     </div>
+                  </>
+               )}
+            </div>
+         </div>
          {selected && !selection && (
             <ActionModal
                title={`Restore ${selected.isDirectory ? 'Directory' : 'File'}`}
@@ -200,24 +246,20 @@ export default function ManagedSnapshotViewer({
                   </>
                }
                closeModal={() => setSelected(null)}
-               primaryAction={{
-                  title: 'Restore to staging',
+               primaryAction={{title: 'Restore to staging',
                   type: 'default',
                   isPending: restore.isPending,
                   action: () =>
                      restore.mutate(
                         { backupId: backup.id, planId, target: '', includes: [selected.path], overwrite: 'never', deleteOption: false },
-                        {
-                           onSuccess: () => {
+                        {onSuccess: () => {
                               toast.success('Staged restoration started.');
                               navigate(`/plan/${planId}`);
                               onClose();
                            },
                            onError: (error) => toast.error(error.message),
-                           onSettled: () => setSelected(null),
-                        },
-                     ),
-               }}
+                           onSettled: () => setSelected(null),},
+                     ),}}
             />
          )}
       </div>

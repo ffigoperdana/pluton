@@ -84,6 +84,22 @@ try {
 	]);
 	const snapshotId = JSON.parse(output.trim().split('\n').at(-1)!).snapshot_id;
 	assert.match(snapshotId, /^[a-f0-9]{64}$/);
+	const snapshotIds = new Map([['backup-01', snapshotId]]);
+	for (const backupId of ['backup-02', 'backup-03']) {
+		const result = await run([
+			'--no-cache',
+			'-r',
+			repository,
+			'--json',
+			'backup',
+			'--tag',
+			'pluton-plan-plan-01',
+			'--tag',
+			`pluton-backup-${backupId}`,
+			source,
+		]);
+		snapshotIds.set(backupId, JSON.parse(result.trim().split('\n').at(-1)!).snapshot_id);
+	}
 	const before = await repositoryDigest();
 	let metadataBytes = 0;
 	const listing = spawn(
@@ -170,7 +186,12 @@ try {
 	};
 	service = new RemoteRepositoryRecoveryService(
 		{ getByPlanId: async () => repo } as any,
-		{ getById: async () => backup } as any,
+		{
+			getById: async (id: string) =>
+				snapshotIds.has(id)
+					? { ...backup, id, completionStats: { snapshot_id: snapshotIds.get(id) } }
+					: undefined,
+		} as any,
 		{ getById: async () => plan } as any,
 		{} as any,
 		{
@@ -259,6 +280,7 @@ try {
 	});
 	transfer.end();
 	await complete;
+	const downloadMs = Math.round(performance.now() - downloadStart);
 	assert.equal(archiveFiles, count);
 	assert.equal(
 		await repositoryDigest(),
@@ -270,6 +292,30 @@ try {
 	for (const directory of await fs.readdir(cacheRoot))
 		for (const file of await fs.readdir(path.join(cacheRoot, directory)))
 			cacheDiskBytes += (await fs.stat(path.join(cacheRoot, directory, file))).size;
+	const switchStart = performance.now();
+	let maxCacheDiskBytes = cacheDiskBytes;
+	for (const backupId of ['backup-02', 'backup-03', 'backup-01']) {
+		await service.prepareDownload(backupId);
+		const switched = await service.browsePage(backupId, { path: source, limit: 200 });
+		assert.equal(switched.status, 'ready');
+		if (switched.status === 'ready') {
+			assert.equal(switched.total, count);
+			assert.equal(switched.snapshotId, snapshotIds.get(backupId));
+		}
+		const directories = await fs.readdir(cacheRoot);
+		assert(directories.length <= 2);
+		let bytes = 0;
+		for (const directory of directories)
+			for (const file of await fs.readdir(path.join(cacheRoot, directory)))
+				bytes += (await fs.stat(path.join(cacheRoot, directory, file))).size;
+		maxCacheDiskBytes = Math.max(maxCacheDiskBytes, bytes);
+	}
+	const threeSnapshotSwitchMs = Math.round(performance.now() - switchStart);
+	assert.equal(
+		await repositoryDigest(),
+		afterBackup,
+		'Snapshot switching does not mutate the repository.'
+	);
 	const cgroupPeak = await fs
 		.readFile('/sys/fs/cgroup/memory.peak', 'utf8')
 		.catch(() => 'unavailable');
@@ -281,10 +327,12 @@ try {
 			indexingMs: Math.round(indexingMs),
 			pageMs: Math.round(pageMs),
 			downloadHeadersMs: Math.round(headersMs),
-			downloadMs: Math.round(performance.now() - downloadStart),
+			downloadMs,
 			archiveFiles,
 			archiveBytes,
 			cacheDiskBytes,
+			maxCacheDiskBytes,
+			threeSnapshotSwitchMs,
 			nodePeakRssBytes: process.resourceUsage().maxRSS * 1024,
 			cgroupPeakBytes: cgroupPeak.trim(),
 			temporaryTarBytes: 0,

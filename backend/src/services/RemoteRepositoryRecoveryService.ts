@@ -87,7 +87,9 @@ export class RemoteRepositoryRecoveryService {
 		private readonly stagingRoot = path.join(appPaths.getDataDir(), 'managed-remote-restores')
 	) {
 		this.indexes = new ManagedSnapshotIndexCache(
-			path.join(path.dirname(stagingRoot), 'managed-snapshot-indexes')
+			path.join(path.dirname(stagingRoot), 'managed-snapshot-indexes'),
+			SNAPSHOT_INDEX_LIMITS,
+			record => planLogger('snapshot-index').info(record, 'Managed snapshot cache lifecycle.')
 		);
 	}
 
@@ -338,12 +340,13 @@ export class RemoteRepositoryRecoveryService {
 	async browsePage(backupId: string, query: SnapshotPageQuery, signal?: AbortSignal) {
 		const context = await this.context(backupId);
 		const key = this.indexKey(context);
+		if (signal?.aborted) throw new SnapshotIndexError('cancelled');
+		if (query.retry) await this.indexes.retry(key);
 		const failure = this.indexes.failure(key);
-		await this.indexes.retry(key);
 		if (failure) throw failure;
 		const state = this.indexes.status(key);
 		if (state === 'missing' || state === 'indexing') {
-			this.indexes.start(
+			await this.indexes.start(
 				key,
 				(append, buildSignal) => this.populateIndex(context, append, buildSignal),
 				true

@@ -252,6 +252,9 @@ streamed Restic 0.19.1 NDJSON validation, and authenticated server pagination.
 Downloads and recovery consume complete verified manifests without whole-list
 buffering. See [managed snapshot streaming](MANAGED_SNAPSHOT_STREAMING.md) for
 limits, errors, measured load tests, compatibility, deployment and rollback.
+The [classic browser/cache reliability report](CLASSIC_SNAPSHOT_BROWSER_RELIABILITY_REPORT.md)
+covers bounded LRU admission, explicit retry, lazy directory-tree pages and safe
+storage-limit diagnostics.
 No application migration or new environment setting is required.
 
 ## MCP integration

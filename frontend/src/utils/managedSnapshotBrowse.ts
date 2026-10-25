@@ -7,6 +7,8 @@ export type ManagedSnapshotQuery = {
    limit: number;
    sort: 'name' | 'size' | 'modifiedAt';
    order: 'asc' | 'desc';
+   directoriesOnly?: boolean;
+   retry?: boolean;
 };
 export type ManagedSnapshotPage =
    | { status: 'indexing'; retryAfterMs: number }
@@ -33,8 +35,18 @@ export async function fetchManagedSnapshotPage(
 ): Promise<ManagedSnapshotPage> {
    const response = await fetch(managedSnapshotPageUrl(api, backupId, query), { credentials: 'include', signal });
    const data = await response.json();
-   if (!response.ok || !data.success) throw new Error(data.error || 'Snapshot metadata is unavailable. Retry indexing.');
+   if (!response.ok || !data.success)
+      throw new ManagedSnapshotPageError(data.error || 'Snapshot metadata is unavailable. Retry indexing.', data.reason, response.status);
    return data.result;
+}
+export class ManagedSnapshotPageError extends Error {
+   readonly reason?: string;
+   readonly status?: number;
+   constructor(message: string, reason?: string, status?: number) {
+      super(message);
+      this.reason = reason;
+      this.status = status;
+   }
 }
 export function snapshotParent(directory: string) {
    return directory.slice(0, directory.lastIndexOf('/'));

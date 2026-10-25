@@ -272,3 +272,161 @@ test('wizard selection retains exact paths across pages and can return to comple
       await ui.close();
    }
 });
+
+test('classic sidebar loads only expanded directory pages, pages 601 siblings, and handles an empty folder', async () => {
+   const requests: URL[] = [];
+   const ui = await mount(async (input: any) => {
+      const url = new URL(input);
+      requests.push(url);
+      const parent = url.searchParams.get('path') || '',
+         offset = Number(url.searchParams.get('offset'));
+      const folders = url.searchParams.get('directoriesOnly') === 'true';
+      const total = parent === '/srv' ? 601 : parent ? 0 : 1;
+      const files =
+         parent === '/srv'
+            ? Array.from({ length: Math.min(200, total - offset) }, (_, i) => ({
+                 name: `dir-${String(offset + i).padStart(4, '0')}`,
+                 path: `/srv/dir-${String(offset + i).padStart(4, '0')}`,
+                 type: 'dir',
+                 isDirectory: true,
+                 size: 0,
+                 modifiedAt: '2026-01-01',
+              }))
+            : parent
+              ? []
+              : [{ name: 'srv', path: '/srv', type: 'dir', isDirectory: true, size: 0, modifiedAt: '2026-01-01' }];
+      if (folders) assert.equal(url.searchParams.get('search'), '');
+      return Response.json({
+         success: true,
+         result: {
+            status: 'ready',
+            files,
+            total,
+            offset,
+            limit: 200,
+            nextOffset: offset + files.length < total ? offset + files.length : null,
+            entries: 100000,
+            snapshotId: 'a'.repeat(64),
+         },
+      });
+   });
+   const byLabel = async (label: string) => {
+      const button = ui.dom.window.document.querySelector(`button[aria-label="${label}"]`) as HTMLButtonElement;
+      assert(button, `Missing ${label}`);
+      await act(async () => button.click());
+      await ui.settle();
+   };
+   try {
+      assert.match(ui.dom.window.document.body.textContent!, /Directories/);
+      assert.equal(requests.filter((url) => url.searchParams.get('path') === '/srv').length, 0);
+      await byLabel('Expand srv');
+      assert.equal(ui.dom.window.document.querySelectorAll('[role="treeitem"]').length, 201);
+      assert.equal(requests.filter((url) => url.searchParams.get('path') === '/srv').length, 1);
+      await byLabel('Next folders in /srv');
+      await byLabel('Next folders in /srv');
+      await byLabel('Next folders in /srv');
+      assert.match(ui.dom.window.document.body.textContent!, /601–601 of 601/);
+      await byLabel('Expand dir-0600');
+      assert.match(ui.dom.window.document.body.textContent!, /No subfolders/);
+      await byLabel('Collapse srv');
+      await byLabel('Expand srv');
+      assert.equal(
+         requests.filter((url) => url.searchParams.get('path') === '/srv').length,
+         4,
+         'Collapsing and expanding reuses the completed page.',
+      );
+      const row = [...ui.dom.window.document.querySelectorAll('[role="treeitem"]')].find((row: any) =>
+         row.textContent.includes('dir-0600'),
+      ) as HTMLElement;
+      await act(async () => row.click());
+      await ui.settle();
+      assert.equal(ui.dom.window.document.querySelector('[aria-selected="true"]')?.textContent?.includes('dir-0600'), true);
+      assert(requests.every((url) => Number(url.searchParams.get('limit')) <= 200));
+      assert(ui.dom.window.document.querySelectorAll('[role="treeitem"]').length < 1000);
+   } finally {
+      await ui.close();
+   }
+});
+
+test('rapid expand/collapse aborts pending children and does not duplicate requests', async () => {
+   let pending = 0,
+      aborted = 0;
+   const ui = await mount(async (input: any, init: any) => {
+      const url = new URL(input);
+      if (url.searchParams.get('path') === '/srv') {
+         pending++;
+         return new Promise<Response>((_resolve, reject) =>
+            init.signal.addEventListener(
+               'abort',
+               () => {
+                  aborted++;
+                  reject(new Error('cancelled'));
+               },
+               { once: true },
+            ),
+         );
+      }
+      return Response.json({
+         success: true,
+         result: {
+            status: 'ready',
+            files: [{ name: 'srv', path: '/srv', type: 'dir', isDirectory: true }],
+            total: 1,
+            offset: 0,
+            limit: 200,
+            nextOffset: null,
+            entries: 100000,
+            snapshotId: 'a'.repeat(64),
+         },
+      });
+   });
+   try {
+      const expand = () => ui.dom.window.document.querySelector('button[aria-label="Expand srv"]') as HTMLButtonElement;
+      await act(async () => expand().click());
+      await ui.settle();
+      assert.match(ui.dom.window.document.body.textContent!, /Loading folders/);
+      await act(async () => (ui.dom.window.document.querySelector('button[aria-label="Collapse srv"]') as HTMLButtonElement).click());
+      await ui.settle();
+      assert.equal(aborted, 1);
+      await act(async () => expand().click());
+      await ui.settle();
+      assert.equal(pending, 2);
+   } finally {
+      await ui.close();
+   }
+   assert.equal(aborted, 2, 'Unmount cancels the remaining directory request.');
+});
+
+test('deep navigation retains ancestor expansion with bounded requests and current-page state', async () => {
+   let calls = 0;
+   const ui = await mount(async (input: any) => {
+      calls++;
+      const url = new URL(input), parent = url.searchParams.get('path') || '';
+      const depth = parent.split('/').filter(Boolean).length;
+      const name = `level-${depth}`, files = depth < 80 ? [{ name, path: `${parent}/${name}`, type: 'dir', isDirectory: true }] : [];
+      return Response.json({ success: true, result: { status: 'ready', files, total: files.length, offset: 0, limit: 200, nextOffset: null, entries: 100000, snapshotId: 'a'.repeat(64) } });
+   });
+   try {
+      for (let depth = 0; depth < 80; depth++) await ui.click(`level-${depth}`);
+      assert.equal(ui.dom.window.document.querySelectorAll('[role="treeitem"]').length, 80);
+      assert.equal(ui.dom.window.document.querySelectorAll('[aria-expanded="true"]').length >= 79, true);
+      assert(calls <= 165, 'Each navigation fetches at most one file page and one directory page.');
+      assert(ui.client.getQueryCache().getAll().length <= 1);
+   } finally { await ui.close(); }
+});
+
+test('selection stays highlighted when a table folder belongs to a different sidebar page', async () => {
+   const ui = await mount(async (input: any) => {
+      const url = new URL(input), parent = url.searchParams.get('path') || '', offset = Number(url.searchParams.get('offset'));
+      const files = parent === '/srv' ? Array.from({ length: 200 }, (_, i) => {
+         const name = `dir-${offset + i}`; return { name, path: `/srv/${name}`, type: 'dir', isDirectory: true };
+      }) : parent ? [] : [{ name: 'srv', path: '/srv', type: 'dir', isDirectory: true }];
+      return Response.json({ success: true, result: { status: 'ready', files, total: parent === '/srv' ? 600 : files.length, offset, limit: 200, nextOffset: parent === '/srv' && offset < 400 ? offset + 200 : null, entries: 100000, snapshotId: 'a'.repeat(64) } });
+   });
+   try {
+      await ui.click('srv'); await ui.click('Next'); await ui.click('Next'); await ui.click('dir-555');
+      const selected = ui.dom.window.document.querySelector('[role="treeitem"][aria-selected="true"]');
+      assert(selected?.textContent?.includes('dir-555'));
+      assert(ui.dom.window.document.querySelectorAll('[role="treeitem"]').length < 210);
+   } finally { await ui.close(); }
+});

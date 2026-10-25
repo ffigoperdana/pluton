@@ -5,7 +5,7 @@ param(
 # Disposable fixtures only. No host data/config/credentials, published port or host network.
 $snapshotRepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 foreach ($mode in $Modes) {
-    $cases = if ($mode -eq 'load') { @(22, 5000, 100000) } else { @($mode) }
+    $cases = if ($mode -eq 'load') { @(22, 5000, 79300, 100000) } else { @($mode) }
     foreach ($case in $cases) {
         $snapshotArgs = @('run','--rm','--init','--network','none','--read-only','--user','node','--memory','2g',
             '--tmpfs','/tmp:rw,exec,nosuid,nodev,size=1536m',

@@ -305,6 +305,94 @@
    border-radius: 6px;
 }
 
+.managedContent {
+   min-height: 0;
+   .sidebar {
+      flex: 0 0 280px;
+   }
+   .content {
+      min-width: 0;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+   }
+   .fileList {
+      flex: 1;
+      min-height: 0;
+   }
+   .directory {
+      padding-left: 12px;
+   }
+   .dirName {
+      overflow-wrap: anywhere;
+   }
+   .header button {
+      text-align: center;
+      font-weight: 600;
+   }
+   .header button:first-child {
+      text-align: left;
+   }
+}
+.managedNavigation {
+   display: flex;
+   align-items: center;
+   gap: 12px;
+   padding: 8px 12px;
+   border-bottom: 1px solid var(--line-color);
+   span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+   }
+}
+.folderToggle {
+   display: none;
+}
+.mobileSort {
+   display: none;
+}
+.treeRoot {
+   display: block;
+   text-align: left;
+   padding: 10px 16px;
+   width: 100%;
+}
+.treeControls {
+   font-size: 0.75rem;
+   color: var(--content-text-color-light);
+   display: flex;
+   flex-wrap: wrap;
+   gap: 6px;
+   &:not(:empty) {
+      padding-top: 4px;
+      padding-bottom: 4px;
+   }
+   button {
+      text-decoration: underline;
+   }
+}
+.managedPages {
+   display: flex;
+   flex-wrap: wrap;
+   align-items: center;
+   gap: 12px;
+   padding: 12px;
+   border-top: 1px solid var(--line-color);
+   font-size: 0.8rem;
+   button {
+      border: 1px solid var(--line-color);
+      border-radius: 4px;
+      padding: 5px 10px;
+   }
+   button:disabled {
+      opacity: 0.45;
+      cursor: default;
+   }
+}
+
 @media only screen and (max-width: 768px) {
    .toolbar {
       flex-direction: column;
@@ -328,6 +416,61 @@
    }
    .sidebar {
       display: none;
+   }
+   .folderToggle {
+      display: inline-block;
+   }
+   .mobileSort {
+      display: flex;
+      gap: 6px;
+   }
+   .managedBrowser .toolbarRight {
+      flex-wrap: wrap;
+      min-width: 0;
+      gap: 8px;
+   }
+   .managedBrowser .snapshotFile .fileActions {
+      position: absolute;
+      right: 12px;
+      top: 20px;
+      float: none;
+   }
+   .managedBrowser .snapshotFile .fileName {
+      padding-right: 30px;
+      box-sizing: border-box;
+   }
+   .managedPages {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 6px;
+      padding: 8px;
+      span {
+         font-size: 0.7rem;
+         text-align: center;
+      }
+   }
+   .managedBrowser .toolbarRight .search {
+      flex: 1 1 100%;
+      min-width: 0;
+      input {
+         min-width: 0;
+         width: 100%;
+      }
+   }
+   .managedContent {
+      .sidebar {
+         max-width: 100%;
+      }
+   }
+   .managedContent.showFolders {
+      .sidebar {
+         display: block;
+         flex: 0 0 100%;
+         width: 100%;
+      }
+      .content {
+         display: none;
+      }
    }
 
    .content {

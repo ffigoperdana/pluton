@@ -92,17 +92,22 @@ describe('bounded managed snapshot metadata index', () => {
 	}, 30000);
 	it('deduplicates concurrent requests and never publishes partial/failed construction', async () => {
 		let release!: () => void;
+		let entered!: () => void;
+		const started = new Promise<void>(resolve => {
+			entered = resolve;
+		});
 		const gate = new Promise<void>(resolve => {
 			release = resolve;
 		});
 		const build = jest.fn(async append => {
 			append(node(0));
+			entered();
 			await gate;
 			append(node(1));
 		});
 		const a = cache.use(key, build, index => index.count),
 			b = cache.use(key, build, index => index.count);
-		await new Promise(resolve => setImmediate(resolve));
+		await started;
 		expect(cache.status(key)).toBe('indexing');
 		release();
 		await expect(Promise.all([a, b])).resolves.toEqual([2, 2]);
@@ -118,7 +123,7 @@ describe('bounded managed snapshot metadata index', () => {
 				},
 				() => undefined
 			)
-		).rejects.toMatchObject({ code: 'timeout' });
+		).rejects.toMatchObject({ code: 'index-unavailable', reason: 'timeout' });
 		expect(cache.status(key)).toBe('failed');
 		expect(await fs.readdir(path.join(root, 'indexes'))).toEqual([]);
 		await expect(cache.use(key, populate(22), index => index.count)).resolves.toBe(24);
@@ -179,10 +184,10 @@ describe('bounded managed snapshot metadata index', () => {
 		const gate = new Promise<void>(resolve => {
 			release = resolve;
 		});
-		cache.start(key, async () => gate, true);
-		expect(() =>
+		await cache.start(key, async () => gate, true);
+		await expect(
 			cache.start(ManagedSnapshotIndexCache.key('other'), async () => undefined)
-		).toThrow('resource limit');
+		).rejects.toMatchObject({ reason: 'build-busy' });
 		release();
 	});
 	it('cancels a waiter without exposing partial data to another request', async () => {

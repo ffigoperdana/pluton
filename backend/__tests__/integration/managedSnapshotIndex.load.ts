@@ -8,7 +8,13 @@ import { ManagedSnapshotIndexCache } from '../../src/utils/restic/ManagedSnapsho
 import { consumeMetadataLines } from '../../src/utils/restic/ManagedSftpRepositorySession';
 
 const count = Number(process.argv[2] || 100000);
-assert([22, 5000, 100000].includes(count));
+assert([22, 5000, 79300, 100000].includes(count));
+const fileBytes =
+	count === 5000
+		? Math.ceil((3.16 * 1024 ** 3) / count)
+		: count === 79300
+			? Math.ceil((77.49 * 1024 ** 3) / count)
+			: 832000;
 const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'managed-metadata-load-'));
 const cache = new ManagedSnapshotIndexCache(path.join(scratch, 'indexes'));
 const key = ManagedSnapshotIndexCache.key({ backup: 'backup-01', snapshot: 'a'.repeat(64) });
@@ -26,7 +32,7 @@ async function* listing() {
 			path: `/srv/example-app/${name}`,
 			name,
 			type: 'file',
-			size: 832000,
+			size: fileBytes,
 			mtime: stamp,
 			atime: stamp,
 			ctime: stamp,

@@ -68,9 +68,14 @@ bounds; the listing no longer uses that whole-output limit.
 | Granular restore | Existing 1,024 regular-file/include limits; additionally 8,192 selected nodes/ancestors |
 | Archive timeout | Existing 10 minute inactivity bound; no total archive size cap |
 
+Admission is serialized with at most 16 pending admissions. An idle completed or
+failed index is evicted in least-recently-used order when slots or free space are
+needed. Readers and unfinished builds remain pinned. Native SQLite handles close
+before generated files are removed; failed cleanup retains its reservation.
 These are safety limits, not a promise that every 500,000-entry snapshot fits the
 disk limit. Long names and paths make indexes larger. Resource exhaustion returns
-a closed retryable error, never an incomplete listing. Recovery still needs enough
+a precise closed error, never an incomplete listing. Hard entry/database limits
+are HTTP 413 and are not fixed by repeatedly polling. Recovery still needs enough
 disk for its selected restored content plus the existing 512 MiB reserve and its
 own job limits; full recovery writes content, unlike browse/download.
 
@@ -104,9 +109,12 @@ detaches its waiter; the last cancelled waiter aborts a foreground-only build.
 A build started by paginated browsing has its own bounded background lifetime so
 closing the browser does not cancel another user's work. Cancelled/failed builds
 close SQLite and remove their exact generated directory after processes stop;
-the next explicit request can build again. Failed status is surfaced by the page
-poller before retry. Leases protect indexes used by restores/downloads from idle
-expiry. Retry/expiry cleanup is deduplicated. Shutdown aborts owned work and closes
+the next explicit operation can build again. A failed page poll stops and exposes
+the current error until explicit `retry=true` or expiry. Retry clears the old
+attempt before examining its replacement; it never throws an error saved before
+cleanup. Leases protect indexes used by restores/downloads from expiry and LRU
+eviction. Retry/expiry/admission cleanup is serialized. Shutdown aborts owned builds,
+waits for active consumers, and closes
 indexes. Startup discards only exact generated cache-directory names, never trusts
 old index files and never touches the application DB or restore content.
 
@@ -118,7 +126,10 @@ filesystem/permission repair. No external DB/cache or persistent queue is added.
 ## Authenticated browsing API and UI
 
 `GET /api/backups/:id/files/page` uses the existing administrator session middleware.
-The only query fields are `path`, `search`, `offset`, `limit`, `sort` and `order`.
+The only query fields are `path`, `search`, `offset`, `limit`, `sort`, `order`,
+`directoriesOnly` and `retry`. The last two accept only `true` or `false`.
+`directoriesOnly=true` filters direct child directories on the server; `retry=true`
+is sent once by an explicit retry action, not by every poll.
 `path` is an absolute logical snapshot directory, with empty string for snapshot
 root. Search is a literal filename substring in the current directory, not a glob,
 regular expression, filesystem command or recursive repository operation. Sort is
@@ -135,10 +146,22 @@ directory entries), `entries` (complete snapshot nodes), `offset`, `limit`,
 Indexes are complete before any ready page is returned. Pagination is for display,
 not evidence that a partial manifest is safe.
 
-Managed Browse opens this API immediately, shows indexing/retry states, and uses
-breadcrumbs, virtual rows, directory navigation, filename search and previous/next
-pages. Only the active page is retained by the query cache (`gcTime: 0`); no whole
-managed tree is transferred to Dexie. Historical backup IDs remain the selection
+Managed Browse restores the classic left directory tree and right file table,
+including indentation, expand/collapse, selected-folder highlighting, Last Modified,
+Size and Restore actions. Root folders and expanded children load lazily in pages
+of 200, with independent previous/next folder controls. Empty directories and
+loading/retry states remain visible. Mobile uses a Folders toggle and sort controls;
+the desktop keeps the familiar proportions and theme. Filename search applies only
+to the current right-hand directory, and file pages remain server-sorted.
+Only the active file page is retained by the query cache (`gcTime: 0`). Directory
+state is separately bounded to 4,096 nodes, 512 branch pages/expanded paths and
+eight pending requests, plus bounded selected-ancestor rows (at most 512). A selected
+table folder outside the sidebar's current page stays highlighted through this
+ancestry projection without loading all sibling pages. Inactive pages are evicted; reopening a missing page reloads
+it. If the selected ancestry itself fills the tree budget, a clear retry/collapse
+message is shown. Collapsing cancels pending children; completed pages and expansion
+choices are reused while within budget. No whole managed tree is transferred to
+Dexie. Historical backup IDs remain the selection
 unit. Managed restore-wizard selection uses the same pages, retains at most 1,024
 include/exclude paths, and preserves the complete-snapshot selection option. It
 does not invoke the old complete-list hook. A capped preview explicitly says that
@@ -190,9 +213,16 @@ introduced.
 | --- | --- |
 | `indexing` / 202 | Metadata is being validated; allow polling or reopen later. |
 | `pagination-required` / 409 | Upgrade the client/use the page endpoint. |
-| `index-resource-limit` / 429 | Entry/disk/index/build limit; wait for work/idle expiry, verify cache capacity. Do not raise stdout limits. |
+| `index-resource-limit`, `reason=cache-active` / 429 | Both slots are consumed by active readers; finish/cancel those operations and retry. Idle indexes are evicted automatically. |
+| `index-resource-limit`, `reason=build-busy` / 429 | One metadata build is already running; retry after it completes. |
+| `index-resource-limit`, `reason=admission-busy` / 429 | The bounded admission queue is full; retry shortly. Busy index responses include `Retry-After: 2`. |
+| `index-resource-limit`, `reason=disk-capacity` / 507 | Fewer than 320 MiB remain after safe idle eviction. Check available cache filesystem capacity. |
+| `index-resource-limit`, `reason=database-size` / 413 | SQLite reached its 256 MiB hard page limit. Repeating unchanged indexing does not help. |
+| `index-resource-limit`, `reason=storage-full` / 507 | SQLite reported FULL without sufficient evidence to attribute it to the configured page cap. Inspect filesystem capacity/quota; do not assume snapshot corruption or a full disk. |
+| `index-resource-limit`, `reason=entry-count` / 413 | More than 500,000 metadata nodes. No partial manifest is published. |
 | `repository-busy` / 429 | Two recovery repository sessions already active; retry after one finishes. |
-| `index-unavailable` / 503 | Private cache unavailable or cleanup failed; check disk/ownership and retry. |
+| `index-unavailable`, `reason=unavailable` or `cleanup-failed` / 503 | Private cache unavailable or cleanup failed; check disk/ownership and explicitly retry. |
+| `index-unavailable`, `reason=timeout` / 504 | Indexing deadline expired. Inspect storage latency and explicitly retry. |
 | `metadata-invalid` / 422 | Unsafe, duplicate, inconsistent path/size/time metadata; investigate the snapshot, never skip the record. |
 | `unsupported-snapshot-file` / 409 | Archive/full restore contains symlinks or special/unsafe entries; select safe regular paths for staged recovery if appropriate. |
 | `credentials-unavailable` / 502 | Stored credentials cannot be resolved; verify existing configuration privately. |
@@ -221,6 +251,23 @@ rclone version
 df -h /var/lib/pluton
 du -sh /var/lib/pluton/managed-snapshot-indexes
 ```
+
+The `snapshot_index` JSON log event includes only closed stage/reason values and
+numeric index/build/reader counts, metadata entries, database bytes, last observed
+available filesystem bytes and duration milliseconds. It includes no snapshot
+paths, cache key, connection configuration or provider output. For Compose,
+project just this event before sharing diagnostics:
+
+```sh
+docker compose logs --no-log-prefix --tail 200 pluton | jq -Rc 'fromjson? | select(.event == "snapshot_index") | {stage,reason,indexes,builds,readers,entries,databaseBytes,availableBytes,durationMs}'
+docker compose exec -T pluton node -e 'const d=require("fs").statfsSync("/data/managed-snapshot-indexes");console.log(JSON.stringify({availableBytes:d.bavail*d.bsize,totalBytes:d.blocks*d.bsize}))'
+```
+
+These are operator instructions, not commands executed against production by
+this task. `availableBytes` is an observation, not a disk reservation or proof that
+a per-user/container filesystem quota permits a write. SQLite FULL may roll a
+transaction back; the cache preserves bounded allocation samples and reports a
+proven page-cap failure separately from an ambiguous storage/quota failure.
 
 Use the authenticated browser network panel to record the HTTP status and closed
 code, and whether failure was before headers or during TAR transfer. Compare the
@@ -271,6 +318,9 @@ indexing, then proves browse/download did not change the resulting repository.
 It does not allocate or transfer 77 GiB of content. Native resource/timing results
 and full command outcomes are recorded in the
 [delivery report](MANAGED_SNAPSHOT_STREAMING_REPORT.md).
+The [classic browser and cache reliability follow-up](CLASSIC_SNAPSHOT_BROWSER_RELIABILITY_REPORT.md)
+adds 79,300-file measurements, actual three-snapshot switching, classic desktop/
+mobile screenshots, new regression results and deployment acceptance limits.
 
 Unit/component tests cover malformed and fragmented records, unsupported types,
 duplicates/traversal/ancestors, full-ID/ownership/storage mismatch, process timeout

@@ -14,12 +14,14 @@ interface SnapshotBrowserDirectoriesProps {
    renderDirectoryExtra?: (dir: string) => ReactNode;
    /** Custom function to split a path into parts. Defaults to splitting by / and \ */
    splitPath?: (path: string) => string[];
+   headerContent?: ReactNode;
+   renderAfterDirectory?: (dir: string) => ReactNode;
+   rootContent?: ReactNode;
 }
 
 const defaultSplitPath = (path: string) => path.split(/[/\\]/).filter(Boolean);
 
-const SnapshotBrowserDirectories = ({
-   directories,
+const SnapshotBrowserDirectories = ({directories,
    selectedFolder,
    expandedFolders,
    useProgressiveLoading,
@@ -29,15 +31,20 @@ const SnapshotBrowserDirectories = ({
    hasSubdirectories,
    renderDirectoryExtra,
    splitPath: splitPathFn = defaultSplitPath,
-}: SnapshotBrowserDirectoriesProps) => {
+   headerContent,
+   renderAfterDirectory,
+   rootContent,}: SnapshotBrowserDirectoriesProps) => {
    return (
       <div className={`${classes.sidebar} styled__scrollbar`}>
          <div className={classes.sidebarHeader}>
-            <h4>
-               Directories ({directories.length}
-               {useProgressiveLoading && '+'})
-            </h4>
+            {headerContent || (
+               <h4>
+                  Directories ({directories.length}
+                  {useProgressiveLoading && '+'})
+               </h4>
+            )}
          </div>
+         {rootContent}
          {directories.length === 0 && (
             <div className={classes.noDirectories}>{useProgressiveLoading ? 'Loading directories...' : 'No directories found'}</div>
          )}
@@ -51,29 +58,35 @@ const SnapshotBrowserDirectories = ({
             if (!isVisible(dir)) return null;
 
             return (
-               <div
-                  key={dir}
-                  className={`${classes.directory} ${selectedFolder === dir ? classes.selected : ''} ${hasChildren ? '' : classes.directoryEmpty}`}
-                  style={{ paddingLeft: `${depth * 20}px` }}
-                  onClick={() => onDirectoryClick(dir)}
-               >
-                  {hasChildren ? (
-                     <button
-                        className={classes.toggleButton}
-                        onClick={(e) => {
-                           e.stopPropagation();
-                           onToggleFolder(dir);
-                        }}
-                     >
-                        {isExpanded ? '-' : '+'}
-                     </button>
-                  ) : (
-                     <span className={classes.togglePlaceholder} />
-                  )}
-                  <span className={classes.dirName}>
-                     <Icon type={'fm-directory'} size={14} /> {dirName}
-                  </span>
-                  {renderDirectoryExtra?.(dir)}
+               <div key={dir}>
+                  <div
+                     role="treeitem"
+                     aria-selected={selectedFolder === dir}
+                     aria-expanded={hasChildren ? isExpanded : undefined}
+                     className={`${classes.directory} ${selectedFolder === dir ? classes.selected : ''} ${hasChildren ? '' : classes.directoryEmpty}`}
+                     style={{ paddingLeft: `${depth * 20}px` }}
+                     onClick={() => onDirectoryClick(dir)}
+                  >
+                     {hasChildren ? (
+                        <button
+                           aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${dirName}`}
+                           className={classes.toggleButton}
+                           onClick={(e) => {
+                              e.stopPropagation();
+                              onToggleFolder(dir);
+                           }}
+                        >
+                           {isExpanded ? '-' : '+'}
+                        </button>
+                     ) : (
+                        <span className={classes.togglePlaceholder} />
+                     )}
+                     <span className={classes.dirName}>
+                        <Icon type={'fm-directory'} size={14} /> {dirName}
+                     </span>
+                     {renderDirectoryExtra?.(dir)}
+                  </div>
+                  {isExpanded && renderAfterDirectory?.(dir)}
                </div>
             );
          })}
