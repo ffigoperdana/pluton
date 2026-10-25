@@ -57,7 +57,7 @@ const output = await backendRequire('esbuild').build({
             stub(/\.scss$/, 'export default {};');
             stub(/[\\/]Icon\.tsx$/, 'export default ()=>null;');
             stub(/[\\/]utils[\\/]constants\.ts$/, 'export const API_URL="https://example.internal/api";');
-            stub(/[\\/]utils[\\/]helpers\.ts$/, 'export const formatBytes=String;export const isMobile=()=>false;');
+            stub(/[\\/]utils[\\/]helpers\.ts$/, 'export const formatBytes=String;export const isMobile=()=>!!globalThis.__snapshotMobile;');
             stub(
                /[\\/]services[\\/]restores\.ts$/,
                'export const useRestoreBackup=()=>({isPending:false,mutate:payload=>globalThis.__snapshotRestores.push(payload)});',
@@ -81,9 +81,9 @@ const output = await backendRequire('esbuild').build({
 const module = { exports: {} as any };
 new Function('require', 'module', 'exports', output.outputFiles[0].text)(require, module, module.exports);
 const Viewer = module.exports.default;
-async function mount(fetcher: typeof fetch, selectionMode = false) {
+async function mount(fetcher: typeof fetch, selectionMode = false, mobile = false) {
    const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.internal/' });
-   const globals = ['window', 'document', 'HTMLElement', 'IS_REACT_ACT_ENVIRONMENT', 'fetch', '__snapshotRestores'];
+   const globals = ['window', 'document', 'HTMLElement', 'IS_REACT_ACT_ENVIRONMENT', 'fetch', '__snapshotRestores', '__snapshotMobile'];
    const previous = globals.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
    const restores: any[] = [];
    for (const key of globals)
@@ -97,7 +97,9 @@ async function mount(fetcher: typeof fetch, selectionMode = false) {
                  ? true
                  : key === '__snapshotRestores'
                    ? restores
-                   : (dom.window as any)[key],
+                   : key === '__snapshotMobile'
+                     ? mobile
+                     : (dom.window as any)[key],
       });
    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
    let selectedPaths: { includes: string[]; excludes: string[] } | undefined;
@@ -115,6 +117,36 @@ async function mount(fetcher: typeof fetch, selectionMode = false) {
       });
    }
    const root = require('react-dom/client').createRoot(dom.window.document.getElementById('root'));
+   const diagnostics = () => ({
+      queries: client
+         .getQueryCache()
+         .getAll()
+         .map((query: any) => ({ key: query.queryKey, fetching: query.state.fetchStatus, status: query.state.status })),
+      rows: [...dom.window.document.querySelectorAll('section button')]
+         .map((button) => button.textContent)
+         .filter((name) => name?.startsWith('dir-'))
+         .filter((_, index, rows) => index === 0 || index === rows.length - 1),
+      pagination: [...dom.window.document.querySelectorAll('[aria-label="Snapshot pages"] button')].map((button: any) => ({
+         name: button.textContent,
+         disabled: button.disabled,
+      })),
+      selected: dom.window.document.querySelector('[role="treeitem"][aria-selected="true"]')?.textContent,
+   });
+   const waitFor = async (condition: () => unknown, label: string) => {
+      const deadline = Date.now() + 2000;
+      do {
+         // Yield for React Query's scheduled notifications and flush React work;
+         // readiness is determined by the predicate, never by elapsed sleep time.
+         await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+         });
+         if (condition()) return;
+      } while (Date.now() < deadline);
+      assert.fail(`Timed out waiting for ${label}: ${JSON.stringify(diagnostics())}`);
+   };
+   const settle = () => waitFor(() => client.isFetching() === 0, 'the current query to finish');
+   const findButton = (text: string) =>
+      [...dom.window.document.querySelectorAll('button')].find((button) => button.textContent === text) as HTMLButtonElement | undefined;
    await act(async () => {
       root.render(
          React.createElement(
@@ -123,17 +155,14 @@ async function mount(fetcher: typeof fetch, selectionMode = false) {
             React.createElement(require('react-router').MemoryRouter, {}, React.createElement(Host)),
          ),
       );
-      await new Promise((resolve) => setTimeout(resolve, 30));
    });
-   const settle = async () =>
-      act(async () => {
-         await new Promise((resolve) => setTimeout(resolve, 30));
-      });
    const click = async (text: string) => {
-      const button = [...dom.window.document.querySelectorAll('button')].find((item: any) => item.textContent === text) as any;
-      assert(button, `Missing button ${text}`);
+      await waitFor(() => {
+         const button = findButton(text);
+         return button && !button.disabled;
+      }, `enabled button ${text}`);
       await act(async () => {
-         button.click();
+         findButton(text)!.click();
       });
       await settle();
    };
@@ -144,6 +173,21 @@ async function mount(fetcher: typeof fetch, selectionMode = false) {
       restores,
       click,
       settle,
+      waitFor,
+      findButton,
+      diagnostics,
+      async waitForPage(path: string, offset: number, row: string) {
+         await waitFor(
+            () => {
+               const query: any = client
+                  .getQueryCache()
+                  .getAll()
+                  .find((query: any) => query.queryKey[2] === path && query.queryKey[4] === offset);
+               return query?.state.fetchStatus === 'idle' && query?.state.data?.status === 'ready' && !!findButton(row);
+            },
+            `page ${path || '/'} offset=${offset} with row ${row}`,
+         );
+      },
       selection: () => selectedPaths,
       async close() {
          await act(async () => root.unmount());
@@ -155,6 +199,7 @@ async function mount(fetcher: typeof fetch, selectionMode = false) {
       },
    };
 }
+
 test('managed viewer navigates pages and directories without whole-tree metadata or IndexedDB', async () => {
    const requests: URL[] = [];
    const ui = await mount(async (input: any) => {
@@ -415,18 +460,202 @@ test('deep navigation retains ancestor expansion with bounded requests and curre
    } finally { await ui.close(); }
 });
 
-test('selection stays highlighted when a table folder belongs to a different sidebar page', async () => {
+// Advance only the application's 300 ms search debounce. Query notifications and
+// network gates use their real scheduler; this is not a longer readiness sleep.
+function controlSearchDebounce() {
+   const originalTimeout = globalThis.setTimeout,
+      originalClear = globalThis.clearTimeout;
+   const pending = new Map<ReturnType<typeof setTimeout>, () => void>();
+   globalThis.setTimeout = ((callback: (...args: any[]) => void, delay?: number, ...args: any[]) => {
+      if (delay !== 300) return originalTimeout(callback, delay, ...args);
+      const handle = originalTimeout(() => {}, 2 ** 31 - 1);
+      handle.unref();
+      pending.set(handle, () => callback(...args));
+      return handle;
+   }) as typeof setTimeout;
+   globalThis.clearTimeout = ((handle: ReturnType<typeof setTimeout>) => {
+      pending.delete(handle);
+      originalClear(handle);
+   }) as typeof clearTimeout;
+   return {
+      pending: () => pending.size,
+      async flush() {
+         await act(async () => {
+            for (const [handle, callback] of [...pending]) {
+               if (!pending.delete(handle)) continue;
+               originalClear(handle);
+               callback();
+            }
+         });
+      },
+      restore() {
+         for (const handle of pending.keys()) originalClear(handle);
+         globalThis.setTimeout = originalTimeout;
+         globalThis.clearTimeout = originalClear;
+      },
+   };
+}
+
+for (const mobile of [false, true])
+   test(`selection stays highlighted when a table folder belongs to a different sidebar page${mobile ? ' on mobile' : ''}`, async () => {
+      const clock = controlSearchDebounce();
+      const requests: { path: string; offset: number; folders: boolean; limit: number }[] = [];
+      const network = new Map<number, () => void>();
+      let active = 0,
+         peakActive = 0;
+      const ui = await mount(
+         async (input: any, init: any) => {
+            const url = new URL(input),
+               parent = url.searchParams.get('path') || '',
+               offset = Number(url.searchParams.get('offset'));
+            const folders = url.searchParams.get('directoriesOnly') === 'true';
+            requests.push({ path: parent, offset, folders, limit: Number(url.searchParams.get('limit')) });
+            active++;
+            peakActive = Math.max(peakActive, active);
+            try {
+               if (parent === '/srv' && !folders && offset > 0)
+                  await new Promise<void>((resolve, reject) => {
+                     const abort = () => {
+                        network.delete(offset);
+                        reject(new Error('cancelled fixture request'));
+                     };
+                     network.set(offset, () => {
+                        init.signal.removeEventListener('abort', abort);
+                        network.delete(offset);
+                        resolve();
+                     });
+                     init.signal.addEventListener('abort', abort, { once: true });
+                  });
+               const files =
+                  parent === '/srv'
+                     ? Array.from({ length: 200 }, (_, i) => {
+                          const name = `dir-${offset + i}`;
+                          return { name, path: `/srv/${name}`, type: 'dir', isDirectory: true };
+                       })
+                     : parent
+                       ? []
+                       : [{ name: 'srv', path: '/srv', type: 'dir', isDirectory: true }];
+               return Response.json({
+                  success: true,
+                  result: {
+                     status: 'ready',
+                     files,
+                     total: parent === '/srv' ? 600 : files.length,
+                     offset,
+                     limit: 200,
+                     nextOffset: parent === '/srv' && offset < 400 ? offset + 200 : null,
+                     entries: 100000,
+                     snapshotId: 'a'.repeat(64),
+                  },
+               });
+            } finally {
+               active--;
+            }
+         },
+         false,
+         mobile,
+      );
+      const offsets = () => requests.filter((request) => request.path === '/srv' && !request.folders).map((request) => request.offset);
+      const requestPage = async (offset: number) => {
+         const next = ui.findButton('Next');
+         assert(next && !next.disabled, JSON.stringify(ui.diagnostics()));
+         await act(async () => {
+            next.click();
+            next.click();
+            next.click();
+         });
+         await ui.waitFor(() => network.has(offset), `API request offset=${offset}`);
+         assert.equal(ui.client.isFetching(), 1);
+         assert.match(ui.dom.window.document.body.textContent!, /Loading snapshot metadata/);
+         assert(!ui.findButton('dir-555'), 'A pending response must not expose a row from the next page.');
+         assert.equal(offsets().at(-1), offset);
+      };
+      try {
+         await ui.waitForPage('', 0, 'srv');
+         await ui.click('srv');
+         await ui.waitForPage('/srv', 0, 'dir-0');
+         await requestPage(200);
+         assert.deepEqual(offsets(), [0, 200], 'Rapid clicks must not skip or duplicate requests.');
+         await act(async () => network.get(200)!());
+         await ui.waitForPage('/srv', 200, 'dir-200');
+         assert(ui.findButton('dir-399'));
+         // Previously, the mount-time no-op debounce reset this settled page to zero.
+         await clock.flush();
+         await ui.waitForPage('/srv', 200, 'dir-200');
+         assert.deepEqual(offsets(), [0, 200], JSON.stringify(ui.diagnostics()));
+         await requestPage(400);
+         if (mobile) {
+            await act(async () => ui.findButton('Folders')!.click());
+            assert.equal(ui.findButton('Folders')!.getAttribute('aria-expanded'), 'true');
+            await act(async () => ui.findButton('Folders')!.click());
+         }
+         await act(async () => network.get(400)!());
+         await ui.waitForPage('/srv', 400, 'dir-555');
+         assert(ui.findButton('dir-400'));
+         assert(ui.findButton('dir-599'));
+         assert.equal(ui.findButton('Next')!.disabled, true);
+         assert.deepEqual(offsets(), [0, 200, 400]);
+         await ui.click('dir-555');
+         await ui.waitFor(
+            () => ui.dom.window.document.querySelector('[role="treeitem"][aria-selected="true"]')?.textContent?.includes('dir-555'),
+            'selected sidebar folder dir-555',
+         );
+         assert(
+            ui.client
+               .getQueryCache()
+               .getAll()
+               .some((query: any) => query.queryKey[2] === '/srv/dir-555' && query.queryKey[4] === 0),
+         );
+         assert.equal(requests.filter((request) => request.folders && request.path === '/srv').length, 1);
+         assert(requests.every((request) => request.limit === 200));
+         assert(peakActive <= 8, 'The existing tree request limit remains enforced.');
+         assert(ui.client.getQueryCache().getAll().length <= 1);
+         assert(ui.dom.window.document.querySelectorAll('[role="treeitem"]').length < 210);
+      } finally {
+         await ui.close();
+         clock.restore();
+      }
+   });
+
+test('only an actual debounced search change resets a later page', async () => {
+   const clock = controlSearchDebounce();
+   const requests: URL[] = [];
    const ui = await mount(async (input: any) => {
-      const url = new URL(input), parent = url.searchParams.get('path') || '', offset = Number(url.searchParams.get('offset'));
-      const files = parent === '/srv' ? Array.from({ length: 200 }, (_, i) => {
-         const name = `dir-${offset + i}`; return { name, path: `/srv/${name}`, type: 'dir', isDirectory: true };
-      }) : parent ? [] : [{ name: 'srv', path: '/srv', type: 'dir', isDirectory: true }];
-      return Response.json({ success: true, result: { status: 'ready', files, total: parent === '/srv' ? 600 : files.length, offset, limit: 200, nextOffset: parent === '/srv' && offset < 400 ? offset + 200 : null, entries: 100000, snapshotId: 'a'.repeat(64) } });
+      const url = new URL(input);
+      requests.push(url);
+      const offset = Number(url.searchParams.get('offset')),
+         search = url.searchParams.get('search');
+      const name = search ? 'search-result.txt' : offset ? 'second.txt' : 'first.txt';
+      return Response.json({
+         success: true,
+         result: {
+            status: 'ready',
+            files: [{ name, path: `/${name}`, type: 'file', isDirectory: false }],
+            total: 400,
+            offset,
+            limit: 200,
+            nextOffset: offset ? null : 200,
+            entries: 100000,
+            snapshotId: 'a'.repeat(64),
+         },
+      });
    });
    try {
-      await ui.click('srv'); await ui.click('Next'); await ui.click('Next'); await ui.click('dir-555');
-      const selected = ui.dom.window.document.querySelector('[role="treeitem"][aria-selected="true"]');
-      assert(selected?.textContent?.includes('dir-555'));
-      assert(ui.dom.window.document.querySelectorAll('[role="treeitem"]').length < 210);
-   } finally { await ui.close(); }
+      await ui.waitForPage('', 0, 'first.txt');
+      assert.equal(clock.pending(), 0, 'An unchanged initial filter must not schedule a reset.');
+      await ui.click('Next');
+      await ui.waitForPage('', 200, 'second.txt');
+      const input = ui.dom.window.document.querySelector('input')!;
+      await act(async () => require('react-dom/test-utils').Simulate.change(input, { target: { value: 'report' } }));
+      assert.equal(clock.pending(), 1);
+      assert(ui.findButton('second.txt'), 'The old filter stays active until the debounce fires.');
+      await clock.flush();
+      await ui.waitForPage('', 0, 'search-result.txt');
+      const fileRequests = requests.filter((url) => url.searchParams.get('directoriesOnly') !== 'true');
+      assert.equal(fileRequests.at(-1)!.searchParams.get('search'), 'report');
+      assert.equal(fileRequests.at(-1)!.searchParams.get('offset'), '0');
+   } finally {
+      await ui.close();
+      clock.restore();
+   }
 });

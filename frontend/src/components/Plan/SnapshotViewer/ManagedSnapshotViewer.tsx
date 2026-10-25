@@ -50,12 +50,15 @@ export default function ManagedSnapshotViewer({backup,
    const restore = useRestoreBackup();
    const navigate = useNavigate();
    useEffect(() => {
+      // Only an actual filter change may reset pagination. An initial/no-op
+      // debounce can otherwise fire after the user has already changed pages.
+      if (search === debouncedSearch) return;
       const timer = setTimeout(() => {
          setDebouncedSearch(search);
          setOffset(0);
       }, 300);
       return () => clearTimeout(timer);
-   }, [search]);
+   }, [search, debouncedSearch]);
    const query = useQuery({queryKey: ['managed-snapshot-page', backup.id, directory, debouncedSearch, offset, sort, order],
       meta: { retryIndex },
       queryFn: async ({ signal, meta }) => {
