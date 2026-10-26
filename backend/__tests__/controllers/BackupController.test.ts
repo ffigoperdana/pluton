@@ -47,6 +47,21 @@ describe('BackupController', () => {
 	});
 
 	describe('bounded managed directory pages', () => {
+		it('passes literal POSIX punctuation to the service without decoding it again', async () => {
+			mockRequest.params = { id: 'backup-01' };
+			mockRequest.query = { path: '/srv/100%complete/%2e%2e:文件' };
+			mockBackupService.getSnapshotPage.mockResolvedValue({
+				status: 'indexing',
+				retryAfterMs: 1000,
+			});
+			await backupController.getSnapshotPage(mockRequest as Request, mockResponse as Response);
+			expect(mockBackupService.getSnapshotPage).toHaveBeenCalledWith(
+				'backup-01',
+				{ path: mockRequest.query.path },
+				expect.any(AbortSignal)
+			);
+			expect(mockStatus).toHaveBeenCalledWith(202);
+		});
 		it('passes only bounded directory and explicit retry selectors to the authorized service', async () => {
 			mockRequest.params = { id: 'backup-01' };
 			mockRequest.query = {

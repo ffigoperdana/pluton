@@ -18,6 +18,7 @@ import {
 	normalizeLegacySnapshotPath,
 	resolvePathWithin,
 } from '../utils/legacySnapshotPath';
+import { managedSnapshotPath, assertManagedRestorePath } from '../utils/managedSnapshotPath';
 import { planLogger } from '../utils/logger';
 import {
 	fullSnapshotId,
@@ -184,7 +185,7 @@ export class RemoteRepositoryRecoveryService {
 						stage('snapshot-validation');
 						await this.verifySnapshot(context, session);
 						try {
-							listed.assertSafe();
+							listed.assertSafe('restore');
 						} catch {
 							throw new RecoveryTestError('snapshot-validation', 'unsupported-snapshot-file');
 						}
@@ -240,7 +241,7 @@ export class RemoteRepositoryRecoveryService {
 							throw new RecoveryTestError('snapshot-validation', 'snapshot-binding-mismatch');
 						for (const source of sources) {
 							const stat = await fs.lstat(
-								resolvePathWithin(target, normalizeLegacySnapshotPath(source.slice(1), false))
+								resolvePathWithin(target, managedSnapshotPath(source).slice(1))
 							);
 							if (!stat.isDirectory() || stat.isSymbolicLink())
 								throw new RecoveryTestError('filesystem-validation', 'source-tree-missing');
@@ -406,11 +407,16 @@ export class RemoteRepositoryRecoveryService {
 						{
 							event: 'remote_download_failed',
 							stage,
-							code: signal.aborted
-								? 'cancelled'
-								: safe instanceof ManagedRepositoryAccessError
+							// Destroying HTTP after a server failure also aborts its signal.
+							// Preserve the known failure instead of relabeling it cancellation.
+							code:
+								safe instanceof ManagedRepositoryAccessError
 									? safe.code
-									: 'validation-failed',
+									: safe instanceof SnapshotIndexError
+										? safe.reason
+										: signal.aborted
+											? 'cancelled'
+											: 'validation-failed',
 						},
 						'Remote download failed.'
 					);
@@ -753,7 +759,7 @@ export class RemoteRepositoryRecoveryService {
 			for (const file of paths) {
 				if (typeof file !== 'string' || !file.startsWith('/'))
 					throw new AppError(400, 'Select exact absolute snapshot paths.');
-				normalizeLegacySnapshotPath(file.slice(1), false);
+				managedSnapshotPath(file);
 				if (/[*?[\]]/.test(file))
 					throw new AppError(400, 'Wildcard selections are not supported for staged recovery.');
 			}
@@ -768,7 +774,7 @@ export class RemoteRepositoryRecoveryService {
 		}
 		const full = !includes.length && !excludes.length;
 		if (full) {
-			index.assertSafe();
+			index.assertSafe('restore');
 			if (!index.count) throw new AppError(400, 'No entries were selected for staged recovery.');
 			return { files: index, includes: [], full: true, stats: index.stats };
 		}
@@ -800,9 +806,10 @@ export class RemoteRepositoryRecoveryService {
 		}
 		const selected = [...chosen.values()];
 		// Do not create device nodes or symlink-mediated writes in server staging.
-		if (selected.some(file => !['file', 'dir'].includes(file.type) || file.path.includes(':'))) {
+		if (selected.some(file => !['file', 'dir'].includes(file.type))) {
 			throw new AppError(400, 'Staged recovery supports regular files and directories only.');
 		}
+		for (const file of selected) assertManagedRestorePath(file.path);
 		const regularFiles = selected.filter(file => file.type === 'file');
 		if (!selected.length) throw new AppError(400, 'No entries were selected for staged recovery.');
 		if (!full && (regularFiles.length > 1024 || selected.some(file => /[*?[\]]/.test(file.path)))) {

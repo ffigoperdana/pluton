@@ -3,7 +3,7 @@ import { BackupService } from '../services/BackupServices';
 import { AppError } from '../utils/AppError';
 import { RetainedRestoreDependencyError } from '../utils/retainedRestoreDependency';
 import { z } from 'zod';
-import { normalizeLegacySnapshotPath } from '../utils/legacySnapshotPath';
+import { managedSnapshotPath } from '../utils/managedSnapshotPath';
 import { SnapshotIndexError } from '../utils/restic/ManagedSnapshotIndex';
 import { ManagedRepositoryAccessError } from '../utils/restic/ManagedSftpRepositorySession';
 
@@ -209,7 +209,7 @@ export class BackupController {
 			const query = parsed.data;
 			if (query.path) {
 				if (!query.path.startsWith('/')) throw new AppError(400, 'Invalid snapshot directory.');
-				normalizeLegacySnapshotPath(query.path.slice(1), false);
+				managedSnapshotPath(query.path);
 			}
 			if (
 				query.search &&

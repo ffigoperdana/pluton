@@ -23,6 +23,37 @@ async function client(name: string) {
 const clients = Object.fromEntries(await Promise.all(['plans', 'backups', 'restores', 'storage', 'databaseRestores', 'legacyRepositories', 'notifications', 'devices', 'recoveryTests'].map(async name => [name, await client(name)])));
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
 
+test('download preparation encodes identities and only confirms a completed JSON response without replay', async () => {
+   const previous = globalThis.fetch;
+   const payload = { backupId: 'backup/01', planId: 'plan-01', replicationId: 'replica&01' };
+   let calls = 0;
+   let response = json({ success: true, result: { streaming: true } });
+   globalThis.fetch = async (input, init) => {
+      calls++;
+      const url = new URL(String(input));
+      assert.equal(url.pathname, '/api/backups/backup%2F01/action/download');
+      assert.equal(url.searchParams.get('replicationId'), 'replica&01');
+      assert.equal(init?.method, 'POST');
+      assert.equal(init?.credentials, 'include');
+      assert.equal(init?.redirect, 'error');
+      return response;
+   };
+   try {
+      assert.equal((await clients.backups.generateBackupDownload(payload)).result.streaming, true);
+      for (const status of [429, 502, 503, 504]) {
+         response = new Response('<html>private proxy diagnostic</html>', { status, headers: { 'Content-Type': 'text/html' } });
+         await assert.rejects(clients.backups.generateBackupDownload(payload), (error: any) =>
+            error.status === status && error.outcome === 'unknown' && /HTML/.test(error.message) && !error.message.includes('private proxy'));
+      }
+      response = json({ success: false, code: 'unsupported-snapshot-file', error: 'Snapshot contains an unsupported node.' }, 422);
+      await assert.rejects(clients.backups.generateBackupDownload(payload), (error: any) => error.code === 'unsupported-snapshot-file' && error.outcome === 'rejected');
+      response = json({ success: true }, 202);
+      await assert.rejects(clients.backups.generateBackupDownload(payload), (error: any) => error.outcome === 'pending');
+      assert.equal(calls, 7);
+      assert.equal(clients.backups.useDownloadBackup().retry, false);
+   } finally { globalThis.fetch = previous; }
+});
+
 test('replication retry preserves exact identities, session and rejected/unknown outcomes without automatic retry', async () => {
    const previous = globalThis.fetch;
    let response = json({ success: true, result: 'Replication retry queued' }, 202);

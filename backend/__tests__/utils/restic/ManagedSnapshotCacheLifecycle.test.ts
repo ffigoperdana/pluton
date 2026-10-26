@@ -41,6 +41,24 @@ describe('managed index cache lifecycle and bounded admission', () => {
 		await fs.rm(root, { recursive: true, force: true });
 	});
 	const fill = (id: string) => cache.use(key(id), populate, index => index.count);
+	it.each([1000, 900])(
+		'keeps the most recently used index when the clock subsequently reads %i',
+		async next => {
+			const clock = jest.spyOn(Date, 'now').mockReturnValue(1000);
+			const build = jest.fn(populate);
+			const access = (id: string) => cache.use(key(id), build, index => index.count);
+			await access('A');
+			await access('B');
+			clock.mockReturnValue(next);
+			await access('A');
+			await access('C');
+			expect(cache.status(key('A'))).toBe('ready');
+			expect(cache.status(key('B'))).toBe('missing');
+			expect(cache.status(key('C'))).toBe('ready');
+			await access('A');
+			expect(build).toHaveBeenCalledTimes(3);
+		}
+	);
 
 	it('opens A then B then C with two slots and deterministically evicts the least recently used idle index', async () => {
 		await fill('A');
@@ -232,8 +250,28 @@ describe('managed index cache lifecycle and bounded admission', () => {
 					},
 					() => {}
 				)
-			).rejects.toMatchObject({ reason: code === 'invalid-output' ? 'metadata-invalid' : code });
+			).rejects.toMatchObject({
+				reason: code === 'invalid-output' ? 'repository-output-invalid' : code,
+			});
 		}
+	});
+	it('projects untrusted provider reasons to a closed diagnostic category', async () => {
+		await expect(
+			cache.use(
+				key('invalid'),
+				async () => {
+					throw Object.assign(new Error('private provider output'), {
+						code: 'invalid-output',
+						reason: '/private/raw-filename',
+					});
+				},
+				() => {}
+			)
+		).rejects.toMatchObject({
+			code: 'metadata-invalid',
+			reason: 'repository-output-invalid',
+			statusCode: 422,
+		});
 	});
 	it('releases idle disk occupancy even before the second cache slot is full', async () => {
 		await fill('A');

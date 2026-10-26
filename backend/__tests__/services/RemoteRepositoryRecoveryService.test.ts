@@ -616,19 +616,33 @@ describe('Phase 4 remote managed repository recovery', () => {
 		);
 		it.each([
 			'/srv/../escape',
-			'/srv/%2e%2e/escape',
+			'/srv/%2e%2e/../escape',
 			'/srv/example\\escape',
-			'/srv/C:escape',
+			'/srv/C:escape/../escape',
 			'relative/file',
 		])('refuses traversal/unsafe path %s before archive', async unsafe => {
 			session.files.mockResolvedValue([{ ...nodes[2], path: unsafe } as any]);
-			const expected = unsafe.includes(':')
-				? { statusCode: 409, code: 'unsupported-snapshot-file' }
-				: { statusCode: 422, code: 'metadata-invalid' };
+			const expected = { statusCode: 422, code: 'metadata-invalid', reason: 'unsafe-path' };
 			await expect(service.prepareDownload('backup-01')).rejects.toMatchObject(expected);
 			await expect(transfer()).rejects.toMatchObject(expected);
 			expect(session.archive).not.toHaveBeenCalled();
 		});
+		it.each(['/srv/100%complete.txt', '/srv/%2e%2e/escape', '/srv/C:escape'])(
+			'exports literal POSIX path %s without URL decoding or host-path interpretation',
+			async exact => {
+				session.files.mockResolvedValue([{ ...nodes[2], path: exact }] as any);
+				await expect(service.prepareDownload('backup-01')).resolves.toEqual({ streaming: true });
+				await transfer();
+				expect(session.archive).toHaveBeenCalledWith(snapshotId, expect.any(Writable));
+				if (!exact.includes(':')) {
+					const preview = await service.preview('backup-01', { ...config, includes: [exact] });
+					expect(preview.files[0].path).toBe(exact);
+				}
+				await expect(
+					service.preview('backup-01', { ...config, includes: ['/srv/not-present'] })
+				).rejects.toMatchObject({ statusCode: 404 });
+			}
+		);
 		it('sanitizes the filename even for malformed stored identifiers', async () => {
 			const unsafeId = 'backup-01"\r\nInjected: value/..';
 			session.snapshot.mockResolvedValue({
@@ -654,6 +668,29 @@ describe('Phase 4 remote managed repository recovery', () => {
 				expect(logged).toContain('archive-stream');
 				expect(logged).toContain(code);
 				expect(logged).not.toMatch(/synthetic-.*password|encryptedPassword|rclone\.conf/);
+			}
+		);
+		it.each(['archive-failed', 'timeout'] as const)(
+			'preserves %s diagnostics when closing HTTP also aborts the request',
+			async code => {
+				const controller = new AbortController();
+				session.archive.mockImplementation(async () => {
+					controller.abort();
+					throw new ManagedRepositoryAccessError(code);
+				});
+				const { destination } = sink();
+				await expect(
+					(await service.download('backup-01')).streamTo(destination, controller.signal, jest.fn())
+				).rejects.toMatchObject({ code });
+				const records = (planLogger as jest.Mock).mock.results.flatMap(result =>
+					result.value.warn.mock.calls.map((call: any[]) => call[0])
+				);
+				expect(records).toContainEqual({
+					event: 'remote_download_failed',
+					stage: 'archive-stream',
+					code,
+				});
+				destination.destroy();
 			}
 		);
 		it('does not expose arbitrary exceptions or credential materialization failures', async () => {
@@ -949,7 +986,7 @@ describe('Phase 4 remote managed repository recovery', () => {
 		expect(withSession).not.toHaveBeenCalled();
 		expect(session.restore).not.toHaveBeenCalled();
 	});
-	it.each(['/srv/../outside', '//srv/example-app', '/srv/example-app/*', '/srv/%2e%2e/outside'])(
+	it.each(['/srv/../outside', '//srv/example-app', '/srv/example-app/*', '/srv/%2e%2e/../outside'])(
 		'refuses unsafe snapshot selections %s',
 		async file => {
 			await expect(

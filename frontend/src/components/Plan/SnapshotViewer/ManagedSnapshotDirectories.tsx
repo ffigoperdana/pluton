@@ -79,7 +79,7 @@ export default function ManagedSnapshotDirectories({backupId,
                   const timer = setTimeout(() => {
                      controller.signal.removeEventListener('abort', stop);
                      resolve();
-                  }, 1000);
+                  }, page.retryAfterMs);
                   controller.signal.addEventListener('abort', stop, { once: true });
                   if (controller.signal.aborted) stop();
                });

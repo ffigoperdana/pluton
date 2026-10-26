@@ -28,7 +28,14 @@ export type RecoveryFailureCode =
 
 /** Only closed error categories cross the process/credential boundary. */
 export class ManagedRepositoryAccessError extends AppError {
-	constructor(public readonly code: RecoveryFailureCode) {
+	constructor(
+		public readonly code: RecoveryFailureCode,
+		readonly reason?:
+			| 'repository-output-invalid'
+			| 'metadata-schema-invalid'
+			| 'invalid-size'
+			| 'invalid-timestamp'
+	) {
 		super(code === 'repository-busy' ? 429 : 502, `Managed repository access failed (${code}).`);
 		// AppError sets its own prototype; retain this closed-category subclass.
 		Object.setPrototypeOf(this, new.target.prototype);
@@ -220,8 +227,20 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 							header = true;
 						} else if (record.struct_type === 'node' && header) {
 							if (record.type === 'file' && record.size === undefined)
-								throw new ManagedRepositoryAccessError('invalid-output');
-							await onNode(this.parse(nodeSchema, line));
+								throw new ManagedRepositoryAccessError('invalid-output', 'invalid-size');
+							const parsed = nodeSchema.safeParse(record);
+							if (!parsed.success) {
+								const field = parsed.error.issues[0]?.path[0];
+								throw new ManagedRepositoryAccessError(
+									'invalid-output',
+									field === 'size'
+										? 'invalid-size'
+										: field === 'mtime'
+											? 'invalid-timestamp'
+											: 'metadata-schema-invalid'
+								);
+							}
+							await onNode(parsed.data);
 						} else throw new ManagedRepositoryAccessError('invalid-output');
 					},
 					signal
@@ -321,7 +340,7 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		try {
 			return schema.parse(JSON.parse(output));
 		} catch {
-			throw new ManagedRepositoryAccessError('invalid-output');
+			throw new ManagedRepositoryAccessError('invalid-output', 'repository-output-invalid');
 		}
 	}
 

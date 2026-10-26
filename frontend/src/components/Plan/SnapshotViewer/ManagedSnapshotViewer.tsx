@@ -75,7 +75,9 @@ export default function ManagedSnapshotViewer({backup,
       gcTime: 0,
       staleTime: 30_000,
       retry: false,
-      refetchInterval: (state) => (state.state.status !== 'error' && state.state.data?.status === 'indexing' ? 1000 : false),});
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchInterval: (state) => (state.state.status !== 'error' && state.state.data?.status === 'indexing' ? state.state.data.retryAfterMs : false),});
    const page = query.data?.status === 'ready' ? query.data : null;
    const openDirectory = (value: string) => {
       setShowFolders(false);

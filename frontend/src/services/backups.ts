@@ -10,16 +10,12 @@ const notifiedBackupProgress = new Set<string>();
 
 // Generate Download
 export async function generateBackupDownload({ backupId, replicationId }: { backupId: string; planId: string; replicationId?: string }) {
-   const url = `${API_URL}/backups/${backupId}/action/download?${replicationId ? `replicationId=${replicationId}` : ''}`;
-   const res = await fetch(url, {
-      method: 'POST',
-      credentials: 'include',
-   });
-   const data = await res.json();
-   if (!data.success) {
-      throw new Error(data.error);
-   }
-   return data;
+   const query = new URLSearchParams(replicationId ? { replicationId } : {});
+   return mutationResponse<{ success: boolean; result?: { streaming?: boolean } }>(
+      `${API_URL}/backups/${encodeURIComponent(backupId)}/action/download?${query}`,
+      { method: 'POST', credentials: 'include' },
+      { allowAccepted: false },
+   );
 }
 
 export function useDownloadBackup() {
@@ -27,6 +23,7 @@ export function useDownloadBackup() {
 
    return useMutation({
       mutationFn: generateBackupDownload,
+      retry: false,
       onSuccess: (res, payload) => {
          if (res.result?.streaming === true) startNativeBackupDownload(API_URL, payload.backupId);
          console.log('res :', payload, res);

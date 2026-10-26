@@ -3,7 +3,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import Database from 'better-sqlite3';
 import { AppError } from '../AppError';
-import { normalizeLegacySnapshotPath } from '../legacySnapshotPath';
+import { managedSnapshotPath, assertManagedRestorePath } from '../managedSnapshotPath';
 import type { SnapShotFile } from '../../types/restic';
 import type { ManagedSnapshotNode } from './ManagedSftpRepositorySession';
 
@@ -68,8 +68,32 @@ export type SnapshotIndexReason =
 	| 'unavailable'
 	| 'metadata-invalid'
 	| 'timeout'
-	| 'cancelled';
+	| 'cancelled'
+	| 'unsafe-path'
+	| 'invalid-node-name'
+	| 'duplicate-entry'
+	| 'invalid-timestamp'
+	| 'ancestor-conflict'
+	| 'invalid-size'
+	| 'metadata-schema-invalid'
+	| 'repository-output-invalid'
+	| 'unsupported-node-type'
+	| 'symlink-target-unverified'
+	| 'host-path-unsupported';
 const reasonMessages: Partial<Record<SnapshotIndexReason, string>> = {
+	'unsafe-path': 'Snapshot metadata contains an unsafe or ambiguous path. Export was refused.',
+	'invalid-node-name': 'Snapshot node name does not match its exact path.',
+	'duplicate-entry': 'Snapshot metadata contains a duplicate path. Export was refused.',
+	'invalid-timestamp': 'Snapshot metadata contains an invalid timestamp.',
+	'ancestor-conflict': 'Snapshot metadata places entries below a non-directory node.',
+	'invalid-size': 'Snapshot metadata contains an invalid file size.',
+	'metadata-schema-invalid': 'Snapshot metadata does not match the supported Restic schema.',
+	'repository-output-invalid': 'Repository metadata output is malformed or incomplete.',
+	'unsupported-node-type':
+		'This snapshot contains an unsupported file type (device, FIFO or socket). Complete export and recovery were refused; no entries were omitted.',
+	'symlink-target-unverified':
+		'This snapshot contains symbolic links. The Restic listing does not expose their targets, so safe complete export or recovery cannot be verified. No entries were omitted.',
+	'host-path-unsupported': 'Snapshot filenames require a POSIX restore destination.',
 	'cache-active':
 		'Snapshot cache is busy with active readers. Retry after those operations finish.',
 	'build-busy': 'Another snapshot is being indexed. Retry shortly.',
@@ -169,15 +193,24 @@ export class ManagedSnapshotIndex implements Iterable<SnapShotFile> {
 			yield asFile(row as Row);
 		}
 	}
-	assertSafe() {
+	assertSafe(operation: 'archive' | 'restore' = 'archive') {
 		if (
 			this.db
-				.prepare(
-					"SELECT 1 FROM nodes WHERE type NOT IN ('file','dir') OR instr(path,':')>0 LIMIT 1"
-				)
+				.prepare("SELECT 1 FROM nodes WHERE type NOT IN ('file','dir','symlink') LIMIT 1")
 				.get()
 		)
-			throw new SnapshotIndexError('unsupported-snapshot-file');
+			throw new SnapshotIndexError('unsupported-snapshot-file', 'unsupported-node-type');
+		if (this.db.prepare("SELECT 1 FROM nodes WHERE type='symlink' LIMIT 1").get())
+			throw new SnapshotIndexError('unsupported-snapshot-file', 'symlink-target-unverified');
+		if (operation === 'restore' && process.platform === 'win32') {
+			for (const file of this) {
+				try {
+					assertManagedRestorePath(file.path);
+				} catch {
+					throw new SnapshotIndexError('unsupported-snapshot-file', 'host-path-unsupported');
+				}
+			}
+		}
 	}
 	page(query: SnapshotPageQuery) {
 		if (
@@ -200,7 +233,7 @@ export class ManagedSnapshotIndex implements Iterable<SnapShotFile> {
 		const directory = query.path || '';
 		if (directory) {
 			if (!directory.startsWith('/')) throw new AppError(400, 'Invalid snapshot directory.');
-			normalizeLegacySnapshotPath(directory.slice(1), false);
+			managedSnapshotPath(directory);
 		}
 		if (directory && this.get(directory)?.type !== 'dir')
 			throw new AppError(404, 'Snapshot directory not found.');
@@ -258,6 +291,7 @@ type Entry = {
 	index?: ManagedSnapshotIndex;
 	error?: AppError;
 	updated: number;
+	used: number;
 	readers: number;
 	settled: boolean;
 	directory?: string;
@@ -282,6 +316,7 @@ export type SnapshotIndexDiagnostic = {
 /** Single server process owns the cache. No persisted index is trusted on restart. */
 export class ManagedSnapshotIndexCache {
 	private readonly entries = new Map<string, Entry>();
+	private sequence = 0;
 	private initialized?: Promise<void>;
 	private builds = 0;
 	private availableBytes = 0;
@@ -370,10 +405,11 @@ export class ManagedSnapshotIndexCache {
 					if (this.builds >= this.limits.maxBuilds)
 						throw new SnapshotIndexError('index-resource-limit', 'build-busy');
 					if (this.entries.size >= this.limits.maxIndexes) {
-						// Stable map order resolves equal timestamps. Readers and builds are pinned.
+						// Wall clocks can tie or move backwards. Use access order for LRU;
+						// wall time is only for TTL. Readers and builds remain pinned.
 						const victim = [...this.entries]
 							.filter(([, value]) => value.settled && !value.readers)
-							.sort((a, b) => a[1].updated - b[1].updated)[0];
+							.sort((a, b) => a[1].used - b[1].used)[0];
 						if (!victim) throw new SnapshotIndexError('index-resource-limit', 'cache-active');
 						await this.remove(...victim);
 					}
@@ -383,7 +419,7 @@ export class ManagedSnapshotIndexCache {
 					while (disk.bavail * disk.bsize < this.limits.maxBytes + 64 * 1024 ** 2) {
 						const victim = [...this.entries]
 							.filter(([, value]) => value.settled && !value.readers)
-							.sort((a, b) => a[1].updated - b[1].updated)[0];
+							.sort((a, b) => a[1].used - b[1].used)[0];
 						if (!victim) throw new SnapshotIndexError('index-resource-limit', 'disk-capacity');
 						await this.remove(...victim);
 						disk = await fs.statfs(this.root);
@@ -394,6 +430,7 @@ export class ManagedSnapshotIndexCache {
 						controller: new AbortController(),
 						background,
 						updated: Date.now(),
+						used: ++this.sequence,
 						started: Date.now(),
 						readers: 0,
 						settled: false,
@@ -422,6 +459,7 @@ export class ManagedSnapshotIndexCache {
 						.finally(() => {
 							owned.settled = true;
 							owned.updated = Date.now();
+							owned.used = ++this.sequence;
 							this.builds--;
 						});
 					void owned.promise.catch(() => undefined);
@@ -429,11 +467,14 @@ export class ManagedSnapshotIndexCache {
 				}
 				entry.background ||= background;
 				entry.updated = Date.now();
+				entry.used = ++this.sequence;
 				if (lease) entry.readers++; // Atomic with eviction/admission.
 				return entry;
 			} catch (error) {
-				const failure = error instanceof AppError ? error : new SnapshotIndexError('index-unavailable');
-				if (failure instanceof SnapshotIndexError) this.report('refused', undefined, failure.reason);
+				const failure =
+					error instanceof AppError ? error : new SnapshotIndexError('index-unavailable');
+				if (failure instanceof SnapshotIndexError)
+					this.report('refused', undefined, failure.reason);
 				throw failure;
 			}
 		});
@@ -467,6 +508,7 @@ export class ManagedSnapshotIndexCache {
 			if (abort) signal?.removeEventListener('abort', abort);
 			entry.readers--;
 			entry.updated = Date.now();
+			entry.used = ++this.sequence;
 			if (!entry.readers) entry.idle?.();
 			if (!entry.readers && !entry.background && !entry.settled && signal?.aborted)
 				entry.controller.abort();
@@ -540,29 +582,31 @@ export class ManagedSnapshotIndexCache {
 				entry.count = ++count;
 				if (count > this.limits.maxEntries)
 					throw new SnapshotIndexError('index-resource-limit', 'entry-count');
-				if (!node.path.startsWith('/')) throw new SnapshotIndexError('metadata-invalid');
-				let relative: string;
+				let exactPath: string;
 				try {
-					relative = normalizeLegacySnapshotPath(node.path.slice(1), false);
+					exactPath = managedSnapshotPath(node.path);
 				} catch {
-					throw new SnapshotIndexError('metadata-invalid');
+					throw new SnapshotIndexError('metadata-invalid', 'unsafe-path');
 				}
+				if (node.name !== path.posix.basename(exactPath))
+					throw new SnapshotIndexError('metadata-invalid', 'invalid-node-name');
+				if (!Number.isSafeInteger(node.size) || node.size < 0)
+					throw new SnapshotIndexError('metadata-invalid', 'invalid-size');
 				if (
-					node.name !== path.posix.basename(node.path) ||
-					!Number.isSafeInteger(node.size) ||
-					node.size < 0 ||
 					typeof node.mtime !== 'string' ||
 					node.mtime.length > 64 ||
-					!Number.isFinite(Date.parse(node.mtime)) ||
-					!['file', 'dir', 'symlink', 'dev', 'chardev', 'fifo', 'socket'].includes(node.type)
+					!Number.isFinite(Date.parse(node.mtime))
 				)
-					throw new SnapshotIndexError('metadata-invalid');
+					throw new SnapshotIndexError('metadata-invalid', 'invalid-timestamp');
+				if (!['file', 'dir', 'symlink', 'dev', 'chardev', 'fifo', 'socket'].includes(node.type))
+					throw new SnapshotIndexError('metadata-invalid', 'metadata-schema-invalid');
 				logicalBytes += node.type === 'file' ? node.size : 0;
-				if (!Number.isSafeInteger(logicalBytes)) throw new SnapshotIndexError('metadata-invalid');
-				const parent = path.posix.dirname(`/${relative}`);
+				if (!Number.isSafeInteger(logicalBytes))
+					throw new SnapshotIndexError('metadata-invalid', 'invalid-size');
+				const parent = path.posix.dirname(exactPath);
 				try {
 					insert.run(
-						`/${relative}`,
+						exactPath,
 						parent === '/' ? '' : parent,
 						node.name,
 						node.type,
@@ -574,7 +618,7 @@ export class ManagedSnapshotIndexCache {
 					);
 				} catch (error) {
 					if ((error as { code?: string }).code === 'SQLITE_CONSTRAINT_PRIMARYKEY')
-						throw new SnapshotIndexError('metadata-invalid');
+						throw new SnapshotIndexError('metadata-invalid', 'duplicate-entry');
 					throw error;
 				}
 				let parentPath = parent;
@@ -605,7 +649,7 @@ export class ManagedSnapshotIndexCache {
 					.prepare("SELECT 1 FROM ancestors JOIN nodes USING(path) WHERE nodes.type!='dir' LIMIT 1")
 					.get()
 			)
-				throw new SnapshotIndexError('metadata-invalid');
+				throw new SnapshotIndexError('metadata-invalid', 'ancestor-conflict');
 			db.exec('DROP TABLE ancestors; COMMIT;');
 			entry.bytes = (db.pragma('page_count', { simple: true }) as number) * 4096;
 			return new ManagedSnapshotIndex(db);
@@ -641,8 +685,21 @@ export class ManagedSnapshotIndexCache {
 				throw new SnapshotIndexError('index-unavailable', 'timeout');
 			if ((error as { code?: string }).code === 'cancelled')
 				throw new SnapshotIndexError('cancelled');
-			if ((error as { code?: string }).code === 'invalid-output')
-				throw new SnapshotIndexError('metadata-invalid');
+			if ((error as { code?: string }).code === 'invalid-output') {
+				const reason = (error as { reason?: SnapshotIndexReason }).reason;
+				throw new SnapshotIndexError(
+					'metadata-invalid',
+					reason &&
+					[
+						'invalid-size',
+						'invalid-timestamp',
+						'metadata-schema-invalid',
+						'repository-output-invalid',
+					].includes(reason)
+						? reason
+						: 'repository-output-invalid'
+				);
+			}
 			throw error;
 		}
 	}

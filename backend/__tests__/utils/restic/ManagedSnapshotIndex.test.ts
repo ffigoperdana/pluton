@@ -165,11 +165,58 @@ describe('bounded managed snapshot metadata index', () => {
 				async append => append({ ...node(0), type } as any),
 				index => {
 					expect(index.count).toBe(1);
-					expect(() => index.assertSafe()).toThrow('unsupported file type');
+					expect(() => index.assertSafe()).toThrow(
+						type === 'symlink' ? 'symbolic links' : 'unsupported file type'
+					);
+					try {
+						index.assertSafe();
+					} catch (error) {
+						expect(error).toMatchObject({
+							code: 'unsupported-snapshot-file',
+							reason: type === 'symlink' ? 'symlink-target-unverified' : 'unsupported-node-type',
+						});
+					}
 				}
 			);
 		}
 	);
+	it.each(['job:2026.txt', '100%complete.txt', '%2e%2e.txt', 'café-文件.txt'])(
+		'preserves exact valid POSIX filename %s without URL decoding',
+		async name => {
+			await cache.use(
+				key,
+				async append => {
+					append(dir('/srv'));
+					append({ ...node(0), path: `/srv/${name}`, name });
+				},
+				index => {
+					index.assertSafe();
+					expect(index.page({ path: '/srv' }).files[0].path).toBe(`/srv/${name}`);
+					expect(index.get(`/srv/${name}`)?.name).toBe(name);
+				}
+			);
+		}
+	);
+	it.each([
+		['unsafe-path', [{ ...node(0), path: '/srv/../escape' }]],
+		['invalid-node-name', [{ ...node(0), name: 'different.txt' }]],
+		['invalid-size', [{ ...node(0), size: -1 }]],
+		['invalid-timestamp', [{ ...node(0), mtime: 'invalid' }]],
+		['duplicate-entry', [node(0), node(0)]],
+		['ancestor-conflict', [{ ...dir('/srv'), type: 'file' }, node(0)]],
+		['metadata-schema-invalid', [{ ...node(0), type: 'unknown' }]],
+	])('reports only the closed validation category %s', async (reason, records) => {
+		await expect(
+			cache.use(
+				key,
+				async append => {
+					for (const record of records as any[]) append(record);
+				},
+				() => undefined
+			)
+		).rejects.toMatchObject({ code: 'metadata-invalid', reason });
+		expect(await fs.readdir(path.join(root, 'indexes'))).toEqual([]);
+	});
 	it('enforces entry and global construction concurrency limits', async () => {
 		await cache.close();
 		cache = new ManagedSnapshotIndexCache(path.join(root, 'indexes'), {

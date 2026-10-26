@@ -200,6 +200,24 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 			)
 		).rejects.toMatchObject({ code: 'execution-failed' });
 	});
+	it.each([
+		[{ size: undefined }, 'invalid-size'],
+		[{ size: -1 }, 'invalid-size'],
+		[{ mtime: 'not-a-timestamp' }, 'invalid-timestamp'],
+		[{ type: 'unknown' }, 'metadata-schema-invalid'],
+	] as const)(
+		'classifies schema rejection without exposing raw records',
+		async (change, reason) => {
+			responses.push({
+				stdout: `${JSON.stringify({ struct_type: 'snapshot', ...snapshot })}\n${JSON.stringify({ ...node, ...change })}\n`,
+			});
+			await expect(
+				new ManagedSftpRepositorySession().withSession(access, session =>
+					session.streamFiles(id, () => undefined)
+				)
+			).rejects.toMatchObject({ code: 'invalid-output', reason });
+		}
+	);
 	it('cancels a metadata process tree and cleans credentials after close', async () => {
 		responses.push({ held: true });
 		const controller = new AbortController();
