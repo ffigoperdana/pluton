@@ -41,6 +41,46 @@ describe('managed index cache lifecycle and bounded admission', () => {
 		await fs.rm(root, { recursive: true, force: true });
 	});
 	const fill = (id: string) => cache.use(key(id), populate, index => index.count);
+	it('keeps a cancelled construction owned until cleanup settles before a retry', async () => {
+		const started = gate(),
+			stopping = gate(),
+			cleaned = gate();
+		const controller = new AbortController();
+		let finished = false;
+		const work = cache
+			.use(
+				key('A'),
+				async (_append, signal) => {
+					started.release();
+					await new Promise<void>(resolve =>
+						signal.addEventListener(
+							'abort',
+							() => {
+								stopping.release();
+								resolve();
+							},
+							{ once: true }
+						)
+					);
+					await cleaned.wait;
+					throw new SnapshotIndexError('cancelled');
+				},
+				index => index.count,
+				controller.signal
+			)
+			.finally(() => {
+				finished = true;
+			});
+		const cancelled = expect(work).rejects.toMatchObject({ code: 'cancelled' });
+		await started.wait;
+		controller.abort();
+		await stopping.wait;
+		expect(finished).toBe(false);
+		cleaned.release();
+		await cancelled;
+		expect(cache.status(key('A'))).toBe('failed');
+		expect(await fill('A')).toBe(2);
+	});
 	it.each([1000, 900])(
 		'keeps the most recently used index when the clock subsequently reads %i',
 		async next => {

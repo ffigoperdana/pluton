@@ -6,6 +6,7 @@ import { BackupService } from '../../src/services/BackupServices';
 import { BackupController } from '../../src/controllers/BackupController';
 import { createBackupRouter } from '../../src/routes/backups';
 import { RemoteRepositoryRecoveryService } from '../../src/services/RemoteRepositoryRecoveryService';
+import { ManagedSftpRepositorySession } from '../../src/utils/restic/ManagedSftpRepositorySession';
 assert.equal(process.getuid?.(), 1000);
 assert(process.send, 'Requires private lab IPC.');
 process.once('message', async (input: any) => {
@@ -30,6 +31,7 @@ process.once('message', async (input: any) => {
 						}
 					: undefined,
 		};
+		const native = new ManagedSftpRepositorySession();
 		service = new RemoteRepositoryRecoveryService(
 			{ getByPlanId: async () => repo } as any,
 			backups as any,
@@ -37,7 +39,39 @@ process.once('message', async (input: any) => {
 			{} as any,
 			{ getSftpRecoveryOptions: async () => input.options },
 			{ getAgentById: async () => ({ deviceId: 'app-01' }) } as any,
-			undefined,
+			input.holdIndex
+				? {
+						withSession: (access, consume, signal, limits) =>
+							native.withSession(
+								access,
+								session =>
+									consume({
+										...session,
+										streamFiles: (id, append) =>
+											session.streamFiles(id, async node => {
+												await append(node);
+												if (!input.holdIndex) return;
+												input.holdIndex = false;
+												process.send!({ indexing: true });
+												await new Promise<void>((resolve, reject) => {
+													const abort = () => {
+														clearTimeout(timer);
+														reject(new Error('Fixture stopped'));
+													};
+													const timer = setTimeout(() => {
+														signal?.removeEventListener('abort', abort);
+														resolve();
+													}, 5 * 60_000);
+													signal?.addEventListener('abort', abort, { once: true });
+													if (signal?.aborted) abort();
+												});
+											}),
+									}),
+								signal,
+								limits
+							),
+					}
+				: undefined,
 			input.secret,
 			path.join(input.scratch, 'staging')
 		);

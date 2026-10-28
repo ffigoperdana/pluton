@@ -546,8 +546,13 @@ export class ManagedSnapshotIndexCache {
 			entry.updated = Date.now();
 			entry.used = ++this.sequence;
 			if (!entry.readers) entry.idle?.();
-			if (!entry.readers && !entry.background && !entry.settled && signal?.aborted)
+			if (!entry.readers && !entry.background && !entry.settled && signal?.aborted) {
 				entry.controller.abort();
+				// The preparation worker owns this construction. Do not admit its next
+				// job until the cancelled process/config/index cleanup has settled.
+				// Shared Browse-owned work remains independent and is not aborted.
+				await entry.promise.catch(() => undefined);
+			}
 		}
 	}
 	private async initialize() {

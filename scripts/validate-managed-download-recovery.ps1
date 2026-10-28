@@ -1,6 +1,6 @@
 param(
-    [ValidateSet('small','proxy','history','delay','combined','medium','large','four','metadata','colon','percent','symlink','fifo')]
-    [string[]]$Modes=@('small','proxy','history','delay','combined','medium','large','four','metadata','colon','percent','symlink','fifo'),
+    [ValidateSet('small','proxy','history','controls','delay','combined','medium','large','four','metadata','colon','percent','symlink','fifo')]
+    [string[]]$Modes=@('small','proxy','history','controls','delay','combined','medium','large','four','metadata','colon','percent','symlink','fifo'),
     [string]$Image='pluton-phase5-real-db:local',
     [switch]$Baseline,
     [switch]$PackagedRuntime,

@@ -40,6 +40,7 @@ const sizes: Record<string, number> = {
 	small: 120_000_000,
 	proxy: 120_000_000,
 	history: 0,
+	controls: 0,
 	delay: 0,
 	combined: 3_170_000_000,
 	medium: 1_230_000_000,
@@ -79,16 +80,22 @@ const sessions = {
 						...session,
 						streamFiles: async (...args: Parameters<typeof session.streamFiles>) => {
 							metadataBuilds++;
-							if (metadataBuilds === 1 && process.env.LAB_PREPARATION_DELAY_MS) {
+							if (
+								metadataBuilds === 1 &&
+								(mode === 'controls' || process.env.LAB_PREPARATION_DELAY_MS)
+							) {
 								await new Promise<void>((resolve, reject) => {
 									const abort = () => {
 										clearTimeout(timer);
 										reject(new Error('Fixture cancelled'));
 									};
-									const timer = setTimeout(() => {
-										signal?.removeEventListener('abort', abort);
-										resolve();
-									}, Number(process.env.LAB_PREPARATION_DELAY_MS));
+									const timer = setTimeout(
+										() => {
+											signal?.removeEventListener('abort', abort);
+											resolve();
+										},
+										mode === 'controls' ? 65_000 : Number(process.env.LAB_PREPARATION_DELAY_MS)
+									);
 									signal?.addEventListener('abort', abort, { once: true });
 								});
 							}
@@ -203,28 +210,31 @@ try {
 		measurements.historicalContentDiffersFromLive = true;
 		measurements.currentSourceBytes = beforeInspectionSource.bytes;
 	}
-	const beforeRepository = await hashTree(repository);
+	let beforeRepository = await hashTree(repository);
 	measurements.physicalRepositoryBytes = beforeRepository.bytes;
 	const sftpPort = await port();
-	sftp = spawn(
-		rclone,
-		[
-			'serve',
-			'sftp',
-			path.dirname(repository),
-			'--addr',
-			`127.0.0.1:${sftpPort}`,
-			'--user',
-			'fixture-user',
-			'--pass',
-			sftpPassword,
-			'--read-only',
-			'--cache-dir',
-			path.join(scratch, 'rclone-cache'),
-		],
-		{ stdio: 'ignore', shell: false }
-	);
-	await ready(sftpPort);
+	const startSftp = async () => {
+		sftp = spawn(
+			rclone,
+			[
+				'serve',
+				'sftp',
+				path.dirname(repository),
+				'--addr',
+				`127.0.0.1:${sftpPort}`,
+				'--user',
+				'fixture-user',
+				'--pass',
+				sftpPassword,
+				'--read-only',
+				'--cache-dir',
+				path.join(scratch, 'rclone-cache'),
+			],
+			{ stdio: 'ignore', shell: false }
+		);
+		await ready(sftpPort);
+	};
+	await startSftp();
 	const plan = {
 		id: 'plan-01',
 		sourceId: 'app-01',
@@ -313,6 +323,14 @@ try {
 			response => {
 				clearTimeout(timer);
 				res.writeHead(response.statusCode!, response.headers);
+				// pipe() does not forward an aborted upstream response to its sink.
+				// Preserve transport failure instead of leaving a partial TAR open
+				// until Node's unrelated five-minute request timer closes it.
+				response.on('aborted', () => res.destroy());
+				response.on('error', () => res.destroy());
+				response.on('close', () => {
+					if (!response.complete) res.destroy();
+				});
 				response.pipe(res);
 			}
 		);
@@ -352,7 +370,18 @@ try {
 			headers,
 			body: '{}',
 		});
-		let value = (await response.json()) as any;
+		const value = /application\/json/.test(response.headers.get('content-type') || '')
+			? ((await response.json()) as any)
+			: {
+					success: false,
+					code: response.status === 524 ? 'gateway-timeout' : 'unexpected-response',
+				};
+		if (response.status === 524) {
+			assert.equal(response.headers.get('server'), 'fixture-gateway');
+			await response.body?.cancel();
+			measurements.gateway = 'fixture-gateway';
+			measurements.gatewayTimeoutMs = 5000;
+		}
 		if (process.env.LAB_BASELINE === '1') return { prepare: response, prepared: value };
 		assert.equal(response.status, 202);
 		const admissionMs = Math.round(performance.now() - started);
@@ -391,6 +420,50 @@ try {
 			assert(Date.now() < deadline);
 			await new Promise(r => setTimeout(r, 1000));
 		}
+	}
+	if (mode === 'controls') {
+		const response = await fetch(`${api}/backup-01/action/download`, { method: 'POST', headers });
+		assert.equal(response.status, 202);
+		const id = ((await response.json()) as any).result.preparation.id;
+		const deadline = Date.now() + 10_000;
+		while (metadataBuilds !== 1) {
+			assert(Date.now() < deadline);
+			await new Promise(resolve => setTimeout(resolve, 10));
+		}
+		// A real disposable repository writer runs while exact historical preparation
+		// is in flight. Old objects must remain unchanged; only new backup objects
+		// are adopted into the read-only-operation inventory after writer completion.
+		const writer = command([
+			'--json',
+			'backup',
+			source,
+			'--tag',
+			'pluton-plan-plan-01',
+			'--tag',
+			'pluton-backup-concurrent-fixture',
+		]);
+		const whileWriting = await fetch(`${api}/backup-01/download-preparations/${id}`, { headers });
+		assert.equal(((await whileWriting.json()) as any).result.state, 'indexing');
+		await writer;
+		const afterWriter = await hashTree(repository);
+		for (const [name, entry] of Object.entries(beforeRepository.entries))
+			assert.deepEqual(afterWriter.entries[name], entry);
+		beforeRepository = afterWriter;
+		measurements.concurrentFixtureBackup = 'PASS';
+		const sessionsBeforePoll = active;
+		const status = await fetch(`${api}/backup-01/download-preparations/${id}`, { headers });
+		assert.equal(((await status.json()) as any).result.state, 'indexing');
+		assert.equal(active, sessionsBeforePoll);
+		const cancelled = await fetch(`${api}/backup-01/download-preparations/${id}`, {
+			method: 'DELETE',
+			headers,
+		});
+		assert.equal(((await cancelled.json()) as any).result.state, 'cancelled');
+		assert.equal(
+			(await fetch(`${api}/backup-01/action/download?preparationId=${id}`, { headers })).status,
+			409
+		);
+		measurements.preparationCancellation = 'PASS';
 	}
 	const start = performance.now();
 	const { prepare, prepared } = await prepareViaApi();
@@ -611,11 +684,22 @@ try {
 			measurements.terminatedResticHttp = 'PASS';
 			measurements.interruptedBytes = failedBytes;
 			measurements.interruptionMs = Math.round(performance.now() - failStart);
+			assert(
+				measurements.interruptionMs < 10_000,
+				'The fixture proxy must propagate an upstream abort promptly.'
+			);
+			await prepareViaApi(); // Each independent fault needs a live exact-snapshot proof.
+			const faultHandoff = await fetch(
+				`${api}/backup-01/download-preparations/${preparationIds.get('backup-01')}`,
+				{ headers }
+			);
+			assert.equal(((await faultHandoff.json()) as any).result.state, 'ready');
 			const sftpClosed = new Promise<void>(resolve => sftp!.once('close', () => resolve()));
 			disconnectSftp = true;
 			const faultAbort = new AbortController();
 			let deadlineHit = false,
 				disconnectedBytes = 0;
+			let disconnectedStatus = 0;
 			// Observe the unchanged 10-minute server inactivity guard, rather than
 			// misreporting a shorter client abort as repository failure propagation.
 			const faultDeadline = setTimeout(() => {
@@ -624,18 +708,35 @@ try {
 			}, 660_000);
 			const sftpFailureStart = performance.now();
 			try {
-				await assert.rejects(async () => {
-					const failed = await fetch(downloadUrl(), {
-						headers,
-						signal: faultAbort.signal,
+				await assert
+					.rejects(async () => {
+						const failed = await fetch(downloadUrl(), {
+							headers,
+							signal: faultAbort.signal,
+						});
+						disconnectedStatus = failed.status;
+						for await (const chunk of Readable.fromWeb(failed.body as any))
+							disconnectedBytes += chunk.length;
+					})
+					.catch(error => {
+						throw new Error(
+							JSON.stringify({
+								stage: 'sftp-drop',
+								status: disconnectedStatus,
+								entered: !disconnectSftp,
+								bytes: disconnectedBytes,
+								expectedBytes: transfer.bytes,
+								previousInterruptionMs: measurements.interruptionMs,
+							}),
+							{ cause: error }
+						);
 					});
-					for await (const chunk of Readable.fromWeb(failed.body as any))
-						disconnectedBytes += chunk.length;
-				});
 			} finally {
 				clearTimeout(faultDeadline);
 			}
 			await sftpClosed;
+			assert.equal(disconnectedStatus, 200);
+			assert.equal(disconnectSftp, false, 'The SFTP fault must actually enter archive streaming.');
 			assert(disconnectedBytes < transfer.bytes);
 			measurements.sftpDisconnect = deadlineHit ? 'BLOCKED' : 'PASS';
 			measurements.sftpDisconnectMs = Math.round(performance.now() - sftpFailureStart);
@@ -681,6 +782,24 @@ try {
 			assert(Date.now() < deadline);
 			await new Promise(r => setTimeout(r, 25));
 		}
+		if (mode === 'controls') {
+			const stopped = new Promise<void>(resolve => sftp!.once('close', () => resolve()));
+			sftp!.kill('SIGTERM');
+			await stopped;
+			const failureStarted = performance.now();
+			const unavailable = await prepareViaApi(api, 'backup-02');
+			assert.equal(unavailable.prepare.ok, false);
+			assert(
+				['index-unavailable', 'repository-unavailable', 'execution-failed'].includes(
+					unavailable.prepared.code
+				)
+			);
+			measurements.unavailablePreparationMs = Math.round(performance.now() - failureStarted);
+			measurements.unavailablePreparationCode = unavailable.prepared.code;
+			await startSftp();
+			assert.equal((await prepareViaApi(api, 'backup-02')).prepare.ok, true);
+			measurements.unavailablePreparationRetry = 'PASS';
+		}
 		for (const id of ['backup-02', 'backup-03', 'backup-01']) {
 			if (mode === 'history' && id === 'backup-01' && process.env.LAB_BASELINE !== '1') {
 				const beforeBuilds = metadataBuilds;
@@ -712,7 +831,7 @@ try {
 			[],
 			{ stdio: ['ignore', 'ignore', 'ignore', 'ipc'] }
 		);
-		const child = restartedProcess;
+		let child = restartedProcess;
 		const nextMessage = () =>
 			new Promise<any>((resolve, reject) => {
 				const timer = setTimeout(() => {
@@ -736,7 +855,7 @@ try {
 				child.once('exit', exit);
 			});
 		const listening = nextMessage();
-		child.send({
+		const restartInput = {
 			scratch,
 			source,
 			plan,
@@ -749,11 +868,62 @@ try {
 				user: 'fixture-user',
 				pass: sftpPassword,
 			},
-		});
-		const restartedApi = `http://127.0.0.1:${(await listening).port}/api/backups`;
+		};
+		child.send({ ...restartInput, holdIndex: mode === 'controls' });
+		let restartedApi = `http://127.0.0.1:${(await listening).port}/api/backups`;
+		if (mode === 'controls') {
+			const entered = nextMessage();
+			const accepted = await fetch(`${restartedApi}/backup-01/action/download`, {
+				method: 'POST',
+				headers,
+			});
+			assert.equal(accepted.status, 202);
+			const interruptedId = ((await accepted.json()) as any).result.preparation.id;
+			assert.equal((await entered).indexing, true);
+			const during = await fetch(
+				`${restartedApi}/backup-01/download-preparations/${interruptedId}`,
+				{ headers }
+			);
+			const state = ((await during.json()) as any).result;
+			assert.equal(state.state, 'indexing');
+			assert(state.indexedEntries > 0);
+			const closing = nextMessage();
+			child.send({ stop: true });
+			assert.equal((await closing).closed, true);
+			await new Promise<void>(resolve => {
+				if (child.exitCode !== null) resolve();
+				else child.once('exit', () => resolve());
+			});
+			restartedProcess = fork(
+				fileURLToPath(new URL('./managedDownloadRecovery.restart.ts', import.meta.url)),
+				[],
+				{ stdio: ['ignore', 'ignore', 'ignore', 'ipc'] }
+			);
+			child = restartedProcess;
+			const nextListening = nextMessage();
+			child.send(restartInput);
+			restartedApi = `http://127.0.0.1:${(await nextListening).port}/api/backups`;
+			const expired = await fetch(
+				`${restartedApi}/backup-01/download-preparations/${interruptedId}`,
+				{ headers }
+			);
+			assert.equal(((await expired.json()) as any).result.state, 'expired');
+			assert.equal(
+				(
+					await fetch(`${restartedApi}/backup-01/action/download?preparationId=${interruptedId}`, {
+						headers,
+					})
+				).status,
+				409
+			);
+			measurements.indexingProcessRestart = 'PASS';
+		}
 		if (process.env.LAB_BASELINE !== '1') {
 			const oldPreparation = preparationIds.get('backup-01');
-			const staleStatus = await fetch(`${restartedApi}/backup-01/download-preparations/${oldPreparation}`, { headers });
+			const staleStatus = await fetch(
+				`${restartedApi}/backup-01/download-preparations/${oldPreparation}`,
+				{ headers }
+			);
 			assert.equal(((await staleStatus.json()) as any).result.state, 'expired');
 			assert.equal((await fetch(downloadUrl(restartedApi), { headers })).status, 409);
 		}
