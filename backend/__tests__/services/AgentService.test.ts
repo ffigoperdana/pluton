@@ -63,6 +63,7 @@ describe('AgentService', () => {
 			acknowledgeCommand: jest.fn(),
 			recordCommandEvent: jest.fn(),
 			completeCommand: jest.fn(),
+			getCommandStatus: jest.fn(),
 			revokeAgentByDeviceId: jest.fn(),
 			getAgentByDeviceId: jest.fn().mockResolvedValue(agent),
 			revokeEnrollment: jest.fn(),
@@ -70,6 +71,34 @@ describe('AgentService', () => {
 		service = new AgentService(store, 'agent-service-test-secret-that-is-long-enough', () => now);
 	});
 
+	it('returns the actual renewed lease deadline without changing older cancellation semantics', async () => {
+		const expiry = new Date(now.getTime() + 60_000);
+		store.getCommandStatus.mockResolvedValue({
+			cancelled: false,
+			command: { leaseExpiresAt: expiry },
+		} as any);
+		await expect(
+			service.commandStatus(agent.agentId, 'command-01', { leaseToken: 'a'.repeat(32) })
+		).resolves.toEqual({ cancelled: false, leaseExpiresAt: expiry.toISOString() });
+		expect(store.getCommandStatus).toHaveBeenCalledWith(
+			agent.agentId,
+			'command-01',
+			'a'.repeat(32),
+			60_000,
+			now
+		);
+		store.getCommandStatus.mockResolvedValue({
+			cancelled: true,
+			command: { leaseExpiresAt: expiry },
+		} as any);
+		await expect(
+			service.commandStatus(agent.agentId, 'command-01', { leaseToken: 'a'.repeat(32) })
+		).resolves.toMatchObject({ cancelled: true });
+		store.getCommandStatus.mockResolvedValue(null);
+		await expect(
+			service.commandStatus(agent.agentId, 'command-01', { leaseToken: 'a'.repeat(32) })
+		).rejects.toMatchObject({ statusCode: 404 });
+	});
 	it('creates a random enrollment token while persisting only its hash', async () => {
 		const result = await service.createEnrollment({ name: 'app-01' });
 		expect(result.token).toHaveLength(43);
@@ -490,6 +519,15 @@ describe('AgentService', () => {
 
 	it.each([
 		'repository-check-failed',
+		'command-lease-unavailable',
+		'command-authorization-rejected',
+		'control-plane-rate-limited',
+		'control-plane-unavailable',
+		'control-plane-timeout',
+		'control-plane-network-failed',
+		'control-plane-response-invalid',
+		'control-plane-unexpected',
+		'database-artifact-finalization-failed',
 		'repository-target-not-empty',
 		'database-insufficient-privileges',
 		'source-parent-not-traversable',
@@ -498,7 +536,13 @@ describe('AgentService', () => {
 		'target-check-transport-failed',
 	])('logs only closed, sanitized BACKUP_FILESYSTEM failure metadata: %s', async failureCode => {
 		const failureStage =
-			failureCode === 'repository-check-failed' ? 'repository-check' : 'repository-target-check';
+			failureCode.startsWith('control-plane-') || failureCode.startsWith('command-')
+				? 'post-dump-status-check'
+				: failureCode === 'database-artifact-finalization-failed'
+					? 'database-dump-validation'
+					: failureCode === 'repository-check-failed'
+						? 'repository-check'
+						: 'repository-target-check';
 		const command = {
 			id: 'command-backup-failure',
 			agentId: agent.agentId,

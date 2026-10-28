@@ -2,9 +2,11 @@
 export class ProgressDelivery {
   private pending?: Record<string, unknown>;
   private draining?: Promise<void>;
+  private lastSent = -Infinity;
   constructor(
     private readonly send: (event: Record<string, unknown>) => Promise<void>,
     private readonly onFailure: () => void,
+    private readonly intervalMs = 1000,
   ) {}
   enqueue(event: Record<string, unknown>): void {
     this.pending = { ...this.pending, ...event };
@@ -18,12 +20,19 @@ export class ProgressDelivery {
   }
   private async drain(): Promise<void> {
     while (this.pending) {
+      const delay = this.lastSent + this.intervalMs - Date.now();
+      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
       const event = this.pending;
       this.pending = undefined;
+      this.lastSent = Date.now();
       try {
         await this.send(event);
       } catch {
-        this.onFailure();
+        try {
+          this.onFailure();
+        } catch {
+          /* Diagnostics are also best-effort. */
+        }
       }
     }
   }
@@ -46,6 +55,8 @@ export function backupProgressStage(stage: string): string {
     "pre-backup": "pre-backup",
     "database-dump": "dumping-database",
     "database-dump-validation": "dumping-database",
+    "post-dump-status-check": "preparing-repository",
+    "command-status-check": "preparing-backup",
     "repository-target-check": "preparing-repository",
     "repository-initialization": "preparing-repository",
     "parent-discovery": "preparing-repository",

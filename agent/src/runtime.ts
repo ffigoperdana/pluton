@@ -137,12 +137,12 @@ async function runOnceWork(
     sequence += 1;
     await client.event(command.id, command.leaseToken, sequence, event);
   };
-  await atAgentStage("record-event", () => recordEvent({ phase: "accepted" }));
   const progress = new ProgressDelivery(recordEvent, () =>
     console.warn(
       "[pluton-agent] progress delivery temporarily unavailable; backup execution continues.",
     ),
   );
+  progress.enqueue({ phase: "accepted" });
 
   let completion: StoredAgentIdentity["completedCommands"][number];
   try {
@@ -164,10 +164,14 @@ async function runOnceWork(
         successfulSnapshotIds: successfulSnapshotIds(
           identity.completedCommands,
         ),
-        shouldCancel: async () =>
-          signal?.aborted ||
-          (await client.commandStatus(command.id, command.leaseToken))
-            .cancelled,
+        shouldCancel: async () => {
+          if (signal?.aborted) return true;
+          const status = await client.commandStatus(
+            command.id,
+            command.leaseToken,
+          );
+          return !!signal?.aborted || status.cancelled;
+        },
         onEvent: async (event) => progress.enqueue(event),
         onStage: ({ stage, message, database, diagnostic }) => {
           progress.enqueue({

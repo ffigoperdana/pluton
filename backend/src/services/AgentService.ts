@@ -83,6 +83,8 @@ const enrollmentNameSchema = z.object({ name: z.string().trim().min(1).max(100) 
 // The agent may report only this closed set of non-secret execution metadata.
 // Do not accept provider errors, command arguments, or arbitrary text here.
 const backupFailureStageSchema = z.enum([
+	'post-dump-status-check',
+	'command-status-check',
 	'payload-validation',
 	'source-validation',
 	'state-validation',
@@ -103,6 +105,15 @@ const backupFailureStageSchema = z.enum([
 	'post-backup',
 ]);
 const backupFailureCodeSchema = z.enum([
+	'command-lease-unavailable',
+	'command-authorization-rejected',
+	'control-plane-rate-limited',
+	'control-plane-unavailable',
+	'control-plane-timeout',
+	'control-plane-network-failed',
+	'control-plane-response-invalid',
+	'control-plane-unexpected',
+	'database-artifact-finalization-failed',
 	'invalid-payload',
 	'source-validation-failed',
 	'source-parent-not-traversable',
@@ -728,7 +739,7 @@ export class AgentService {
 		agentId: string,
 		commandId: string,
 		input: unknown
-	): Promise<{ cancelled: boolean }> {
+	): Promise<{ cancelled: boolean; leaseExpiresAt?: string }> {
 		const parsed = this.parseLeaseToken(input);
 		const status = await this.agentStore.getCommandStatus(
 			agentId,
@@ -738,7 +749,12 @@ export class AgentService {
 			this.now()
 		);
 		if (!status) throw new NotFoundError('Command not found.');
-		return { cancelled: status.cancelled };
+		return {
+			cancelled: status.cancelled,
+			...(status.command.leaseExpiresAt
+				? { leaseExpiresAt: status.command.leaseExpiresAt.toISOString() }
+				: {}),
+		};
 	}
 
 	async revokeDevice(deviceId: string): Promise<void> {
