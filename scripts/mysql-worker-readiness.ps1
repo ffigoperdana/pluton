@@ -1,7 +1,14 @@
 # Local fixture readiness only; do not emit raw inspect/environment/log/config contents.
 function Wait-MysqlFixtureWorker {
-    param([Parameter(Mandatory)][string]$Container, [ValidateRange(1,120)][int]$DeadlineSeconds = 60)
-    $clock = [Diagnostics.Stopwatch]::StartNew()
+    param(
+        [Parameter(Mandatory)][string]$Container,
+        [ValidateRange(1,120)][int]$DeadlineSeconds = 60,
+        # Synthetic tests supply monotonic time and a delay without sleeping.
+        # Native fixture callers retain the real clock, deadline and 250 ms poll.
+        [scriptblock]$StartClock = { [Diagnostics.Stopwatch]::StartNew() },
+        [scriptblock]$PollDelay = { Start-Sleep -Milliseconds 250 }
+    )
+    $clock = & $StartClock
     $lastProbe = $null
     while ($clock.Elapsed.TotalSeconds -lt $DeadlineSeconds) {
         $stateJson = & docker inspect --format '{{json .State}}' $Container 2>$null
@@ -42,7 +49,7 @@ function Wait-MysqlFixtureWorker {
                 }
             }
         }
-        Start-Sleep -Milliseconds 250
+        & $PollDelay
     }
     $stage = if ($lastProbe -and $lastProbe.stage -eq 'socket-present') { 'ready-signal-timeout' } else { 'socket-timeout' }
     throw "Disposable worker startup failed (stage=$stage; status=$($state.Status); exit=$($state.ExitCode); oom=$([bool]$state.OOMKilled); deadline-seconds=$DeadlineSeconds)."
