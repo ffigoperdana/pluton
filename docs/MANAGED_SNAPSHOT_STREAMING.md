@@ -1,5 +1,12 @@
 # Managed snapshot metadata and streaming downloads
 
+Managed remote Download now uses bounded asynchronous preparation: POST returns
+202 plus a preparation identity, the authenticated status endpoint reports work,
+and GET requires a ready preparation with the same live index generation. GET
+does not rebuild an evicted index. See the [async timeout fix report](MANAGED_ASYNC_DOWNLOAD_TIMEOUT_FIX_REPORT.md)
+for endpoint details, expiry/restart semantics, first-byte limits and pending
+native/production acceptance. The historical audit below describes earlier phases.
+
 ## Audit and implementation decision
 
 The managed SFTP session previously collected `restic ls --long --json` stdout

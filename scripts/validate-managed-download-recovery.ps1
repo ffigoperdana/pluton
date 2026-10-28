@@ -1,10 +1,11 @@
 param(
-    [ValidateSet('small','proxy','history','medium','large','four','metadata','colon','percent','symlink','fifo')]
-    [string[]]$Modes=@('small','proxy','history','medium','large','four','metadata','colon','percent','symlink','fifo'),
+    [ValidateSet('small','proxy','history','delay','combined','medium','large','four','metadata','colon','percent','symlink','fifo')]
+    [string[]]$Modes=@('small','proxy','history','delay','combined','medium','large','four','metadata','colon','percent','symlink','fifo'),
     [string]$Image='pluton-phase5-real-db:local',
     [switch]$Baseline,
     [switch]$PackagedRuntime,
-    [string]$BaselineRef='origin/main'
+    [string]$BaselineRef='origin/main',
+    [ValidateRange(0,180)][int]$PreparationDelaySeconds=0
 )
 # Task-owned isolated Linux containers only. No production input, host network,
 # published port, Docker socket, user data mount or global Docker/WSL change.
@@ -26,7 +27,7 @@ try {
     if($Baseline){
         $revision=& git -C $labRepo rev-parse --verify --end-of-options "$BaselineRef`^{commit}"
         if($LASTEXITCODE -ne 0 -or $revision -notmatch '^[a-f0-9]{40}$'){throw 'Baseline must resolve to a local commit.'}
-        foreach($file in @('utils/restic/ManagedSnapshotIndex.ts','utils/restic/ManagedSftpRepositorySession.ts','services/RemoteRepositoryRecoveryService.ts','controllers/BackupController.ts')){
+        foreach($file in @('utils/restic/ManagedSnapshotIndex.ts','utils/restic/ManagedSftpRepositorySession.ts','services/RemoteRepositoryRecoveryService.ts','controllers/BackupController.ts','routes/backups.ts')){
             $target=Join-Path $labScratch $file
             New-Item -Force -ItemType Directory (Split-Path $target) | Out-Null
             $content=& git -C $labRepo show "${revision}:backend/src/$file"
@@ -49,10 +50,11 @@ try {
             '-e',"ENCRYPTION_KEY=$([Guid]::NewGuid().ToString('N'))",'-e','USER_NAME=fixture-admin',
             '-e',"USER_PASSWORD=$([Guid]::NewGuid().ToString('N'))")
         if(-not $PackagedRuntime){foreach($dir in @('src','__tests__')){$labArgs+=@('--mount',"type=bind,source=$labRepo/backend/$dir,target=/app/backend/$dir,readonly")}}
+        if($PreparationDelaySeconds){$labArgs+=@('-e',"LAB_PREPARATION_DELAY_MS=$($PreparationDelaySeconds*1000)")}
         if($mode -in @('symlink','fifo')){$labArgs+=@('-e','LAB_EXPECT_REFUSAL=1')}
         if($Baseline){
             $labArgs+=@('-e','LAB_BASELINE=1','-e','LAB_EXPECT_REFUSAL=1')
-            foreach($file in @('utils/restic/ManagedSnapshotIndex.ts','utils/restic/ManagedSftpRepositorySession.ts','services/RemoteRepositoryRecoveryService.ts','controllers/BackupController.ts')){
+            foreach($file in @('utils/restic/ManagedSnapshotIndex.ts','utils/restic/ManagedSftpRepositorySession.ts','services/RemoteRepositoryRecoveryService.ts','controllers/BackupController.ts','routes/backups.ts')){
                 $labArgs+=@('--mount',"type=bind,source=$labScratch/$file,target=/app/backend/src/$file,readonly")
             }
         }

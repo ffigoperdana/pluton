@@ -1,4 +1,4 @@
-import { mutationResponse } from '../utils/httpResponse';
+import { ApiResponseError, mutationResponse, parseApiResponse } from '../utils/httpResponse';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-toastify';
 import { API_URL } from '../utils/constants';
@@ -11,11 +11,14 @@ const notifiedBackupProgress = new Set<string>();
 // Generate Download
 export async function generateBackupDownload({ backupId, replicationId }: { backupId: string; planId: string; replicationId?: string }) {
    const query = new URLSearchParams(replicationId ? { replicationId } : {});
-   return mutationResponse<{ success: boolean; result?: { streaming?: boolean } }>(
-      `${API_URL}/backups/${encodeURIComponent(backupId)}/action/download?${query}`,
-      { method: 'POST', credentials: 'include' },
-      { allowAccepted: false },
-   );
+   let response: Response;
+   try {
+      response = await fetch(`${API_URL}/backups/${encodeURIComponent(backupId)}/action/download?${query}`, { method: 'POST', credentials: 'include', redirect: 'error' });
+   } catch { throw new ApiResponseError('Download preparation response unavailable. Retry to reconnect to the preparation.', 0, 'unknown'); }
+   const result = await parseApiResponse<{ success: boolean; result?: { streaming?: boolean; preparation?: { id: string; state: string } } }>(response);
+   if (response.status === 202 && (!result.result?.preparation || !/^[a-f0-9-]{36}$/.test(result.result.preparation.id)))
+      throw new ApiResponseError('Download preparation was accepted, but its identity is not confirmed. Retry to reconnect.', 202, 'pending');
+   return result;
 }
 
 export function useDownloadBackup() {
@@ -25,7 +28,7 @@ export function useDownloadBackup() {
       mutationFn: generateBackupDownload,
       retry: false,
       onSuccess: (res, payload) => {
-         if (res.result?.streaming === true) startNativeBackupDownload(API_URL, payload.backupId);
+         if (res.result?.streaming === true && !res.result.preparation) startNativeBackupDownload(API_URL, payload.backupId);
          console.log('res :', payload, res);
          queryClient.invalidateQueries({ queryKey: ['plan', payload.planId] });
       },

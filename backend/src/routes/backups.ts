@@ -13,6 +13,16 @@ export function createBackupRouter(
 	router.get('/:id/progress', authM, controller.getBackupProgress.bind(controller));
 	router.post('/:id/action/cancel', authM, controller.cancelBackup.bind(controller));
 	router.get('/:id/action/download', authM, controller.getBackupDownload.bind(controller));
+	router.get(
+		'/:id/download-preparations/:jobId',
+		authM,
+		controller.downloadPreparation.bind(controller)
+	);
+	router.delete(
+		'/:id/download-preparations/:jobId',
+		authM,
+		controller.downloadPreparation.bind(controller)
+	);
 	router.post('/:id/action/download', authM, controller.generateBackupDownload.bind(controller));
 	router.delete('/:id/action/download', authM, controller.cancelBackupDownload.bind(controller));
 	router.post(

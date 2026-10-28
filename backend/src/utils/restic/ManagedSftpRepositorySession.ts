@@ -436,6 +436,7 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		let failure: RecoveryFailureCode | undefined;
 		let hasClosed = false;
 		let pipelineFinished = false;
+		let receivedData = false;
 		const transfer = new AbortController();
 		let timer: ReturnType<typeof setTimeout>;
 		const stop = (reason: RecoveryFailureCode) => {
@@ -454,7 +455,7 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		// Inactivity bound, not a tiny archive size or total-transfer-time limit.
 		const activity = () => {
 			clearTimeout(timer);
-			timer = setTimeout(() => stop('timeout'), 10 * 60_000);
+			timer = setTimeout(() => stop('timeout'), receivedData ? 10 * 60_000 : 15_000);
 			timer.unref();
 		};
 		const closed = new Promise<void>(resolve => {
@@ -475,7 +476,11 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		});
 		child.stderr?.on('data', () => undefined); // never retain provider diagnostics
 		signal?.addEventListener('abort', abort, { once: true });
-		child.stdout?.on('data', activity);
+		const dataActivity = () => {
+			receivedData = true;
+			activity();
+		};
+		child.stdout?.on('data', dataActivity);
 		destination.on('drain', activity);
 		activity();
 		try {
@@ -493,7 +498,7 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		} finally {
 			clearTimeout(timer!);
 			signal?.removeEventListener('abort', abort);
-			child.stdout?.removeListener('data', activity);
+			child.stdout?.removeListener('data', dataActivity);
 			destination.removeListener('drain', activity);
 			processManager.untrackProcess(processId);
 		}

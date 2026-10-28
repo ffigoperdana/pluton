@@ -47,6 +47,40 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 		held?: boolean;
 	}>;
 	let children: any[];
+	it('bounds archive startup separately from transfer inactivity and cleans credentials on first-byte timeout', async () => {
+		responses.push({ held: true });
+		const original = global.setTimeout;
+		let expire: (() => void) | undefined;
+		const timer = jest.spyOn(global, 'setTimeout').mockImplementation(((
+			callback: any,
+			ms: number,
+			...args: any[]
+		) => {
+			if (ms === 15_000) expire = () => callback(...args);
+			return original(callback, ms, ...args);
+		}) as any);
+		const destination = new Writable({
+			write(_chunk, _encoding, done) {
+				done();
+			},
+		});
+		try {
+			const work = new ManagedSftpRepositorySession().withSession(access, session =>
+				session.archive(id, destination)
+			);
+			const failed = expect(work).rejects.toMatchObject({ code: 'timeout' });
+			while (!expire) await new Promise<void>(resolve => setImmediate(resolve));
+			expire();
+			await failed;
+			expect(killProcessTree).toHaveBeenCalledWith(children[1], 'SIGKILL');
+			await expect(
+				fs.stat((spawn as jest.Mock).mock.calls[1][2].env.RCLONE_CONFIG)
+			).rejects.toMatchObject({ code: 'ENOENT' });
+		} finally {
+			timer.mockRestore();
+			destination.destroy();
+		}
+	});
 	beforeEach(() => {
 		jest.clearAllMocks();
 		responses = [{ stdout: 'Obscured_synthetic-value\n', code: 0 }];

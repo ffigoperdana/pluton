@@ -124,14 +124,14 @@ export class BackupService {
 		return removeResult;
 	}
 
-	async getBackupDownload(backupId: string): Promise<any> {
+	async getBackupDownload(backupId: string, preparationId?: string): Promise<any> {
 		const backup = await this.backupStore.getById(backupId);
 		if (!backup) {
 			throw new Error('Backup not found');
 		}
 		if (backup.method === 'backup' && RemoteBackupService.isRemoteFilesystemPlan(backup)) {
 			if (!this.remoteRecovery) throw new AppError(501, 'REMOTE_CAPABILITY_NOT_IMPLEMENTED');
-			return this.remoteRecovery.download(backupId);
+			return this.remoteRecovery.download(backupId, preparationId);
 		}
 		const backupDevice = backup.sourceId ? backup.sourceId : 'main';
 		const strategy = this.getSnapshotStrategy(backupDevice, backup.method);
@@ -149,7 +149,8 @@ export class BackupService {
 	async generateBackupDownload(
 		backupId: string,
 		replicationId?: string,
-		signal?: AbortSignal
+		signal?: AbortSignal,
+		hasBody = false
 	): Promise<any> {
 		const backup = await this.backupStore.getById(backupId);
 		if (!backup) {
@@ -157,6 +158,8 @@ export class BackupService {
 		}
 		if (backup.method === 'backup' && RemoteBackupService.isRemoteFilesystemPlan(backup)) {
 			if (!this.remoteRecovery) throw new AppError(501, 'REMOTE_CAPABILITY_NOT_IMPLEMENTED');
+			if (hasBody)
+				throw new AppError(400, 'Remote downloads support only the complete exact snapshot.');
 			return this.remoteRecovery.prepareDownload(backupId, replicationId, signal);
 		}
 		// If replicationId is provided, download from mirror storage
@@ -182,6 +185,11 @@ export class BackupService {
 			throw new Error(downloadResult.result || 'Failed to generate Download Link');
 		}
 		return downloadResult.result;
+	}
+
+	async downloadPreparation(backupId: string, id: string, cancel = false) {
+		if (!this.remoteRecovery) throw new AppError(501, 'REMOTE_CAPABILITY_NOT_IMPLEMENTED');
+		return this.remoteRecovery.downloadPreparation(backupId, id, cancel);
 	}
 
 	async cancelBackupDownload(planId: string, backupId: string): Promise<any> {

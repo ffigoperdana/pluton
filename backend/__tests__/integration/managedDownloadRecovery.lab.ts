@@ -40,6 +40,8 @@ const sizes: Record<string, number> = {
 	small: 120_000_000,
 	proxy: 120_000_000,
 	history: 0,
+	delay: 0,
+	combined: 3_170_000_000,
 	medium: 1_230_000_000,
 	large: Math.round(3.16 * 1024 ** 3),
 	four: 4_000_000_000,
@@ -77,6 +79,19 @@ const sessions = {
 						...session,
 						streamFiles: async (...args: Parameters<typeof session.streamFiles>) => {
 							metadataBuilds++;
+							if (metadataBuilds === 1 && process.env.LAB_PREPARATION_DELAY_MS) {
+								await new Promise<void>((resolve, reject) => {
+									const abort = () => {
+										clearTimeout(timer);
+										reject(new Error('Fixture cancelled'));
+									};
+									const timer = setTimeout(() => {
+										signal?.removeEventListener('abort', abort);
+										resolve();
+									}, Number(process.env.LAB_PREPARATION_DELAY_MS));
+									signal?.addEventListener('abort', abort, { once: true });
+								});
+							}
 							return session.streamFiles(...args);
 						},
 						archive: async (...args: Parameters<typeof session.archive>) => {
@@ -112,6 +127,7 @@ const sessions = {
 		}
 	},
 };
+let gateway: http.Server | undefined;
 let restartedProcess: ReturnType<typeof fork> | undefined;
 let sftp: ReturnType<typeof spawn> | undefined,
 	server: ReturnType<ReturnType<typeof express>['listen']> | undefined,
@@ -133,7 +149,7 @@ try {
 	if (sizes[mode])
 		assert.equal(
 			beforeSource.bytes,
-			sizes[mode] + 28,
+			sizes[mode] + 28 + (mode === 'combined' ? 115552 * 8 : 0),
 			'Physical, non-sparse fixture content size.'
 		);
 	const command = async (args: string[]) =>
@@ -289,20 +305,97 @@ try {
 	app.use('/api/backups', createBackupRouter(new BackupController(backupService)));
 	server = app.listen(0, '127.0.0.1');
 	await new Promise<void>(r => server!.once('listening', r));
-	const api = `http://127.0.0.1:${(server.address() as net.AddressInfo).port}/api/backups`;
+	const upstreamOrigin = `http://127.0.0.1:${(server.address() as net.AddressInfo).port}`;
+	gateway = http.createServer((req, res) => {
+		const upstream = http.request(
+			upstreamOrigin + req.url,
+			{ method: req.method, headers: req.headers },
+			response => {
+				clearTimeout(timer);
+				res.writeHead(response.statusCode!, response.headers);
+				response.pipe(res);
+			}
+		);
+		const timer = setTimeout(() => {
+			res.writeHead(524, { 'Content-Type': 'text/html', 'Server': 'fixture-gateway' });
+			res.end('<html>fixture upstream timeout</html>');
+			upstream.destroy();
+		}, 5000);
+		upstream.on('error', () => {
+			clearTimeout(timer);
+			if (!res.headersSent) {
+				res.writeHead(502);
+				res.end();
+			} else res.destroy();
+		});
+		res.on('close', () => {
+			clearTimeout(timer);
+			upstream.destroy();
+		});
+		req.pipe(upstream);
+	});
+	gateway.listen(0, '127.0.0.1');
+	await new Promise<void>(r => gateway!.once('listening', r));
+	const api = `http://127.0.0.1:${(gateway.address() as net.AddressInfo).port}/api/backups`;
+	const preparationIds = new Map<string, string>();
+	const downloadUrl = (base = api, id = 'backup-01') =>
+		`${base}/${id}/action/download${preparationIds.has(id) ? `?preparationId=${preparationIds.get(id)}` : ''}`;
 	const headers = {
 		'Cookie': `token=${jwt.sign({ user: 'fixture-admin' }, configService.config.SECRET!, { expiresIn: '1h' })}`,
 		'Content-Type': 'application/json',
 	};
 	assert.equal((await fetch(`${api}/backup-01/action/download`, { method: 'POST' })).status, 401);
-	const start = performance.now(),
-		prepare = await fetch(`${api}/backup-01/action/download`, {
+	async function prepareViaApi(base = api, id = 'backup-01') {
+		const started = performance.now();
+		const response = await fetch(`${base}/${id}/action/download`, {
 			method: 'POST',
 			headers,
 			body: '{}',
-		}),
-		prepared = (await prepare.json()) as any;
+		});
+		let value = (await response.json()) as any;
+		if (process.env.LAB_BASELINE === '1') return { prepare: response, prepared: value };
+		assert.equal(response.status, 202);
+		const admissionMs = Math.round(performance.now() - started);
+		assert(admissionMs < 4000, 'Admission must fit the five-second gateway deadline.');
+		measurements.maxAdmissionMs = Math.max(measurements.maxAdmissionMs || 0, admissionMs);
+		const jobId = value.result.preparation.id;
+		const duplicate = await fetch(`${base}/${id}/action/download`, {
+			method: 'POST',
+			headers,
+			body: '{}',
+		});
+		assert.equal(((await duplicate.json()) as any).result.preparation.id, jobId);
+		preparationIds.set(id, jobId);
+		const deadline = Date.now() + 25 * 60_000;
+		for (;;) {
+			const pollStart = performance.now();
+			const status = await fetch(`${base}/${id}/download-preparations/${jobId}`, { headers });
+			assert.equal(status.status, 200);
+			const job = ((await status.json()) as any).result;
+			measurements.maxStatusMs = Math.max(
+				measurements.maxStatusMs || 0,
+				Math.round(performance.now() - pollStart)
+			);
+			assert(measurements.maxStatusMs < 4000);
+			if (job.state === 'ready')
+				return {
+					prepare: { ok: true, status: 202 },
+					prepared: { success: true, result: { streaming: true } },
+				};
+			if (job.state === 'failed')
+				return {
+					prepare: { ok: false, status: job.failureStatus },
+					prepared: { code: job.code, reason: job.reason },
+				};
+			assert(['queued', 'indexing', 'validating'].includes(job.state));
+			assert(Date.now() < deadline);
+			await new Promise(r => setTimeout(r, 1000));
+		}
+	}
+	const start = performance.now();
+	const { prepare, prepared } = await prepareViaApi();
 	measurements.preparationMs = Math.round(performance.now() - start);
+
 	if (!prepare.ok) {
 		measurements.preparation = {
 			status: prepare.status,
@@ -368,7 +461,7 @@ try {
 		assert.deepEqual(prepared, { success: true, result: { streaming: true } });
 		const initialBuilds = metadataBuilds;
 		const downloadStart = performance.now(),
-			response = await fetch(`${api}/backup-01/action/download`, { headers });
+			response = await fetch(downloadUrl(), { headers });
 		const headerMs = performance.now() - downloadStart;
 		const clientTar = path.join(scratch, 'client.tar'),
 			transfer = await receive(response, clientTar);
@@ -394,7 +487,7 @@ try {
 		assert.deepEqual(await hashTree(path.join(extraction, source.slice(1))), beforeSource);
 		if (mode === 'proxy') {
 			const proxy = http.createServer((_request, downstream) => {
-				const upstream = http.get(`${api}/backup-01/action/download`, { headers }, response => {
+				const upstream = http.get(downloadUrl(), { headers }, response => {
 					response.once('data', chunk => {
 						downstream.write(chunk);
 						response.destroy();
@@ -493,8 +586,9 @@ try {
 		assert.equal(metadataBuilds, initialBuilds, 'Healthy index reused for navigation.');
 		measurements.reopenMs = Math.round(performance.now() - reopenStart);
 		if (mode === 'small') {
+			await prepareViaApi();
 			const slowStart = performance.now();
-			const slow = await fetch(`${api}/backup-01/action/download`, { headers });
+			const slow = await fetch(downloadUrl(), { headers });
 			const browsing = recovery.browsePage('backup-01', { path: source, limit: 200, offset: 0 });
 			let slowBytes = 0;
 			for await (const chunk of Readable.fromWeb(slow.body as any)) {
@@ -510,7 +604,7 @@ try {
 			let failedBytes = 0;
 			const failStart = performance.now();
 			await assert.rejects(async () => {
-				const failed = await fetch(`${api}/backup-01/action/download`, { headers });
+				const failed = await fetch(downloadUrl(), { headers });
 				for await (const chunk of Readable.fromWeb(failed.body as any)) failedBytes += chunk.length;
 			});
 			assert(failedBytes < transfer.bytes);
@@ -531,7 +625,7 @@ try {
 			const sftpFailureStart = performance.now();
 			try {
 				await assert.rejects(async () => {
-					const failed = await fetch(`${api}/backup-01/action/download`, {
+					const failed = await fetch(downloadUrl(), {
 						headers,
 						signal: faultAbort.signal,
 					});
@@ -570,8 +664,9 @@ try {
 			);
 			await ready(sftpPort);
 		}
+		await prepareViaApi();
 		const abort = new AbortController(),
-			cancelled = await fetch(`${api}/backup-01/action/download`, {
+			cancelled = await fetch(downloadUrl(), {
 				headers,
 				signal: abort.signal,
 			}),
@@ -587,15 +682,20 @@ try {
 			await new Promise(r => setTimeout(r, 25));
 		}
 		for (const id of ['backup-02', 'backup-03', 'backup-01']) {
-			if (mode === 'history' && id === 'backup-01') {
-				const response = await fetch(`${api}/backup-01/action/download`, { headers });
+			if (mode === 'history' && id === 'backup-01' && process.env.LAB_BASELINE !== '1') {
+				const beforeBuilds = metadataBuilds;
+				const stale = await fetch(downloadUrl(), { headers });
+				assert.equal(stale.status, 409);
+				assert.equal(metadataBuilds, beforeBuilds);
+				await prepareViaApi();
+				const response = await fetch(downloadUrl(), { headers });
 				assert.equal(response.status, 200);
 				const digest = crypto.createHash('sha256');
 				for await (const chunk of Readable.fromWeb(response.body as any)) digest.update(chunk);
 				assert.equal(digest.digest('hex'), transfer.sha256);
 				measurements.downloadAfterEviction = 'PASS';
 			}
-			await recovery.prepareDownload(id);
+			await prepareViaApi(api, id);
 		}
 		assert((await fs.readdir(path.join(scratch, 'managed-snapshot-indexes'))).length <= 2);
 		let completedIndexBytes = 0;
@@ -651,17 +751,14 @@ try {
 			},
 		});
 		const restartedApi = `http://127.0.0.1:${(await listening).port}/api/backups`;
-		assert.deepEqual(
-			await (
-				await fetch(`${restartedApi}/backup-01/action/download`, {
-					method: 'POST',
-					headers,
-					body: '{}',
-				})
-			).json(),
-			{ success: true, result: { streaming: true } }
-		);
-		const restarted = await fetch(`${restartedApi}/backup-01/action/download`, { headers });
+		if (process.env.LAB_BASELINE !== '1') {
+			const oldPreparation = preparationIds.get('backup-01');
+			const staleStatus = await fetch(`${restartedApi}/backup-01/download-preparations/${oldPreparation}`, { headers });
+			assert.equal(((await staleStatus.json()) as any).result.state, 'expired');
+			assert.equal((await fetch(downloadUrl(restartedApi), { headers })).status, 409);
+		}
+		await prepareViaApi(restartedApi);
+		const restarted = await fetch(downloadUrl(restartedApi), { headers });
 		assert.equal(restarted.status, 200);
 		let bytes = 0;
 		const restartedHash = crypto.createHash('sha256');
@@ -713,6 +810,10 @@ try {
 	console.log(JSON.stringify({ event: 'managed_recovery_lab', ...measurements }));
 } finally {
 	monitor.stop();
+	if (gateway) {
+		gateway.closeAllConnections();
+		await new Promise<void>(resolve => gateway!.close(() => resolve()));
+	}
 	if (restartedProcess && restartedProcess.exitCode === null) restartedProcess.kill('SIGTERM');
 	await recovery?.close();
 	if (server) {

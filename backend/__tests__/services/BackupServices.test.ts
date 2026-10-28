@@ -100,11 +100,18 @@ describe('BackupService', () => {
 			await expect(
 				backupService.generateBackupDownload('backup-01', undefined, signal)
 			).resolves.toEqual({ streaming: true });
-			expect(download).toHaveBeenCalledWith('backup-01');
+			expect(download).toHaveBeenCalledWith('backup-01', undefined);
 			expect(prepareDownload).toHaveBeenCalledWith('backup-01', undefined, signal);
 			expect(mockSnapshotStrategy.getSnapshotDownload).not.toHaveBeenCalled();
 			expect(mockSnapshotStrategy.downloadSnapshot).not.toHaveBeenCalled();
 			expect(mockBackupStore.update).not.toHaveBeenCalled();
+			await backupService.getBackupDownload('backup-01', 'preparation-01');
+			expect(download).toHaveBeenLastCalledWith('backup-01', 'preparation-01');
+			prepareDownload.mockClear();
+			await expect(
+				backupService.generateBackupDownload('backup-01', undefined, signal, true)
+			).rejects.toMatchObject({ statusCode: 400 });
+			expect(prepareDownload).not.toHaveBeenCalled();
 		});
 		it('fails closed for remote Download when recovery is not wired; never falls back to local', async () => {
 			mockBackupStore.getById.mockResolvedValue({

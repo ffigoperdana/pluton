@@ -38,6 +38,7 @@ import {
 	validateRestoredFiles,
 } from '../utils/recoveryValidation';
 import type { RecoveryStage } from '../types/recoveryTests';
+import { ManagedDownloadPreparation } from './ManagedDownloadPreparation';
 import {
 	ManagedSnapshotIndex,
 	ManagedSnapshotIndexCache,
@@ -74,6 +75,7 @@ export type ManagedArchiveDownload = {
 export class RemoteRepositoryRecoveryService {
 	private readonly jobs = new Map<string, { controller: AbortController; done: Promise<void> }>();
 	private readonly preparing = new Set<string>();
+	private readonly downloads = new ManagedDownloadPreparation();
 	private readonly indexes: ManagedSnapshotIndexCache;
 
 	constructor(
@@ -96,6 +98,7 @@ export class RemoteRepositoryRecoveryService {
 
 	/** Stop background metadata work and close disposable indexes during shutdown/tests. */
 	async close() {
+		await this.downloads.close();
 		for (const job of this.jobs.values()) job.controller.abort();
 		await Promise.allSettled([...this.jobs.values()].map(job => job.done));
 		await this.indexes.close();
@@ -352,7 +355,11 @@ export class RemoteRepositoryRecoveryService {
 				(append, buildSignal) => this.populateIndex(context, append, buildSignal),
 				true
 			);
-			return { status: 'indexing' as const, retryAfterMs: 1000 };
+			return {
+				status: 'indexing' as const,
+				retryAfterMs: 1000,
+				indexedEntries: this.indexes.inspect(key)?.entries || 0,
+			};
 		}
 		return this.withIndex(
 			context,
@@ -361,48 +368,124 @@ export class RemoteRepositoryRecoveryService {
 		);
 	}
 
-	/** Existing POST Download interaction: validate, but never materialize an archive. */
+	/** Admit only local authorization/binding work; client disconnect never owns the job. */
 	async prepareDownload(backupId: string, replicationId?: string, signal?: AbortSignal) {
 		if (replicationId)
 			throw new AppError(400, 'Remote downloads support only the original managed repository.');
 		const context = await this.context(backupId);
-		await this.withIndex(context, index => index.assertSafe(), signal);
-		return { streaming: true };
+		if (signal?.aborted) throw new SnapshotIndexError('cancelled');
+		const key = this.indexKey(context);
+		const job = this.downloads.start(
+			key,
+			async (jobSignal, stage) => {
+				const started = performance.now();
+				try {
+					stage('indexing');
+					await this.indexes.retry(key); // Only an explicit POST may retry a failed build.
+					return await this.withIndex(
+						context,
+						index => {
+							index.assertSafe();
+							return this.indexes.inspect(key)!.generation;
+						},
+						jobSignal,
+						() => stage('validating')
+					);
+				} finally {
+					try {
+						planLogger('download-preparation').info(
+							{
+								event: 'download_preparation',
+								stage: 'complete',
+								durationMs: Math.round(performance.now() - started),
+								entries: this.indexes.inspect(key)?.entries || 0,
+							},
+							'Managed download preparation timing.'
+						);
+					} catch {
+						/* Timing cannot change the preparation outcome. */
+					}
+				}
+			},
+			proof => {
+				const cached = this.indexes.inspect(key);
+				return cached?.state === 'ready' && cached.generation === proof;
+			}
+		);
+		return {
+			streaming: true,
+			preparation: this.downloads.status(job, job.id, this.indexes.inspect(key)?.entries),
+		};
 	}
 
-	async download(backupId: string): Promise<ManagedArchiveDownload> {
+	async downloadPreparation(backupId: string, id: string, cancel = false) {
 		const context = await this.context(backupId);
+		const key = this.indexKey(context);
+		const job = this.downloads.get(key, id);
+		const telemetry = this.indexes.inspect(key);
+		if (
+			job?.state === 'ready' &&
+			(telemetry?.state !== 'ready' || telemetry.generation !== job.proof)
+		)
+			this.downloads.expire(job);
+		if (job && cancel) this.downloads.cancel(job);
+		return this.downloads.status(job, id, telemetry?.entries);
+	}
+
+	async download(backupId: string, preparationId?: string): Promise<ManagedArchiveDownload> {
+		const context = await this.context(backupId);
+		const key = this.indexKey(context);
+		if (!preparationId) throw new AppError(409, 'Prepare this snapshot before downloading.');
+		const job = this.downloads.get(key, preparationId);
+		if (
+			!job ||
+			job.state !== 'ready' ||
+			!job.proof ||
+			this.indexes.inspect(key)?.generation !== job.proof
+		)
+			throw new AppError(
+				409,
+				'Download preparation is not ready or expired. Prepare this snapshot again.'
+			);
+		const proof = job.proof;
 		const safeId = context.backupId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80) || 'snapshot';
 		return {
 			fileName: `backup-${safeId}.tar`,
 			streamTo: async (destination, signal, ready) => {
 				let stage = 'metadata-validation';
+				const deadline = new AbortController();
+				const timer = setTimeout(() => deadline.abort(), 15_000);
+				timer.unref();
+				const boundedSignal = AbortSignal.any([signal, deadline.signal]);
 				try {
-					await this.withIndex(
-						context,
-						async index => {
-							index.assertSafe();
-							stage = 'repository-read';
-							await this.sessions.withSession(
-								context.access,
-								async session => {
-									await this.verifySnapshot(context, session);
-									await this.assertCurrentContext(context);
-									if (signal.aborted) throw new ManagedRepositoryAccessError('cancelled');
-									stage = 'archive-stream';
-									ready(); // headers are set only after exact snapshot/binding validation
-									await session.archive(context.snapshotId, destination);
-								},
-								signal
-							);
-						},
-						signal
-					);
+					await this.indexes.useReady(key, proof, async index => {
+						if (job.state !== 'ready')
+							throw new AppError(409, 'Download preparation is no longer ready.');
+						index.assertSafe();
+						stage = 'repository-read';
+						await this.sessions.withSession(
+							context.access,
+							async session => {
+								await this.downloadTiming('snapshot-verification', () =>
+									this.verifySnapshot(context, session)
+								);
+								await this.assertCurrentContext(context);
+								if (boundedSignal.aborted) throw new ManagedRepositoryAccessError('cancelled');
+								clearTimeout(timer);
+								stage = 'archive-stream';
+								ready(); // headers are set only after exact snapshot/binding validation
+								await session.archive(context.snapshotId, destination);
+							},
+							boundedSignal
+						);
+					});
 				} catch (error) {
 					const safe =
-						error instanceof AppError
-							? error
-							: new ManagedRepositoryAccessError('execution-failed');
+						deadline.signal.aborted && !signal.aborted
+							? new ManagedRepositoryAccessError('timeout')
+							: error instanceof AppError
+								? error
+								: new ManagedRepositoryAccessError('execution-failed');
 					planLogger('download', context.planId, context.backupId).warn(
 						{
 							event: 'remote_download_failed',
@@ -421,6 +504,8 @@ export class RemoteRepositoryRecoveryService {
 						'Remote download failed.'
 					);
 					throw safe;
+				} finally {
+					clearTimeout(timer);
 				}
 			},
 		};
@@ -697,28 +782,57 @@ export class RemoteRepositoryRecoveryService {
 		await this.sessions.withSession(
 			context.access,
 			async session => {
-				await this.verifySnapshot(context, session);
-				await session.streamFiles(context.snapshotId, append);
-				await this.verifySnapshot(context, session);
+				await this.downloadTiming('snapshot-verification', () =>
+					this.verifySnapshot(context, session)
+				);
+				await this.downloadTiming('metadata-stream', () =>
+					session.streamFiles(context.snapshotId, append)
+				);
+				await this.downloadTiming('snapshot-verification', () =>
+					this.verifySnapshot(context, session)
+				);
 				await this.assertCurrentContext(context);
 			},
 			signal
 		);
 	}
+	private async downloadTiming<T>(
+		stage: 'snapshot-verification' | 'metadata-stream',
+		work: () => Promise<T>
+	) {
+		const started = performance.now();
+		try {
+			return await work();
+		} finally {
+			try {
+				planLogger('download-preparation').info(
+					{ event: 'download_stage', stage, durationMs: Math.round(performance.now() - started) },
+					'Managed download stage timing.'
+				);
+			} catch {
+				/* Timing cannot change repository validation. */
+			}
+		}
+	}
 	private async withIndex<T>(
 		context: RecoveryContext,
 		consume: (index: ManagedSnapshotIndex) => Promise<T> | T,
-		signal?: AbortSignal
+		signal?: AbortSignal,
+		validating?: () => void
 	): Promise<T> {
 		return this.indexes.use(
 			this.indexKey(context),
 			(append, buildSignal) => this.populateIndex(context, append, buildSignal),
 			async index => {
+				validating?.();
 				await this.assertCurrentContext(context);
 				// Recheck repository availability, exact ID and ownership even on cache hits.
 				await this.sessions.withSession(
 					context.access,
-					session => this.verifySnapshot(context, session),
+					session =>
+						this.downloadTiming('snapshot-verification', () =>
+							this.verifySnapshot(context, session)
+						),
 					signal
 				);
 				await this.assertCurrentContext(context);

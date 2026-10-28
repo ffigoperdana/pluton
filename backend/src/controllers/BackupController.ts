@@ -53,8 +53,13 @@ export class BackupController {
 		}
 
 		try {
-			this.validateDownloadRequest(req);
-			const downloadResult = await this.backupService.getBackupDownload(req.params.id);
+			this.validateDownloadRequest(req, true);
+			const downloadResult = req.query.preparationId
+				? await this.backupService.getBackupDownload(
+						req.params.id,
+						req.query.preparationId as string
+					)
+				: await this.backupService.getBackupDownload(req.params.id);
 			if (typeof downloadResult.streamTo === 'function') {
 				const request = this.downloadRequest(req, res);
 				try {
@@ -116,15 +121,22 @@ export class BackupController {
 		try {
 			this.validateDownloadRequest(req);
 			const replicationId = req.query.replicationId as string | undefined;
-			const downloadResult = await this.backupService.generateBackupDownload(
+			const args: [string, string | undefined, AbortSignal, boolean?] = [
 				req.params.id,
 				replicationId,
-				request.signal
-			);
+				request.signal,
+			];
+			if (Object.keys(req.body || {}).length) args.push(true);
+			const downloadResult = await this.backupService.generateBackupDownload(...args);
 
 			if (downloadResult?.streaming === true && Object.keys(req.body || {}).length)
 				throw new AppError(400, 'Remote downloads support only the complete exact snapshot.');
-			if (!res.destroyed) res.status(200).json({ success: true, result: downloadResult });
+			if (!res.destroyed) {
+				res.setHeader('Cache-Control', 'private, no-store');
+				res
+					.status(downloadResult?.preparation ? 202 : 200)
+					.json({ success: true, result: downloadResult });
+			}
 		} catch (error: any) {
 			if (!res.destroyed)
 				res.status(error instanceof AppError ? error.statusCode : 500).json({
@@ -137,12 +149,39 @@ export class BackupController {
 		}
 	}
 
-	private validateDownloadRequest(req: Request) {
+	async downloadPreparation(req: Request, res: Response) {
+		try {
+			if (Object.keys(req.query).length || Object.keys(req.body || {}).length)
+				throw new AppError(400, 'Preparation accepts no options.');
+			const result = await this.backupService.downloadPreparation(
+				req.params.id,
+				req.params.jobId,
+				req.method === 'DELETE'
+			);
+			res.setHeader('Cache-Control', 'private, no-store');
+			if (result.retryAfterMs) res.setHeader('Retry-After', Math.ceil(result.retryAfterMs / 1000));
+			res.json({ success: true, result });
+		} catch (error) {
+			res
+				.status(error instanceof AppError ? error.statusCode : 500)
+				.json({
+					success: false,
+					error: error instanceof AppError ? error.message : 'Preparation status unavailable.',
+					...failureCode(error),
+				});
+		}
+	}
+
+	private validateDownloadRequest(req: Request, download = false) {
 		// Keep the existing local file-selection shape, never accept client-owned
 		// credentials, repository URLs, storage overrides or process/config options.
 		const body = req.body;
 		if (
-			Object.keys(req.query).some(key => key !== 'replicationId') ||
+			Object.keys(req.query).some(
+				key => key !== 'replicationId' && !(download && key === 'preparationId')
+			) ||
+			(req.query.preparationId !== undefined &&
+				!z.string().uuid().safeParse(req.query.preparationId).success) ||
 			(body !== undefined &&
 				(!body ||
 					typeof body !== 'object' ||

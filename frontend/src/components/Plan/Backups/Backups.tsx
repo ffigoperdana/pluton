@@ -34,6 +34,7 @@ import recoveryClasses from '../RecoveryTesting/RecoveryTesting.module.scss';
 import { backupStatistics, statisticHelp } from '../../../utils/backupStatistics';
 import { displayTimeZone, formatHistoryDate, historyIsoDate } from '../../../utils/backupHistory';
 import BackupRowMenu from './BackupRowMenu';
+import DownloadPreparation from './DownloadPreparation';
 
 const DownloadLabel = ({ download, downloadBackup }: { download: Backup['download']; downloadBackup: () => void }) => {
    if (download?.status === 'started') {
@@ -120,6 +121,7 @@ const Backups = ({
    const [showBackupError, setShowBackupError] = useState<{ id: string; message: string } | false>(false);
    const [showEditModal, setShowEditModal] = useState<Backup | false>(false);
    const [showStorageSelector, setShowStorageSelector] = useState<Backup | false>(false);
+   const [preparingDownload, setPreparingDownload] = useState<string>();
    const queryClient = useQueryClient();
    const deleteBackupMutation = useDeleteBackup();
    const updateBackupMutation = useUpdateBackup();
@@ -181,6 +183,7 @@ const Backups = ({
    };
 
    const handleDownloadClick = (backup: Backup) => {
+      if (isRemoteManaged) { setPreparingDownload(backup.id); return; }
       if (!isRemoteManaged && replicationSettings?.enabled && backup.mirrors && backup.mirrors.some((m) => m.status === 'completed')) {
          setShowStorageSelector(backup);
       } else {
@@ -214,6 +217,7 @@ const Backups = ({
 
    return (
       <div className={classes.backupsTable} data-backup-table>
+         {preparingDownload && <DownloadPreparation backupId={preparingDownload} close={() => setPreparingDownload(undefined)} />}
          <div className={classes.backupsTableHead}>
             <div>{isSync ? 'Sync' : 'Backup'} ID</div>
             <div>Status</div>

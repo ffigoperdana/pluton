@@ -111,8 +111,8 @@ export async function fixture(source: string, mode: string, size: number) {
 			await file.close();
 		}
 	}
-	if (mode === 'metadata')
-		for (let start = 0; start < 80000; start += 32)
+	if (mode === 'metadata' || mode === 'combined')
+		for (let start = 0; start < (mode === 'combined' ? 115552 : 80000); start += 32)
 			await Promise.all(
 				Array.from({ length: 32 }, (_, j) =>
 					fs.writeFile(

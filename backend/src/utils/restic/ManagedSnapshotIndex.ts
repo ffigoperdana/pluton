@@ -285,6 +285,7 @@ export class ManagedSnapshotIndex implements Iterable<SnapShotFile> {
 
 type Populate = (append: (node: ManagedSnapshotNode) => void, signal: AbortSignal) => Promise<void>;
 type Entry = {
+	generation: string;
 	promise: Promise<ManagedSnapshotIndex>;
 	controller: AbortController;
 	background: boolean;
@@ -343,6 +344,40 @@ export class ManagedSnapshotIndexCache {
 	}
 	failure(key: string) {
 		return this.entries.get(key)?.error;
+	}
+	/** Read-only telemetry: polling neither touches TTL/LRU nor starts work. */
+	inspect(key: string) {
+		const entry = this.entries.get(key);
+		const live =
+			entry &&
+			(entry.readers > 0 || !entry.settled || Date.now() - entry.updated < this.limits.ttlMs);
+		return live
+			? { state: this.status(key), entries: entry.count, generation: entry.generation }
+			: undefined;
+	}
+	/** Atomic cache-only handoff. Missing/expired/replaced indexes never rebuild on GET. */
+	async useReady<T>(
+		key: string,
+		generation: string,
+		consume: (index: ManagedSnapshotIndex) => Promise<T>
+	) {
+		const entry = await this.exclusive(async () => {
+			await this.expire();
+			const value = this.entries.get(key);
+			if (!value?.index || value.generation !== generation)
+				throw new AppError(409, 'Download preparation expired. Prepare this snapshot again.');
+			value.readers++;
+			value.used = ++this.sequence;
+			return value;
+		});
+		try {
+			return await consume(entry.index!);
+		} finally {
+			entry.readers--;
+			entry.updated = Date.now();
+			entry.used = ++this.sequence;
+			if (!entry.readers) entry.idle?.();
+		}
 	}
 	private report(
 		stage: SnapshotIndexDiagnostic['stage'],
@@ -426,6 +461,7 @@ export class ManagedSnapshotIndexCache {
 						this.availableBytes = disk.bavail * disk.bsize;
 					}
 					entry = {
+						generation: crypto.randomUUID(),
 						promise: undefined!,
 						controller: new AbortController(),
 						background,

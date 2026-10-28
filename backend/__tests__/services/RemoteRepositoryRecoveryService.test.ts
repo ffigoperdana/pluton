@@ -175,9 +175,159 @@ describe('Phase 4 remote managed repository recovery', () => {
 			staging
 		);
 	});
+
+	const preparationIds = new Map<string, string>();
+	async function prepareReady(id: string, replica?: string, signal?: AbortSignal) {
+		const result = await service.prepareDownload(id, replica, signal);
+		preparationIds.set(id, result.preparation.id);
+		const deadline = Date.now() + 30_000;
+		for (;;) {
+			const state = await service.downloadPreparation(id, result.preparation.id);
+			if (state.state === 'ready') return { streaming: true };
+			if (state.state === 'failed')
+				throw Object.assign(new Error(state.error), state, { statusCode: state.failureStatus });
+			if (['cancelled', 'expired'].includes(state.state)) throw new Error(state.state);
+			expect(Date.now()).toBeLessThan(deadline);
+			await new Promise<void>(resolve => setImmediate(resolve));
+		}
+	}
+
 	async function finish(id: string) {
 		await (service as any).jobs.get(id)?.done;
 	}
+	it('admits and deduplicates a slow job, polls without SFTP, and survives the creating client disconnect', async () => {
+		let release!: () => void;
+		const original = session.streamFiles.getMockImplementation()!;
+		session.streamFiles.mockImplementationOnce(async (...args) => {
+			await new Promise<void>(resolve => {
+				release = resolve;
+			});
+			return original(...args);
+		});
+		const client = new AbortController();
+		const accepted = await service.prepareDownload('backup-01', undefined, client.signal);
+		expect(accepted.preparation.state).toBe('queued');
+		expect(withSession).not.toHaveBeenCalled();
+		client.abort();
+		while (!release) await new Promise<void>(resolve => setImmediate(resolve));
+		const calls = withSession.mock.calls.length;
+		for (let n = 0; n < 5; n++) {
+			expect((await service.prepareDownload('backup-01')).preparation.id).toBe(
+				accepted.preparation.id
+			);
+			expect((await service.downloadPreparation('backup-01', accepted.preparation.id)).state).toBe(
+				'indexing'
+			);
+		}
+		expect(withSession).toHaveBeenCalledTimes(calls);
+		release();
+		await prepareReady('backup-01');
+		expect(session.streamFiles).toHaveBeenCalledTimes(1);
+	});
+	it('cancels an owned preparation and never authorizes its download', async () => {
+		const accepted = await service.prepareDownload('backup-01');
+		expect(
+			(await service.downloadPreparation('backup-01', accepted.preparation.id, true)).state
+		).toBe('cancelled');
+		await expect(service.download('backup-01', accepted.preparation.id)).rejects.toMatchObject({
+			statusCode: 409,
+		});
+		expect(withSession).not.toHaveBeenCalled();
+	});
+	it('reconciles a restart during indexing as expired without trusting a partial index', async () => {
+		let entered!: () => void;
+		const building = new Promise<void>(resolve => {
+			entered = resolve;
+		});
+		withSession.mockImplementationOnce(async (_access, consume, signal) => {
+			session.streamFiles.mockImplementationOnce(async () => {
+				entered();
+				await new Promise<void>(resolve =>
+					signal.addEventListener('abort', () => resolve(), { once: true })
+				);
+			});
+			return consume(session);
+		});
+		const accepted = await service.prepareDownload('backup-01');
+		await building;
+		await service.close();
+		service = new RemoteRepositoryRecoveryService(
+			stores.repositories,
+			stores.backups,
+			stores.plans,
+			stores.restores,
+			{ getSftpRecoveryOptions: options },
+			stores.agents,
+			{ withSession },
+			secret,
+			staging
+		);
+		const sessionsBeforeStatus = withSession.mock.calls.length;
+		expect((await service.downloadPreparation('backup-01', accepted.preparation.id)).state).toBe(
+			'expired'
+		);
+		await expect(service.download('backup-01', accepted.preparation.id)).rejects.toMatchObject({
+			statusCode: 409,
+		});
+		expect(withSession).toHaveBeenCalledTimes(sessionsBeforeStatus);
+	});
+	it('preparation cannot fail because sanitized timing telemetry is unavailable', async () => {
+		const logger = planLogger as jest.Mock;
+		const original = logger.getMockImplementation();
+		logger.mockImplementation(() => {
+			throw new Error('logger unavailable');
+		});
+		try {
+			await expect(prepareReady('backup-01')).resolves.toEqual({ streaming: true });
+		} finally {
+			logger.mockImplementation(original!);
+		}
+	});
+	it('expires a ready job after LRU eviction and GET cannot rebuild the index', async () => {
+		session.snapshot.mockResolvedValue({
+			id: snapshotId,
+			tags: [
+				'pluton-plan-plan-01',
+				...['backup-01', 'backup-02', 'backup-03'].map(id => `pluton-backup-${id}`),
+			],
+			paths: ['/srv/example-app'],
+		});
+		await prepareReady('backup-01');
+		const oldId = preparationIds.get('backup-01')!;
+		const descriptor = await service.download('backup-01', oldId);
+		await prepareReady('backup-02');
+		await prepareReady('backup-03');
+		expect((await service.downloadPreparation('backup-01', oldId)).state).toBe('expired');
+		await expect(service.download('backup-01', oldId)).rejects.toMatchObject({ statusCode: 409 });
+		expect(session.streamFiles).toHaveBeenCalledTimes(3);
+		const destination = new Writable({
+			write(_chunk, _encoding, done) {
+				done();
+			},
+		});
+		const ready = jest.fn();
+		await expect(
+			descriptor.streamTo(destination, new AbortController().signal, ready)
+		).rejects.toMatchObject({ statusCode: 409 });
+		expect(ready).not.toHaveBeenCalled();
+		expect(session.archive).not.toHaveBeenCalled();
+		expect(session.streamFiles).toHaveBeenCalledTimes(3);
+		destination.destroy();
+		const next = await service.prepareDownload('backup-01');
+		expect(next.preparation.id).not.toBe(oldId);
+	});
+	it('ready preparation and index expiration fail promptly without extending TTL through status polls', async () => {
+		await prepareReady('backup-01');
+		const id = preparationIds.get('backup-01')!;
+		const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 16 * 60_000);
+		try {
+			expect((await service.downloadPreparation('backup-01', id)).state).toBe('expired');
+			await expect(service.download('backup-01', id)).rejects.toMatchObject({ statusCode: 409 });
+			expect(session.streamFiles).toHaveBeenCalledTimes(1);
+		} finally {
+			clock.mockRestore();
+		}
+	});
 	afterEach(async () => {
 		for (const job of (service as any).jobs.values()) {
 			job.controller.abort();
@@ -504,7 +654,8 @@ describe('Phase 4 remote managed repository recovery', () => {
 			};
 		}
 		async function transfer(backupId = 'backup-01') {
-			const descriptor = await service.download(backupId);
+			await prepareReady(backupId);
+			const descriptor = await service.download(backupId, preparationIds.get(backupId));
 			const { destination, chunks } = sink();
 			const ready = jest.fn();
 			try {
@@ -515,7 +666,7 @@ describe('Phase 4 remote managed repository recovery', () => {
 			}
 		}
 		it('downloads a historical successful backup with its exact persisted ID, without staging or agent contact', async () => {
-			await expect(service.prepareDownload('backup-01')).resolves.toEqual({ streaming: true });
+			await expect(prepareReady('backup-01')).resolves.toEqual({ streaming: true });
 			const { descriptor, chunks, ready } = await transfer();
 			expect(descriptor.fileName).toBe('backup-backup-01.tar');
 			expect(Buffer.concat(chunks).toString()).toBe('synthetic-tar');
@@ -538,7 +689,7 @@ describe('Phase 4 remote managed repository recovery', () => {
 			'refuses invalid snapshot selector %s before repository access',
 			async invalid => {
 				backup.completionStats.snapshot_id = invalid;
-				await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({
+				await expect(prepareReady('backup-01')).rejects.toMatchObject({
 					statusCode: 409,
 				});
 				await expect(service.download('backup-01')).rejects.toMatchObject({ statusCode: 409 });
@@ -550,7 +701,7 @@ describe('Phase 4 remote managed repository recovery', () => {
 			'refuses %s backup downloads',
 			async status => {
 				backup.status = status;
-				await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({
+				await expect(prepareReady('backup-01')).rejects.toMatchObject({
 					statusCode: 400,
 				});
 				await expect(service.download('backup-01')).rejects.toMatchObject({ statusCode: 400 });
@@ -565,11 +716,11 @@ describe('Phase 4 remote managed repository recovery', () => {
 			}
 		);
 		it('refuses an unknown backup and alternate storage/mirror selection', async () => {
-			await expect(service.prepareDownload('backup-01', 'mirror-01')).rejects.toMatchObject({
+			await expect(prepareReady('backup-01', 'mirror-01')).rejects.toMatchObject({
 				statusCode: 400,
 			});
 			backup = null;
-			await expect(service.prepareDownload('missing')).rejects.toMatchObject({ statusCode: 404 });
+			await expect(prepareReady('missing')).rejects.toMatchObject({ statusCode: 404 });
 			await expect(service.download('missing')).rejects.toMatchObject({ statusCode: 404 });
 			expect(withSession).not.toHaveBeenCalled();
 		});
@@ -577,7 +728,7 @@ describe('Phase 4 remote managed repository recovery', () => {
 			'refuses changed repository binding %s before access',
 			async field => {
 				repository[field] = 'other-binding';
-				await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({
+				await expect(prepareReady('backup-01')).rejects.toMatchObject({
 					statusCode: 409,
 				});
 				await expect(service.download('backup-01')).rejects.toMatchObject({ statusCode: 409 });
@@ -590,7 +741,7 @@ describe('Phase 4 remote managed repository recovery', () => {
 			{ id: snapshotId, tags: ['pluton-plan-plan-01', 'pluton-backup-backup-02'] },
 		])('revalidates exact snapshot/plan/backup ownership on POST and GET', async snapshot => {
 			session.snapshot.mockResolvedValue({ ...snapshot, paths: ['/srv/example-app'] });
-			await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({ statusCode: 409 });
+			await expect(prepareReady('backup-01')).rejects.toMatchObject({ statusCode: 409 });
 			await expect(transfer()).rejects.toMatchObject({ statusCode: 409 });
 			expect(session.files).not.toHaveBeenCalled();
 			expect(session.archive).not.toHaveBeenCalled();
@@ -599,19 +750,14 @@ describe('Phase 4 remote managed repository recovery', () => {
 			'refuses %s archive entries before sending headers',
 			async type => {
 				session.files.mockResolvedValue([{ ...nodes[2], type } as any]);
-				await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({
+				await expect(prepareReady('backup-01')).rejects.toMatchObject({
 					statusCode: 409,
 					code: 'unsupported-snapshot-file',
 				});
-				const descriptor = await service.download('backup-01');
-				const { destination } = sink();
-				const ready = jest.fn();
 				await expect(
-					descriptor.streamTo(destination, new AbortController().signal, ready)
-				).rejects.toMatchObject({ statusCode: 409, code: 'unsupported-snapshot-file' });
-				expect(ready).not.toHaveBeenCalled();
+					service.download('backup-01', preparationIds.get('backup-01'))
+				).rejects.toMatchObject({ statusCode: 409 });
 				expect(session.archive).not.toHaveBeenCalled();
-				destination.destroy();
 			}
 		);
 		it.each([
@@ -623,7 +769,7 @@ describe('Phase 4 remote managed repository recovery', () => {
 		])('refuses traversal/unsafe path %s before archive', async unsafe => {
 			session.files.mockResolvedValue([{ ...nodes[2], path: unsafe } as any]);
 			const expected = { statusCode: 422, code: 'metadata-invalid', reason: 'unsafe-path' };
-			await expect(service.prepareDownload('backup-01')).rejects.toMatchObject(expected);
+			await expect(prepareReady('backup-01')).rejects.toMatchObject(expected);
 			await expect(transfer()).rejects.toMatchObject(expected);
 			expect(session.archive).not.toHaveBeenCalled();
 		});
@@ -631,7 +777,7 @@ describe('Phase 4 remote managed repository recovery', () => {
 			'exports literal POSIX path %s without URL decoding or host-path interpretation',
 			async exact => {
 				session.files.mockResolvedValue([{ ...nodes[2], path: exact }] as any);
-				await expect(service.prepareDownload('backup-01')).resolves.toEqual({ streaming: true });
+				await expect(prepareReady('backup-01')).resolves.toEqual({ streaming: true });
 				await transfer();
 				expect(session.archive).toHaveBeenCalledWith(snapshotId, expect.any(Writable));
 				if (!exact.includes(':')) {
@@ -678,9 +824,14 @@ describe('Phase 4 remote managed repository recovery', () => {
 					controller.abort();
 					throw new ManagedRepositoryAccessError(code);
 				});
+				await prepareReady('backup-01');
 				const { destination } = sink();
 				await expect(
-					(await service.download('backup-01')).streamTo(destination, controller.signal, jest.fn())
+					(await service.download('backup-01', preparationIds.get('backup-01'))).streamTo(
+						destination,
+						controller.signal,
+						jest.fn()
+					)
 				).rejects.toMatchObject({ code });
 				const records = (planLogger as jest.Mock).mock.results.flatMap(result =>
 					result.value.warn.mock.calls.map((call: any[]) => call[0])
@@ -700,7 +851,7 @@ describe('Phase 4 remote managed repository recovery', () => {
 				message: 'Managed repository access failed (execution-failed).',
 			});
 			options.mockRejectedValue(new Error('synthetic-sftp-password raw config'));
-			await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({
+			await expect(prepareReady('backup-01')).rejects.toMatchObject({
 				code: 'credentials-unavailable',
 			});
 			expect(
@@ -712,9 +863,9 @@ describe('Phase 4 remote managed repository recovery', () => {
 		it('passes the HTTP abort signal through and refuses a cancelled preparation before any session operation', async () => {
 			const controller = new AbortController();
 			controller.abort();
-			await expect(
-				service.prepareDownload('backup-01', undefined, controller.signal)
-			).rejects.toMatchObject({ code: 'cancelled' });
+			await expect(prepareReady('backup-01', undefined, controller.signal)).rejects.toMatchObject({
+				code: 'cancelled',
+			});
 			expect(withSession).not.toHaveBeenCalled();
 			expect(session.archive).not.toHaveBeenCalled();
 		});
@@ -722,13 +873,13 @@ describe('Phase 4 remote managed repository recovery', () => {
 
 	it('reports a failed build until explicit retry, then polls the new attempt without throwing the cleared error', async () => {
 		session.streamFiles.mockRejectedValueOnce(new ManagedRepositoryAccessError('timeout'));
-		await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({ reason: 'timeout' });
+		await expect(prepareReady('backup-01')).rejects.toMatchObject({ reason: 'timeout' });
 		await expect(service.browsePage('backup-01', {})).rejects.toMatchObject({ reason: 'timeout' });
 		expect(session.streamFiles).toHaveBeenCalledTimes(1);
 		await expect(service.browsePage('backup-01', { retry: true })).resolves.toMatchObject({
 			status: 'indexing',
 		});
-		await service.prepareDownload('backup-01');
+		await prepareReady('backup-01');
 		await expect(
 			service.browsePage('backup-01', { path: '/srv/example-app', directoriesOnly: true })
 		).resolves.toMatchObject({
@@ -755,7 +906,7 @@ describe('Phase 4 remote managed repository recovery', () => {
 		await expect(
 			service.browsePage('backup-01', { path: '/srv/example-app', limit: 200 })
 		).resolves.toMatchObject({ status: 'indexing' });
-		await service.prepareDownload('backup-01');
+		await prepareReady('backup-01');
 		const page = await service.browsePage('backup-01', {
 			path: '/srv/example-app',
 			limit: 200,
@@ -793,19 +944,28 @@ describe('Phase 4 remote managed repository recovery', () => {
 		await expect(service.preview('backup-01', config)).rejects.toMatchObject({
 			code: 'unsupported-snapshot-file',
 		});
-		await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({
+		await expect(prepareReady('backup-01')).rejects.toMatchObject({
 			code: 'unsupported-snapshot-file',
 		});
 		expect(session.archive).not.toHaveBeenCalled();
 		expect(session.restore).not.toHaveBeenCalled();
 	});
 	it('refuses a cached index after repository binding or exact snapshot ownership changes', async () => {
-		await service.prepareDownload('backup-01');
+		await prepareReady('backup-01');
 		repository.storagePath = 'changed-repository';
 		await expect(service.browsePage('backup-01', {})).rejects.toMatchObject({ statusCode: 409 });
 		repository.storagePath = 'application';
 		session.snapshot.mockResolvedValue({ id: snapshotId, tags: ['foreign-plan'], paths: [] });
-		await expect(service.prepareDownload('backup-01')).rejects.toMatchObject({ statusCode: 409 });
+		const descriptor = await service.download('backup-01', preparationIds.get('backup-01'));
+		const destination = new Writable({
+			write(_chunk, _encoding, done) {
+				done();
+			},
+		});
+		await expect(
+			descriptor.streamTo(destination, new AbortController().signal, jest.fn())
+		).rejects.toMatchObject({ statusCode: 409 });
+		destination.destroy();
 		expect(session.streamFiles).toHaveBeenCalledTimes(1);
 	});
 	it('browses a historical completed backup by its persisted FULL ID, never latest or tag search', async () => {

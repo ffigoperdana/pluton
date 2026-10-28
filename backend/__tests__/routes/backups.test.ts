@@ -10,6 +10,7 @@ import http from 'http';
 import { AddressInfo } from 'net';
 import { ManagedRepositoryAccessError } from '../../src/utils/restic/ManagedSftpRepositorySession';
 import { SnapshotIndexError } from '../../src/utils/restic/ManagedSnapshotIndex';
+import { webAccess } from '../../src/middlewares/webAccess';
 
 jest.mock('jsonwebtoken');
 jest.mock('cookies');
@@ -58,6 +59,7 @@ describe('Backup Routes', () => {
 			cancelBackup: jest.fn(),
 			getBackupDownload: jest.fn(),
 			generateBackupDownload: jest.fn(),
+			downloadPreparation: jest.fn(),
 			cancelBackupDownload: jest.fn(),
 		} as any;
 
@@ -71,6 +73,103 @@ describe('Backup Routes', () => {
 		setupAuthMock(true);
 	});
 
+	describe('asynchronous download preparation', () => {
+		const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+		it('preserves the application same-origin boundary for bodyless creation and cancellation', async () => {
+			const guarded = express();
+			guarded.use(
+				webAccess({ canonical: 'https://example.internal', origins: ['https://example.internal'] })
+			);
+			guarded.use(express.json());
+			guarded.use('/api/backups', createBackupRouter(backupController));
+			mockBackupService.generateBackupDownload.mockResolvedValue({
+				streaming: true,
+				preparation: { id, state: 'queued' },
+			});
+			mockBackupService.downloadPreparation.mockResolvedValue({
+				id,
+				state: 'cancelled',
+				retryAfterMs: 0,
+			} as any);
+			for (const [method, route] of [
+				['post', '/action/download'],
+				['delete', `/download-preparations/${id}`],
+			] as const) {
+				for (const origin of ['', 'https://other.example.internal']) {
+					let rejected = request(guarded)
+						[method](`/api/backups/backup-01${route}`)
+						.set('Host', 'example.internal');
+					if (origin) rejected = rejected.set('Origin', origin);
+					expect((await rejected).status).toBe(403);
+				}
+				const accepted = await request(guarded)
+					[method](`/api/backups/backup-01${route}`)
+					.set('Host', 'example.internal')
+					.set('Origin', 'https://example.internal')
+					.set('Sec-Fetch-Site', 'same-origin');
+				expect(accepted.status).toBe(method === 'post' ? 202 : 200);
+			}
+			expect(mockBackupService.generateBackupDownload).toHaveBeenCalledTimes(1);
+			expect(mockBackupService.downloadPreparation).toHaveBeenCalledTimes(1);
+		});
+		it('returns a confirmed 202 job identity and private no-store response', async () => {
+			mockBackupService.generateBackupDownload.mockResolvedValue({
+				streaming: true,
+				preparation: { id, state: 'queued' },
+			});
+			const response = await request(app).post('/api/backups/backup-01/action/download').send({});
+			expect(response.status).toBe(202);
+			expect(response.body.result.preparation.id).toBe(id);
+			expect(response.headers['cache-control']).toBe('private, no-store');
+		});
+		it.each(['get', 'delete'] as const)(
+			'requires authentication for %s status/cancellation',
+			async method => {
+				setupAuthMock(false);
+				const response = await request(app)[method](
+					`/api/backups/backup-01/download-preparations/${id}`
+				);
+				expect(response.status).toBe(401);
+				expect(mockBackupService.downloadPreparation).not.toHaveBeenCalled();
+			}
+		);
+		it.each(['get', 'delete'] as const)(
+			'binds %s to the backup and exact job, with no caller options',
+			async method => {
+				mockBackupService.downloadPreparation.mockResolvedValue({
+					id,
+					state: 'indexing',
+					retryAfterMs: 2000,
+				} as any);
+				const response = await request(app)[method](
+					`/api/backups/backup-01/download-preparations/${id}`
+				);
+				expect(response.status).toBe(200);
+				expect(response.headers['retry-after']).toBe('2');
+				expect(mockBackupService.downloadPreparation).toHaveBeenCalledWith(
+					'backup-01',
+					id,
+					method === 'delete'
+				);
+				const rejected = await request(app)[method](
+					`/api/backups/backup-01/download-preparations/${id}?repository=other`
+				);
+				expect(rejected.status).toBe(400);
+				expect(mockBackupService.downloadPreparation).toHaveBeenCalledTimes(1);
+			}
+		);
+		it('allows only a bounded preparation identity on authenticated GET Download', async () => {
+			mockBackupService.getBackupDownload.mockRejectedValue(new Error('fixture'));
+			await request(app).get(`/api/backups/backup-01/action/download?preparationId=${id}`);
+			expect(mockBackupService.getBackupDownload).toHaveBeenCalledWith('backup-01', id);
+			mockBackupService.getBackupDownload.mockClear();
+			expect(
+				(await request(app).get('/api/backups/backup-01/action/download?preparationId=latest'))
+					.status
+			).toBe(400);
+			expect(mockBackupService.getBackupDownload).not.toHaveBeenCalled();
+		});
+	});
 	describe('bounded managed snapshot pages', () => {
 		it('requires authentication before any metadata work', async () => {
 			setupAuthMock(false);
@@ -475,7 +574,8 @@ describe('Backup Routes', () => {
 			expect(mockBackupService.generateBackupDownload).toHaveBeenCalledWith(
 				'backup-1',
 				undefined,
-				expect.any(AbortSignal)
+				expect.any(AbortSignal),
+				true
 			);
 		});
 		it('rejects client credentials/repository URLs/options before any repository access', async () => {

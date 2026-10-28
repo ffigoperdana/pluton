@@ -646,7 +646,8 @@
     "classification": "read (may perform IO)",
     "support": "Supported but internal-only",
     "request": [
-      "params.id"
+      "params.id",
+      "query.preparationId"
     ],
     "requestSchemas": [],
     "response": "controller JSON or binary/stream contract; unversioned",
@@ -719,6 +720,68 @@
     "source": "backend/src/controllers/BackupController.ts",
     "routeSource": "backend/src/routes/backups.ts",
     "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "backups",
+    "method": "DELETE",
+    "route": "/api/backups/:id/download-preparations/:jobId",
+    "handler": "BackupController.downloadPreparation",
+    "services": [
+      "backupService.downloadPreparation"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "destructive/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "body",
+      "params.id",
+      "params.jobId"
+    ],
+    "requestSchemas": [],
+    "response": "controller JSON or binary/stream contract; unversioned",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "backups",
+    "method": "GET",
+    "route": "/api/backups/:id/download-preparations/:jobId",
+    "handler": "BackupController.downloadPreparation",
+    "services": [
+      "backupService.downloadPreparation"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "body",
+      "params.id",
+      "params.jobId"
+    ],
+    "requestSchemas": [],
+    "response": "controller JSON or binary/stream contract; unversioned",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
   },
   {
     "feature": "backups",
