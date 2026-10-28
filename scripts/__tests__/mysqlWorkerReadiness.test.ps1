@@ -1,7 +1,21 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '../mysql-worker-readiness.ps1')
-function Assert([bool]$ok, [string]$message) { if (-not $ok) { throw $message } }
+function Assert([bool]$ok, [string]$check) {
+    if (-not $ok) { $script:failedCheck = $check; throw 'Synthetic readiness assertion failed.' }
+}
+trap {
+    # Closed test labels only: never print the exception or captured Docker output.
+    Write-Output "READINESS failure scenario=$script:scenario profile=$script:profile check=$script:failedCheck"
+    exit 1
+}
+function Start-Sleep { throw 'Synthetic readiness scenarios must not sleep.' }
 function docker {
+    if ($script:profile -eq 'busy') {
+        # Add CPU work/yield points without advancing the scenario's clock.
+        # Scheduler latency must not decide how many synthetic polls fit.
+        [Threading.Thread]::SpinWait(10000)
+        [void][Threading.Thread]::Yield()
+    }
     $global:LASTEXITCODE = 0
     switch ($args[0]) {
         'inspect' {
@@ -31,24 +45,42 @@ function docker {
         default { throw 'Unexpected Docker fixture call.' }
     }
 }
-foreach ($script:scenario in @('ready','delayed','exit','configuration','native-client','module-loading','oom','permission','timeout','stale-socket')) {
-    $script:polls=0
-    $message=''
-    try { Wait-MysqlFixtureWorker -Container 'fixture-worker' -DeadlineSeconds 1 }
-    catch { $message=$_.Exception.Message }
-    if ($script:scenario -in @('ready','delayed')) { Assert ($message -eq '') 'Valid startup refused.' }
-    else {
-        $expected = switch($script:scenario) {
-            'exit' {'stage=worker-process; status=exited; exit=1'}
-            'oom' {'oom=True'}
-            'permission' {'stage=ipc-directory'}
-            'timeout' {'stage=socket-timeout'}
-            'stale-socket' {'stage=ready-signal-timeout'}
-            default {"stage=$script:scenario"}
+foreach ($script:profile in @('normal','busy')) {
+    foreach ($script:scenario in @('ready','delayed','exit','configuration','native-client','module-loading','oom','permission','timeout','stale-socket')) {
+        $scenarioClock = [Diagnostics.Stopwatch]::StartNew()
+        $script:failedCheck = 'unexpected-error'
+        $script:clock = [pscustomobject]@{ Elapsed = [TimeSpan]::Zero }
+        $script:delays = 0
+        $script:polls=0
+        $message=''
+        try {
+            Wait-MysqlFixtureWorker -Container 'fixture-worker' -DeadlineSeconds 1 `
+                -StartClock { $script:clock } -PollDelay {
+                    $script:delays++
+                    $script:clock.Elapsed += [TimeSpan]::FromMilliseconds(250)
+                }
         }
-        Assert ($message.Contains($expected)) "Wrong closed startup category for $script:scenario."
-        Assert (-not ($message -match 'synthetic-private|synthetic-password')) 'Startup diagnostic leaked raw provider output.'
-        if ($script:scenario -notin @('timeout','stale-socket')) { Assert ($script:polls -eq 1) 'Irreversible startup failure was polled repeatedly.' }
+        catch { $message=$_.Exception.Message }
+        if ($script:scenario -in @('ready','delayed')) { Assert ($message -eq '') 'valid-startup' }
+        else {
+            $expected = switch($script:scenario) {
+                'exit' {'stage=worker-process; status=exited; exit=1'}
+                'oom' {'oom=True'}
+                'permission' {'stage=ipc-directory'}
+                'timeout' {'stage=socket-timeout'}
+                'stale-socket' {'stage=ready-signal-timeout'}
+                default {"stage=$script:scenario"}
+            }
+            Assert ($message.Contains($expected)) 'expected-category'
+            Assert (-not ($message -match 'synthetic-private|synthetic-password')) 'safe-diagnostic'
+        }
+        $expectedPolls = switch ($script:scenario) { 'delayed' {3}; {$_ -in @('timeout','stale-socket')} {4}; default {1} }
+        $expectedDelays = switch ($script:scenario) { 'delayed' {2}; {$_ -in @('timeout','stale-socket')} {4}; default {0} }
+        Assert ($script:polls -eq $expectedPolls) 'poll-count'
+        Assert ($script:delays -eq $expectedDelays) 'delay-count'
+        Assert ($script:clock.Elapsed.TotalMilliseconds -eq $expectedDelays * 250) 'virtual-time'
+        if ($script:scenario -in @('timeout','stale-socket')) { Assert ($message.Contains('deadline-seconds=1')) 'deadline' }
+        Write-Output "READINESS scenario=$script:scenario profile=$script:profile polls=$script:polls delays=$script:delays virtual-ms=$($script:clock.Elapsed.TotalMilliseconds) wall-ms=$($scenarioClock.ElapsedMilliseconds)"
     }
 }
 Write-Output 'PASS bounded worker startup diagnostics: ready, delayed, early exit, configuration, native client, module load, OOM, IPC ownership, timeout and stale socket.'
