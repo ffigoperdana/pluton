@@ -9,6 +9,8 @@ import http from 'node:http';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import Cryptr from 'cryptr';
+import tar from 'tar-stream';
+import { pipeline } from 'node:stream/promises';
 import { RemoteRepositoryRecoveryService } from '../../src/services/RemoteRepositoryRecoveryService';
 import { BackupService } from '../../src/services/BackupServices';
 import { BackupController } from '../../src/controllers/BackupController';
@@ -105,7 +107,16 @@ for (const delayMs of [65_000, 126_000]) {
 					},
 					archive: async (_id, destination) => {
 						calls++;
-						destination.write(Buffer.from('synthetic-stream-only'));
+						const archive = tar.pack();
+						archive.entry({
+							name: 'srv/example-app',
+							type: 'directory',
+							size: 0,
+							mode: 0o700,
+							mtime: new Date('2026-01-01T00:00:00Z'),
+						});
+						archive.finalize();
+						await pipeline(archive, destination, { end: false });
 					},
 				});
 			},
@@ -176,7 +187,17 @@ for (const delayMs of [65_000, 126_000]) {
 			assert.equal(accepted.status, 524);
 			assert.equal(accepted.headers.get('server'), 'fixture-gateway');
 			assert.match(await accepted.text(), /synthetic upstream timeout/);
-			console.log(JSON.stringify({ event: 'async_download_synchronous_control', transport: 'synthetic', delayMs, gatewayTimeoutMs: 5000, responseMs: Math.round(performance.now() - started), status: 524, passed: true }));
+			console.log(
+				JSON.stringify({
+					event: 'async_download_synchronous_control',
+					transport: 'synthetic',
+					delayMs,
+					gatewayTimeoutMs: 5000,
+					responseMs: Math.round(performance.now() - started),
+					status: 524,
+					passed: true,
+				})
+			);
 			continue;
 		}
 		assert.equal(accepted.status, 202);
@@ -187,6 +208,7 @@ for (const delayMs of [65_000, 126_000]) {
 		assert.equal(((await duplicate.json()) as any).result.preparation.id, jobId);
 		let polls = 0,
 			maxStatusMs = 0;
+		let archiveSha256 = '';
 		for (;;) {
 			const statusStart = performance.now();
 			const status = await fetch(`${base}/download-preparations/${jobId}`, { headers });
@@ -195,7 +217,10 @@ for (const delayMs of [65_000, 126_000]) {
 			maxStatusMs = Math.max(maxStatusMs, Math.round(performance.now() - statusStart));
 			polls++;
 			assert(maxStatusMs < 4000);
-			if (state.state === 'ready') break;
+			if (state.state === 'ready') {
+				archiveSha256 = state.export.archiveSha256;
+				break;
+			}
 			assert(
 				['queued', 'indexing', 'validating'].includes(state.state),
 				JSON.stringify({
@@ -209,11 +234,13 @@ for (const delayMs of [65_000, 126_000]) {
 			await new Promise(resolve => setTimeout(resolve, 1000));
 		}
 		assert.equal(builds, 1);
-		assert.equal(sessions, 2);
+		assert.equal(sessions, 3); // admission verification, index read, archive proof
 		const download = await fetch(`${base}/action/download?preparationId=${jobId}`, { headers });
 		assert.equal(download.status, 200);
-		assert.equal(await download.text(), 'synthetic-stream-only');
-		assert.equal(calls, 1);
+		const downloaded = Buffer.from(await download.arrayBuffer());
+		assert.equal(crypto.createHash('sha256').update(downloaded).digest('hex'), archiveSha256);
+		assert(downloaded.subarray(-1024).every(value => value === 0));
+		assert.equal(calls, 2); // preparation verification plus final transfer
 		console.log(
 			JSON.stringify({
 				event: 'async_download_protocol',

@@ -2,6 +2,11 @@ import crypto from 'crypto';
 import { AppError } from '../utils/AppError';
 import { SnapshotIndexError } from '../utils/restic/ManagedSnapshotIndex';
 import { ManagedRepositoryAccessError } from '../utils/restic/ManagedSftpRepositorySession';
+import {
+	ManagedExportError,
+	type ManagedExportMode,
+	type ManagedExportSummary,
+} from '../utils/restic/ManagedExportPolicy';
 
 export type PreparationState =
 	| 'queued'
@@ -23,6 +28,8 @@ export type PreparationStatus = {
 	code?: string;
 	reason?: string;
 	failureStatus?: number;
+	exportMode: ManagedExportMode;
+	export?: ManagedExportSummary;
 };
 type Job = {
 	id: string;
@@ -31,7 +38,12 @@ type Job = {
 	createdAt: number;
 	finishedAt?: number;
 	controller: AbortController;
-	run: (signal: AbortSignal, stage: (state: 'indexing' | 'validating') => void) => Promise<string>;
+	exportMode: ManagedExportMode;
+	export?: ManagedExportSummary;
+	run: (
+		signal: AbortSignal,
+		stage: (state: 'indexing' | 'validating') => void
+	) => Promise<string | { proof: string; export: ManagedExportSummary }>;
 	done?: Promise<void>;
 	proof?: string;
 	error?: string;
@@ -51,7 +63,12 @@ export class ManagedDownloadPreparation {
 		this.timer = setInterval(() => this.sweep(), 1000);
 		this.timer.unref();
 	}
-	start(key: string, run: Job['run'], validProof: (proof: string) => boolean): Job {
+	start(
+		key: string,
+		run: Job['run'],
+		validProof: (proof: string) => boolean,
+		exportMode: ManagedExportMode = 'full'
+	): Job {
 		this.sweep();
 		if (this.closed) throw new AppError(503, 'Download preparation is shutting down.');
 		const existing = [...this.jobs.values()].find(
@@ -82,6 +99,7 @@ export class ManagedDownloadPreparation {
 			state: 'queued',
 			createdAt: this.now(),
 			controller: new AbortController(),
+			exportMode,
 			run,
 		};
 		this.jobs.set(job.id, job);
@@ -112,14 +130,19 @@ export class ManagedDownloadPreparation {
 			if (job !== this.active) job.run = async () => '';
 		}
 	}
-	status(job: Job | undefined, id: string, entries = 0): PreparationStatus {
+	status(
+		job: Job | undefined,
+		id: string,
+		entries = 0,
+		exportMode: ManagedExportMode = 'full'
+	): PreparationStatus {
 		return {
 			id,
 			state: job?.state || 'expired',
 			createdAt: job?.createdAt || this.now(),
 			elapsedMs: job ? Math.max(0, (job.finishedAt || this.now()) - job.createdAt) : 0,
 			indexedEntries: entries,
-			validatedEntries: job?.state === 'ready' ? entries : 0,
+			validatedEntries: job?.state === 'ready' ? (job.export?.includedEntries ?? entries) : 0,
 			retryAfterMs:
 				!job || ['ready', 'failed', 'cancelled', 'expired'].includes(job.state)
 					? 0
@@ -128,6 +151,8 @@ export class ManagedDownloadPreparation {
 			code: job?.code,
 			reason: job?.reason,
 			failureStatus: job?.failureStatus,
+			exportMode: job?.exportMode || exportMode,
+			export: job?.state === 'ready' ? job.export : undefined,
 		};
 	}
 	private sweep() {
@@ -149,11 +174,12 @@ export class ManagedDownloadPreparation {
 		this.active = job;
 		job.done = (async () => {
 			try {
-				const proof = await job.run(job.controller.signal, state => {
+				const result = await job.run(job.controller.signal, state => {
 					if (!job.controller.signal.aborted) job.state = state;
 				});
 				if (!job.controller.signal.aborted) {
-					job.proof = proof;
+					job.proof = typeof result === 'string' ? result : result.proof;
+					job.export = typeof result === 'string' ? undefined : result.export;
 					job.state = 'ready';
 				}
 			} catch (error) {
@@ -166,7 +192,8 @@ export class ManagedDownloadPreparation {
 					job.failureStatus = error instanceof AppError ? error.statusCode : 500;
 					if (
 						error instanceof SnapshotIndexError ||
-						error instanceof ManagedRepositoryAccessError
+						error instanceof ManagedRepositoryAccessError ||
+						error instanceof ManagedExportError
 					) {
 						job.code = error.code;
 						job.reason = error.reason;

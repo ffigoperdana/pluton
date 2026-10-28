@@ -108,6 +108,71 @@ describe('Phase 6 isolated filesystem / every database artifact boundary', () =>
 			code: 'cancelled',
 		});
 	});
+	it('checks stored link text without realpath/open on the link, and rejects altered targets', async () => {
+		const alias = path.join(target, 'alias');
+		await fs.writeFile(alias, 'placeholder');
+		const original = fs.lstat.bind(fs);
+		const stat = jest.spyOn(fs, 'lstat').mockImplementation(async (value: any, ...args: any[]) => {
+			if (String(value) === alias)
+				return { isSymbolicLink: () => true, isDirectory: () => false, isFile: () => false } as any;
+			return (original as any)(value, ...args);
+		});
+		const readlink = jest.spyOn(fs, 'readlink').mockResolvedValue(artifact.path.slice(1));
+		const real = jest.spyOn(fs, 'realpath');
+		const open = jest.spyOn(fs, 'open');
+		const files = [
+			{ path: artifact.path, type: 'file', size: sql.length },
+			{ path: '/alias', type: 'symlink', size: 0 },
+		] as any;
+		const proof = {
+			get: (name: string) =>
+				name === '/alias'
+					? {
+							path: name,
+							type: 'symlink' as const,
+							size: 0,
+							linkTarget: artifact.path.slice(1),
+							metadata: '{}',
+						}
+					: {
+							path: name,
+							type: 'file' as const,
+							size: sql.length,
+							sha256: artifact.sha256,
+							metadata: '{}',
+						},
+		};
+		try {
+			await expect(
+				validateRestoredFiles(files, target, new AbortController().signal, proof)
+			).resolves.toEqual({ files: 1, bytes: sql.length });
+			expect(real).not.toHaveBeenCalledWith(alias);
+			expect(open).not.toHaveBeenCalledWith(alias, expect.anything());
+			readlink.mockResolvedValue('/outside-fixture/secret');
+			await expect(
+				validateRestoredFiles(files, target, new AbortController().signal, proof)
+			).rejects.toMatchObject({ code: 'restored-link-target-mismatch' });
+		} finally {
+			stat.mockRestore();
+			readlink.mockRestore();
+			real.mockRestore();
+			open.mockRestore();
+		}
+	});
+	it('rejects equal-sized restored file corruption against the verified archive hash', async () => {
+		const files = [{ path: artifact.path, type: 'file', size: sql.length }] as any;
+		await expect(
+			validateRestoredFiles(files, target, new AbortController().signal, {
+				get: () => ({
+					path: artifact.path,
+					type: 'file',
+					size: sql.length,
+					sha256: '0'.repeat(64),
+					metadata: '{}',
+				}),
+			})
+		).rejects.toMatchObject({ code: 'restored-file-hash-mismatch' });
+	});
 	it('only removes an exact owned workspace; cannot delete broad/user paths', async () => {
 		const workspace = new RecoveryWorkspace(path.join(scratch, 'recovery-tests'));
 		const id = 'a'.repeat(24);

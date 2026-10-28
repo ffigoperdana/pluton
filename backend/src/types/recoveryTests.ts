@@ -52,6 +52,8 @@ export type RecoveryCode =
 	| 'unsupported-snapshot-file'
 	| 'restored-file-count-mismatch'
 	| 'restored-file-size-mismatch'
+	| 'restored-file-hash-mismatch'
+	| 'restored-link-target-mismatch'
 	| 'source-tree-missing'
 	| 'workspace-size-limit'
 	| 'insufficient-space'

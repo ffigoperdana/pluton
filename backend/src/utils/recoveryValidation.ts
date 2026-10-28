@@ -9,6 +9,7 @@ import type { RecoveryCode, RecoveryStage, RecoveryDatabaseResult } from '../typ
 import { z } from 'zod';
 import { recoveryEngineSchema } from './recoveryTestPolicy';
 import type { ManagedSnapshotIndex } from './restic/ManagedSnapshotIndex';
+import type { ManagedExportProof } from './restic/ManagedExportProof';
 
 export class RecoveryTestError extends AppError {
 	constructor(
@@ -26,8 +27,12 @@ export function checkRecoveryCancellation(signal: AbortSignal) {
 export async function validateRestoredFiles(
 	files: SnapShotFile[] | ManagedSnapshotIndex,
 	target: string,
-	signal: AbortSignal
+	signal: AbortSignal,
+	verified?: Pick<ManagedExportProof, 'get'>
 ) {
+	const root = await fs.lstat(target);
+	if (!root.isDirectory() || root.isSymbolicLink())
+		throw new RecoveryTestError('filesystem-validation', 'unsafe-workspace');
 	const realTarget = await fs.realpath(target);
 	// The manifest is provided only by internal callers. Keep its implementation
 	// out of this shared validator: the standalone MySQL worker has no SQLite.
@@ -42,11 +47,15 @@ export async function validateRestoredFiles(
 		? files.stats.total_files
 		: files.filter(file => file.type === 'file').length;
 	const expectedDirectories = indexed
-		? files.count - expectedFiles
+		? files.typeCounts().dir || 0
 		: files.filter(file => file.type === 'dir').length;
+	const expectedLinks = indexed
+		? files.typeCounts().symlink || 0
+		: files.filter(file => file.type === 'symlink').length;
 	let count = 0,
 		bytes = 0;
 	let directories = 0;
+	let links = 0;
 	const walk = async (directory: string): Promise<void> => {
 		checkRecoveryCancellation(signal);
 		for await (const entry of await fs.opendir(directory)) {
@@ -54,6 +63,21 @@ export async function validateRestoredFiles(
 			const candidate = path.join(directory, entry.name);
 			const relative = path.relative(target, candidate).split(path.sep).join('/');
 			const stat = await fs.lstat(candidate);
+			if (stat.isSymbolicLink()) {
+				const expected = get(relative);
+				const proof = verified?.get(`/${relative}`);
+				if (
+					expected?.type !== 'symlink' ||
+					proof?.type !== 'symlink' ||
+					(await fs.readlink(candidate)) !== proof.linkTarget
+				)
+					throw new RecoveryTestError(
+						'filesystem-validation',
+						verified ? 'restored-link-target-mismatch' : 'unsupported-snapshot-file'
+					);
+				links++;
+				continue; // Never realpath, open, hash or descend through a restored link.
+			}
 			if (
 				stat.isSymbolicLink() ||
 				(!stat.isDirectory() && !stat.isFile()) ||
@@ -64,7 +88,7 @@ export async function validateRestoredFiles(
 				// Ancestors may be implicit in a granular selection. Files never may.
 				if (!get(relative) && !hasChildren(relative))
 					throw new RecoveryTestError('filesystem-validation', 'restored-file-count-mismatch');
-				if (get(relative)?.type === 'file')
+				if (get(relative) && get(relative)?.type !== 'dir')
 					throw new RecoveryTestError('filesystem-validation', 'restored-file-count-mismatch');
 				if (get(relative)?.type === 'dir') directories++;
 				await walk(candidate);
@@ -74,6 +98,31 @@ export async function validateRestoredFiles(
 					throw new RecoveryTestError('filesystem-validation', 'restored-file-count-mismatch');
 				if (file.size !== stat.size)
 					throw new RecoveryTestError('filesystem-validation', 'restored-file-size-mismatch');
+				if (verified) {
+					const proof = verified.get(file.path);
+					if (proof?.type !== 'file' || !proof.sha256)
+						throw new RecoveryTestError('filesystem-validation', 'restored-file-count-mismatch');
+					const handle = await fs.open(candidate, constants.O_RDONLY | constants.O_NOFOLLOW);
+					try {
+						const opened = await handle.stat();
+						if (
+							!opened.isFile() ||
+							opened.dev !== stat.dev ||
+							opened.ino !== stat.ino ||
+							opened.size !== stat.size
+						)
+							throw new RecoveryTestError('filesystem-validation', 'restored-file-size-mismatch');
+						const hash = crypto.createHash('sha256');
+						for await (const chunk of handle.createReadStream({ autoClose: false })) {
+							checkRecoveryCancellation(signal);
+							hash.update(chunk);
+						}
+						if (hash.digest('hex') !== proof.sha256)
+							throw new RecoveryTestError('filesystem-validation', 'restored-file-hash-mismatch');
+					} finally {
+						await handle.close();
+					}
+				}
 				count++;
 				bytes += stat.size;
 			}
@@ -82,7 +131,7 @@ export async function validateRestoredFiles(
 	await walk(target);
 	if (count !== expectedFiles)
 		throw new RecoveryTestError('filesystem-validation', 'restored-file-count-mismatch');
-	if (directories !== expectedDirectories)
+	if (directories !== expectedDirectories || links !== expectedLinks)
 		throw new RecoveryTestError('filesystem-validation', 'restored-file-count-mismatch');
 	return { files: count, bytes };
 }

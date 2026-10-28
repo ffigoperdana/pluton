@@ -2,7 +2,8 @@ import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import Cryptr from 'cryptr';
-import { Writable } from 'stream';
+import { Readable, Writable } from 'stream';
+import { pipeline } from 'stream/promises';
 import { BackupStore } from '../stores/BackupStore';
 import { PlanStore } from '../stores/PlanStore';
 import { RestoreStore } from '../stores/RestoreStore';
@@ -39,6 +40,13 @@ import {
 } from '../utils/recoveryValidation';
 import type { RecoveryStage } from '../types/recoveryTests';
 import { ManagedDownloadPreparation } from './ManagedDownloadPreparation';
+import { prepareManagedExport, streamManagedExport } from '../utils/restic/ManagedTarExport';
+import {
+	managedExportMode,
+	ManagedExportError,
+	type ManagedExportMode,
+	type ManagedExportSummary,
+} from '../utils/restic/ManagedExportPolicy';
 import {
 	ManagedSnapshotIndex,
 	ManagedSnapshotIndexCache,
@@ -65,6 +73,7 @@ type Selection = {
 
 export type ManagedArchiveDownload = {
 	fileName: string;
+	export: ManagedExportSummary;
 	streamTo: (destination: Writable, signal: AbortSignal, ready: () => void) => Promise<void>;
 };
 
@@ -188,7 +197,7 @@ export class RemoteRepositoryRecoveryService {
 						stage('snapshot-validation');
 						await this.verifySnapshot(context, session);
 						try {
-							listed.assertSafe('restore');
+							listed.assertExportEntries('full', true);
 						} catch {
 							throw new RecoveryTestError('snapshot-validation', 'unsupported-snapshot-file');
 						}
@@ -231,10 +240,21 @@ export class RemoteRepositoryRecoveryService {
 							throw new RecoveryTestError('staged-restore', 'insufficient-space');
 						stage('staged-restore');
 						checkRecoveryCancellation(signal);
+						const linkProof = listed.typeCounts().symlink
+							? listed.exportProof(this.exportBinding(context), 'full')
+							: undefined;
+						if (linkProof) await prepareManagedExport(listed, session, linkProof, signal);
+						await assertWorkspace();
+						if (
+							!(await fs.lstat(target)).isDirectory() ||
+							(await fs.lstat(target)).isSymbolicLink() ||
+							(await fs.readdir(target)).length
+						)
+							throw new RecoveryTestError('staged-restore', 'unsafe-workspace');
 						await session.restore(context.snapshotId, [], target);
 						await assertWorkspace();
 						stage('filesystem-validation');
-						const measured = await validateRestoredFiles(listed, target, signal);
+						const measured = await validateRestoredFiles(listed, target, signal, linkProof);
 						await this.verifySnapshot(context, session); // exact binding remains valid, not latest
 						const current = await this.context(binding.backupId, binding.planId);
 						if (
@@ -369,14 +389,20 @@ export class RemoteRepositoryRecoveryService {
 	}
 
 	/** Admit only local authorization/binding work; client disconnect never owns the job. */
-	async prepareDownload(backupId: string, replicationId?: string, signal?: AbortSignal) {
+	async prepareDownload(
+		backupId: string,
+		replicationId?: string,
+		signal?: AbortSignal,
+		exportMode: ManagedExportMode = 'full'
+	) {
+		const mode = managedExportMode(exportMode);
 		if (replicationId)
 			throw new AppError(400, 'Remote downloads support only the original managed repository.');
 		const context = await this.context(backupId);
 		if (signal?.aborted) throw new SnapshotIndexError('cancelled');
 		const key = this.indexKey(context);
 		const job = this.downloads.start(
-			key,
+			`${key}:${mode}`,
 			async (jobSignal, stage) => {
 				const started = performance.now();
 				try {
@@ -384,9 +410,19 @@ export class RemoteRepositoryRecoveryService {
 					await this.indexes.retry(key); // Only an explicit POST may retry a failed build.
 					return await this.withIndex(
 						context,
-						index => {
-							index.assertSafe();
-							return this.indexes.inspect(key)!.generation;
+						async index => {
+							index.assertExportEntries(mode);
+							const proof = index.exportProof(this.exportBinding(context), mode);
+							const verified = await this.sessions.withSession(
+								context.access,
+								async session => {
+									await this.verifySnapshot(context, session);
+									return prepareManagedExport(index, session, proof, jobSignal);
+								},
+								jobSignal
+							);
+							await this.assertCurrentContext(context);
+							return { proof: this.indexes.inspect(key)!.generation, export: verified };
 						},
 						jobSignal,
 						() => stage('validating')
@@ -410,7 +446,8 @@ export class RemoteRepositoryRecoveryService {
 			proof => {
 				const cached = this.indexes.inspect(key);
 				return cached?.state === 'ready' && cached.generation === proof;
-			}
+			},
+			mode
 		);
 		return {
 			streaming: true,
@@ -418,10 +455,16 @@ export class RemoteRepositoryRecoveryService {
 		};
 	}
 
-	async downloadPreparation(backupId: string, id: string, cancel = false) {
+	async downloadPreparation(
+		backupId: string,
+		id: string,
+		cancel = false,
+		exportMode: ManagedExportMode = 'full'
+	) {
+		const mode = managedExportMode(exportMode);
 		const context = await this.context(backupId);
 		const key = this.indexKey(context);
-		const job = this.downloads.get(key, id);
+		const job = this.downloads.get(`${key}:${mode}`, id);
 		const telemetry = this.indexes.inspect(key);
 		if (
 			job?.state === 'ready' &&
@@ -429,18 +472,24 @@ export class RemoteRepositoryRecoveryService {
 		)
 			this.downloads.expire(job);
 		if (job && cancel) this.downloads.cancel(job);
-		return this.downloads.status(job, id, telemetry?.entries);
+		return this.downloads.status(job, id, telemetry?.entries, mode);
 	}
 
-	async download(backupId: string, preparationId?: string): Promise<ManagedArchiveDownload> {
+	async download(
+		backupId: string,
+		preparationId?: string,
+		exportMode: ManagedExportMode = 'full'
+	): Promise<ManagedArchiveDownload> {
+		const mode = managedExportMode(exportMode);
 		const context = await this.context(backupId);
 		const key = this.indexKey(context);
 		if (!preparationId) throw new AppError(409, 'Prepare this snapshot before downloading.');
-		const job = this.downloads.get(key, preparationId);
+		const job = this.downloads.get(`${key}:${mode}`, preparationId);
 		if (
 			!job ||
 			job.state !== 'ready' ||
 			!job.proof ||
+			job.export?.mode !== mode ||
 			this.indexes.inspect(key)?.generation !== job.proof
 		)
 			throw new AppError(
@@ -450,7 +499,8 @@ export class RemoteRepositoryRecoveryService {
 		const proof = job.proof;
 		const safeId = context.backupId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80) || 'snapshot';
 		return {
-			fileName: `backup-${safeId}.tar`,
+			fileName: `backup-${safeId}${mode === 'regular-files' ? '-regular-files' : ''}.tar`,
+			export: job.export,
 			streamTo: async (destination, signal, ready) => {
 				let stage = 'metadata-validation';
 				const deadline = new AbortController();
@@ -461,7 +511,9 @@ export class RemoteRepositoryRecoveryService {
 					await this.indexes.useReady(key, proof, async index => {
 						if (job.state !== 'ready')
 							throw new AppError(409, 'Download preparation is no longer ready.');
-						index.assertSafe();
+						const verified = index.exportProof(this.exportBinding(context), mode);
+						if (!verified.summary || verified.summary.manifestSha256 !== job.export!.manifestSha256)
+							throw new ManagedExportError('export-proof-missing');
 						stage = 'repository-read';
 						await this.sessions.withSession(
 							context.access,
@@ -474,7 +526,7 @@ export class RemoteRepositoryRecoveryService {
 								clearTimeout(timer);
 								stage = 'archive-stream';
 								ready(); // headers are set only after exact snapshot/binding validation
-								await session.archive(context.snapshotId, destination);
+								await streamManagedExport(index, session, verified, destination, boundedSignal);
 							},
 							boundedSignal
 						);
@@ -508,6 +560,38 @@ export class RemoteRepositoryRecoveryService {
 					clearTimeout(timer);
 				}
 			},
+		};
+	}
+
+	async downloadManifest(
+		backupId: string,
+		preparationId: string,
+		mode: ManagedExportMode = 'full'
+	): Promise<ManagedArchiveDownload> {
+		const download = await this.download(backupId, preparationId, mode);
+		const context = await this.context(backupId);
+		const key = this.indexKey(context);
+		const generation = this.downloads.get(`${key}:${mode}`, preparationId)!.proof!;
+		return {
+			fileName: download.fileName.replace(/\.tar$/, '.manifest.jsonl'),
+			export: download.export,
+			streamTo: (destination, signal, ready) =>
+				this.indexes.useReady(key, generation, async index => {
+					if (this.downloads.get(`${key}:${mode}`, preparationId)?.state !== 'ready')
+						throw new ManagedExportError('export-proof-missing');
+					const proof = index.exportProof(this.exportBinding(context), mode);
+					if (!proof.summary || proof.summary.manifestSha256 !== download.export!.manifestSha256)
+						throw new ManagedExportError('export-proof-missing');
+					await this.sessions.withSession(
+						context.access,
+						session => this.verifySnapshot(context, session),
+						signal
+					);
+					await this.assertCurrentContext(context);
+					signal.throwIfAborted();
+					ready();
+					await pipeline(Readable.from(proof.manifestLines()), destination, { end: false, signal });
+				}),
 		};
 	}
 
@@ -593,7 +677,8 @@ export class RemoteRepositoryRecoveryService {
 						target,
 						context,
 						this.select(index, config),
-						controller.signal
+						controller.signal,
+						index
 					),
 				controller.signal
 			).catch(async () => {
@@ -764,6 +849,13 @@ export class RemoteRepositoryRecoveryService {
 		return snapshot;
 	}
 
+	private exportBinding(context: RecoveryContext) {
+		return {
+			backupId: context.backupId,
+			repositoryId: context.repositoryId,
+			snapshotId: context.snapshotId,
+		};
+	}
 	private indexKey(context: RecoveryContext) {
 		// Credentials are hashed in memory, never persisted in metadata or logs.
 		return ManagedSnapshotIndexCache.key(context);
@@ -888,7 +980,7 @@ export class RemoteRepositoryRecoveryService {
 		}
 		const full = !includes.length && !excludes.length;
 		if (full) {
-			index.assertSafe('restore');
+			index.assertExportEntries('full', true);
 			if (!index.count) throw new AppError(400, 'No entries were selected for staged recovery.');
 			return { files: index, includes: [], full: true, stats: index.stats };
 		}
@@ -920,8 +1012,14 @@ export class RemoteRepositoryRecoveryService {
 		}
 		const selected = [...chosen.values()];
 		// Do not create device nodes or symlink-mediated writes in server staging.
-		if (selected.some(file => !['file', 'dir'].includes(file.type))) {
-			throw new AppError(400, 'Staged recovery supports regular files and directories only.');
+		if (
+			selected.some(file => !['file', 'dir', 'symlink'].includes(file.type)) ||
+			(process.platform === 'win32' && selected.some(file => file.type === 'symlink'))
+		) {
+			throw new AppError(
+				400,
+				'Staged recovery refuses special nodes or links unsupported by the destination.'
+			);
 		}
 		for (const file of selected) assertManagedRestorePath(file.path);
 		const regularFiles = selected.filter(file => file.type === 'file');
@@ -945,7 +1043,7 @@ export class RemoteRepositoryRecoveryService {
 		const completeSubtrees = selected.filter(
 			file => file.type === 'dir' && !incomplete.has(file.path)
 		);
-		const selectedIncludes = [...completeSubtrees, ...regularFiles]
+		const selectedIncludes = [...completeSubtrees, ...selected.filter(file => file.type !== 'dir')]
 			.filter(
 				file =>
 					!completeSubtrees.some(parent => parent !== file && contains(parent.path, file.path))
@@ -1014,9 +1112,17 @@ export class RemoteRepositoryRecoveryService {
 		target: string,
 		context: RecoveryContext,
 		selection: Selection,
-		signal: AbortSignal
+		signal: AbortSignal,
+		index: ManagedSnapshotIndex
 	) {
 		let stage = 'repository-read';
+		const linkProof = (
+			selection.files instanceof ManagedSnapshotIndex
+				? !!index.typeCounts().symlink
+				: selection.files.some(file => file.type === 'symlink')
+		)
+			? index.exportProof(this.exportBinding(context), 'full')
+			: undefined;
 		try {
 			await this.sessions.withSession(
 				context.access,
@@ -1033,6 +1139,16 @@ export class RemoteRepositoryRecoveryService {
 					)
 						throw new AppError(400, 'Invalid staging destination.');
 					stage = 'staged-restore';
+					if (linkProof) await prepareManagedExport(index, session, linkProof, signal);
+					await this.assertWorkspace(id, workspace);
+					const before = await fs.lstat(target);
+					if (
+						!before.isDirectory() ||
+						before.isSymbolicLink() ||
+						(await fs.readdir(target)).length ||
+						!isPathWithin(await fs.realpath(workspace), await fs.realpath(target))
+					)
+						throw new AppError(400, 'Staging destination must remain empty and isolated.');
 					return session.restore(context.snapshotId, selection.includes, target);
 				},
 				signal
@@ -1041,29 +1157,13 @@ export class RemoteRepositoryRecoveryService {
 			stage = 'staged-file-validation';
 			// Restic 0.19.1 files_restored counts directory nodes too. Measure the
 			// selected regular files actually written, not that mixed node count.
-			const realTarget = await fs.realpath(target);
-			let filesRestored = 0;
-			let bytesRestored = 0;
-			for (const file of selection.files) {
-				if (file.type !== 'file') continue;
-				const restoredPath = resolvePathWithin(target, file.path.slice(1));
-				const stat = await fs.lstat(restoredPath);
-				if (
-					!stat.isFile() ||
-					stat.isSymbolicLink() ||
-					stat.size !== file.size ||
-					!isPathWithin(realTarget, await fs.realpath(restoredPath))
-				)
-					throw new AppError(500, 'Staged file validation failed.');
-				filesRestored++;
-				bytesRestored += stat.size;
-			}
+			const measured = await validateRestoredFiles(selection.files, target, signal, linkProof);
 			if (signal.aborted) throw new ManagedRepositoryAccessError('cancelled');
 			stage = 'result-persistence';
 			const stats = {
 				...selection.stats,
-				files_restored: filesRestored,
-				bytes_restored: bytesRestored,
+				files_restored: measured.files,
+				bytes_restored: measured.bytes,
 			};
 			await fs.writeFile(
 				path.join(workspace, 'stats.json'),
