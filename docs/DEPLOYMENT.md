@@ -15,6 +15,12 @@ This document applies to the public community fork. It does not change the
 read-only guarantees for imported Restic repositories or enable any new backup
 operation.
 
+Reliable Download remains disabled by default. Its independent temporary S3
+configuration, optional read-only CA mount, mandatory destination preflight,
+120 MB test and rollback procedure are documented in the
+[controlled UAT runbook](MANAGED_RELIABLE_DOWNLOAD_UAT.md). Enabling it does not
+change backup repositories, replication, Standard Download, Restore or Agent.
+
 Existing installations must first follow the separate, operator-approved
 [one-time host-bundle upgrade](DEPLOYMENT_OVERLAY_AND_HEALTHCHECK_FIX.md#8-a--one-time-host-script-upgrade).
 Pulling a new image does not update already installed scripts. That runbook also

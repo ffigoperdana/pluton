@@ -9,6 +9,7 @@ import { ManagedExportStore } from '../../src/stores/ManagedExportStore';
 import { ManagedExportService } from '../../src/services/ManagedExportService';
 import { ManagedExportController } from '../../src/controllers/ManagedExportController';
 import { createManagedExportRouter } from '../../src/routes/managedExports';
+import { createManagedExportPreflightRouter } from '../../src/routes/managedExportPreflight';
 import {
 	exportConfiguration,
 	TemporaryExportError,
@@ -96,10 +97,20 @@ process.on('message', async (message: any) => {
 				if (message.fault === 'hold-upload' || message.fault === 'upload-error') {
 					const send = storage.client.send.bind(storage.client);
 					let parts = 0;
+					const archiveUploads = new Set<string>();
 					(storage.client as any).send = async (command: any, options: any) => {
+						if (
+							command.constructor.name === 'CreateMultipartUploadCommand' &&
+							command.input.Metadata?.['archive-sha256']
+						) {
+							const result = await send(command, options);
+							if (result.UploadId) archiveUploads.add(result.UploadId);
+							return result;
+						}
 						if (
 							command.constructor.name === 'UploadPartCommand' &&
 							command.input.Key.endsWith('.tar') &&
+							archiveUploads.has(command.input.UploadId) &&
 							++parts === 2
 						) {
 							process.send?.({ event: 'held', phase: 'upload' });
@@ -139,6 +150,10 @@ process.on('message', async (message: any) => {
 			running.app.use(
 				'/api/backups',
 				createManagedExportRouter(new ManagedExportController(service))
+			);
+			running.app.use(
+				'/api/managed-exports',
+				createManagedExportPreflightRouter(new ManagedExportController(service))
 			);
 			await service.recoverInterrupted();
 			timer = setInterval(() => void service!.tick(), 250);

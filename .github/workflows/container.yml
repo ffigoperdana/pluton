@@ -48,8 +48,9 @@ jobs:
 
       - name: Check deployment probe, overlay policy and POSIX shell syntax
         run: |
-          node --test scripts/__tests__/deployment.test.cjs
+          node --test scripts/__tests__/deployment.test.cjs scripts/__tests__/managedExportCompose.test.cjs
           python3 scripts/__tests__/deployment_policy_test.py
+          python3 scripts/__tests__/managed_export_ca_test.py
           python3 scripts/__tests__/deployment_fixture_test.py
           for script in deploy/*.sh; do sh -n "$script"; done
 

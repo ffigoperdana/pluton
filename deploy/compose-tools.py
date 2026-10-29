@@ -202,6 +202,7 @@ def validate_config(path, ref, health_file, directory):
     environment = service.get("environment", {})
     for key in ("APP_URL", "APP_ALLOWED_ORIGINS", "AGENT_SERVER_URL", "ALLOW_INSECURE_AGENT_HTTP", "TRUST_PROXY"):
         require(key in environment, "supported-environment-setting-missing")
+    validate_export_ca(config)
     require(service.get("healthcheck", {}).get("test") == ["CMD", "node", "-e", probe_source(health_file)],
             "reviewed-get-healthcheck-required")
     validate_internal_mysql_worker(config)
@@ -216,6 +217,35 @@ def validate_config(path, ref, health_file, directory):
     return value
 
 
+EXPORT_CA_TARGET = "/run/secrets/pluton-managed-export-ca.pem"
+
+
+def validate_export_ca(config):
+    service = config["services"]["pluton"]
+    environment = service.get("environment", {})
+    if environment.get("MANAGED_EXPORT_ENABLED") == "true":
+        for name in ("ENDPOINT", "REGION", "BUCKET", "PREFIX", "ACCESS_KEY_ID", "SECRET_ACCESS_KEY"):
+            require(bool(environment.get("MANAGED_EXPORT_" + name)), "export-configuration-incomplete")
+        require(environment["MANAGED_EXPORT_ENDPOINT"].startswith("https://"), "export-https-required")
+    selected = [item for item in service.get("volumes", []) if item.get("target") == EXPORT_CA_TARGET]
+    if environment.get("MANAGED_EXPORT_CA_FILE") == EXPORT_CA_TARGET:
+        require(len(selected) == 1, "export-ca-mount-required")
+    if not selected:
+        return
+    require(len(selected) == 1 and environment.get("MANAGED_EXPORT_CA_FILE") == EXPORT_CA_TARGET,
+            "export-ca-binding-mismatch")
+    item = selected[0]
+    require(item.get("type") == "bind" and item.get("read_only") is True and
+            item.get("bind", {}).get("create_host_path", False) is False and
+            item.get("bind", {}).get("propagation", "rprivate") == "rprivate", "export-ca-mount-unsafe")
+    source = Path(item.get("source", ""))
+    require(source.is_absolute(), "export-ca-source-invalid")
+    trusted(source)
+    content = source.read_bytes()
+    require(len(content) <= 256 * 1024 and b"-----BEGIN CERTIFICATE-----" in content and
+            b"PRIVATE KEY" not in content, "export-ca-public-certificate-required")
+
+
 def actual_mounts(container):
     result = []
     for item in container["Mounts"]:
@@ -225,6 +255,21 @@ def actual_mounts(container):
                        "target": item["Destination"], "read_only": not item["RW"],
                        "propagation": (item.get("Propagation") or "rprivate") if item["Type"] == "bind" else ""})
     return sorted(result, key=lambda item: item["target"])
+
+
+def verify_export_environment(config_file, inspect_file):
+    """Compare private inputs in memory; never emit destination/credential values."""
+    trusted(config_file)
+    trusted(inspect_file)
+    expected = load(config_file)["services"]["pluton"].get("environment", {})
+    container = check_container(config_file, inspect_file)
+    actual = dict(item.split("=", 1) for item in container["Config"].get("Env", []) if "=" in item)
+    for suffix in ("ENABLED", "ENDPOINT", "REGION", "BUCKET", "PREFIX", "ACCESS_KEY_ID",
+                   "SECRET_ACCESS_KEY", "SESSION_TOKEN", "CA_FILE", "TTL_SECONDS"):
+        name = "MANAGED_EXPORT_" + suffix
+        require(name in expected and name in actual and expected[name] == actual[name],
+                "export-environment-mismatch-" + name)
+    return "export-environment-matches-all-10-fields-no-values-emitted"
 
 
 def check_container(config_file, inspect_file):
@@ -325,6 +370,8 @@ def main(args):
     elif action == "check-container":
         container = check_container(*values[:2])
         require(container["Image"] == values[2], "new-container-image-mismatch")
+    elif action == "export-environment":
+        print(verify_export_environment(*values))
     elif action == "field":
         value = load(values[0])[0]
         for field in values[1].split("."):

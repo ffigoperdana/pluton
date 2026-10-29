@@ -44,6 +44,7 @@ import { ManagedExportStore } from './stores/ManagedExportStore';
 import { ManagedExportService } from './services/ManagedExportService';
 import { ManagedExportController } from './controllers/ManagedExportController';
 import { createManagedExportRouter } from './routes/managedExports';
+import { createManagedExportPreflightRouter } from './routes/managedExportPreflight';
 import { exportConfiguration } from './utils/managedExport/ExportPolicy';
 import { assertExportIsolation } from './utils/managedExport/ExportIsolation';
 import { appPaths } from './utils/AppPaths';
@@ -422,6 +423,10 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	app.use(
 		'/api/backups',
 		createManagedExportRouter(new ManagedExportController(managedExportService))
+	);
+	app.use(
+		'/api/managed-exports',
+		createManagedExportPreflightRouter(new ManagedExportController(managedExportService))
 	);
 	app.use('/api/devices', createDeviceRouter(deviceController));
 	app.use('/api/storages', createStorageRouter(storageController));

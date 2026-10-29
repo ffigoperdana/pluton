@@ -24,6 +24,8 @@ import { NodeHttpHandler } from '@smithy/node-http-handler';
 import {
 	EXPORT_LIMITS,
 	TemporaryExportError,
+	ExportPreflightError,
+	type ExportCapability,
 	bindingDigest,
 	exportFileName,
 	type ExportConfig,
@@ -185,158 +187,352 @@ export class S3ExportStorage {
 		signal: AbortSignal,
 		update: (fields: Partial<ExportJob>) => void = () => {}
 	) {
-		if (
-			(
-				await this.client.send(new GetBucketVersioningCommand({ Bucket: this.config.bucket }), {
-					abortSignal: signal,
-				})
-			).Status !== 'Enabled'
-		)
-			throw new TemporaryExportError('security-capability-missing');
-		const key = job.key + '.probe',
-			data = crypto.randomBytes(32),
-			params = this.scope(job, key);
+		let capability: ExportCapability = 'versioning';
+		const passed = (step: ExportCapability) => {
+			job.preflightChecks = [...new Set([...(job.preflightChecks || []), step])];
+			update({ preflightChecks: job.preflightChecks });
+		};
 		try {
-			await this.client.send(
-				new PutObjectCommand({
-					...params,
-					Body: data,
-					IfNoneMatch: '*',
-					ServerSideEncryption: 'AES256',
-					Metadata: this.metadata(job),
-				}),
-				{ abortSignal: signal }
-			);
-			const head = await this.client.send(new HeadObjectCommand(params), { abortSignal: signal });
 			if (
-				!head.VersionId ||
-				head.VersionId === 'null' ||
-				head.ServerSideEncryption !== 'AES256' ||
-				head.ContentLength !== data.length ||
-				!this.owns(job, head)
+				(
+					await this.client.send(new GetBucketVersioningCommand({ Bucket: this.config.bucket }), {
+						abortSignal: signal,
+					})
+				).Status !== 'Enabled'
 			)
 				throw new TemporaryExportError('security-capability-missing');
-			const acl = await this.client.send(
-				new GetObjectAclCommand({ ...params, VersionId: head.VersionId }),
-				{ abortSignal: signal }
-			);
-			if (
-				!acl.Grants?.length ||
-				acl.Grants.some(g => g.Grantee?.URI || g.Grantee?.Type !== 'CanonicalUser')
-			)
-				throw new TemporaryExportError('security-capability-missing');
-			await this.assertPrivate(key, head.VersionId, signal);
-			// Prove old-version reads remain byte-stable after a newer generation.
-			const newer = await this.client.send(
-				new PutObjectCommand({
-					...params,
-					Body: crypto.randomBytes(32),
-					ServerSideEncryption: 'AES256',
-					Metadata: this.metadata(job),
-				}),
-				{ abortSignal: signal }
-			);
-			if (!newer.VersionId || newer.VersionId === head.VersionId)
-				throw new TemporaryExportError('security-capability-missing');
-			const get = await this.client.send(
-				new GetObjectCommand({
-					...params,
-					VersionId: head.VersionId,
-					Range: 'bytes=2-7',
-					IfMatch: head.ETag,
-				}),
-				{ abortSignal: signal }
-			);
-			if (
-				get.$metadata.httpStatusCode !== 206 ||
-				get.ContentRange !== 'bytes 2-7/32' ||
-				get.ContentLength !== 6 ||
-				!get.Body
-			) {
-				(get.Body as Readable)?.destroy();
-				throw new TemporaryExportError('security-capability-missing');
-			}
-			const bytes = Buffer.alloc(6);
-			let received = 0;
-			try {
-				for await (const chunk of get.Body as Readable) {
-					if (received + chunk.length > bytes.length)
-						throw new TemporaryExportError('security-capability-missing');
-					chunk.copy(bytes, received);
-					received += chunk.length;
-				}
-			} finally {
-				(get.Body as Readable).destroy();
-			}
-			if (received !== bytes.length) throw new TemporaryExportError('security-capability-missing');
-			if (!bytes.equals(data.subarray(2, 8)))
-				throw new TemporaryExportError('security-capability-missing');
-			const versions = await this.client.send(
-				new ListObjectVersionsCommand({ Bucket: params.Bucket, Prefix: key, MaxKeys: 10 }),
-				{ abortSignal: signal }
-			);
-			if (
-				![head.VersionId, newer.VersionId].every(id =>
-					versions.Versions?.some(v => v.Key === key && v.VersionId === id)
-				)
-			)
-				throw new TemporaryExportError('security-capability-missing');
-			// Probe the SAME conditional multipart publication operation used for TARs.
-			const mp = await this.client.send(
-				new CreateMultipartUploadCommand({
-					...params,
-					ServerSideEncryption: 'AES256',
-					Metadata: this.metadata(job),
-				}),
-				{ abortSignal: signal }
-			);
-			if (!mp.UploadId) throw new TemporaryExportError('security-capability-missing');
-			job.probeUploadId = mp.UploadId;
-			update({ probeUploadId: mp.UploadId });
-			const part = await this.client.send(
-				new UploadPartCommand({
-					...params,
-					UploadId: mp.UploadId,
-					PartNumber: 1,
-					Body: data,
-					ContentLength: data.length,
-					ContentMD5: crypto.createHash('md5').update(data).digest('base64'),
-				}),
-				{ abortSignal: signal }
-			);
-			const pending = await this.client.send(
-				new ListMultipartUploadsCommand({ Bucket: params.Bucket, Prefix: key, MaxUploads: 10 }),
-				{ abortSignal: signal }
-			);
-			if (!pending.Uploads?.some(u => u.Key === key && u.UploadId === mp.UploadId))
-				throw new TemporaryExportError('security-capability-missing');
-			let refused = false;
+			passed('https');
+			passed('versioning');
+			capability = 'sse-s3';
+			const key = job.key + '.probe',
+				data = crypto.randomBytes(32),
+				params = this.scope(job, key);
+			let probeFailure: unknown;
 			try {
 				await this.client.send(
-					new CompleteMultipartUploadCommand({
+					new PutObjectCommand({
+						...params,
+						Body: data,
+						IfNoneMatch: '*',
+						ServerSideEncryption: 'AES256',
+						Metadata: this.metadata(job),
+					}),
+					{ abortSignal: signal }
+				);
+				const head = await this.client.send(new HeadObjectCommand(params), { abortSignal: signal });
+				if (
+					!head.VersionId ||
+					head.VersionId === 'null' ||
+					head.ServerSideEncryption !== 'AES256' ||
+					head.ContentLength !== data.length ||
+					!this.owns(job, head)
+				)
+					throw new TemporaryExportError('security-capability-missing');
+				passed('sse-s3');
+				capability = 'private-acl';
+				const acl = await this.client.send(
+					new GetObjectAclCommand({ ...params, VersionId: head.VersionId }),
+					{ abortSignal: signal }
+				);
+				if (
+					!acl.Grants?.length ||
+					acl.Grants.some(g => g.Grantee?.URI || g.Grantee?.Type !== 'CanonicalUser')
+				)
+					throw new TemporaryExportError('security-capability-missing');
+				passed('private-acl');
+				capability = 'anonymous-denial';
+				await this.assertPrivate(key, head.VersionId, signal);
+				passed('anonymous-denial');
+				capability = 'immutable-version';
+				// Prove old-version reads remain byte-stable after a newer generation.
+				const newer = await this.client.send(
+					new PutObjectCommand({
+						...params,
+						Body: crypto.randomBytes(32),
+						ServerSideEncryption: 'AES256',
+						Metadata: this.metadata(job),
+					}),
+					{ abortSignal: signal }
+				);
+				if (!newer.VersionId || newer.VersionId === head.VersionId)
+					throw new TemporaryExportError('security-capability-missing');
+				capability = 'range-resume';
+				const get = await this.client.send(
+					new GetObjectCommand({
+						...params,
+						VersionId: head.VersionId,
+						Range: 'bytes=2-7',
+						IfMatch: head.ETag,
+					}),
+					{ abortSignal: signal }
+				);
+				if (
+					get.$metadata.httpStatusCode !== 206 ||
+					get.ContentRange !== 'bytes 2-7/32' ||
+					get.ContentLength !== 6 ||
+					!get.Body
+				) {
+					(get.Body as Readable)?.destroy();
+					throw new TemporaryExportError('security-capability-missing');
+				}
+				const bytes = Buffer.alloc(6);
+				let received = 0;
+				try {
+					for await (const chunk of get.Body as Readable) {
+						if (received + chunk.length > bytes.length)
+							throw new TemporaryExportError('security-capability-missing');
+						chunk.copy(bytes, received);
+						received += chunk.length;
+					}
+				} finally {
+					(get.Body as Readable).destroy();
+				}
+				if (received !== bytes.length)
+					throw new TemporaryExportError('security-capability-missing');
+				if (!bytes.equals(data.subarray(2, 8)))
+					throw new TemporaryExportError('security-capability-missing');
+				passed('range-resume');
+				passed('immutable-version');
+				capability = 'version-enumeration';
+				const versions = await this.client.send(
+					new ListObjectVersionsCommand({ Bucket: params.Bucket, Prefix: key, MaxKeys: 10 }),
+					{ abortSignal: signal }
+				);
+				if (
+					![head.VersionId, newer.VersionId].every(id =>
+						versions.Versions?.some(v => v.Key === key && v.VersionId === id)
+					)
+				)
+					throw new TemporaryExportError('security-capability-missing');
+				passed('version-enumeration');
+				capability = 'presigned-get';
+				const signed = await getSignedUrl(
+					this.client,
+					new GetObjectCommand({ ...params, VersionId: head.VersionId }),
+					{ expiresIn: 60 }
+				);
+				const first = await this.probeRange(signed, 0, 15, signal),
+					second = await this.probeRange(signed, 16, 31, signal);
+				if (!Buffer.concat([first, second]).equals(data))
+					throw new TemporaryExportError('security-capability-missing');
+				passed('presigned-get');
+				capability = 'multipart-upload';
+				// Probe the SAME conditional multipart publication operation used for TARs.
+				const mp = await this.client.send(
+					new CreateMultipartUploadCommand({
+						...params,
+						ServerSideEncryption: 'AES256',
+						Metadata: this.metadata(job),
+					}),
+					{ abortSignal: signal }
+				);
+				if (!mp.UploadId) throw new TemporaryExportError('security-capability-missing');
+				job.probeUploadId = mp.UploadId;
+				update({ probeUploadId: mp.UploadId });
+				const part = await this.client.send(
+					new UploadPartCommand({
 						...params,
 						UploadId: mp.UploadId,
-						MultipartUpload: { Parts: [{ PartNumber: 1, ETag: part.ETag }] },
+						PartNumber: 1,
+						Body: data,
+						ContentLength: data.length,
+						ContentMD5: crypto.createHash('md5').update(data).digest('base64'),
+					}),
+					{ abortSignal: signal }
+				);
+				passed('multipart-upload');
+				capability = 'multipart-enumeration';
+				const pending = await this.client.send(
+					new ListMultipartUploadsCommand({ Bucket: params.Bucket, Prefix: key, MaxUploads: 10 }),
+					{ abortSignal: signal }
+				);
+				if (!pending.Uploads?.some(u => u.Key === key && u.UploadId === mp.UploadId))
+					throw new TemporaryExportError('security-capability-missing');
+				passed('multipart-enumeration');
+				capability = 'conditional-completion';
+				let refused = false;
+				try {
+					await this.client.send(
+						new CompleteMultipartUploadCommand({
+							...params,
+							UploadId: mp.UploadId,
+							MultipartUpload: { Parts: [{ PartNumber: 1, ETag: part.ETag }] },
+							IfNoneMatch: '*',
+						}),
+						{ abortSignal: signal }
+					);
+				} catch (error) {
+					if (
+						(error as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode !==
+						412
+					)
+						throw error;
+					refused = true;
+				}
+				if (!refused) throw new TemporaryExportError('security-capability-missing');
+				passed('conditional-completion');
+				// Complete a real TWO-part random object before reading backup data.
+				// The first part meets S3's minimum; only 5 MiB is retained in memory.
+				capability = 'multipart-completion';
+				await this.absent(job, signal);
+				const full = this.scope(job),
+					random = crypto.randomBytes(5 * 1024 ** 2);
+				const multipart = await this.client.send(
+					new CreateMultipartUploadCommand({
+						...full,
+						ServerSideEncryption: 'AES256',
+						Metadata: this.metadata(job),
+					}),
+					{ abortSignal: signal }
+				);
+				if (!multipart.UploadId) throw new TemporaryExportError('security-capability-missing');
+				job.uploadId = multipart.UploadId;
+				update({ uploadId: multipart.UploadId });
+				const parts: CompletedPart[] = [];
+				for (const [index, body] of [random, data].entries()) {
+					const part = await this.client.send(
+						new UploadPartCommand({
+							...full,
+							UploadId: multipart.UploadId,
+							PartNumber: index + 1,
+							Body: body,
+							ContentLength: body.length,
+							ContentMD5: crypto.createHash('md5').update(body).digest('base64'),
+						}),
+						{ abortSignal: signal }
+					);
+					if (!part.ETag) throw new TemporaryExportError('security-capability-missing');
+					parts.push({ PartNumber: index + 1, ETag: part.ETag });
+				}
+				const completed = await this.client.send(
+					new CompleteMultipartUploadCommand({
+						...full,
+						UploadId: multipart.UploadId,
+						MultipartUpload: { Parts: parts },
 						IfNoneMatch: '*',
 					}),
 					{ abortSignal: signal }
 				);
+				if (!completed.VersionId || completed.VersionId === 'null')
+					throw new TemporaryExportError('security-capability-missing');
+				const stored = await this.client.send(
+					new HeadObjectCommand({ ...full, VersionId: completed.VersionId }),
+					{ abortSignal: signal }
+				);
+				if (
+					stored.ContentLength !== random.length + data.length ||
+					stored.ServerSideEncryption !== 'AES256' ||
+					!this.owns(job, stored)
+				)
+					throw new TemporaryExportError('security-capability-missing');
+				passed('multipart-completion');
 			} catch (error) {
-				refused =
-					(error as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode === 412;
+				probeFailure = error;
 			}
-			if (!refused) throw new TemporaryExportError('security-capability-missing');
-		} finally {
-			await this.cleanup(job, AbortSignal.timeout(30_000));
+			try {
+				await this.cleanup(job, AbortSignal.timeout(30_000));
+				passed('cleanup');
+			} catch {
+				throw new ExportPreflightError('cleanup', 'cleanup-failed');
+			}
 			job.probeUploadId = undefined;
-			update({ probeUploadId: undefined });
+			job.uploadId = undefined;
+			update({ probeUploadId: undefined, uploadId: undefined });
+			if (probeFailure) throw probeFailure;
+		} catch (error) {
+			if (error instanceof ExportPreflightError) throw error;
+			const e = error as { code?: string; name?: string; $metadata?: { httpStatusCode?: number } };
+			const status = e.$metadata?.httpStatusCode;
+			const tls = [
+				'DEPTH_ZERO_SELF_SIGNED_CERT',
+				'SELF_SIGNED_CERT_IN_CHAIN',
+				'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+				'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+				'ERR_TLS_CERT_ALTNAME_INVALID',
+				'CERT_HAS_EXPIRED',
+			].includes(e.code || '');
+			const category = tls
+				? 'tls-validation'
+				: status === 401 || status === 403
+					? 'access-denied'
+					: status === 405 || status === 501
+						? 'unsupported-api'
+						: error instanceof TemporaryExportError || status
+							? 'unexpected-response'
+							: 'network-or-deadline';
+			throw new ExportPreflightError(
+				tls ? 'https' : capability,
+				category,
+				Number.isInteger(status) ? status : undefined
+			);
 		}
 	}
-	private assertPrivate(key: string, version: string, signal: AbortSignal) {
+	/** Two authenticated requests prove the private URL can resume the SAME random
+	 * version. No URL, header, provider body or permanent key enters diagnostics. */
+	private probeRange(
+		url: string,
+		start: number,
+		end: number,
+		signal: AbortSignal
+	): Promise<Buffer> {
+		return new Promise((resolve, reject) => {
+			const request = https.get(
+				url,
+				{
+					headers: { Range: `bytes=${start}-${end}` },
+					ca: this.config.ca,
+					rejectUnauthorized: true,
+					signal,
+				},
+				response => {
+					const output = Buffer.alloc(end - start + 1);
+					let bytes = 0;
+					response.on('error', () => reject(new TemporaryExportError('storage-unavailable')));
+					if (
+						response.statusCode !== 206 ||
+						response.headers['content-range'] !== `bytes ${start}-${end}/32` ||
+						Number(response.headers['content-length']) !== output.length
+					) {
+						response.destroy();
+						reject(
+							Object.assign(new TemporaryExportError('security-capability-missing'), {
+								$metadata: { httpStatusCode: response.statusCode },
+							})
+						);
+						return;
+					}
+					response.on('data', (chunk: Buffer) => {
+						if (bytes + chunk.length > output.length) {
+							response.destroy();
+							reject(new TemporaryExportError('security-capability-missing'));
+							return;
+						}
+						chunk.copy(output, bytes);
+						bytes += chunk.length;
+					});
+					response.on('end', () =>
+						bytes === output.length
+							? resolve(output)
+							: reject(new TemporaryExportError('security-capability-missing'))
+					);
+				}
+			);
+			request.on('error', reject); // Caller reduces transport errors to bounded diagnostics.
+		});
+	}
+	private async assertPrivate(key: string, version: string, signal: AbortSignal) {
 		const url = new URL(
 			`${this.config.endpoint}/${encodeURIComponent(this.config.bucket)}/${key.split('/').map(encodeURIComponent).join('/')}`
 		);
 		url.searchParams.set('versionId', version);
+		await this.assertAnonymousDenied(url, signal);
+		const listing = new URL(`${this.config.endpoint}/${encodeURIComponent(this.config.bucket)}`);
+		listing.searchParams.set('list-type', '2');
+		listing.searchParams.set('prefix', `${this.config.prefix}/`);
+		listing.searchParams.set('max-keys', '1');
+		await this.assertAnonymousDenied(listing, signal);
+	}
+	private assertAnonymousDenied(url: URL, signal: AbortSignal) {
 		return new Promise<void>((resolve, reject) => {
 			const request = https.request(
 				url,
@@ -350,10 +546,15 @@ export class S3ExportStorage {
 				response => {
 					response.destroy(); // privacy requires headers only; never consume provider contents
 					if ([403, 404].includes(response.statusCode || 0)) resolve();
-					else reject(new TemporaryExportError('security-capability-missing'));
+					else
+						reject(
+							Object.assign(new TemporaryExportError('security-capability-missing'), {
+								$metadata: { httpStatusCode: response.statusCode },
+							})
+						);
 				}
 			);
-			request.once('error', () => reject(new TemporaryExportError('storage-unavailable')));
+			request.once('error', reject);
 			request.end();
 		});
 	}

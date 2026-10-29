@@ -5,6 +5,7 @@ import { HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { S3ExportStorage } from '../../src/utils/managedExport/S3ExportStorage';
 import {
 	EXPORT_LIMITS,
+	ExportPreflightError,
 	bindingDigest,
 	exportConfiguration,
 	type ExportJob,
@@ -230,6 +231,126 @@ describe('bounded multipart publication', () => {
 	});
 });
 describe('immutable object integrity and exact orphan cleanup', () => {
+	for (const scenario of ['unsupported', 'unconditional', 'cleanup-failure'])
+		test(`conditional-completion preflight fails closed for ${scenario} before source publication`, async () => {
+			const f = fixture();
+			let data: Buffer;
+			let versions = 0;
+			jest.spyOn(f.storage as any, 'assertPrivate').mockResolvedValue(undefined);
+			jest
+				.spyOn(f.storage as any, 'probeRange')
+				.mockImplementation(async (...args: any[]) => data.subarray(args[1], args[2] + 1));
+			const cleanup = jest.spyOn(f.storage, 'cleanup').mockResolvedValue(undefined);
+			if (scenario === 'cleanup-failure')
+				cleanup.mockRejectedValue(new Error('synthetic private cleanup error'));
+			const send = jest.spyOn(f.storage.client, 'send') as jest.Mock;
+			send.mockImplementation(async (command: any) => {
+				switch (command.constructor.name) {
+					case 'GetBucketVersioningCommand':
+						return { Status: 'Enabled' };
+					case 'PutObjectCommand':
+						if (!versions) data = command.input.Body;
+						return { VersionId: `v${++versions}` };
+					case 'HeadObjectCommand':
+						return {
+							VersionId: 'v1',
+							ETag: '"probe"',
+							ServerSideEncryption: 'AES256',
+							ContentLength: 32,
+							Metadata: {
+								'pluton-export-job': f.job.id,
+								'pluton-export-binding': bindingDigest(f.job.binding),
+							},
+						};
+					case 'GetObjectAclCommand':
+						return { Grants: [{ Grantee: { Type: 'CanonicalUser' } }] };
+					case 'GetObjectCommand':
+						return {
+							$metadata: { httpStatusCode: 206 },
+							ContentRange: 'bytes 2-7/32',
+							ContentLength: 6,
+							Body: Readable.from([data.subarray(2, 8)]),
+						};
+					case 'ListObjectVersionsCommand':
+						return {
+							Versions: ['v1', 'v2'].map(VersionId => ({ Key: f.job.key + '.probe', VersionId })),
+						};
+					case 'CreateMultipartUploadCommand':
+						return { UploadId: 'owned-probe-upload' };
+					case 'UploadPartCommand':
+						return { ETag: '"part"' };
+					case 'ListMultipartUploadsCommand':
+						return { Uploads: [{ Key: f.job.key + '.probe', UploadId: 'owned-probe-upload' }] };
+					case 'CompleteMultipartUploadCommand':
+						if (scenario === 'unconditional') return {};
+						throw Object.assign(new Error('synthetic provider response must stay private'), {
+							$metadata: { httpStatusCode: 501 },
+						});
+					default:
+						throw new Error('Unexpected preflight operation');
+				}
+			});
+			try {
+				const error = await f.storage
+					.preflight(f.job, new AbortController().signal)
+					.catch(error => error);
+				expect(error).toBeInstanceOf(ExportPreflightError);
+				expect(error.capability).toBe(
+					scenario === 'cleanup-failure' ? 'cleanup' : 'conditional-completion'
+				);
+				expect(error.category).toBe(
+					scenario === 'cleanup-failure'
+						? 'cleanup-failed'
+						: scenario === 'unsupported'
+							? 'unsupported-api'
+							: 'unexpected-response'
+				);
+				expect(error.httpStatus).toBe(scenario === 'unsupported' ? 501 : undefined);
+				expect(JSON.stringify(error)).not.toMatch(/synthetic|private|provider response/);
+				expect(cleanup).toHaveBeenCalledTimes(1);
+				expect(
+					send.mock.calls.filter(
+						([command]: any) => command.constructor.name === 'CreateMultipartUploadCommand'
+					)
+				).toHaveLength(1);
+			} finally {
+				f.storage.close();
+			}
+		});
+	for (const scenario of [
+		{ code: 'ERR_TLS_CERT_ALTNAME_INVALID', capability: 'https', category: 'tls-validation' },
+		{ status: 403, capability: 'versioning', category: 'access-denied' },
+		{ status: 501, capability: 'versioning', category: 'unsupported-api' },
+		{ code: 'ETIMEDOUT', capability: 'versioning', category: 'network-or-deadline' },
+	])
+		test(`preflight reports bounded ${scenario.category} diagnostics without provider contents`, async () => {
+			const f = fixture();
+			const providerContents = 'synthetic-provider-credential-output-never-return';
+			const send = jest.spyOn(f.storage.client, 'send') as jest.Mock;
+			send.mockRejectedValue(
+				Object.assign(new Error(providerContents), {
+					code: scenario.code,
+					$metadata: { httpStatusCode: scenario.status },
+					providerBody: providerContents,
+				})
+			);
+			try {
+				const result = await f.storage
+					.preflight(f.job, new AbortController().signal)
+					.catch(error => error);
+				expect(result).toBeInstanceOf(ExportPreflightError);
+				expect(result).toMatchObject({
+					capability: scenario.capability,
+					category: scenario.category,
+				});
+				expect(result.httpStatus).toBe(scenario.status);
+				expect(JSON.stringify(result)).not.toContain(providerContents);
+				expect(result.message).not.toContain(providerContents);
+				expect(send).toHaveBeenCalledTimes(1);
+			} finally {
+				f.storage.close();
+			}
+		});
 	for (const failure of ['wrong-length', 'oversized-body', 'truncated-body'])
 		test(`capability probe refuses ${failure} with a fixed six-byte buffer`, async () => {
 			const f = fixture();

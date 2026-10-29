@@ -12,6 +12,7 @@ import { ManagedExportStore } from '../../src/stores/ManagedExportStore';
 import { ManagedExportService } from '../../src/services/ManagedExportService';
 import { ManagedExportController } from '../../src/controllers/ManagedExportController';
 import { createManagedExportRouter } from '../../src/routes/managedExports';
+import { createManagedExportPreflightRouter } from '../../src/routes/managedExportPreflight';
 import { configService } from '../../src/services/ConfigService';
 import {
 	EXPORT_LIMITS,
@@ -235,6 +236,65 @@ describe('temporary export policy and durable admission', () => {
 	});
 });
 describe('durable independent export lifecycle', () => {
+	test('standalone preflight uses durable random jobs, owner checks and no backup/repository reads', async () => {
+		const h = harness();
+		try {
+			const value = await h.service.preflight(owner);
+			expect(value.kind).toBe('preflight');
+			await until(() => h.store.get(value.id)?.state === 'ready');
+			const result = await h.service.preflightStatus(owner, value.id);
+			expect(result.cleanupPending).toBe(false);
+			expect(h.store.get(value.id)!.cleaned).toBe(true);
+			expect(h.recovery.exportBindingFor).not.toHaveBeenCalled();
+			expect(h.recovery.withVerifiedExport).not.toHaveBeenCalled();
+			expect(h.storage.upload).not.toHaveBeenCalled();
+			await expect(h.service.preflightStatus('other-user', value.id)).rejects.toThrow(
+				'Preflight not found'
+			);
+			const next = await h.service.preflight(owner);
+			expect(next.id).not.toBe(value.id);
+		} finally {
+			await h.close();
+		}
+	});
+	test('only the preflight owner can retry exhausted cleanup without reading a backup', async () => {
+		const h = harness();
+		try {
+			const value = await h.service.preflight(owner);
+			await until(() => h.store.get(value.id)?.state === 'ready');
+			h.store.update(value.id, { state: 'failed', cleaned: false, cleanupAttempts: 10 });
+			await expect(h.service.cancelPreflight('other-user', value.id)).rejects.toThrow(
+				'Preflight not found'
+			);
+			expect(h.storage.cleanup).not.toHaveBeenCalled();
+			await h.service.cancelPreflight(owner, value.id);
+			await until(() => h.store.get(value.id)?.cleaned);
+			expect(h.store.get(value.id)?.cleanupAttempts).toBe(11);
+			expect(h.storage.cleanup).toHaveBeenCalledTimes(1);
+			expect(h.recovery.exportBindingFor).not.toHaveBeenCalled();
+			expect(h.recovery.withVerifiedExport).not.toHaveBeenCalled();
+		} finally {
+			await h.close();
+		}
+	});
+	test('interrupted preflight reconciles through exact cleanup without restarting a backup read', async () => {
+		const h = harness();
+		try {
+			const value = await h.service.preflight(owner);
+			await until(() => h.store.get(value.id)?.state === 'ready');
+			h.store.update(value.id, {
+				state: 'validating',
+				cleaned: false,
+				probeUploadId: 'interrupted-probe',
+			});
+			await h.service.recoverInterrupted();
+			await until(() => h.store.get(value.id)!.cleaned);
+			expect(h.store.get(value.id)!.failure).toBe('interrupted');
+			expect(h.recovery.withVerifiedExport).not.toHaveBeenCalled();
+		} finally {
+			await h.close();
+		}
+	});
 	test('cancellation during the last binding check cannot resurrect a Ready object', async () => {
 		const h = harness();
 		let verified = false,
@@ -507,6 +567,47 @@ describe('durable independent export lifecycle', () => {
 	});
 });
 describe('authenticated Range proxy and authorization boundaries', () => {
+	test('operator endpoints require cookie ownership and refuse every destination override', async () => {
+		const h = harness(),
+			app = express();
+		app.use(express.json());
+		app.use(
+			'/api/managed-exports',
+			createManagedExportPreflightRouter(new ManagedExportController(h.service))
+		);
+		const cookie = `token=${jwt.sign({ user: 'fixture-admin' }, configService.config.SECRET!)}`;
+		try {
+			const api = request(app),
+				path = '/api/managed-exports/preflights';
+			expect((await api.post(path).send({})).status).toBe(401);
+			for (const body of [
+				{ endpoint: 'https://foreign.example.internal' },
+				{ backupId: 'backup-01' },
+				{ key: 'foreign' },
+			])
+				expect((await api.post(path).set('Cookie', cookie).send(body)).status).toBe(400);
+			const created = await api.post(path).set('Cookie', cookie).send({});
+			expect(created.status).toBe(202);
+			await until(() => h.store.get(created.body.result.id)?.state === 'ready');
+			expect(
+				(await api.get(path + '/' + created.body.result.id).set('Cookie', cookie)).status
+			).toBe(200);
+			expect(h.recovery.withVerifiedExport).not.toHaveBeenCalled();
+			const config = await api.get('/api/managed-exports/configuration').set('Cookie', cookie);
+			expect(config.status).toBe(200);
+			expect(JSON.stringify(config.body)).not.toContain(h.config.secretAccessKey);
+			expect(JSON.stringify(config.body)).not.toContain(h.config.accessKeyId);
+			expect(config.headers['cache-control']).toContain('no-store');
+			const cancellation = path + '/' + created.body.result.id;
+			expect((await api.delete(cancellation)).status).toBe(401);
+			expect(
+				(await api.delete(cancellation).set('Cookie', cookie).send({ key: 'foreign' })).status
+			).toBe(400);
+			expect((await api.delete(cancellation).set('Cookie', cookie).send({})).status).toBe(200);
+		} finally {
+			await h.close();
+		}
+	});
 	test('disabled exports return a safe 503 and leave other endpoints available', async () => {
 		const app = express();
 		app.use(express.json());

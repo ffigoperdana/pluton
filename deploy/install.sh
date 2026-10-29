@@ -20,7 +20,7 @@ if [ "$SCRIPT_DIR" != "$TARGET_DIR" ]; then
  umask 077
  mkdir -p "$TARGET_DIR"
  chmod 750 "$TARGET_DIR"
- for file in install.sh deploy.sh rollback.sh status.sh lib.sh compose.yml compose-tools.py healthcheck.cjs upgrade-host.sh bundle-tools.py .env.example; do
+ for file in install.sh deploy.sh rollback.sh status.sh lib.sh compose.yml compose-tools.py healthcheck.cjs upgrade-host.sh bundle-tools.py .env.example compose.managed-export-ca.yml approve-managed-export-ca.py; do
   cp "$SCRIPT_DIR/$file" "$TARGET_DIR/$file"
  done
  cp "$TARGET_DIR/.env.example" "$TARGET_DIR/.env"

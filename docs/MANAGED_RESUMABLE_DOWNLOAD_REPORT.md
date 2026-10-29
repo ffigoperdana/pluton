@@ -1,5 +1,10 @@
 # Managed resumable download: implementation and local evidence
 
+This is the historical PR #54 implementation report. That PR is now merged.
+Deployment wiring, safe operator preflight and current release gates are covered
+by the [controlled UAT follow-up](MANAGED_RELIABLE_DOWNLOAD_UAT.md). Statements below
+about unpublished work/hosted CI describe the original implementation session.
+
 ## Scope and baseline
 
 Branch: `codex/managed-resumable-download`. Base: fetched `origin/main`,

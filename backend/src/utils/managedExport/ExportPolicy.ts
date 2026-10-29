@@ -48,6 +48,38 @@ export class TemporaryExportError extends AppError {
 		Object.setPrototypeOf(this, new.target.prototype);
 	}
 }
+export type ExportCapability =
+	| 'https'
+	| 'destination-isolation'
+	| 'versioning'
+	| 'sse-s3'
+	| 'private-acl'
+	| 'anonymous-denial'
+	| 'immutable-version'
+	| 'range-resume'
+	| 'version-enumeration'
+	| 'multipart-upload'
+	| 'multipart-completion'
+	| 'multipart-enumeration'
+	| 'conditional-completion'
+	| 'presigned-get'
+	| 'cleanup';
+export class ExportPreflightError extends TemporaryExportError {
+	constructor(
+		readonly capability: ExportCapability,
+		readonly category:
+			| 'tls-validation'
+			| 'access-denied'
+			| 'unsupported-api'
+			| 'unexpected-response'
+			| 'network-or-deadline'
+			| 'cleanup-failed',
+		readonly httpStatus?: number
+	) {
+		super('security-capability-missing');
+		Object.setPrototypeOf(this, new.target.prototype);
+	}
+}
 export type ExportConfig = {
 	endpoint: string;
 	region: string;
@@ -124,6 +156,29 @@ export function exportConfiguration(
 		throw new TemporaryExportError('configuration-invalid');
 	}
 }
+/** Safe projection from the application's actual process configuration. Values,
+ * credential hashes and signed URLs are deliberately excluded. */
+export function exportConfigurationStatus() {
+	const enabled = process.env.MANAGED_EXPORT_ENABLED === 'true';
+	try {
+		const c = exportConfiguration();
+		return {
+			enabled,
+			configured: !!c,
+			endpointConfigured: !!c?.endpoint,
+			regionConfigured: !!c?.region,
+			bucketConfigured: !!c?.bucket,
+			prefixConfigured: !!c?.prefix,
+			credentialsConfigured: !!c?.accessKeyId && !!c?.secretAccessKey,
+			sessionTokenConfigured: !!c?.sessionToken,
+			privateCaConfigured: !!c?.ca,
+			ttlSeconds: c?.ttlSeconds,
+			destinationFingerprint: c?.fingerprint,
+		};
+	} catch {
+		return { enabled, configured: false, reason: 'configuration-invalid' };
+	}
+}
 export type ExportBinding = {
 	backupId: string;
 	planId: string;
@@ -143,6 +198,7 @@ export type ExportState =
 	| 'cancelled'
 	| 'expired';
 export type ExportJob = {
+	kind?: 'archive' | 'preflight';
 	id: string;
 	owner: string;
 	binding: ExportBinding;
@@ -170,6 +226,10 @@ export type ExportJob = {
 		| 'object-verification'
 		| 'binding-validation';
 	failureDetail?: string;
+	preflightChecks?: ExportCapability[];
+	failureCapability?: ExportCapability;
+	failureCategory?: ExportPreflightError['category'];
+	failureHttpStatus?: number;
 	cleaned: boolean;
 	cleanupAttempts: number;
 };

@@ -582,6 +582,64 @@ try {
 		staging: path.join(root, 'staging'),
 	};
 	await start();
+	if (mode === 'small') {
+		stage('operator-only-preflight');
+		const operatorBase = base.replace('/api/backups', '/api/managed-exports');
+		const configuration = await json(await fetch(operatorBase + '/configuration', { headers }));
+		assert.equal(configuration.result.configured, true);
+		assert.equal(configuration.result.destinationFingerprint, config.fingerprint);
+		assert.equal(configuration.result.credentialsConfigured, true);
+		assert.equal(configuration.result.privateCaConfigured, true);
+		const response = await fetch(operatorBase + '/preflights', {
+			method: 'POST',
+			headers,
+			body: '{}',
+		});
+		assert.equal(response.status, 202);
+		const preflightId = (await json(response)).result.id;
+		let preflight: any;
+		await until(async () => {
+			preflight = (
+				await json(await fetch(operatorBase + '/preflights/' + preflightId, { headers }))
+			).result;
+			return ['ready', 'failed'].includes(preflight.state);
+		});
+		if (preflight.state !== 'ready')
+			console.log(
+				JSON.stringify({
+					event: 'operator_preflight_refused',
+					capability: preflight.failureCapability,
+					category: preflight.failureCategory,
+					status: preflight.failureHttpStatus,
+				})
+			);
+		assert.equal(preflight.state, 'ready');
+		assert.equal(preflight.cleanupPending, false);
+		assert.deepEqual(
+			preflight.preflightChecks.sort(),
+			[
+				'destination-isolation',
+				'https',
+				'versioning',
+				'sse-s3',
+				'private-acl',
+				'anonymous-denial',
+				'immutable-version',
+				'range-resume',
+				'version-enumeration',
+				'presigned-get',
+				'multipart-upload',
+				'multipart-enumeration',
+				'conditional-completion',
+				'multipart-completion',
+				'cleanup',
+			].sort()
+		);
+		assert.equal((await stats()).archiveReads, 0);
+		await clean();
+		results.operatorPreflightWithoutBackupRead = 'PASS';
+		results.actualProcessConfiguration = 'PASS';
+	}
 	assert.equal(
 		(
 			await fetch(`${base}/backup-01/exports`, {
@@ -631,6 +689,28 @@ try {
 		const publicJob = await admit();
 		assert.equal((await terminal(publicJob, 'failed')).failure, 'security-capability-missing');
 		await until(async () => !(await status(publicJob)).cleanupPending);
+		await admin.send(new DeleteBucketPolicyCommand({ Bucket: config.bucket }));
+		await clean();
+		stage('anonymous-bucket-listing-refused');
+		await admin.send(
+			new PutBucketPolicyCommand({
+				Bucket: config.bucket,
+				Policy: JSON.stringify({
+					Version: '2012-10-17',
+					Statement: [
+						{
+							Effect: 'Allow',
+							Principal: '*',
+							Action: ['s3:ListBucket'],
+							Resource: [`arn:aws:s3:::${config.bucket}`],
+						},
+					],
+				}),
+			})
+		);
+		const publicListing = await admit();
+		assert.equal((await terminal(publicListing, 'failed')).failureCapability, 'anonymous-denial');
+		await until(async () => !(await status(publicListing)).cleanupPending);
 		await admin.send(new DeleteBucketPolicyCommand({ Bucket: config.bucket }));
 		await clean();
 		assert.equal((await stats()).archiveReads, 0);
