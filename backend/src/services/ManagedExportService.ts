@@ -1,4 +1,4 @@
-import { Readable, Writable } from 'stream';
+import { Readable, Writable, Transform } from 'stream';
 import crypto from 'crypto';
 import { pipeline } from 'stream/promises';
 import type { RemoteRepositoryRecoveryService } from './RemoteRepositoryRecoveryService';
@@ -14,6 +14,8 @@ import {
 	exportFileName,
 	type ExportConfig,
 	type ExportJob,
+	exportCapabilityBinding,
+	exportCleanupDeadline,
 } from '../utils/managedExport/ExportPolicy';
 import {
 	managedExportMode,
@@ -36,6 +38,7 @@ export class ManagedExportService {
 	private closed = false;
 	private workerFault = false;
 	private readonly cleanups = new Map<string, Promise<void>>();
+	private readonly cleanupControllers = new Map<string, AbortController>();
 	constructor(
 		readonly store: ManagedExportStore,
 		private readonly recovery: Pick<
@@ -62,10 +65,28 @@ export class ManagedExportService {
 			/* Telemetry cannot authorize/fail data work. */
 		}
 	}
+	private proven(c: ExportConfig) {
+		const proof = this.store
+			.all()
+			.filter(j => j.kind === 'preflight' && j.destination === c.fingerprint)
+			.at(-1);
+		if (
+			!proof ||
+			proof.state !== 'ready' ||
+			!proof.cleaned ||
+			(proof.expiresAt || 0) <= Date.now() ||
+			proof.capabilityBinding !== exportCapabilityBinding(c) ||
+			!proof.providerEvidence ||
+			!proof.preflightChecks?.includes('cleanup')
+		)
+			throw new TemporaryExportError('security-capability-missing');
+		return proof;
+	}
 	async admit(owner: string, backupId: string, mode: ManagedExportMode) {
 		if (this.stopped || this.workerFault) throw new TemporaryExportError('interrupted');
 		const c = this.config();
 		await this.isolated(c);
+		if (c.allowSharedNamespace) this.proven(c); // before any snapshot/source access
 		const binding = await this.recovery.exportBindingFor(backupId, managedExportMode(mode));
 		const job = this.store.admit(owner, binding, c);
 		this.schedule();
@@ -120,6 +141,14 @@ export class ManagedExportService {
 		return job;
 	}
 	private public(job: ExportJob) {
+		let productionReadiness: 'GO' | 'NO-GO' | undefined;
+		if (job.kind === 'preflight') {
+			try {
+				productionReadiness = this.proven(this.config(job)).id === job.id ? 'GO' : 'NO-GO';
+			} catch {
+				productionReadiness = 'NO-GO';
+			}
+		}
 		const elapsed = Math.max(
 			0,
 			(activeExport(job.state) ? Date.now() : job.updatedAt) - job.createdAt
@@ -128,6 +157,13 @@ export class ManagedExportService {
 			id: job.id,
 			kind: job.kind || 'archive',
 			inventory: job.inventory,
+			provider: job.providerEvidence,
+			productionReadiness,
+			integrityMode: job.integrityMode || (job.versionId ? 'versioned' : undefined),
+			transport:
+				job.integrityMode === 'hcp-write-once'
+					? 'authenticated-proxy'
+					: 'versioned-presigned-and-proxy',
 			state: job.state,
 			mode: job.binding.mode,
 			snapshotId: job.binding.snapshotId,
@@ -154,6 +190,7 @@ export class ManagedExportService {
 			failureDetail: job.failureDetail,
 			preflightChecks: job.preflightChecks,
 			failureCapability: job.failureCapability,
+			probeFailure: job.capabilityProbe?.probeFailure || job.probeFailure,
 			failureCategory: job.failureCategory,
 			failureHttpStatus: job.failureHttpStatus,
 			cleanupPending: !job.cleaned && ['failed', 'cancelled', 'expired'].includes(job.state),
@@ -179,7 +216,7 @@ export class ManagedExportService {
 		if (
 			job.state !== 'ready' ||
 			!job.summary ||
-			!job.versionId ||
+			!(job.identity?.mode === 'hcp-write-once' || job.versionId) ||
 			!job.etag ||
 			(job.expiresAt || 0) <= Date.now()
 		)
@@ -194,23 +231,40 @@ export class ManagedExportService {
 			if (
 				current?.state !== 'ready' ||
 				current.versionId !== job.versionId ||
+				JSON.stringify(current.identity) !== JSON.stringify(job.identity) ||
 				(current.expiresAt || 0) <= Date.now()
 			)
 				throw new TemporaryExportError('expired');
 			return { job, storage };
 		} catch (error) {
+			let failure = error;
+			let inventoryOnlyFailure = false;
+			if (error instanceof ExportPreflightError && error.capability === 'destination-isolation') {
+				// Another probe can be visible just before its successful response is
+				// journaled. Deny this grant, but do not destroy a proven ready object
+				// unless its own independent identity check also fails.
+				try {
+					await storage.identity(job, signal);
+					inventoryOnlyFailure = true;
+				} catch (identityError) {
+					failure = identityError;
+				}
+			}
 			storage.close();
-			if (error instanceof TemporaryExportError && error.reason === 'expired') throw error;
+			if (failure instanceof TemporaryExportError && failure.reason === 'expired') throw failure;
 			const mismatch =
-				(error instanceof TemporaryExportError &&
+				!inventoryOnlyFailure &&
+				((failure instanceof TemporaryExportError &&
 					['object-mismatch', 'security-capability-missing', 'binding-changed'].includes(
-						error.reason
+						failure.reason
 					)) ||
-				(error as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode === 404;
+					[404, 412].includes(
+						(failure as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode || 0
+					));
 			if (mismatch && this.store.get(job.id)?.state === 'ready') {
 				this.store.update(job.id, {
 					state: 'failed',
-					failure: error instanceof TemporaryExportError ? error.reason : 'object-mismatch',
+					failure: failure instanceof TemporaryExportError ? failure.reason : 'object-mismatch',
 					failureStage: 'object-verification',
 				});
 				this.schedule();
@@ -229,7 +283,10 @@ export class ManagedExportService {
 					Math.floor((job.expiresAt! - Date.now()) / 1000)
 				);
 				if (seconds < 1) throw new TemporaryExportError('expired');
-				const url = await storage.authorize(job, seconds);
+				const proxy = job.integrityMode === 'hcp-write-once';
+				const url = proxy
+					? `/api/backups/${encodeURIComponent(backupId)}/exports/${job.id}/content`
+					: await storage.authorize(job, seconds);
 				if (this.store.get(job.id)?.state !== 'ready') throw new TemporaryExportError('expired');
 				return {
 					url,
@@ -237,6 +294,7 @@ export class ManagedExportService {
 					bytes: job.summary!.archiveBytes,
 					sha256: job.summary!.archiveSha256,
 					etag: job.etag,
+					transport: proxy ? 'authenticated-proxy' : 'versioned-presigned',
 				};
 			} finally {
 				storage.close();
@@ -274,6 +332,13 @@ export class ManagedExportService {
 			const job = ready.job;
 			const etag = `"sha256-${job.summary!.archiveSha256}"`,
 				size = job.summary!.archiveBytes;
+			if (
+				job.integrityMode === 'hcp-write-once' &&
+				range !== undefined &&
+				ifRange !== undefined &&
+				ifRange !== etag
+			)
+				throw new TemporaryExportError('object-mismatch');
 			const selection = exportRange(range, ifRange, size, etag);
 			if (headOnly) {
 				headers({
@@ -309,7 +374,41 @@ export class ManagedExportService {
 				sha256: job.summary!.archiveSha256,
 				fileName: exportFileName(job),
 			});
-			await pipeline(result.Body as Readable, destination, { end: false, signal });
+			let transferred = 0;
+			const hash = crypto.createHash('sha256');
+			const counter = new Transform({
+				transform(chunk: Buffer, _encoding, done) {
+					transferred += chunk.length;
+					if (transferred > selection.end - selection.start + 1)
+						return done(new TemporaryExportError('object-mismatch'));
+					if (selection.status === 200) hash.update(chunk);
+					done(null, chunk);
+				},
+			});
+			await pipeline(result.Body as Readable, counter, destination, { end: false, signal });
+			if (
+				transferred !== selection.end - selection.start + 1 ||
+				(selection.status === 200 && hash.digest('hex') !== job.summary!.archiveSha256)
+			)
+				throw new TemporaryExportError('object-mismatch');
+			if (job.integrityMode === 'hcp-write-once') await storage.identity(job, signal);
+		} catch (error) {
+			if (error instanceof TemporaryExportError && error.reason === 'object-mismatch') {
+				const current = this.store.get(id);
+				if (
+					current?.state === 'ready' &&
+					current.owner === owner &&
+					current.binding.backupId === backupId
+				) {
+					this.store.update(id, {
+						state: 'failed',
+						failure: 'object-mismatch',
+						failureStage: 'object-verification',
+					});
+					this.schedule();
+				}
+			}
+			throw error;
 		} finally {
 			storage?.close();
 			this.downloads--;
@@ -372,14 +471,19 @@ export class ManagedExportService {
 		}
 	}
 	private cleanup(job: ExportJob, explicit = false): Promise<void> {
-		if (this.closed) return Promise.resolve();
+		if (this.closed || this.stopped) return Promise.resolve();
 		const current = this.cleanups.get(job.id);
 		if (current) return current;
-		const done = this.performCleanup(job, explicit).finally(() => this.cleanups.delete(job.id));
+		const controller = new AbortController();
+		this.cleanupControllers.set(job.id, controller);
+		const done = this.performCleanup(job, explicit, controller.signal).finally(() => {
+			this.cleanups.delete(job.id);
+			this.cleanupControllers.delete(job.id);
+		});
 		this.cleanups.set(job.id, done);
 		return done;
 	}
-	private async performCleanup(job: ExportJob, explicit = false) {
+	private async performCleanup(job: ExportJob, explicit: boolean, stop: AbortSignal) {
 		if (job.cleaned || (!explicit && job.cleanupAttempts >= 10)) return;
 		let storage: S3ExportStorage | undefined;
 		this.store.update(job.id, { cleanupAttempts: job.cleanupAttempts + 1 });
@@ -387,7 +491,10 @@ export class ManagedExportService {
 			const c = this.config(job);
 			await this.isolated(c);
 			storage = this.storageFactory(c);
-			await storage.cleanup(job, AbortSignal.timeout(60_000));
+			await storage.cleanup(
+				job,
+				AbortSignal.any([stop, AbortSignal.timeout(exportCleanupDeadline(job))])
+			);
 			this.store.update(job.id, {
 				cleaned: true,
 				reservedBytes: 0,
@@ -427,6 +534,11 @@ export class ManagedExportService {
 				bounded.throwIfAborted();
 				this.store.update(job.id, { state: 'ready', expiresAt: Date.now() + 15 * 60_000 });
 				return;
+			}
+			if (original.kind !== 'preflight' && c.allowSharedNamespace) {
+				const proof = this.proven(c);
+				if ((await storage.mode(bounded)) !== proof.integrityMode)
+					throw new TemporaryExportError('security-capability-missing');
 			}
 			await storage.preflight(
 				job,
@@ -524,7 +636,9 @@ export class ManagedExportService {
 		}
 	}
 	async shutdown() {
+		if (this.closed) return;
 		this.stopped = true;
+		for (const controller of this.cleanupControllers.values()) controller.abort();
 		this.active?.controller.abort();
 		await this.active?.done;
 		await this.ticking;

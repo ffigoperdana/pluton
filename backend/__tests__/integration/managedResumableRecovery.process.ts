@@ -30,6 +30,7 @@ import {
 	isS3Storage,
 } from '../../src/utils/storageSecurity';
 let namespaceDb: Database.Database | undefined;
+let releaseUpload: (() => void) | undefined;
 let running: Awaited<ReturnType<typeof startLinkFixture>> | undefined,
 	service: ManagedExportService | undefined,
 	store: ManagedExportStore | undefined,
@@ -195,7 +196,7 @@ process.on('message', async (message: any) => {
 					storageDiagnostics.push(storage.diagnostics());
 					close();
 				};
-				if (message.fault === 'hold-upload' || message.fault === 'upload-error') {
+				if (['hold-upload', 'upload-error', 'concurrent-replication'].includes(message.fault)) {
 					const send = storage.client.send.bind(storage.client);
 					let parts = 0;
 					const archiveUploads = new Set<string>();
@@ -212,18 +213,19 @@ process.on('message', async (message: any) => {
 							command.constructor.name === 'UploadPartCommand' &&
 							command.input.Key.endsWith('.tar') &&
 							archiveUploads.has(command.input.UploadId) &&
-							++parts === 2
+							++parts === (message.fault === 'concurrent-replication' ? 1 : 2)
 						) {
 							process.send?.({ event: 'held', phase: 'upload' });
 							if (message.fault === 'upload-error')
 								throw new TemporaryExportError('storage-unavailable');
-							await new Promise<void>((_resolve, reject) =>
+							await new Promise<void>((resolve, reject) => {
+								if (message.fault === 'concurrent-replication') releaseUpload = resolve;
 								options.abortSignal.addEventListener(
 									'abort',
 									() => reject(new TemporaryExportError('interrupted')),
 									{ once: true }
-								)
-							);
+								);
+							});
 						}
 						return send(command, options);
 					};
@@ -282,8 +284,13 @@ process.on('message', async (message: any) => {
 			});
 		else if (message.action === 'expire') {
 			store!.update(message.id, { expiresAt: Date.now() - 1 });
-			await service!.tick();
 			process.send?.({ event: 'expired' });
+			// Expiry intent is durable immediately; the parent separately polls
+			// cleanup completion. Full-object verification can outlive an IPC ack.
+			await service!.tick();
+		} else if (message.action === 'release-upload') {
+			releaseUpload?.();
+			releaseUpload = undefined;
 		} else if (message.action === 'short-authorization') {
 			const storage = new S3ExportStorage(exportConfiguration()!);
 			try {

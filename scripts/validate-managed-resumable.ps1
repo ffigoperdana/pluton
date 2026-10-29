@@ -1,13 +1,20 @@
-param([ValidateSet('small','large','combined','four','metadata')][string[]]$Modes=@('small','large','combined','four','metadata'),[string]$Image='pluton-resumable-native:local',[switch]$ProductionCompose,[switch]$SharedNamespace)
+param([ValidateSet('small','large','combined','four','metadata')][string[]]$Modes=@('small','large','combined','four','metadata'),[string]$Image='pluton-resumable-native:local',[switch]$ProductionCompose,[switch]$SharedNamespace,[switch]$WriteOnceReference)
 # Every resource belongs to this invocation. No published ports, production
 # storage inputs, Docker socket mount, global settings or application deployment.
 $ErrorActionPreference='Stop'
+if($WriteOnceReference -and -not $SharedNamespace){throw 'The write-once reference requires explicit shared-namespace isolation.'}
+# Each dataset needs its own native bucket/repositories. Reusing a prior mode's
+# storage would mix historical replica manifests and is not an isolated test.
+if($Modes.Count -gt 1){
+    foreach($mode in $Modes){& $PSCommandPath -Modes $mode -Image $Image -ProductionCompose:$ProductionCompose -SharedNamespace:$SharedNamespace -WriteOnceReference:$WriteOnceReference}
+    return
+}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $id=[Guid]::NewGuid().ToString('N')
 $name="pluton-resumable-fixture-$id"
 $network="$name-network";$lab="$name-lab";$storage="$name-storage";$minio="$name-s3"
 $saved=@{}
-$names=@('FIXTURE_ADMIN_ACCESS','FIXTURE_ADMIN_SECRET','MANAGED_EXPORT_ENABLED','MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE','MANAGED_EXPORT_ENDPOINT','MANAGED_EXPORT_REGION','MANAGED_EXPORT_BUCKET','MANAGED_EXPORT_PREFIX','MANAGED_EXPORT_ACCESS_KEY_ID','MANAGED_EXPORT_SECRET_ACCESS_KEY','MANAGED_EXPORT_SESSION_TOKEN','MANAGED_EXPORT_CA_FILE','MANAGED_EXPORT_TTL_SECONDS','MANAGED_EXPORT_CA_HOST_FILE','PLUTON_IMAGE_REF','PLUTON_VOLUME_NAME','ENCRYPTION_KEY','USER_NAME','USER_PASSWORD','NODE_ENV','PLUTON_DATA_DIR')
+$names=@('FIXTURE_ADMIN_ACCESS','FIXTURE_ADMIN_SECRET','PLUTON_WRITE_ONCE_REFERENCE','MANAGED_EXPORT_ENABLED','MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE','MANAGED_EXPORT_ENDPOINT','MANAGED_EXPORT_REGION','MANAGED_EXPORT_BUCKET','MANAGED_EXPORT_PREFIX','MANAGED_EXPORT_ACCESS_KEY_ID','MANAGED_EXPORT_SECRET_ACCESS_KEY','MANAGED_EXPORT_SESSION_TOKEN','MANAGED_EXPORT_CA_FILE','MANAGED_EXPORT_TTL_SECONDS','MANAGED_EXPORT_CA_HOST_FILE','PLUTON_IMAGE_REF','PLUTON_VOLUME_NAME','ENCRYPTION_KEY','USER_NAME','USER_PASSWORD','NODE_ENV','PLUTON_DATA_DIR')
 foreach($key in $names){$saved[$key]=[Environment]::GetEnvironmentVariable($key,'Process')}
 $createdNetwork=$false;$createdLab=$false;$createdStorage=$false
 $private=Join-Path $repo "tmp/$name";$appData="$name-app-data";$createdAppData=$false
@@ -21,6 +28,7 @@ try {
     & docker run --rm --network none --read-only --user 0 --mount "type=volume,source=$lab,target=/lab" --mount "type=volume,source=$storage,target=/storage" --entrypoint sh $Image -c 'mkdir -p /lab/tls; openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes -keyout /lab/tls/private.key -out /lab/tls/public.crt -subj /CN=minio -addext subjectAltName=DNS:minio,IP:127.0.0.1 >/dev/null 2>&1 && chown -R 1000:1000 /lab /storage && chmod 700 /lab /storage /lab/tls && chmod 600 /lab/tls/private.key'
     if($LASTEXITCODE -ne 0){throw 'Disposable TLS/volume initialization failed.'}
     $env:FIXTURE_ADMIN_ACCESS=[Guid]::NewGuid().ToString('N');$env:FIXTURE_ADMIN_SECRET=[Guid]::NewGuid().ToString('N')
+    $env:PLUTON_WRITE_ONCE_REFERENCE=if($WriteOnceReference){'true'}else{'false'}
     $env:MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE=if($SharedNamespace){'true'}else{'false'};$env:MANAGED_EXPORT_ENABLED='true';$env:MANAGED_EXPORT_ENDPOINT='https://minio:9000';$env:MANAGED_EXPORT_BUCKET='example-private-exports'
     $env:MANAGED_EXPORT_ACCESS_KEY_ID=[Guid]::NewGuid().ToString('N');$env:MANAGED_EXPORT_SECRET_ACCESS_KEY=[Guid]::NewGuid().ToString('N');$env:MANAGED_EXPORT_CA_FILE='/lab/tls/public.crt'
     $env:MANAGED_EXPORT_REGION='us-east-1';$env:MANAGED_EXPORT_PREFIX='pluton-temporary-exports';$env:MANAGED_EXPORT_SESSION_TOKEN='';$env:MANAGED_EXPORT_TTL_SECONDS='7200'
@@ -50,7 +58,7 @@ try {
         [IO.File]::WriteAllText((Join-Path $private '.env'),$privateEnv)
         $mounts=@(@{type='volume';source='lab';target='/lab'})
         foreach($relative in @('backend/src','backend/__tests__')){$mounts+=@{type='bind';source="$repo/$relative".Replace('\','/');target="/app/$relative";read_only=$true}}
-        $override=@{services=@{pluton=@{user='1000:1000';restart='no';cpus=2;mem_limit='4g';memswap_limit='4g';pids_limit=192;volumes=$mounts;environment=@{NODE_ENV='test';FIXTURE_ADMIN_ACCESS=$env:FIXTURE_ADMIN_ACCESS;FIXTURE_ADMIN_SECRET=$env:FIXTURE_ADMIN_SECRET}}};volumes=@{lab=@{external=$true;name=$lab}};networks=@{default=@{external=$true;name=$network}}}
+        $override=@{services=@{pluton=@{user='1000:1000';restart='no';cpus=2;mem_limit='4g';memswap_limit='4g';pids_limit=192;volumes=$mounts;environment=@{NODE_ENV='test';PLUTON_WRITE_ONCE_REFERENCE=$env:PLUTON_WRITE_ONCE_REFERENCE;FIXTURE_ADMIN_ACCESS=$env:FIXTURE_ADMIN_ACCESS;FIXTURE_ADMIN_SECRET=$env:FIXTURE_ADMIN_SECRET}}};volumes=@{lab=@{external=$true;name=$lab}};networks=@{default=@{external=$true;name=$network}}}
         [IO.File]::WriteAllText((Join-Path $private 'compose.fixture.json'),($override | ConvertTo-Json -Depth 12))
     }
     foreach($mode in $Modes){

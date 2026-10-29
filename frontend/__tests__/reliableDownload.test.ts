@@ -160,3 +160,16 @@ test('short HTTPS authorization is bound to verified size and SHA; renewal prese
       globalThis.fetch = before;
    }
 });
+test('nonversioned authorization permits only the exact authenticated same-origin proxy', async () => {
+   const before = fetch;
+   let url = `/api/backups/backup-01/exports/${id}/content`;
+   globalThis.fetch = async () => Response.json({ success: true, result: { transport: 'authenticated-proxy', url, expiresAt: Date.now() + 60000, bytes: 2048, sha256: 'c'.repeat(64) } });
+   try {
+      const grant = await reliableAuthorization('https://example.internal/api', 'backup-01', id, 'c'.repeat(64), 2048);
+      assert.equal(grant.url, `https://example.internal${url}`);
+      assert.equal(grant.transport, 'authenticated-proxy');
+      for (url of ['https://foreign.example/content', '//foreign.example/content', '/api/backups/foreign/exports/' + id + '/content', `/api/backups/backup-01/exports/${id}/content?override=yes`]) {
+         await assert.rejects(reliableAuthorization('https://example.internal/api', 'backup-01', id, 'c'.repeat(64), 2048));
+      }
+   } finally { globalThis.fetch = before; }
+});
