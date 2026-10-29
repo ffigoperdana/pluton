@@ -1,3 +1,4 @@
+import { CommandStatusError } from "./commandStatus.js";
 import {
   chmod,
   lstat,
@@ -192,7 +193,8 @@ export class BackupLifecycleJob {
               // transient control-plane failure cannot undo snapshot success.
               try {
                 await this.shouldCancel();
-              } catch {
+              } catch (error) {
+                if (error instanceof CommandStatusError) throw error;
                 /* The hook deadline remains enforced. */
               }
               return false;
@@ -208,6 +210,7 @@ export class BackupLifecycleJob {
         },
       });
     } catch (error) {
+      if (error instanceof CommandStatusError) throw error;
       const code =
         error instanceof LifecycleProcessError ? error.code : "invalid";
       throw new BackupLifecycleError(
@@ -265,6 +268,7 @@ export class BackupLifecycleJob {
       this.workspace,
       `database-${ordinal}.${db.engine === "postgresql" ? "pgpass" : "cnf"}`,
     );
+    let dumpFailed = false;
     try {
       const clientHome = path.join(this.workspace, `client-home-${ordinal}`);
       await mkdir(clientHome, { mode: 0o700 });
@@ -381,6 +385,8 @@ export class BackupLifecycleJob {
       await this.stageEvent("database-dump-completed", checkpoint);
       return relative;
     } catch (error) {
+      dumpFailed = true;
+      if (error instanceof CommandStatusError) throw error;
       if (error instanceof BackupLifecycleError) throw error;
       const code =
         error instanceof LifecycleProcessError ? error.code : "failed";
@@ -417,12 +423,13 @@ export class BackupLifecycleJob {
       try {
         await rm(credentials, { force: true });
       } catch {
-        throw new BackupLifecycleError(
-          "database-dump",
-          "database-dump-failed",
-          db.databaseId,
-          db.engine,
-        );
+        if (!dumpFailed)
+          throw new BackupLifecycleError(
+            "database-dump-validation",
+            "database-artifact-finalization-failed",
+            db.databaseId,
+            db.engine,
+          );
       }
     }
   }

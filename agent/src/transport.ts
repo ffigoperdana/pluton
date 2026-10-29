@@ -12,6 +12,19 @@ export class AgentHttpError extends Error {
   }
 }
 
+export class AgentTransportError extends Error {
+  constructor(readonly code: "timeout" | "network" | "response-invalid") {
+    super(
+      code === "timeout"
+        ? "Agent request timed out."
+        : code === "response-invalid"
+          ? "Agent response was invalid or exceeded the safe size limit."
+          : "Agent network transport failed.",
+    );
+    this.name = "AgentTransportError";
+  }
+}
+
 /** Outbound-only JSON transport. It starts no listener and supports future mTLS material. */
 export class AgentTransport {
   private readonly client: typeof http | typeof https;
@@ -42,6 +55,7 @@ export class AgentTransport {
     pathname: string,
     body: string,
     headers: Record<string, string> = {},
+    timeoutMs = this.timeoutMs,
   ): Promise<T> {
     const url = new URL(pathname, this.config.serverUrl);
     const response = await new Promise<{ statusCode: number; body: string }>(
@@ -52,8 +66,8 @@ export class AgentTransport {
           request.destroy();
         };
         const deadline = setTimeout(
-          () => abort(new Error("Agent request timed out.")),
-          this.timeoutMs,
+          () => abort(new AgentTransportError("timeout")),
+          Math.max(1, Math.min(this.timeoutMs, timeoutMs)),
         );
         const request = this.client.request(
           {
@@ -76,14 +90,12 @@ export class AgentTransport {
             res.on("data", (chunk) => {
               received += Buffer.byteLength(chunk);
               if (received > this.maxResponseBytes)
-                abort(
-                  new Error("Agent response exceeded the safe size limit."),
-                );
+                abort(new AgentTransportError("response-invalid"));
               else raw += chunk;
             });
-            res.once("error", reject);
+            res.once("error", () => abort(new AgentTransportError("network")));
             res.once("aborted", () =>
-              reject(new Error("Agent response was interrupted.")),
+              abort(new AgentTransportError("network")),
             );
             res.on("end", () => {
               clearTimeout(deadline);
@@ -91,9 +103,9 @@ export class AgentTransport {
             });
           },
         );
-        request.once("error", (error) => {
+        request.once("error", () => {
           clearTimeout(deadline);
-          reject(error);
+          reject(new AgentTransportError("network"));
         });
         request.end(body);
       },
@@ -107,10 +119,7 @@ export class AgentTransport {
     try {
       return JSON.parse(response.body) as T;
     } catch {
-      throw new AgentHttpError(
-        response.statusCode,
-        "Server returned invalid JSON.",
-      );
+      throw new AgentTransportError("response-invalid");
     }
   }
 }

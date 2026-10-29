@@ -4,6 +4,7 @@ import { open, lstat, chmod } from "node:fs/promises";
 import { Transform, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createHash } from "node:crypto";
+import { CommandStatusError } from "./commandStatus.js";
 
 export type ProcessFailureCode =
   | "cancelled"
@@ -96,6 +97,7 @@ export async function runLifecycleProcess(input: {
       input.timeoutSeconds * 1000,
     );
     let checking = false;
+    let statusFailure: CommandStatusError | undefined;
     const cancellation = setInterval(() => {
       if (checking || closed) return;
       checking = true;
@@ -104,9 +106,11 @@ export async function runLifecycleProcess(input: {
         .then((cancel) => {
           if (cancel) stop("cancelled");
         })
-        .catch(() => {
-          // Control-plane outages do not turn a partially written dump into success.
-          // The hard deadline still applies while the lease/status request is unavailable.
+        .catch((error) => {
+          if (error instanceof CommandStatusError && !closed) {
+            statusFailure = error;
+            stop("failed");
+          }
         })
         .finally(() => {
           checking = false;
@@ -164,6 +168,7 @@ export async function runLifecycleProcess(input: {
     try {
       const code = await status;
       await writing;
+      if (statusFailure) throw statusFailure;
       if (failure) throw new LifecycleProcessError(failure);
       if (code !== 0) {
         // Provider text is consumed only for closed classification, never logged/returned.

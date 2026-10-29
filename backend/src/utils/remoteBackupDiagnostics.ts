@@ -1,5 +1,23 @@
 /** Closed diagnostics only. Never incorporate agent/provider text, credentials or URLs. */
 const messages: Record<string, string> = {
+	'command-lease-unavailable':
+		'Command lease is expired, invalid or unavailable; backup stopped safely.',
+	'command-authorization-rejected':
+		'The server rejected Agent authorization; backup stopped safely.',
+	'control-plane-rate-limited':
+		'Command status requests were rate limited after bounded retries; backup stopped safely.',
+	'control-plane-unavailable':
+		'Command status service was unavailable after bounded retries; backup stopped safely.',
+	'control-plane-timeout':
+		'Command status could not be established before its deadline; backup stopped safely.',
+	'control-plane-network-failed':
+		'Command status transport failed after bounded retries; backup stopped safely.',
+	'control-plane-response-invalid':
+		'Command status returned malformed JSON or an invalid status schema; backup stopped safely.',
+	'control-plane-unexpected':
+		'An unexpected application exception prevented command status verification; backup stopped safely.',
+	'database-artifact-finalization-failed':
+		'The dump completed but its private artifact/credential finalization failed; no backup was authorized.',
 	'database-invalid-configuration':
 		'The database name or native client connection configuration is invalid. Check the saved database configuration; dump defaults were not changed.',
 	'invalid-payload': 'The backup command configuration is invalid.',
@@ -63,6 +81,8 @@ const messages: Record<string, string> = {
 	'cancelled': 'The remote backup was cancelled.',
 };
 const stages = new Set([
+	'post-dump-status-check',
+	'command-status-check',
 	'payload-validation',
 	'source-validation',
 	'state-validation',

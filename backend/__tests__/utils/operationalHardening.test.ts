@@ -102,6 +102,20 @@ describe('durable remote backup progress', () => {
 	);
 });
 describe('safe operational errors', () => {
+	it.each([
+		'command-lease-unavailable',
+		'command-authorization-rejected',
+		'control-plane-rate-limited',
+		'control-plane-unavailable',
+		'control-plane-timeout',
+		'control-plane-network-failed',
+		'control-plane-response-invalid',
+		'control-plane-unexpected',
+	])('projects precise post-dump diagnostics without provider text: %s', failureCode => {
+		const message = remoteBackupFailure({ failureStage: 'post-dump-status-check', failureCode });
+		expect(message).toContain(`post-dump-status-check/${failureCode}`);
+		expect(message).not.toContain('unexpectedly');
+	});
 	it('progress projection never forwards historical provider error text', () => {
 		const projected = projectRemoteProgress(
 			row({ status: 'failed', inProgress: false, errorMsg: 'test-only-old-provider-secret' })

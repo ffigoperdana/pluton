@@ -11,6 +11,7 @@ import {
 import { constants } from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { CommandStatusError, type CommandStatusCode } from "./commandStatus.js";
 import {
   parseBackupExclusions,
   sourceResticExclusions,
@@ -111,6 +112,8 @@ export class BackupCancelledError extends Error {
  * to the server without disclosing credentials.
  */
 export type BackupFilesystemStage =
+  | "post-dump-status-check"
+  | "command-status-check"
   | "payload-validation"
   | "source-validation"
   | "state-validation"
@@ -127,6 +130,7 @@ export type BackupFilesystemStage =
   | LifecycleStage;
 
 export type BackupFilesystemFailureCode =
+  | CommandStatusCode
   | "invalid-payload"
   | "source-validation-failed"
   | SourceAccessCode
@@ -245,6 +249,11 @@ export function toBackupFilesystemError(
   if (stage === "parent-discovery" || stage === "parent-verification")
     stage = "repository-check";
   if (error instanceof BackupFilesystemError) return error;
+  if (error instanceof CommandStatusError)
+    return new BackupFilesystemError(
+      stage === "post-dump-status-check" ? stage : "command-status-check",
+      error.code,
+    );
   if (error instanceof SourceAccessError)
     return new BackupFilesystemError(stage, error.code);
   if (error instanceof BackupLifecycleError)
@@ -639,6 +648,8 @@ async function runProgram(
     let stderrBuffer = "";
     let sourceFailure: SourceAccessCode | undefined;
     let cancelled = false;
+    let statusFailure: CommandStatusError | undefined;
+    let checking = false;
     let eventChain = Promise.resolve();
     let settled = false;
     let timedOut = false;
@@ -652,6 +663,8 @@ async function runProgram(
       : undefined;
 
     const cancellationTimer = setInterval(() => {
+      if (checking || settled) return;
+      checking = true;
       void options
         .shouldCancel()
         .then((shouldCancel) => {
@@ -659,8 +672,14 @@ async function runProgram(
           cancelled = true;
           forceKill ||= terminateProcessTree(child);
         })
-        .catch(() => {
-          // A transient control-plane outage must not terminate a data-plane backup.
+        .catch((error) => {
+          if (error instanceof CommandStatusError && !settled) {
+            statusFailure = error;
+            forceKill ||= terminateProcessTree(child);
+          }
+        })
+        .finally(() => {
+          checking = false;
         });
     }, 10_000);
     cancellationTimer.unref();
@@ -722,6 +741,7 @@ async function runProgram(
       consumeLine(stdoutBuffer);
       void eventChain.then(
         () => {
+          if (statusFailure) return reject(statusFailure);
           if (cancelled) return reject(new BackupCancelledError());
           if (timedOut) {
             const reason = options.classifyRepositoryFailure
@@ -1355,7 +1375,14 @@ export async function executeFilesystemBackup(input: {
     message?: BackupFilesystemStageEvent["message"],
   ): void => {
     stage = next;
-    input.onStage?.({ stage: next, message: message || "stage started" });
+    emitStage({ stage: next, message: message || "stage started" });
+  };
+  const emitStage = (event: BackupFilesystemStageEvent): void => {
+    try {
+      input.onStage?.(event);
+    } catch {
+      /* Best-effort journal/progress cannot fail native work. */
+    }
   };
   const lifecycleEvent = async (
     checkpoint: LifecycleCheckpoint,
@@ -1363,8 +1390,10 @@ export async function executeFilesystemBackup(input: {
   ): Promise<void> => {
     if (checkpoint === "pre-backup-started") stage = "pre-backup";
     if (checkpoint === "database-dump-started") stage = "database-dump";
+    if (checkpoint === "database-dump-completed")
+      stage = "database-dump-validation";
     if (checkpoint === "post-backup-started") stage = "post-backup";
-    input.onStage?.({
+    emitStage({
       stage,
       message: checkpoint,
       ...(database ? { database } : {}),
@@ -1396,7 +1425,7 @@ export async function executeFilesystemBackup(input: {
       payload.version === 4
         ? sourceResticExclusions(source, payload.excludes)
         : payload.excludes;
-    input.onStage?.({
+    emitStage({
       stage: "source-validation",
       message: "source validated",
     });
@@ -1453,7 +1482,7 @@ export async function executeFilesystemBackup(input: {
       input.config.dataDir,
       rcloneOptions,
     );
-    input.onStage?.({
+    emitStage({
       stage: "temporary-storage-config",
       message: "temporary storage config created",
     });
@@ -1462,11 +1491,11 @@ export async function executeFilesystemBackup(input: {
     const repository = `rclone:${payload.repository.remoteName}:${payload.repository.path}`;
 
     setStage("repository-check");
-    input.onStage?.({
+    emitStage({
       stage: "repository-check",
       message: "repository check started",
     });
-    input.onStage?.({
+    emitStage({
       stage: "repository-check",
       message: "existing backup snapshot lookup started",
     });
@@ -1517,6 +1546,7 @@ export async function executeFilesystemBackup(input: {
         lifecycleEvent,
       );
       artifacts = await job.prepare();
+      setStage("post-dump-status-check");
       if (await input.shouldCancel()) throw new BackupCancelledError();
     }
     setStage("repository-target-check");
@@ -1549,13 +1579,13 @@ export async function executeFilesystemBackup(input: {
         env,
         input.shouldCancel,
         (diagnostic) =>
-          input.onStage?.({
+          emitStage({
             stage: "repository-check",
             message: "real repository failure",
             diagnostic,
           }),
       );
-      input.onStage?.({
+      emitStage({
         stage: "repository-check",
         message: "repository verified",
       });
@@ -1590,7 +1620,7 @@ export async function executeFilesystemBackup(input: {
           metadata.repositoryFailure &&
           metadata.repositoryFailure !== "process-failed"
         ) {
-          input.onStage?.({
+          emitStage({
             stage: "repository-check",
             message: "real repository failure",
             diagnostic: metadata.repositoryFailure,
@@ -1622,32 +1652,37 @@ export async function executeFilesystemBackup(input: {
           jobsRoot: path.join(await realpath(input.config.dataDir), "jobs"),
           artifacts,
         });
-        input.onStage?.({
+        emitStage({
           stage: "parent-verification",
           message: parent ? "parent selected" : "no compatible parent",
         });
       } catch (error) {
         if (
           error instanceof BackupCancelledError ||
+          error instanceof CommandStatusError ||
           error instanceof BackupFilesystemError
         )
           throw error;
         try {
           if (await input.shouldCancel()) throw new BackupCancelledError();
         } catch (cancelError) {
-          if (cancelError instanceof BackupCancelledError) throw cancelError;
+          if (
+            cancelError instanceof BackupCancelledError ||
+            cancelError instanceof CommandStatusError
+          )
+            throw cancelError;
           // Match the runner's existing outage policy; hard repository/process
           // deadlines still apply, and a confirmed cancellation is never ignored.
         }
         if (error instanceof ProgramTimeoutError && error.diagnostic) {
-          input.onStage?.({
+          emitStage({
             stage: "repository-check",
             message: "real repository failure",
             diagnostic: error.diagnostic,
           });
           throw toBackupFilesystemError(error, "repository-check");
         }
-        input.onStage?.({
+        emitStage({
           stage: "parent-discovery",
           message:
             error instanceof ProgramTimeoutError
@@ -1658,13 +1693,13 @@ export async function executeFilesystemBackup(input: {
         });
         setStage("repository-check", "repository reverification started");
         await verify();
-        input.onStage?.({
+        emitStage({
           stage: "parent-discovery",
           message: "parent lookup fallback; continuing without explicit parent",
         });
       }
     } else
-      input.onStage?.({
+      emitStage({
         stage: "parent-discovery",
         message: "no compatible parent",
       });
@@ -1689,7 +1724,7 @@ export async function executeFilesystemBackup(input: {
     )
       throw new SourceAccessError("source-symlink-escape");
     if (job) await lifecycleEvent("backup-started");
-    input.onStage?.({
+    emitStage({
       stage: "restic-backup",
       message: "restic backup started",
     });
@@ -1762,7 +1797,7 @@ export async function executeFilesystemBackup(input: {
     };
     completedResult = result;
     if (job) await lifecycleEvent("backup-completed");
-    input.onStage?.({ stage: "restic-backup", message: "backup completed" });
+    emitStage({ stage: "restic-backup", message: "backup completed" });
     return result;
   } catch (error) {
     operationError = error;

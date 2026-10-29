@@ -347,6 +347,46 @@ describe('AgentStore durable command queue', () => {
 		).toBe('acknowledged');
 	});
 
+	it('status renews only an owned active lease, reports cancellation and never revives expiry', async () => {
+		await store.enqueueCommand({
+			id: 'command-status',
+			agentId: 'agent-1',
+			type: 'PING',
+			payload: {},
+			idempotencyKey: 'idem-status',
+		});
+		const start = new Date('2026-01-01T00:00:00Z');
+		await store.leaseNext('agent-1', 'owned-token', 1000, start);
+		expect(
+			await store.getCommandStatus('agent-1', 'command-status', 'other-token', 60_000, start)
+		).toBeNull();
+		const checked = new Date(start.getTime() + 500);
+		const valid = await store.getCommandStatus(
+			'agent-1',
+			'command-status',
+			'owned-token',
+			60_000,
+			checked
+		);
+		expect(valid?.cancelled).toBe(false);
+		expect(valid?.command.leaseExpiresAt).toEqual(
+			new Date(Math.floor((checked.getTime() + 60_000) / 1000) * 1000)
+		);
+		expect(
+			await store.getCommandStatus(
+				'agent-1',
+				'command-status',
+				'owned-token',
+				60_000,
+				new Date(checked.getTime() + 60_000)
+			)
+		).toBeNull();
+		await store.cancelCommand('command-status');
+		expect(
+			(await store.getCommandStatus('agent-1', 'command-status', 'owned-token', 60_000, start))
+				?.cancelled
+		).toBe(true);
+	});
 	it('persists nonce hashes and rejects a repeated nonce', async () => {
 		const future = new Date(Date.now() + 5 * 60 * 1000);
 		expect(await store.reserveNonce('agent-1', 'nonce-hash', future)).toBe(true);

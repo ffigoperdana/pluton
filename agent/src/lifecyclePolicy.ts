@@ -45,6 +45,7 @@ export type LifecycleStage =
   | "snapshot-confirmation"
   | "post-backup";
 export type LifecycleFailureCode =
+  | "database-artifact-finalization-failed"
   | "lifecycle-invalid"
   | "workspace-failed"
   | "database-tool-unavailable"
