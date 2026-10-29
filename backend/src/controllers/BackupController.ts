@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { managedSnapshotPath } from '../utils/managedSnapshotPath';
 import { SnapshotIndexError } from '../utils/restic/ManagedSnapshotIndex';
 import { ManagedRepositoryAccessError } from '../utils/restic/ManagedSftpRepositorySession';
+import { observeTransfer, transferReason } from '../utils/managedExport/TransferTelemetry';
 import {
 	managedExportMode,
 	ManagedExportError,
@@ -74,17 +75,22 @@ export class BackupController {
 						: await this.backupService.getBackupDownload(req.params.id);
 			if (typeof downloadResult.streamTo === 'function') {
 				const request = this.downloadRequest(req, res);
+				const transfer = observeTransfer(res, 'standard');
 				try {
-					await downloadResult.streamTo(res, request.signal, () => {
+					await downloadResult.streamTo(transfer.output, request.signal, () => {
 						res.setHeader('Content-Type', 'application/x-tar');
 						res.setHeader(
 							'Content-Disposition',
 							`attachment; filename="${downloadResult.fileName}"`
 						);
 						res.setHeader('Cache-Control', 'private, no-store');
+						res.setHeader('Accept-Ranges', 'none');
 					});
 					if (!res.destroyed) res.end();
+					transfer.finish('origin-stream-complete');
 				} catch (error) {
+					if (!res.headersSent) res.statusCode = error instanceof AppError ? error.statusCode : 502;
+					transfer.finish(request.signal.aborted ? 'peer-closed' : transferReason(error));
 					if (res.headersSent || res.destroyed) {
 						if (!res.destroyed) res.destroy(); // never append JSON/provider output to a partial TAR
 					} else {

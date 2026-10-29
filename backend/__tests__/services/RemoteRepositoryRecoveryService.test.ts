@@ -222,6 +222,42 @@ describe('Phase 4 remote managed repository recovery', () => {
 	});
 
 	const preparationIds = new Map<string, string>();
+	it('an explicitly retried durable export rebuilds a failed index and streams only its verified snapshot', async () => {
+		const binding = await service.exportBindingFor('backup-01', 'full'),
+			signal = new AbortController().signal;
+		session.streamFiles.mockRejectedValueOnce(
+			new ManagedRepositoryAccessError('repository-unavailable')
+		);
+		await expect(
+			service.withVerifiedExport(binding, signal, async () => undefined)
+		).rejects.toMatchObject({ code: 'repository-unavailable' });
+		await service.withVerifiedExport(binding, signal, async descriptor => {
+			let bytes = 0;
+			const hash = crypto.createHash('sha256');
+			const output = new Writable({
+				write(chunk, _encoding, done) {
+					bytes += chunk.length;
+					hash.update(chunk);
+					done();
+				},
+			});
+			await descriptor.streamTo(output, signal, () => {});
+			expect(bytes).toBe(descriptor.export.archiveBytes);
+			expect(hash.digest('hex')).toBe(descriptor.export.archiveSha256);
+			expect(descriptor.export.binding.snapshotId).toBe(snapshotId);
+		});
+		expect(session.streamFiles).toHaveBeenCalledTimes(2);
+		expect(session.archive).toHaveBeenCalledTimes(2);
+	});
+	it('a durable export refuses a changed full snapshot binding before repository access', async () => {
+		const binding = await service.exportBindingFor('backup-01', 'full');
+		backup.completionStats.snapshot_id = 'b'.repeat(64);
+		await expect(
+			service.withVerifiedExport(binding, new AbortController().signal, async () => undefined)
+		).rejects.toMatchObject({ reason: 'binding-changed' });
+		expect(session.archive).not.toHaveBeenCalled();
+		expect(session.streamFiles).not.toHaveBeenCalled();
+	});
 	async function prepareReady(id: string, replica?: string, signal?: AbortSignal) {
 		const result = await service.prepareDownload(id, replica, signal);
 		preparationIds.set(id, result.preparation.id);

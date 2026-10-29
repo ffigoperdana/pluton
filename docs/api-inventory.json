@@ -647,6 +647,7 @@
     "support": "Supported but internal-only",
     "request": [
       "params.id",
+      "query.exportMode",
       "query.preparationId"
     ],
     "requestSchemas": [],
@@ -677,7 +678,8 @@
     "request": [
       "params.id",
       "query.replicationId",
-      "body"
+      "body",
+      "query.exportMode"
     ],
     "requestSchemas": [],
     "response": "controller JSON or binary/stream contract; unversioned",
@@ -737,7 +739,8 @@
       "query",
       "body",
       "params.id",
-      "params.jobId"
+      "params.jobId",
+      "query.exportMode"
     ],
     "requestSchemas": [],
     "response": "controller JSON or binary/stream contract; unversioned",
@@ -768,7 +771,8 @@
       "query",
       "body",
       "params.id",
-      "params.jobId"
+      "params.jobId",
+      "query.exportMode"
     ],
     "requestSchemas": [],
     "response": "controller JSON or binary/stream contract; unversioned",
@@ -782,6 +786,227 @@
     "source": "backend/src/controllers/BackupController.ts",
     "routeSource": "backend/src/routes/backups.ts",
     "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "backups",
+    "method": "GET",
+    "route": "/api/backups/:id/download-preparations/:jobId/manifest",
+    "handler": "BackupController.getExportManifest",
+    "services": [
+      "backupService.getExportManifest"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "body",
+      "params.id",
+      "params.jobId",
+      "query.exportMode"
+    ],
+    "requestSchemas": [],
+    "response": "controller JSON or binary/stream contract; unversioned",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "managedExports",
+    "method": "POST",
+    "route": "/api/backups/:id/exports",
+    "handler": "ManagedExportController.create",
+    "services": [
+      "service.admit"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/services/ManagedExportService.test.ts"
+    ],
+    "source": "backend/src/controllers/ManagedExportController.ts",
+    "routeSource": "backend/src/routes/managedExports.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "managedExports",
+    "method": "DELETE",
+    "route": "/api/backups/:id/exports/:exportId",
+    "handler": "ManagedExportController.cancel",
+    "services": [
+      "service.cancel"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "destructive/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/services/ManagedExportService.test.ts"
+    ],
+    "source": "backend/src/controllers/ManagedExportController.ts",
+    "routeSource": "backend/src/routes/managedExports.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "managedExports",
+    "method": "GET",
+    "route": "/api/backups/:id/exports/:exportId",
+    "handler": "ManagedExportController.status",
+    "services": [
+      "service.status"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/services/ManagedExportService.test.ts"
+    ],
+    "source": "backend/src/controllers/ManagedExportController.ts",
+    "routeSource": "backend/src/routes/managedExports.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "managedExports",
+    "method": "POST",
+    "route": "/api/backups/:id/exports/:exportId/authorization",
+    "handler": "ManagedExportController.authorization",
+    "services": [
+      "service.authorize"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/services/ManagedExportService.test.ts"
+    ],
+    "source": "backend/src/controllers/ManagedExportController.ts",
+    "routeSource": "backend/src/routes/managedExports.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "managedExports",
+    "method": "GET",
+    "route": "/api/backups/:id/exports/:exportId/content",
+    "handler": "ManagedExportController.content",
+    "services": [
+      "service.content"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "params.exportId"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/services/ManagedExportService.test.ts"
+    ],
+    "source": "backend/src/controllers/ManagedExportController.ts",
+    "routeSource": "backend/src/routes/managedExports.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "managedExports",
+    "method": "HEAD",
+    "route": "/api/backups/:id/exports/:exportId/content",
+    "handler": "ManagedExportController.content",
+    "services": [
+      "service.content"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "params.id",
+      "params.exportId"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/services/ManagedExportService.test.ts"
+    ],
+    "source": "backend/src/controllers/ManagedExportController.ts",
+    "routeSource": "backend/src/routes/managedExports.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "managedExports",
+    "method": "GET",
+    "route": "/api/backups/:id/exports/:exportId/link",
+    "handler": "ManagedExportController.authorization",
+    "services": [
+      "service.authorize"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/services/ManagedExportService.test.ts"
+    ],
+    "source": "backend/src/controllers/ManagedExportController.ts",
+    "routeSource": "backend/src/routes/managedExports.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
   },
   {
     "feature": "backups",

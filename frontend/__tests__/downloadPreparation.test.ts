@@ -164,6 +164,97 @@ const result = await backendRequire('esbuild').build({
 });
 const module = { exports: {} as any };
 new Function('require', 'module', 'exports', result.outputFiles[0].text)(require, module, module.exports);
+test('delivery methods remain separate: durable export progress, verified readiness and stale-link hiding', async (context) => {
+   const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.internal' }),
+      saved = new Map<string, PropertyDescriptor | undefined>(),
+      calls: { url: string; method: string }[] = [];
+   let state = 'queued',
+      proxy = false;
+   const reliable = () => ({
+      id,
+      state,
+      mode: 'full',
+      snapshotId: 'a'.repeat(64),
+      createdAt: 1000,
+      elapsedMs: 2000,
+      processedBytes: state === 'queued' ? 0 : 2048,
+      uploadedBytes: state === 'queued' ? 0 : state === 'uploading' ? 1024 : 2048,
+      totalBytes: state === 'queued' ? undefined : 2048,
+      averageBytesPerSecond: 512,
+      expiresAt: Date.now() + 60000,
+      integrity: state === 'ready' ? 'verified' : 'pending',
+      cleanupPending: false,
+      summary: state === 'ready' ? verifiedJob('ready', 'full').export : undefined,
+   });
+   for (const [key, value] of Object.entries({
+      window: dom.window,
+      document: dom.window.document,
+      IS_REACT_ACT_ENVIRONMENT: true,
+      fetch: async (url: string, init: RequestInit) => {
+         calls.push({ url, method: init.method! });
+         if (url.includes('/exports')) {
+            if (proxy) return new Response('<html>private-provider</html>', { status: 504, headers: { 'Content-Type': 'text/html' } });
+            const value: any = reliable();
+            if (value.summary) {
+               value.summary.archiveBytes = 2048;
+               value.summary.archiveSha256 = 'c'.repeat(64);
+            }
+            return Response.json({ success: true, result: value }, { status: init.method === 'POST' ? 202 : 200 });
+         }
+         return Response.json({ success: true, result: init.method === 'POST' ? { preparation: job('queued') } : job('cancelled') });
+      },
+   })) {
+      saved.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+      Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+   }
+   context.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+   const root = require('react-dom/client').createRoot(dom.window.document.getElementById('root'));
+   const flush = async () => {
+      await act(async () => {
+         await new Promise<void>((resolve) => setImmediate(resolve));
+      });
+   };
+   try {
+      await act(async () => root.render(React.createElement(module.exports.default, { backupId: 'backup-01', close() {} })));
+      await flush();
+      const delivery = dom.window.document.querySelectorAll<HTMLInputElement>('input[name="delivery-method"]');
+      await act(async () => delivery[1].click());
+      await flush();
+      assert.match(dom.window.document.body.textContent!, /Queued/);
+      assert.equal(calls.filter((c) => c.method === 'DELETE' && !c.url.includes('/exports')).length, 1);
+      state = 'uploading';
+      await act(async () => context.mock.timers.tick(2000));
+      await flush();
+      assert.match(dom.window.document.body.textContent!, /50%/);
+      state = 'verifying';
+      await act(async () => context.mock.timers.tick(2000));
+      await flush();
+      assert.match(dom.window.document.body.textContent!, /Verifying complete temporary object/);
+      assert(!dom.window.document.querySelector('a[href$="/link"]'));
+      state = 'ready';
+      await act(async () => context.mock.timers.tick(2000));
+      await flush();
+      assert.match(dom.window.document.body.textContent!, /Integrity: complete object size and SHA-256 verified/);
+      assert(dom.window.document.querySelector('a[href$="/link"]'));
+      assert.match(dom.window.document.body.textContent!, /Browser Resume/);
+      assert(!/laptop download finished/i.test(dom.window.document.body.textContent!));
+      proxy = true;
+      await act(async () => context.mock.timers.tick(5000));
+      await flush();
+      assert.match(dom.window.document.body.textContent!, /HTTP 504/);
+      assert(!dom.window.document.querySelector('a[href$="/link"]'));
+      assert(!dom.window.document.body.textContent!.includes('private-provider'));
+   } finally {
+      await act(async () => root.unmount());
+      context.mock.timers.reset();
+      dom.window.close();
+      for (const [key, descriptor] of saved) {
+         if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+         else Reflect.deleteProperty(globalThis, key);
+      }
+   }
+   assert.equal(calls.filter((c) => c.method === 'DELETE' && c.url.includes('/exports')).length, 0);
+});
 test('actual panel follows queued/indexing/validating/ready, separates native transfer, and hides stale readiness on proxy error', async (context) => {
    const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.internal' });
    const saved = new Map<string, PropertyDescriptor | undefined>();
@@ -265,8 +356,9 @@ test('actual panel cancels active full preparation before switching mode, warns 
    try {
       await act(async () => root.render(React.createElement(module.exports.default, { backupId: 'backup-01', close() {} })));
       await flush();
-      const radios = dom.window.document.querySelectorAll<HTMLInputElement>('input[type="radio"]');
+      const radios = dom.window.document.querySelectorAll<HTMLInputElement>('input[name="export-mode"]');
       assert.equal(radios.length, 2);
+      assert.equal(dom.window.document.querySelectorAll('input[name="delivery-method"]').length, 2);
       await act(async () => radios[1].click());
       await flush();
       assert.deepEqual(calls.slice(0, 3), [

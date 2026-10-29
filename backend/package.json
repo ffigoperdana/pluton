@@ -14,8 +14,11 @@
 		"LICENSE"
 	],
 	"dependencies": {
+		"@aws-sdk/client-s3": "3.1159.0",
+		"@aws-sdk/s3-request-presigner": "3.1159.0",
 		"@modelcontextprotocol/sdk": "1.32.1",
 		"@napi-rs/keyring": "^1.2.0",
+		"@smithy/node-http-handler": "4.13.0",
 		"bcryptjs": "^3.0.3",
 		"better-sqlite3": "12.2.0",
 		"cookies": "^0.9.1",

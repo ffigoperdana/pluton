@@ -10,6 +10,7 @@ import { AppError } from '../AppError';
 import { getBinaryPath } from '../binaryPathResolver';
 import { killProcessTree } from '../processTree';
 import { processManager } from '../../managers/ProcessManager';
+import { planLogger } from '../logger';
 
 export type RecoveryFailureCode =
 	| 'configuration-invalid'
@@ -432,6 +433,9 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			stdio: ['ignore', 'pipe', 'pipe'],
 		});
 		const processId = `managed-download-${crypto.randomUUID()}`;
+		const began = Date.now();
+		let exitStatus: number | null = null,
+			exitSignal: string | null = null;
 		processManager.trackProcess(processId, child);
 		let failure: RecoveryFailureCode | undefined;
 		let hasClosed = false;
@@ -459,7 +463,9 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			timer.unref();
 		};
 		const closed = new Promise<void>(resolve => {
-			child.once('close', code => {
+			child.once('close', (code, childSignal) => {
+				exitStatus = code;
+				exitSignal = childSignal;
 				hasClosed = true;
 				if (code !== 0)
 					failure ||=
@@ -501,6 +507,22 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			child.stdout?.removeListener('data', dataActivity);
 			destination.removeListener('drain', activity);
 			processManager.untrackProcess(processId);
+			try {
+				planLogger('download').info(
+					{
+						event: 'managed_native_archive',
+						elapsedMs: Date.now() - began,
+						exitStatus,
+						signal: exitSignal,
+						classification: failure || 'success',
+						activeRepositorySessions: ManagedSftpRepositorySession.active,
+						nodeRssBytes: process.memoryUsage().rss,
+					},
+					'Managed archive process finished.'
+				);
+			} catch {
+				/* Never log arguments, environment or provider output. */
+			}
 		}
 	}
 
