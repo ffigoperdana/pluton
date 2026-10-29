@@ -1,0 +1,13 @@
+# Optional, explicitly approved overlay. Mount only a PUBLIC CA certificate;
+# never a private key, directory, repository credential or Docker socket.
+services:
+  pluton:
+    environment:
+      MANAGED_EXPORT_CA_FILE: /run/secrets/pluton-managed-export-ca.pem
+    volumes:
+      - type: bind
+        source: ${MANAGED_EXPORT_CA_HOST_FILE:?Set an approved absolute public CA PEM path}
+        target: /run/secrets/pluton-managed-export-ca.pem
+        read_only: true
+        bind:
+          create_host_path: false

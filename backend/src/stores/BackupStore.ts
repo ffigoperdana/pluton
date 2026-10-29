@@ -5,6 +5,10 @@ import { Backup, NewBackup, backups } from '../db/schema/backups';
 import { BackupMirror } from '../types/backups';
 import { mergeRemoteProgress, type RemoteProgressEvent } from '../utils/remoteBackupProgress';
 import type { BackupHistoryQuery } from '../utils/backupHistoryQuery';
+import {
+	hasExportNamespaceReservation,
+	assertExportBackupScope,
+} from '../utils/managedExport/NamespaceReservation';
 
 // Explicit projection: never hydrate source/storage configuration or credentials
 // just to render history. Shared with the bounded plan-header summary.
@@ -97,6 +101,20 @@ export class BackupStore {
 	}
 
 	async create(backupData: NewBackup): Promise<Backup | null> {
+		if (this.db.$client && this.db.transaction)
+			return this.db.transaction(
+				tx => {
+					assertExportBackupScope(this.db.$client, backupData);
+					return (
+						tx
+							.insert(backups)
+							.values({ ...backupData, createdAt: sql`(unixepoch())`, started: sql`(unixepoch())` })
+							.returning()
+							.all()[0] || null
+					);
+				},
+				{ behavior: 'immediate' }
+			);
 		const result = await this.db
 			.insert(backups)
 			.values({ ...backupData, createdAt: sql`(unixepoch())`, started: sql`(unixepoch())` })
@@ -106,6 +124,20 @@ export class BackupStore {
 
 	async update(id: string, updates: Partial<NewBackup>): Promise<Backup | null> {
 		const updatedPayload = { ...updates, updatedAt: sql`(unixepoch())` };
+		if (this.db.$client && this.db.transaction)
+			return this.db.transaction(
+				tx => {
+					if (hasExportNamespaceReservation(this.db.$client)) {
+						const old = tx.select().from(backups).where(eq(backups.id, id)).get();
+						if (old) assertExportBackupScope(this.db.$client, { ...old, ...updates });
+					}
+					return (
+						tx.update(backups).set(updatedPayload).where(eq(backups.id, id)).returning().all()[0] ||
+						null
+					);
+				},
+				{ behavior: 'immediate' }
+			);
 		const result = await this.db
 			.update(backups)
 			.set(updatedPayload)

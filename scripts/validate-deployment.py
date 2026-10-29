@@ -77,7 +77,7 @@ def write(path, body):
 def copy_bundle(target):
     target.mkdir(mode=0o750)
     for path in (ROOT / "deploy").iterdir():
-        if path.name in ("compose.yml", ".env.example", "healthcheck.cjs") or path.suffix in (".sh", ".py"):
+        if path.name in ("compose.yml", "compose.managed-export-ca.yml", ".env.example", "healthcheck.cjs") or path.suffix in (".sh", ".py"):
             shutil.copyfile(path, target / path.name)
             (target / path.name).chmod(0o600)
 

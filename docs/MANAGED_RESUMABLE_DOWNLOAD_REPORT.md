@@ -1,5 +1,23 @@
 # Managed resumable download: implementation and local evidence
 
+This is the historical PR #54 implementation report. That PR is now merged.
+Deployment wiring, safe operator preflight and current release gates are covered
+by the [controlled UAT follow-up](MANAGED_RELIABLE_DOWNLOAD_UAT.md). Statements below
+about unpublished work/hosted CI describe the original implementation session.
+
+The later explicitly enabled shared-namespace contract supersedes this report's
+blanket separate-bucket/key requirement only when
+`MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE=true`. It reserves exactly
+`pluton-temporary-exports/` in the existing namespace, checks all configured and
+retained repository/mirror scopes in main-database transactions, blocks future
+overlap and uncertain remote edits, inventories only the reserved prefix, and
+requires journaled upload/version ownership for cleanup. Strict isolation remains
+the default. The [HCP operator procedure](MANAGED_RELIABLE_DOWNLOAD_UAT.md#batii-hcp-97--existing-shared-namespace-backup)
+contains the current contract, residual shared-key risks and mandatory GO/NO-GO
+gates. No provider versioning/conditional-completion bypass is implemented or
+production compatibility claimed; an equivalent unversioned design has not been
+demonstrated through authorized HCP API tests.
+
 ## Scope and baseline
 
 Branch: `codex/managed-resumable-download`. Base: fetched `origin/main`,

@@ -48,7 +48,40 @@ export class TemporaryExportError extends AppError {
 		Object.setPrototypeOf(this, new.target.prototype);
 	}
 }
+export type ExportCapability =
+	| 'https'
+	| 'destination-isolation'
+	| 'versioning'
+	| 'sse-s3'
+	| 'private-acl'
+	| 'anonymous-denial'
+	| 'immutable-version'
+	| 'range-resume'
+	| 'version-enumeration'
+	| 'multipart-upload'
+	| 'multipart-completion'
+	| 'multipart-enumeration'
+	| 'conditional-completion'
+	| 'presigned-get'
+	| 'cleanup';
+export class ExportPreflightError extends TemporaryExportError {
+	constructor(
+		readonly capability: ExportCapability,
+		readonly category:
+			| 'tls-validation'
+			| 'access-denied'
+			| 'unsupported-api'
+			| 'unexpected-response'
+			| 'network-or-deadline'
+			| 'cleanup-failed',
+		readonly httpStatus?: number
+	) {
+		super('security-capability-missing');
+		Object.setPrototypeOf(this, new.target.prototype);
+	}
+}
 export type ExportConfig = {
+	allowSharedNamespace?: boolean;
 	endpoint: string;
 	region: string;
 	bucket: string;
@@ -87,7 +120,18 @@ export function exportConfiguration(
 	if (!parsed.success) throw new TemporaryExportError('configuration-invalid');
 	try {
 		const c = parsed.data;
+		if (
+			env.MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE &&
+			!['true', 'false'].includes(env.MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE)
+		)
+			throw new Error();
+		const allowSharedNamespace = env.MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE === 'true';
+		if (allowSharedNamespace && c.prefix !== 'pluton-temporary-exports') throw new Error();
 		c.endpoint = httpsS3Endpoint(c.endpoint).origin;
+		// This client uses path-style bucket addressing. A bucket-qualified host
+		// could add an unintended object-key component on HCP; do not guess.
+		if (allowSharedNamespace && new URL(c.endpoint).hostname.startsWith(c.bucket + '.'))
+			throw new Error();
 		let ca: Buffer | undefined;
 		if (env.MANAGED_EXPORT_CA_FILE) {
 			const stat = fs.lstatSync(env.MANAGED_EXPORT_CA_FILE);
@@ -119,9 +163,33 @@ export function exportConfiguration(
 				])
 			)
 			.digest('hex');
-		return { ...c, ca, fingerprint };
+		return { ...c, ca, fingerprint, allowSharedNamespace };
 	} catch {
 		throw new TemporaryExportError('configuration-invalid');
+	}
+}
+/** Safe projection from the application's actual process configuration. Values,
+ * credential hashes and signed URLs are deliberately excluded. */
+export function exportConfigurationStatus() {
+	const enabled = process.env.MANAGED_EXPORT_ENABLED === 'true';
+	try {
+		const c = exportConfiguration();
+		return {
+			enabled,
+			configured: !!c,
+			endpointConfigured: !!c?.endpoint,
+			regionConfigured: !!c?.region,
+			bucketConfigured: !!c?.bucket,
+			prefixConfigured: !!c?.prefix,
+			credentialsConfigured: !!c?.accessKeyId && !!c?.secretAccessKey,
+			sessionTokenConfigured: !!c?.sessionToken,
+			privateCaConfigured: !!c?.ca,
+			sharedNamespaceEnabled: !!c?.allowSharedNamespace,
+			ttlSeconds: c?.ttlSeconds,
+			destinationFingerprint: c?.fingerprint,
+		};
+	} catch {
+		return { enabled, configured: false, reason: 'configuration-invalid' };
 	}
 }
 export type ExportBinding = {
@@ -143,6 +211,9 @@ export type ExportState =
 	| 'cancelled'
 	| 'expired';
 export type ExportJob = {
+	kind?: 'archive' | 'preflight' | 'inventory';
+	ownedVersions?: { key: string; versionId: string; etag?: string; bytes: number }[];
+	inventory?: { objects: number; uploads: number; exclusive: true };
 	id: string;
 	owner: string;
 	binding: ExportBinding;
@@ -170,6 +241,10 @@ export type ExportJob = {
 		| 'object-verification'
 		| 'binding-validation';
 	failureDetail?: string;
+	preflightChecks?: ExportCapability[];
+	failureCapability?: ExportCapability;
+	failureCategory?: ExportPreflightError['category'];
+	failureHttpStatus?: number;
 	cleaned: boolean;
 	cleanupAttempts: number;
 };

@@ -6,6 +6,33 @@ const root = path.join(__dirname, "..", "..");
 const docker = fs.readFileSync(path.join(root, "Dockerfile.source"), "utf8");
 const runtime =
   docker.split(" AS production\n")[1] || docker.split(" AS production\r\n")[1];
+function verificationUser(source) {
+  let user;
+  for (const line of source.replace(/\\\r?\n\s*/g, " ").split(/\r?\n/)) {
+    const selected = /^USER\s+(\S+)/.exec(line);
+    if (selected) user = selected[1];
+    if (
+      /^RUN\s/.test(line) &&
+      /(?:^RUN|&&)\s+node --loader \.\/backend\/loader\.mjs \/usr\/local\/libexec\/pluton\/verify-database-recovery-clients\.mjs(?:\s|$)/.test(
+        line,
+      )
+    )
+      return user;
+  }
+}
+test("native verification remains non-root even when RUN first checks Node version", () => {
+  const command =
+    "node --loader ./backend/loader.mjs /usr/local/libexec/pluton/verify-database-recovery-clients.mjs";
+  assert.equal(
+    verificationUser("USER pluton\nRUN test value = value \\\n  && " + command),
+    "pluton",
+  );
+  assert.equal(
+    verificationUser("USER pluton\nUSER root\nRUN " + command),
+    "root",
+  );
+  assert.equal(verificationUser("USER pluton\nRUN echo " + command), undefined);
+});
 test("source runtime installs stable, security-floored native clients, never database servers or mysql-client", () => {
   assert(runtime);
   const packages = /RUN apk add --no-cache ([\s\S]*?)&&/.exec(runtime)[1];
@@ -17,7 +44,7 @@ test("source runtime installs stable, security-floored native clients, never dat
     ),
   );
   assert(!packages.includes("edge"));
-  assert(runtime.indexOf("USER pluton") < runtime.indexOf("RUN node --loader"));
+  assert.equal(verificationUser(runtime), "pluton");
   assert.match(
     runtime,
     /addgroup -S -g 10001 pluton.*adduser -S -u 10001 -G pluton pluton/,

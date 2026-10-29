@@ -5,6 +5,7 @@ import { Settings, NewSettings, settings } from '../db/schema/settings';
 import { AppSettings, INTEGRATIONS_AVAILABLE, IntegrationTypes } from '../types/settings';
 import { NotificationChannelResolver } from '../notifications/channels/NotificationChannelResolver';
 import { INotificationChannelResolver } from '../types/notifications';
+import { assertExportSettingsScope } from '../utils/managedExport/NamespaceReservation';
 
 /**
  * SettingsStore is a class for managing application settings records in the database.
@@ -41,6 +42,14 @@ export class SettingsStore {
 	}
 
 	async create(settingsData: NewSettings): Promise<Settings | null> {
+		if (this.db.$client && this.db.transaction)
+			return this.db.transaction(
+				tx => {
+					assertExportSettingsScope(this.db.$client, settingsData.settings);
+					return tx.insert(settings).values(settingsData).returning().all()[0] || null;
+				},
+				{ behavior: 'immediate' }
+			);
 		const result = await this.db.insert(settings).values(settingsData).returning();
 		return result[0] || null;
 	}
@@ -56,6 +65,21 @@ export class SettingsStore {
 				);
 			updates.integration = this.setIntegrationConnectedStatus(updates.integration);
 		}
+		if (this.db.$client && this.db.transaction)
+			return this.db.transaction(
+				tx => {
+					assertExportSettingsScope(this.db.$client, updates);
+					return (
+						tx
+							.update(settings)
+							.set({ settings: updates, updatedAt: sql`(unixepoch())` })
+							.where(eq(settings.id, id))
+							.returning()
+							.all()[0] || null
+					);
+				},
+				{ behavior: 'immediate' }
+			);
 		const result = await this.db
 			.update(settings)
 			.set({ settings: updates, updatedAt: sql`(unixepoch())` })

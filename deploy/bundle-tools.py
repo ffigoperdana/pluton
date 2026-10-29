@@ -17,7 +17,8 @@ SPEC = importlib.util.spec_from_file_location("compose_tools", ROOT / "compose-t
 POLICY = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(POLICY)
 BUNDLE = ("install.sh", "deploy.sh", "rollback.sh", "status.sh", "lib.sh", "compose.yml", "compose-tools.py",
-          "healthcheck.cjs", "upgrade-host.sh", "bundle-tools.py", ".env.example")
+          "healthcheck.cjs", "upgrade-host.sh", "bundle-tools.py", ".env.example",
+          "compose.managed-export-ca.yml", "approve-managed-export-ca.py")
 # Exact public, uncustomized templates from cf36856 and cd18739. Unknown local
 # bases require a separately approved hash AND a mount-preserving reconciliation.
 PREVIOUS_BASES = {"c15bbca998e6ecd28d720c6332a5932dd59ebcfd16d1002f158250e1f10df5a1",

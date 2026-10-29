@@ -52,6 +52,7 @@ describe('StorageService', () => {
 
 		// Instantiate mocks
 		mockStorageStore = new StorageStore(null as any) as jest.Mocked<StorageStore>;
+		mockStorageStore.beginExportProtectedEdit.mockReturnValue(() => {});
 		mockPlanStore = new PlanStore(null as any) as jest.Mocked<PlanStore>;
 		mockSettingsStore = new SettingsStore(null as any) as jest.Mocked<SettingsStore>;
 		mockStorageManager = new BaseStorageManager() as jest.Mocked<BaseStorageManager>;
@@ -213,6 +214,25 @@ describe('StorageService', () => {
 				'Remote connection failed'
 			);
 			expect(mockStorageStore.create).not.toHaveBeenCalled();
+		});
+
+		it('keeps a durable configuration fence when remote publication or database publication is uncertain', async () => {
+			const release = jest.fn();
+			mockStorageStore.beginExportProtectedEdit.mockReturnValue(release);
+			mockStorageManager.createRemote.mockResolvedValue({
+				success: false,
+				result: 'Synthetic remote failure',
+			});
+			await expect(storageService.createStorage(storagePayload)).rejects.toThrow(
+				'Synthetic remote failure'
+			);
+			expect(release).not.toHaveBeenCalled();
+			mockStorageManager.createRemote.mockResolvedValue({ success: true, result: 'OK' });
+			mockStorageStore.create.mockResolvedValue(null);
+			await expect(storageService.createStorage(storagePayload)).rejects.toThrow(
+				'Storage publication is uncertain'
+			);
+			expect(release).not.toHaveBeenCalled();
 		});
 
 		it('should throw an AppError if payload validation fails', async () => {

@@ -266,6 +266,22 @@ export class StorageService {
 				if (existing?.some(storage => storage.name.toLowerCase() === storageName.toLowerCase()))
 					throw new AppError(409, 'A storage with this remote name already exists.');
 			}
+			const cryptr = new Cryptr(configService.config.SECRET as string);
+			const credsObj = credentials as Record<string, string>;
+			const encryptedCreds = Object.fromEntries(
+				Object.entries(credsObj).map(([key, value]) => [key, cryptr.encrypt(value)])
+			);
+			const storageId = generateUID();
+			const completeExportCreate = this.storageStore.beginExportProtectedEdit(storageId, {
+				id: storageId,
+				name: storageName,
+				type: type as string,
+				credentials: encryptedCreds,
+				settings: settings || {},
+				defaultPath: credsObj?.bucket || '/',
+			} as Storage);
+			// The durable edit journal spans remote mutation and DB publication.
+			// A failed remote call remains uncertain; never silently release it.
 			// Create the remote storage with rclone
 			const remoteResult = await this.storageManager.createRemote(
 				type as string,
@@ -278,16 +294,7 @@ export class StorageService {
 				throw new AppError(500, remoteResult.result || 'Error creating remote storage.');
 			}
 
-			// Encrypt Storage Credentials
-			const cryptr = new Cryptr(configService.config.SECRET as string);
-			const credsObj = credentials as Record<string, string>;
-			const encryptedCreds: Record<string, string> = {};
-			Object.keys(credsObj).forEach(k => {
-				encryptedCreds[k] = cryptr.encrypt(credsObj[k]);
-			});
-
 			// Create the storage in the database
-			const storageId = generateUID();
 			const newStorage = await this.storageStore.create({
 				id: storageId,
 				name: storageName,
@@ -298,6 +305,12 @@ export class StorageService {
 				authType: authType as string,
 				tags: tags as string[],
 			});
+			if (!newStorage)
+				throw new AppError(
+					500,
+					'Storage publication is uncertain; protected configuration must be reconciled.'
+				);
+			completeExportCreate();
 			return newStorage ? publicStorage(newStorage) : null;
 		} catch (error: any) {
 			if (error instanceof AppError) {
@@ -311,6 +324,7 @@ export class StorageService {
 		id: string,
 		storagePayload: Partial<Storage>
 	): Promise<{ storage: Storage | null; devicesUpdated: Record<string, any> }> {
+		let completeExportEdit: (() => void) | undefined;
 		try {
 			const existingStorage = await this.storageStore.getById(id);
 			if (!existingStorage) {
@@ -357,6 +371,11 @@ export class StorageService {
 				settings: settings || existingStorage.settings,
 				credentials: nextCredentials,
 			});
+			completeExportEdit = this.storageStore.beginExportProtectedEdit(id, {
+				...existingStorage,
+				settings: settings || existingStorage.settings,
+				credentials: nextCredentials,
+			});
 			// Update remote settings of all the sources first
 			const devicesWithStorage = (await this.resolveStorageSources(existingStorage.id)).filter(
 				sourceId => !isHcpMode(settings) || sourceId === 'main'
@@ -390,9 +409,10 @@ export class StorageService {
 
 				const deviceUpdatePromises = devicesWithStorage.map(async sourceId => {
 					const strategy = this.getSystemStrategy(sourceId);
-					const protectedType = isHcpMode(settings) || isHcpMode(existingStorage.settings)
-						? { _pluton_storage_type: existingStorage.type }
-						: {};
+					const protectedType =
+						isHcpMode(settings) || isHcpMode(existingStorage.settings)
+							? { _pluton_storage_type: existingStorage.type }
+							: {};
 					const updateRes = await strategy.updateRemoteStorage(existingStorage.name, {
 						new: { ...settings, ...(credsDifferent ? credentials : {}), ...protectedType },
 						old: {
@@ -422,6 +442,12 @@ export class StorageService {
 				credentials: encryptedCreds,
 				tags: tags as string[],
 			});
+			if (!updatedStorage)
+				throw new AppError(
+					500,
+					'Storage publication is uncertain; protected configuration must be reconciled.'
+				);
+			completeExportEdit();
 
 			return {
 				storage: updatedStorage ? publicStorage(updatedStorage) : null,

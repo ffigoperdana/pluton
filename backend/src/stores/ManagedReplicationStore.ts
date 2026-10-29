@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { AppError } from '../utils/AppError';
 import { assertReplicaNotPlanOwned } from '../utils/managedReplicationPolicy';
+import { assertExportRepositoryScope } from '../utils/managedExport/NamespaceReservation';
 
 export type ManagedReplicationStatus =
 	| 'pending'
@@ -135,7 +136,15 @@ export class ManagedReplicationStore {
 	reserveDestination(binding: DestinationBinding): ManagedReplicationDestination {
 		return this.sqlite
 			.transaction(() => {
-				assertReplicaNotPlanOwned(this.sqlite, { planId: binding.planId, authority: binding.destinationAuthority, prefix: binding.destinationPrefix });
+				assertReplicaNotPlanOwned(this.sqlite, {
+					planId: binding.planId,
+					authority: binding.destinationAuthority,
+					prefix: binding.destinationPrefix,
+				});
+				assertExportRepositoryScope(this.sqlite, {
+					authority: binding.destinationAuthority,
+					prefix: binding.destinationPrefix,
+				});
 				const old = this.getDestination(binding.destinationFingerprint);
 				if (old) {
 					if (

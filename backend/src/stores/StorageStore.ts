@@ -7,16 +7,26 @@ import { PlanChildItem, PlanBackupSettings, ReplicationPlanItem } from '../types
 import { AppError } from '../utils/AppError';
 import { canonicalS3RepositoryIdentity } from '../utils/storageSecurity';
 import { assertStorageUpdateReplicaIsolation } from '../utils/managedReplicationPolicy';
+import {
+	assertExportStorageUpdate,
+	beginExportStorageEdit,
+	assertExportStorageCreation,
+	exportNamespacePolicyInitialized,
+} from '../utils/managedExport/NamespaceReservation';
 
 /**
  * StorageStore is a class for managing storage records in the database.
  */
 export class StorageStore {
 	constructor(private db: DatabaseType) {}
+	beginExportProtectedEdit(id: string, next: Storage): () => void {
+		return beginExportStorageEdit(this.db.$client, id, next);
+	}
 
 	/** Check before publishing a remote configuration; database triggers also guard races. */
 	assertManagedReplicationStorageEditable(storageId: string, next?: Storage): void {
 		const sqlite = this.db.$client;
+		if (next) assertExportStorageUpdate(sqlite, storageId, next);
 		if (
 			!sqlite
 				.prepare(
@@ -280,18 +290,34 @@ export class StorageStore {
 	}
 
 	async create(storageData: NewStorage): Promise<Storage | null> {
+		if (exportNamespacePolicyInitialized(this.db.$client))
+			return this.db.transaction(
+				tx => {
+					assertExportStorageCreation(this.db.$client, storageData as Storage);
+					return tx.insert(storages).values(storageData).returning().all()[0] || null;
+				},
+				{ behavior: 'immediate' }
+			);
 		const result = await this.db.insert(storages).values(storageData).returning();
 		return result[0] || null;
 	}
 
 	async update(id: string, updates: Partial<NewStorage>): Promise<Storage | null> {
-		return this.db.transaction(tx => {
-			const next = assertStorageUpdateReplicaIsolation(this.db.$client, id, updates);
-			if (next) this.assertManagedReplicationStorageEditable(id, next);
-			const result = tx.update(storages).set({ ...updates, updatedAt: sql`(unixepoch())` })
-				.where(eq(storages.id, id)).returning().all();
-			return result[0] || null;
-		}, { behavior: 'immediate' });
+		return this.db.transaction(
+			tx => {
+				assertExportStorageUpdate(this.db.$client, id, updates);
+				const next = assertStorageUpdateReplicaIsolation(this.db.$client, id, updates);
+				if (next) this.assertManagedReplicationStorageEditable(id, next);
+				const result = tx
+					.update(storages)
+					.set({ ...updates, updatedAt: sql`(unixepoch())` })
+					.where(eq(storages.id, id))
+					.returning()
+					.all();
+				return result[0] || null;
+			},
+			{ behavior: 'immediate' }
+		);
 	}
 
 	async delete(id: string): Promise<boolean> {

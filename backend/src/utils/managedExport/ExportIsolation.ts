@@ -1,14 +1,22 @@
 import type { Storage } from '../../db/schema/storages';
 import { decryptStorageCredentials, isS3Storage } from '../storageSecurity';
 import { TemporaryExportError, type ExportConfig } from './ExportPolicy';
+import type Database from 'better-sqlite3';
+import { reserveExportNamespace } from './NamespaceReservation';
 
 /** Conservative bucket AND credential isolation, even across endpoint aliases.
  * No export operation reads, provisions or changes a registered repository. */
 export function assertExportIsolation(
 	config: ExportConfig,
-	storages: Pick<Storage, 'type' | 'credentials' | 'settings'>[]
+	storages: Pick<Storage, 'type' | 'credentials' | 'settings'>[],
+	database?: Database.Database
 ) {
 	try {
+		if (config.allowSharedNamespace) {
+			if (!database) throw new Error();
+			reserveExportNamespace(database, config);
+			return;
+		}
 		for (const storage of storages) {
 			if (!isS3Storage(storage.type)) continue;
 			const credentials = decryptStorageCredentials(storage);

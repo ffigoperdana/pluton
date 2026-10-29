@@ -44,8 +44,13 @@ import { ManagedExportStore } from './stores/ManagedExportStore';
 import { ManagedExportService } from './services/ManagedExportService';
 import { ManagedExportController } from './controllers/ManagedExportController';
 import { createManagedExportRouter } from './routes/managedExports';
+import { createManagedExportPreflightRouter } from './routes/managedExportPreflight';
 import { exportConfiguration } from './utils/managedExport/ExportPolicy';
 import { assertExportIsolation } from './utils/managedExport/ExportIsolation';
+import {
+	initializeExportNamespaceReservations,
+	configureExportNamespaceSecurity,
+} from './utils/managedExport/NamespaceReservation';
 import { appPaths } from './utils/AppPaths';
 import { BaseSnapshotManager } from './managers/BaseSnapshotManager';
 import { RestoreService } from './services/RestoreService';
@@ -101,7 +106,13 @@ import { parseWebOrigins } from './utils/webOrigins';
 import { webAccess, originAwareSession, sameOriginCors } from './middlewares/webAccess';
 import { ManagedReplicationStore } from './stores/ManagedReplicationStore';
 import { ManagedReplicationService } from './services/ManagedReplicationService';
-import { configureProtectedStorageDatabase, s3RepositoryScope } from './utils/storageSecurity';
+import {
+	configureProtectedStorageDatabase,
+	s3RepositoryScope,
+	canonicalS3Location,
+	decryptStorageCredentials,
+	isS3Storage,
+} from './utils/storageSecurity';
 import { configureReplicaScopeResolver } from './utils/managedReplicationPolicy';
 import { McpStore } from './mcp/McpStore';
 import { OperationalReadService } from './mcp/OperationalReadService';
@@ -123,6 +134,21 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	// Explicit startup ownership, including compiled ESM: no lazy CommonJS DB loading.
 	configureProtectedStorageDatabase(sqlite);
 	configureReplicaScopeResolver(s3RepositoryScope);
+	configureExportNamespaceSecurity({
+		canonicalS3Location,
+		s3RepositoryScope,
+		decryptStorageCredentials,
+		isS3Storage,
+	});
+	if (
+		process.env.MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE === 'true' ||
+		sqlite
+			.prepare(
+				"SELECT 1 FROM sqlite_master WHERE type='table' AND name='managed_export_namespace_reservations'"
+			)
+			.get()
+	)
+		initializeExportNamespaceReservations(sqlite);
 
 	// Stores
 	const planStore = new PlanStore(db);
@@ -181,7 +207,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 				new ManagedExportStore(exportState),
 				remoteRecoveryService,
 				exportConfiguration,
-				async config => assertExportIsolation(config, (await storageStore.getAll()) || [])
+				async config => assertExportIsolation(config, (await storageStore.getAll()) || [], sqlite)
 			);
 		} catch {
 			planLogger('temporary-export').warn(
@@ -422,6 +448,10 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	app.use(
 		'/api/backups',
 		createManagedExportRouter(new ManagedExportController(managedExportService))
+	);
+	app.use(
+		'/api/managed-exports',
+		createManagedExportPreflightRouter(new ManagedExportController(managedExportService))
 	);
 	app.use('/api/devices', createDeviceRouter(deviceController));
 	app.use('/api/storages', createStorageRouter(storageController));

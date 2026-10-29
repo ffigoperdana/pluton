@@ -5,7 +5,10 @@ import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { configService } from '../services/ConfigService';
 import { ManagedExportService } from '../services/ManagedExportService';
-import { TemporaryExportError } from '../utils/managedExport/ExportPolicy';
+import {
+	TemporaryExportError,
+	exportConfigurationStatus,
+} from '../utils/managedExport/ExportPolicy';
 import { AppError } from '../utils/AppError';
 import { observeTransfer, transferReason } from '../utils/managedExport/TransferTelemetry';
 
@@ -32,6 +35,58 @@ export class ManagedExportController {
 		if (Object.keys(req.query).length)
 			throw new AppError(400, 'Export accepts no query overrides.');
 		return { owner: exportOwner(req, res), backup: req.params.id, id: req.params.exportId };
+	}
+	private operator(req: Request, res: Response) {
+		if (Object.keys(req.query).length || Object.keys(req.body || {}).length)
+			throw new AppError(400, 'Preflight accepts no configuration overrides.');
+		res.setHeader('Cache-Control', 'private, no-store');
+		return exportOwner(req, res);
+	}
+	async configuration(req: Request, res: Response) {
+		try {
+			this.operator(req, res);
+			res.json({ success: true, result: exportConfigurationStatus() });
+		} catch (error) {
+			this.failure(error, res);
+		}
+	}
+	async preflight(req: Request, res: Response) {
+		try {
+			const owner = this.operator(req, res);
+			res.status(202).json({ success: true, result: await this.service.preflight(owner) });
+		} catch (error) {
+			this.failure(error, res);
+		}
+	}
+	async inventory(req: Request, res: Response) {
+		try {
+			const owner = this.operator(req, res);
+			res.status(202).json({ success: true, result: await this.service.preflight(owner, true) });
+		} catch (error) {
+			this.failure(error, res);
+		}
+	}
+	async preflightStatus(req: Request, res: Response) {
+		try {
+			const owner = this.operator(req, res);
+			res.json({
+				success: true,
+				result: await this.service.preflightStatus(owner, req.params.preflightId),
+			});
+		} catch (error) {
+			this.failure(error, res);
+		}
+	}
+	async cancelPreflight(req: Request, res: Response) {
+		try {
+			const owner = this.operator(req, res);
+			res.json({
+				success: true,
+				result: await this.service.cancelPreflight(owner, req.params.preflightId),
+			});
+		} catch (error) {
+			this.failure(error, res);
+		}
 	}
 	private failure(error: unknown, res: Response) {
 		if (res.headersSent || res.destroyed) {
