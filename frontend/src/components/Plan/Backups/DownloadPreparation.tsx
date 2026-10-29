@@ -5,6 +5,7 @@ import styles from './DownloadPreparation.module.scss';
 import { API_URL } from '../../../utils/constants';
 import { startNativeBackupDownload } from '../../../utils/backupDownload';
 import { preparationActive, preparationRequest, type DownloadPreparation as Job, type DownloadMode } from '../../../utils/downloadPreparation';
+import ReliableDownload from './ReliableDownload';
 
 const labels: Record<Job['state'], string> = {
    queued: 'Queued',
@@ -27,6 +28,7 @@ const entryLabels: Record<string, string> = {
 export default function DownloadPreparation({ backupId, close }: { backupId: string; close: () => void }) {
    const [job, setJob] = useState<Job>();
    const [mode, setMode] = useState<DownloadMode>('full');
+   const [delivery, setDelivery] = useState<'standard' | 'reliable'>('standard');
    const [error, setError] = useState('');
    const [retryAt, setRetryAt] = useState(0);
    const [retry, setRetry] = useState(0);
@@ -41,6 +43,7 @@ export default function DownloadPreparation({ backupId, close }: { backupId: str
       return () => clearInterval(timer);
    }, []);
    useEffect(() => {
+      if (delivery !== 'standard') return;
       const controller = new AbortController();
       let timer: ReturnType<typeof setTimeout>;
       let currentId = (jobRef.current?.exportMode || 'full') === mode ? jobRef.current?.id : undefined;
@@ -70,7 +73,7 @@ export default function DownloadPreparation({ backupId, close }: { backupId: str
          controller.abort();
          clearTimeout(timer);
       };
-   }, [backupId, retry, mode]);
+   }, [backupId, retry, mode, delivery]);
    const cancel = async () => {
       if (!job || busy) return;
       setBusy(true);
@@ -107,7 +110,40 @@ export default function DownloadPreparation({ backupId, close }: { backupId: str
    const elapsed = Math.floor(((job?.elapsedMs || 0) + (job && preparationActive(job) ? Math.max(0, clock - observedAt) : 0)) / 1000);
    return (
       <Modal title="Preparing Snapshot" closeModal={close} width="520px" stableLayout>
-         <fieldset disabled={busy} className={styles.modes}>
+         <fieldset className={styles.modes} disabled={busy}>
+            <legend>Delivery method</legend>
+            <label>
+               <input
+                  type="radio"
+                  name="delivery-method"
+                  checked={delivery === 'standard'}
+                  onChange={() => {
+                     setBusy(false);
+                     setDelivery('standard');
+                  }}
+               />{' '}
+               Standard Download
+            </label>
+            <p>Stream directly from the snapshot. An interrupted download starts again.</p>
+            <label>
+               <input
+                  type="radio"
+                  name="delivery-method"
+                  checked={delivery === 'reliable'}
+                  onChange={() =>
+                     void (async () => {
+                        if (job && preparationActive(job)) await preparationRequest(API_URL, backupId, job.id, true, undefined, mode);
+                        setJob(undefined);
+                        setBusy(false);
+                        setDelivery('reliable');
+                     })().catch(() => setError('Cancellation was not confirmed.'))
+                  }
+               />{' '}
+               Reliable Download
+            </label>
+            <p>Prepare a private temporary object for verified resume. Requires separate export storage.</p>
+         </fieldset>
+         <fieldset disabled={delivery === 'standard' && busy} className={styles.modes}>
             <legend>Download mode</legend>
             <label>
                <input type="radio" name="export-mode" checked={mode === 'full'} onChange={() => void chooseMode('full')} /> Full Download
@@ -127,80 +163,87 @@ export default function DownloadPreparation({ backupId, close }: { backupId: str
                application completely.
             </p>
          )}
-         <div role="status" aria-live="polite">
-            <p>{error ? 'Preparation status unavailable' : job ? labels[job.state] : 'Requesting preparation…'}</p>
-            {job && (
+         {delivery === 'reliable' ? (
+            <ReliableDownload backupId={backupId} mode={mode} close={close} />
+         ) : (
+            <>
+               <div role="status" aria-live="polite">
+                  <p>{error ? 'Preparation status unavailable' : job ? labels[job.state] : 'Requesting preparation…'}</p>
+                  {job && (
+                     <p>
+                        Elapsed: {elapsed}s · Indexed entries: {job.indexedEntries.toLocaleString()}
+                        {job.state === 'ready' ? ` · Validated entries: ${job.validatedEntries.toLocaleString()}` : ''}
+                     </p>
+                  )}
+               </div>
+               {job?.state === 'ready' && job.export && (
+                  <div>
+                     <p>
+                        Included entries: {job.export.includedEntries.toLocaleString()} · Excluded entries:{' '}
+                        {job.export.excludedEntries.toLocaleString()}
+                     </p>
+                     <p>
+                        Included:{' '}
+                        {Object.entries(job.export.includedByType)
+                           .map(([type, n]) => `${entryLabels[type]}: ${n.toLocaleString()}`)
+                           .join(' · ') || 'None'}
+                        <br />
+                        Excluded:{' '}
+                        {Object.entries(job.export.excludedByType)
+                           .map(([type, n]) => `${entryLabels[type]}: ${n.toLocaleString()}`)
+                           .join(' · ') || 'None'}
+                     </p>
+                     <a
+                        href={`${API_URL}/backups/${encodeURIComponent(backupId)}/download-preparations/${encodeURIComponent(job.id)}/manifest${mode === 'regular-files' ? '?exportMode=regular-files' : ''}`}
+                        download
+                     >
+                        Download export manifest
+                     </a>
+                  </div>
+               )}
+               {job?.error && (
+                  <p role="alert" className={classes.error}>
+                     {job.error}
+                  </p>
+               )}
+               {error && (
+                  <p role="alert" className={classes.error}>
+                     {error}
+                  </p>
+               )}
                <p>
-                  Elapsed: {elapsed}s · Indexed entries: {job.indexedEntries.toLocaleString()}
-                  {job.state === 'ready' ? ` · Validated entries: ${job.validatedEntries.toLocaleString()}` : ''}
+                  Preparation verifies the selected snapshot archive. Your browser download manager reports transfer progress and completion. Closing
+                  this panel leaves preparation running until it finishes or expires.
                </p>
-            )}
-         </div>
-         {job?.state === 'ready' && job.export && (
-            <div>
-               <p>
-                  Included entries: {job.export.includedEntries.toLocaleString()} · Excluded entries: {job.export.excludedEntries.toLocaleString()}
-               </p>
-               <p>
-                  Included:{' '}
-                  {Object.entries(job.export.includedByType)
-                     .map(([type, n]) => `${entryLabels[type]}: ${n.toLocaleString()}`)
-                     .join(' · ') || 'None'}
-                  <br />
-                  Excluded:{' '}
-                  {Object.entries(job.export.excludedByType)
-                     .map(([type, n]) => `${entryLabels[type]}: ${n.toLocaleString()}`)
-                     .join(' · ') || 'None'}
-               </p>
-               <a
-                  href={`${API_URL}/backups/${encodeURIComponent(backupId)}/download-preparations/${encodeURIComponent(job.id)}/manifest${mode === 'regular-files' ? '?exportMode=regular-files' : ''}`}
-                  download
-               >
-                  Download export manifest
-               </a>
-            </div>
+               {started && <p>Download requested. Check your browser downloads for its result.</p>}
+               <div className={classes.actions}>
+                  <button type="button" onClick={close}>
+                     Close
+                  </button>
+                  {job && preparationActive(job) && (
+                     <button type="button" disabled={busy} onClick={() => void cancel()}>
+                        Cancel preparation
+                     </button>
+                  )}
+                  {(error || !job || (job.state !== 'ready' && !preparationActive(job))) && (
+                     <button type="button" disabled={busy || clock < retryAt} onClick={restart}>
+                        {clock < retryAt ? `Retry in ${Math.ceil((retryAt - clock) / 1000)}s` : 'Retry preparation'}
+                     </button>
+                  )}
+                  {job?.state === 'ready' && !error && (
+                     <button
+                        type="button"
+                        onClick={() => {
+                           startNativeBackupDownload(API_URL, backupId, job.id, mode);
+                           setStarted(true);
+                        }}
+                     >
+                        Download TAR
+                     </button>
+                  )}
+               </div>
+            </>
          )}
-         {job?.error && (
-            <p role="alert" className={classes.error}>
-               {job.error}
-            </p>
-         )}
-         {error && (
-            <p role="alert" className={classes.error}>
-               {error}
-            </p>
-         )}
-         <p>
-            Preparation verifies the selected snapshot archive. Your browser download manager reports transfer progress and completion. Closing this
-            panel leaves preparation running until it finishes or expires.
-         </p>
-         {started && <p>Download requested. Check your browser downloads for its result.</p>}
-         <div className={classes.actions}>
-            <button type="button" onClick={close}>
-               Close
-            </button>
-            {job && preparationActive(job) && (
-               <button type="button" disabled={busy} onClick={() => void cancel()}>
-                  Cancel preparation
-               </button>
-            )}
-            {(error || !job || (job.state !== 'ready' && !preparationActive(job))) && (
-               <button type="button" disabled={busy || clock < retryAt} onClick={restart}>
-                  {clock < retryAt ? `Retry in ${Math.ceil((retryAt - clock) / 1000)}s` : 'Retry preparation'}
-               </button>
-            )}
-            {job?.state === 'ready' && !error && (
-               <button
-                  type="button"
-                  onClick={() => {
-                     startNativeBackupDownload(API_URL, backupId, job.id, mode);
-                     setStarted(true);
-                  }}
-               >
-                  Download TAR
-               </button>
-            )}
-         </div>
       </Modal>
    );
 }

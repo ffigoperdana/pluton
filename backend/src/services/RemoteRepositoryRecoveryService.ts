@@ -31,6 +31,11 @@ import {
 	type ManagedSnapshotNode,
 } from '../utils/restic/ManagedSftpRepositorySession';
 import { configService } from './ConfigService';
+import {
+	bindingDigest,
+	TemporaryExportError,
+	type ExportBinding,
+} from '../utils/managedExport/ExportPolicy';
 import { RemoteBackupService } from './RemoteBackupService';
 import {
 	checkRecoveryCancellation,
@@ -593,6 +598,77 @@ export class RemoteRepositoryRecoveryService {
 					await pipeline(Readable.from(proof.manifestLines()), destination, { end: false, signal });
 				}),
 		};
+	}
+
+	/** Durable export consumers get the same verified archive contract without the
+	 * browser preparation's short TTL. The index remains leased until consumption. */
+	async exportBindingFor(backupId: string, mode: ManagedExportMode): Promise<ExportBinding> {
+		const context = await this.context(backupId);
+		const backup = await this.backups.getById(backupId);
+		return {
+			backupId,
+			planId: context.planId,
+			sourceId: backup!.sourceId,
+			repositoryId: context.repositoryId,
+			snapshotId: context.snapshotId,
+			mode: managedExportMode(mode),
+		};
+	}
+	async withVerifiedExport<T>(
+		binding: ExportBinding,
+		signal: AbortSignal,
+		consume: (archive: ManagedArchiveDownload) => Promise<T>
+	): Promise<T> {
+		if (
+			bindingDigest(await this.exportBindingFor(binding.backupId, binding.mode)) !==
+			bindingDigest(binding)
+		)
+			throw new TemporaryExportError('binding-changed');
+		const context = await this.context(binding.backupId);
+		if (
+			context.backupId !== binding.backupId ||
+			context.planId !== binding.planId ||
+			context.repositoryId !== binding.repositoryId ||
+			context.snapshotId !== binding.snapshotId
+		)
+			throw new TemporaryExportError('binding-changed');
+		// Each invocation belongs to an explicitly admitted POST. Match Standard
+		// Download's retry semantics without retrying an archive in the background.
+		await this.indexes.retry(this.indexKey(context));
+		return this.withIndex(
+			context,
+			async index => {
+				index.assertExportEntries(binding.mode);
+				const proof = index.exportProof(this.exportBinding(context), binding.mode);
+				const summary = await this.sessions.withSession(
+					context.access,
+					async session => {
+						await this.verifySnapshot(context, session);
+						return prepareManagedExport(index, session, proof, signal);
+					},
+					signal
+				);
+				await this.assertCurrentContext(context);
+				return consume({
+					fileName: `backup-${binding.backupId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80)}${binding.mode === 'regular-files' ? '-regular-files' : ''}.tar`,
+					export: summary,
+					streamTo: async (destination, transferSignal, ready) => {
+						await this.sessions.withSession(
+							context.access,
+							async session => {
+								await this.verifySnapshot(context, session);
+								await this.assertCurrentContext(context);
+								transferSignal.throwIfAborted();
+								ready();
+								await streamManagedExport(index, session, proof, destination, transferSignal);
+							},
+							transferSignal
+						);
+					},
+				});
+			},
+			signal
+		);
 	}
 
 	async preview(backupId: string, config: RestoreConfig, planId?: string) {

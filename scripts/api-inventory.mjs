@@ -103,7 +103,7 @@ export function inventory() {
     walk(ast, (node) => {
       if (
         !ts.isCallExpression(node) ||
-        !/^router\.(get|post|put|delete|patch|all)$/.test(text(node.expression))
+        !/^router\.(get|head|post|put|delete|patch|all)$/.test(text(node.expression))
       )
         return;
       const method = text(node.expression).split(".")[1].toUpperCase();
@@ -159,7 +159,7 @@ export function inventory() {
         const mode =
           /delete|prune|repair|unlock/.test(full) || method === "DELETE"
             ? "destructive/privileged"
-            : method === "GET"
+            : ["GET", "HEAD"].includes(method)
               ? "read (may perform IO)"
               : "mutating/privileged";
         const references = tests

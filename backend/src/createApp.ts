@@ -1,4 +1,5 @@
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import express, { type Express } from 'express';
 import { registerSpaFallback } from './utils/spaFallback';
@@ -39,6 +40,13 @@ import { BaseBackupManager } from './managers';
 import { BackupEventListener } from './services/listeners/BackupEventListener';
 import { ReplicationEventListener } from './services/listeners/ReplicationEventListener';
 import { BackupService } from './services/BackupServices';
+import { ManagedExportStore } from './stores/ManagedExportStore';
+import { ManagedExportService } from './services/ManagedExportService';
+import { ManagedExportController } from './controllers/ManagedExportController';
+import { createManagedExportRouter } from './routes/managedExports';
+import { exportConfiguration } from './utils/managedExport/ExportPolicy';
+import { assertExportIsolation } from './utils/managedExport/ExportIsolation';
+import { appPaths } from './utils/AppPaths';
 import { BaseSnapshotManager } from './managers/BaseSnapshotManager';
 import { RestoreService } from './services/RestoreService';
 import { RemoteRepositoryRecoveryService } from './services/RemoteRepositoryRecoveryService';
@@ -55,7 +63,7 @@ import { SystemTaskManager } from './jobs/SystemTaskManager';
 import { SYSTEM_JOBS } from './jobs/systemJobs';
 import { jobProcessor } from './jobs/JobProcessor';
 import { SelfBackupTask } from './jobs/tasks/SelfBackupTask';
-import { initializeLogger } from './utils/logger';
+import { initializeLogger, planLogger } from './utils/logger';
 import { configService } from './services/ConfigService';
 import { BaseRestoreManager } from './managers/BaseRestoreManager';
 import { parseTrustProxy } from './utils/helpers';
@@ -165,6 +173,23 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		remoteBackupService,
 		agentStore
 	);
+	let managedExportService: ManagedExportService | undefined;
+	const exportState = path.join(appPaths.getDataDir(), 'temporary-exports', 'jobs.sqlite');
+	if (process.env.MANAGED_EXPORT_ENABLED === 'true' || fs.existsSync(exportState)) {
+		try {
+			managedExportService = new ManagedExportService(
+				new ManagedExportStore(exportState),
+				remoteRecoveryService,
+				exportConfiguration,
+				async config => assertExportIsolation(config, (await storageStore.getAll()) || [])
+			);
+		} catch {
+			planLogger('temporary-export').warn(
+				{ event: 'temporary_exports_unavailable', reason: 'metadata-unavailable' },
+				'Temporary export metadata could not be opened.'
+			);
+		}
+	}
 	const recoveryTestStore = new RecoveryTestStore(db, configService.config.SECRET);
 	const automaticLifecycle =
 		process.env.PLUTON_AUTOMATIC_RECOVERY === 'enabled'
@@ -394,6 +419,10 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	app.use('/api/user', createUserRouter(userController, authLimiter));
 	app.use('/api/plans', createPlanRouter(planController));
 	app.use('/api/backups', createBackupRouter(backupController));
+	app.use(
+		'/api/backups',
+		createManagedExportRouter(new ManagedExportController(managedExportService))
+	);
 	app.use('/api/devices', createDeviceRouter(deviceController));
 	app.use('/api/storages', createStorageRouter(storageController));
 	app.use('/api/restores', createRestoreRouter(restoreController));
@@ -424,6 +453,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	await recoveryTestService.recoverInterrupted();
 	await databaseRestoreService.recoverInterrupted();
 	await managedReplicationService.recoverInterrupted();
+	await managedExportService?.recoverInterrupted();
 
 	// Reconcile CronManager schedules with the database (fixes drift on restart)
 	try {
@@ -453,6 +483,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 			// Durable executor/cleanup intent remains in SQLite. No raw provider error logging.
 		});
 		void managedReplicationService.tick().catch(() => {});
+		void managedExportService?.tick().catch(() => {});
 	}, 5000);
 	recoveryTick.unref();
 	// Reconcile missed dispatch from durable primary completion in bounded batches.
@@ -480,6 +511,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 			clearInterval(recoveryTick);
 			clearInterval(replicationReconcile);
 			await managedReplicationService.shutdown();
+			await managedExportService?.shutdown();
 			await recoveryTestService.shutdown();
 			await databaseRestoreService.shutdown();
 			await remoteRecoveryService.close();
