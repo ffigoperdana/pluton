@@ -6,6 +6,11 @@ import { z } from 'zod';
 import { managedSnapshotPath } from '../utils/managedSnapshotPath';
 import { SnapshotIndexError } from '../utils/restic/ManagedSnapshotIndex';
 import { ManagedRepositoryAccessError } from '../utils/restic/ManagedSftpRepositorySession';
+import {
+	managedExportMode,
+	ManagedExportError,
+	type ManagedExportMode,
+} from '../utils/restic/ManagedExportPolicy';
 
 const pageQuery = z.strictObject({
 	path: z.string().max(1025).optional(),
@@ -34,7 +39,7 @@ const pageQuery = z.strictObject({
 		.optional(),
 });
 const failureCode = (error: unknown) =>
-	error instanceof SnapshotIndexError
+	error instanceof SnapshotIndexError || error instanceof ManagedExportError
 		? { code: error.code, reason: error.reason }
 		: error instanceof ManagedRepositoryAccessError
 			? { code: error.code }
@@ -54,12 +59,19 @@ export class BackupController {
 
 		try {
 			this.validateDownloadRequest(req, true);
-			const downloadResult = req.query.preparationId
-				? await this.backupService.getBackupDownload(
-						req.params.id,
-						req.query.preparationId as string
-					)
-				: await this.backupService.getBackupDownload(req.params.id);
+			const downloadResult =
+				req.query.exportMode !== undefined
+					? await this.backupService.getBackupDownload(
+							req.params.id,
+							req.query.preparationId as string | undefined,
+							managedExportMode(req.query.exportMode)
+						)
+					: req.query.preparationId
+						? await this.backupService.getBackupDownload(
+								req.params.id,
+								req.query.preparationId as string
+							)
+						: await this.backupService.getBackupDownload(req.params.id);
 			if (typeof downloadResult.streamTo === 'function') {
 				const request = this.downloadRequest(req, res);
 				try {
@@ -121,12 +133,16 @@ export class BackupController {
 		try {
 			this.validateDownloadRequest(req);
 			const replicationId = req.query.replicationId as string | undefined;
-			const args: [string, string | undefined, AbortSignal, boolean?] = [
+			const args: [string, string | undefined, AbortSignal, boolean?, ManagedExportMode?] = [
 				req.params.id,
 				replicationId,
 				request.signal,
 			];
 			if (Object.keys(req.body || {}).length) args.push(true);
+			if (req.query.exportMode !== undefined) {
+				args[3] = Object.keys(req.body || {}).length > 0;
+				args[4] = managedExportMode(req.query.exportMode);
+			}
 			const downloadResult = await this.backupService.generateBackupDownload(...args);
 
 			if (downloadResult?.streaming === true && Object.keys(req.body || {}).length)
@@ -151,24 +167,64 @@ export class BackupController {
 
 	async downloadPreparation(req: Request, res: Response) {
 		try {
-			if (Object.keys(req.query).length || Object.keys(req.body || {}).length)
+			if (
+				Object.keys(req.query).some(key => key !== 'exportMode') ||
+				Object.keys(req.body || {}).length
+			)
 				throw new AppError(400, 'Preparation accepts no options.');
 			const result = await this.backupService.downloadPreparation(
 				req.params.id,
 				req.params.jobId,
-				req.method === 'DELETE'
+				req.method === 'DELETE',
+				managedExportMode(req.query.exportMode)
 			);
 			res.setHeader('Cache-Control', 'private, no-store');
 			if (result.retryAfterMs) res.setHeader('Retry-After', Math.ceil(result.retryAfterMs / 1000));
 			res.json({ success: true, result });
 		} catch (error) {
-			res
-				.status(error instanceof AppError ? error.statusCode : 500)
-				.json({
-					success: false,
-					error: error instanceof AppError ? error.message : 'Preparation status unavailable.',
-					...failureCode(error),
-				});
+			res.status(error instanceof AppError ? error.statusCode : 500).json({
+				success: false,
+				error: error instanceof AppError ? error.message : 'Preparation status unavailable.',
+				...failureCode(error),
+			});
+		}
+	}
+
+	async getExportManifest(req: Request, res: Response) {
+		const request = this.downloadRequest(req, res);
+		try {
+			if (
+				Object.keys(req.query).some(key => key !== 'exportMode') ||
+				Object.keys(req.body || {}).length
+			)
+				throw new AppError(400, 'Invalid export manifest request.');
+			const descriptor = await this.backupService.getExportManifest(
+				req.params.id,
+				req.params.jobId,
+				managedExportMode(req.query.exportMode)
+			);
+			await descriptor.streamTo(res, request.signal, () => {
+				res.setHeader('Content-Type', 'application/x-ndjson');
+				res.setHeader('Content-Disposition', `attachment; filename="${descriptor.fileName}"`);
+				res.setHeader('Cache-Control', 'private, no-store');
+			});
+			if (!res.destroyed) res.end();
+		} catch (error) {
+			if (res.headersSent || res.destroyed) {
+				if (!res.destroyed) res.destroy();
+			} else {
+				res.removeHeader('Content-Type');
+				res.removeHeader('Content-Disposition');
+				res
+					.status(error instanceof AppError ? error.statusCode : 500)
+					.json({
+						success: false,
+						error: error instanceof AppError ? error.message : 'Export manifest unavailable.',
+						...failureCode(error),
+					});
+			}
+		} finally {
+			request.cleanup();
 		}
 	}
 
@@ -176,9 +232,11 @@ export class BackupController {
 		// Keep the existing local file-selection shape, never accept client-owned
 		// credentials, repository URLs, storage overrides or process/config options.
 		const body = req.body;
+		managedExportMode(req.query.exportMode);
 		if (
 			Object.keys(req.query).some(
-				key => key !== 'replicationId' && !(download && key === 'preparationId')
+				key =>
+					key !== 'replicationId' && key !== 'exportMode' && !(download && key === 'preparationId')
 			) ||
 			(req.query.preparationId !== undefined &&
 				!z.string().uuid().safeParse(req.query.preparationId).success) ||

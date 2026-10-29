@@ -14,6 +14,11 @@ export function createBackupRouter(
 	router.post('/:id/action/cancel', authM, controller.cancelBackup.bind(controller));
 	router.get('/:id/action/download', authM, controller.getBackupDownload.bind(controller));
 	router.get(
+		'/:id/download-preparations/:jobId/manifest',
+		authM,
+		controller.getExportManifest.bind(controller)
+	);
+	router.get(
 		'/:id/download-preparations/:jobId',
 		authM,
 		controller.downloadPreparation.bind(controller)

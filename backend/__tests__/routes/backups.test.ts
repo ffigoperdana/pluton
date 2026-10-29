@@ -11,6 +11,8 @@ import { AddressInfo } from 'net';
 import { ManagedRepositoryAccessError } from '../../src/utils/restic/ManagedSftpRepositorySession';
 import { SnapshotIndexError } from '../../src/utils/restic/ManagedSnapshotIndex';
 import { webAccess } from '../../src/middlewares/webAccess';
+import { AppError } from '../../src/utils/AppError';
+import { ManagedExportError } from '../../src/utils/restic/ManagedExportPolicy';
 
 jest.mock('jsonwebtoken');
 jest.mock('cookies');
@@ -60,6 +62,7 @@ describe('Backup Routes', () => {
 			getBackupDownload: jest.fn(),
 			generateBackupDownload: jest.fn(),
 			downloadPreparation: jest.fn(),
+			getExportManifest: jest.fn(),
 			cancelBackupDownload: jest.fn(),
 		} as any;
 
@@ -71,6 +74,131 @@ describe('Backup Routes', () => {
 
 		// Default to authenticated
 		setupAuthMock(true);
+	});
+
+	describe('mode-bound verified exports', () => {
+		const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+		const manifestUrl = `/api/backups/backup-01/download-preparations/${id}/manifest`;
+		it('authenticates manifests before accessing snapshot metadata', async () => {
+			setupAuthMock(false);
+			expect((await request(app).get(manifestUrl)).status).toBe(401);
+			expect(mockBackupService.getExportManifest).not.toHaveBeenCalled();
+		});
+		it('streams a private manifest with the exact backup, preparation and export mode', async () => {
+			const payload = JSON.stringify({ version: 1, mode: 'regular-files' }) + '\n';
+			mockBackupService.getExportManifest.mockResolvedValue({
+				fileName: 'backup-backup-01-regular-files.manifest.jsonl',
+				async streamTo(destination: any, _signal: AbortSignal, ready: () => void) {
+					ready();
+					destination.write(payload);
+				},
+			} as any);
+			const response = await request(app).get(`${manifestUrl}?exportMode=regular-files`);
+			expect(response.status).toBe(200);
+			expect(response.text).toBe(payload);
+			expect(response.headers['content-type']).toContain('application/x-ndjson');
+			expect(response.headers['cache-control']).toBe('private, no-store');
+			expect(mockBackupService.getExportManifest).toHaveBeenCalledWith(
+				'backup-01',
+				id,
+				'regular-files'
+			);
+		});
+		it.each([
+			'exportMode=other',
+			'exportMode=full&exportMode=regular-files',
+			'repository=other',
+			'snapshotId=latest',
+		])('refuses ambiguous modes and caller overrides: %s', async query => {
+			expect((await request(app).get(`${manifestUrl}?${query}`)).status).toBe(400);
+			expect(
+				(await request(app).post(`/api/backups/backup-01/action/download?${query}`)).status
+			).toBe(400);
+			expect(mockBackupService.getExportManifest).not.toHaveBeenCalled();
+			expect(mockBackupService.generateBackupDownload).not.toHaveBeenCalled();
+		});
+		it('does not expose a manifest when ownership or the mode proof is refused', async () => {
+			mockBackupService.getExportManifest.mockRejectedValueOnce(
+				new AppError(403, 'Snapshot access refused.')
+			);
+			expect((await request(app).get(manifestUrl)).status).toBe(403);
+			mockBackupService.getExportManifest.mockRejectedValueOnce(
+				new ManagedExportError('export-proof-missing')
+			);
+			const response = await request(app).get(manifestUrl);
+			expect(response.status).toBe(409);
+			expect(response.body).toMatchObject({
+				success: false,
+				code: 'managed-export-refused',
+				reason: 'export-proof-missing',
+			});
+		});
+		it('removes archive headers on a safe failure before manifest bytes are sent', async () => {
+			mockBackupService.getExportManifest.mockResolvedValue({
+				fileName: 'backup-backup-01.manifest.jsonl',
+				async streamTo(_destination: any, _signal: AbortSignal, ready: () => void) {
+					ready();
+					throw new Error('synthetic-private-provider-output');
+				},
+			} as any);
+			const response = await request(app).get(manifestUrl);
+			expect(response.status).toBe(500);
+			expect(response.headers['content-type']).toContain('application/json');
+			expect(response.headers['content-disposition']).toBeUndefined();
+			expect(response.text).not.toContain('synthetic-private-provider-output');
+		});
+		it('carries the selected mode through admission, status, cancellation and transfer', async () => {
+			mockBackupService.generateBackupDownload.mockResolvedValue({
+				streaming: true,
+				preparation: { id, state: 'queued' },
+			});
+			mockBackupService.downloadPreparation.mockResolvedValue({
+				id,
+				state: 'queued',
+				retryAfterMs: 0,
+			} as any);
+			mockBackupService.getBackupDownload.mockRejectedValue(
+				new ManagedExportError('export-proof-missing')
+			);
+			expect(
+				(await request(app).post('/api/backups/backup-01/action/download?exportMode=regular-files'))
+					.status
+			).toBe(202);
+			expect(mockBackupService.generateBackupDownload).toHaveBeenCalledWith(
+				'backup-01',
+				undefined,
+				expect.any(AbortSignal),
+				false,
+				'regular-files'
+			);
+			for (const method of ['get', 'delete'] as const) {
+				expect(
+					(
+						await request(app)[method](
+							`/api/backups/backup-01/download-preparations/${id}?exportMode=regular-files`
+						)
+					).status
+				).toBe(200);
+				expect(mockBackupService.downloadPreparation).toHaveBeenLastCalledWith(
+					'backup-01',
+					id,
+					method === 'delete',
+					'regular-files'
+				);
+			}
+			expect(
+				(
+					await request(app).get(
+						`/api/backups/backup-01/action/download?preparationId=${id}&exportMode=regular-files`
+					)
+				).status
+			).toBe(409);
+			expect(mockBackupService.getBackupDownload).toHaveBeenCalledWith(
+				'backup-01',
+				id,
+				'regular-files'
+			);
+		});
 	});
 
 	describe('asynchronous download preparation', () => {
@@ -149,7 +277,8 @@ describe('Backup Routes', () => {
 				expect(mockBackupService.downloadPreparation).toHaveBeenCalledWith(
 					'backup-01',
 					id,
-					method === 'delete'
+					method === 'delete',
+					'full'
 				);
 				const rejected = await request(app)[method](
 					`/api/backups/backup-01/download-preparations/${id}?repository=other`

@@ -1,3 +1,16 @@
+export type DownloadMode = 'full' | 'regular-files';
+export type VerifiedExport = {
+   version: 1;
+   binding: { backupId: string; repositoryId: string; snapshotId: string };
+   mode: DownloadMode;
+   includedEntries: number;
+   excludedEntries: number;
+   includedByType: Record<string, number>;
+   excludedByType: Record<string, number>;
+   manifestSha256: string;
+   archiveSha256: string;
+   archiveBytes: number;
+};
 export type DownloadPreparation = {
    id: string;
    state: 'queued' | 'indexing' | 'validating' | 'ready' | 'failed' | 'cancelled' | 'expired';
@@ -7,6 +20,8 @@ export type DownloadPreparation = {
    validatedEntries: number;
    retryAfterMs: number;
    error?: string;
+   exportMode?: DownloadMode;
+   export?: VerifiedExport;
 };
 export const preparationActive = (job: DownloadPreparation) => ['queued', 'indexing', 'validating'].includes(job.state);
 export async function preparationRequest(
@@ -15,8 +30,9 @@ export async function preparationRequest(
    id?: string,
    cancel = false,
    signal?: AbortSignal,
+   mode: DownloadMode = 'full',
 ): Promise<DownloadPreparation> {
-   const url = `${api}/backups/${encodeURIComponent(backupId)}/${id ? `download-preparations/${encodeURIComponent(id)}` : 'action/download'}`;
+   const url = `${api}/backups/${encodeURIComponent(backupId)}/${id ? `download-preparations/${encodeURIComponent(id)}` : 'action/download'}${mode === 'regular-files' ? '?exportMode=regular-files' : ''}`;
    const response = await fetch(url, { method: cancel ? 'DELETE' : id ? 'GET' : 'POST', credentials: 'include', redirect: 'error', signal });
    const retry = response.headers.get('Retry-After');
    const seconds = retry && /^\d+$/.test(retry) ? Number(retry) : 0;
@@ -72,5 +88,37 @@ export async function preparationRequest(
       job.retryAfterMs > 60_000
    )
       throw failure('Preparation identity or status was invalid. Retry to reconnect.');
-   return job;
+   if ((job.exportMode || 'full') !== mode) throw failure('Preparation export mode did not match the selected mode.');
+   if (job.export) {
+      const proof = job.export;
+      const validCounts = (counts: unknown, allowed: string[], expected: number) =>
+         !!counts &&
+         typeof counts === 'object' &&
+         !Array.isArray(counts) &&
+         Object.entries(counts).every(([type, n]) => allowed.includes(type) && Number.isSafeInteger(n) && n >= 0 && n <= 500000) &&
+         Object.values(counts).reduce((sum: number, n) => sum + Number(n), 0) === expected;
+      if (
+         proof.version !== 1 ||
+         proof.mode !== mode ||
+         proof.binding?.backupId !== backupId ||
+         typeof proof.binding?.repositoryId !== 'string' ||
+         proof.binding.repositoryId.length > 128 ||
+         !/^[a-f0-9]{64}$/.test(proof.binding?.snapshotId) ||
+         !Number.isSafeInteger(proof.includedEntries) ||
+         !Number.isSafeInteger(proof.excludedEntries) ||
+         proof.includedEntries < 0 ||
+         proof.excludedEntries < 0 ||
+         proof.includedEntries !== job.validatedEntries ||
+         proof.includedEntries + proof.excludedEntries !== job.indexedEntries ||
+         !validCounts(proof.includedByType, mode === 'full' ? ['file', 'dir', 'symlink'] : ['file', 'dir'], proof.includedEntries) ||
+         !validCounts(proof.excludedByType, mode === 'full' ? [] : ['symlink', 'dev', 'chardev', 'fifo', 'socket'], proof.excludedEntries) ||
+         !/^[a-f0-9]{64}$/.test(proof.manifestSha256) ||
+         !/^[a-f0-9]{64}$/.test(proof.archiveSha256) ||
+         !Number.isSafeInteger(proof.archiveBytes) ||
+         proof.archiveBytes < 1024 ||
+         proof.archiveBytes % 512
+      )
+         throw failure('Verified export counts or snapshot binding were invalid.');
+   } else if (mode === 'regular-files' && job.state === 'ready') throw failure('Partial export verification was missing.');
+   return { ...job, exportMode: mode };
 }

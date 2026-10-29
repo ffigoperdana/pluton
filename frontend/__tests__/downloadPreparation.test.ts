@@ -13,6 +13,68 @@ const job = (state = 'indexing') => ({
    validatedEntries: state === 'ready' ? 12 : 0,
    retryAfterMs: state === 'ready' ? 0 : 1000,
 });
+const partialId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const verifiedJob = (state = 'ready', mode = 'regular-files') => ({
+   ...job(state),
+   validatedEntries: state === 'ready' ? (mode === 'full' ? 12 : 9) : 0,
+   id: mode === 'full' ? id : partialId,
+   exportMode: mode,
+   ...(state === 'ready'
+      ? {
+           export: {
+              version: 1,
+              binding: { backupId: 'backup-01', repositoryId: 'repository-01', snapshotId: 'a'.repeat(64) },
+              mode,
+              includedEntries: mode === 'full' ? 12 : 9,
+              excludedEntries: mode === 'full' ? 0 : 3,
+              includedByType: mode === 'full' ? { file: 8, dir: 4 } : { file: 5, dir: 4 },
+              excludedByType: mode === 'full' ? {} : { symlink: 2, fifo: 1 },
+              manifestSha256: 'b'.repeat(64),
+              archiveSha256: 'c'.repeat(64),
+              archiveBytes: 2048,
+           },
+        }
+      : {}),
+});
+
+test('partial requests bind creation, status and cancellation to their explicit mode and verified counts', async () => {
+   const original = globalThis.fetch;
+   const calls: string[] = [];
+   globalThis.fetch = async (url, init) => {
+      calls.push(String(url));
+      return Response.json(
+         { success: true, result: init?.method === 'POST' ? { preparation: verifiedJob('indexing') } : verifiedJob() },
+         { status: init?.method === 'POST' ? 202 : 200 },
+      );
+   };
+   try {
+      await preparationRequest('https://example.internal/api', 'backup-01', undefined, false, undefined, 'regular-files');
+      const ready = await preparationRequest('https://example.internal/api', 'backup-01', partialId, false, undefined, 'regular-files');
+      assert.equal(ready.export?.includedEntries, 9);
+      assert.equal(ready.export?.excludedByType.symlink, 2);
+      await preparationRequest('https://example.internal/api', 'backup-01', partialId, true, undefined, 'regular-files');
+      assert(calls.every((url) => new URL(url).searchParams.get('exportMode') === 'regular-files'));
+   } finally {
+      globalThis.fetch = original;
+   }
+});
+for (const failure of ['cross-mode', 'missing-proof', 'wrong-backup', 'wrong-counts', 'unknown-type', 'bad-hash'])
+   test(`partial readiness refuses ${failure}`, async () => {
+      const original = globalThis.fetch;
+      const value: any = verifiedJob();
+      if (failure === 'cross-mode') value.exportMode = 'full';
+      if (failure === 'missing-proof') delete value.export;
+      if (failure === 'wrong-backup') value.export.binding.backupId = 'backup-foreign';
+      if (failure === 'wrong-counts') value.export.includedEntries++;
+      if (failure === 'unknown-type') value.export.excludedByType = { private: 3 };
+      if (failure === 'bad-hash') value.export.archiveSha256 = 'invalid';
+      globalThis.fetch = async () => Response.json({ success: true, result: value });
+      try {
+         await assert.rejects(preparationRequest('https://example.internal/api', 'backup-01', partialId, false, undefined, 'regular-files'));
+      } finally {
+         globalThis.fetch = original;
+      }
+   });
 test('confirmed 202 creation, polling and cancellation retain exact identities and authentication', async () => {
    const previous = globalThis.fetch;
    const calls: any[] = [];
@@ -156,6 +218,75 @@ test('actual panel follows queued/indexing/validating/ready, separates native tr
       await flush();
       assert(![...dom.window.document.querySelectorAll('button')].some((button) => button.textContent === 'Download TAR'));
       assert.match(dom.window.document.body.textContent!, /HTTP 524/);
+   } finally {
+      await act(async () => root.unmount());
+      context.mock.timers.reset();
+      dom.window.close();
+      for (const [key, descriptor] of saved) {
+         if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+         else Reflect.deleteProperty(globalThis, key);
+      }
+   }
+});
+
+test('actual panel cancels active full preparation before switching mode, warns about partial recovery and downloads only its proof', async (context) => {
+   const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.internal' });
+   const saved = new Map<string, PropertyDescriptor | undefined>();
+   const calls: { method: string; mode: string }[] = [];
+   let state = 'indexing',
+      downloaded = '';
+   for (const [key, value] of Object.entries({
+      window: dom.window,
+      document: dom.window.document,
+      IS_REACT_ACT_ENVIRONMENT: true,
+      fetch: async (url: string, init: RequestInit) => {
+         const mode = new URL(url).searchParams.get('exportMode') || 'full';
+         calls.push({ method: init.method!, mode });
+         const value = verifiedJob(init.method === 'DELETE' ? 'cancelled' : state, mode);
+         return Response.json(
+            { success: true, result: init.method === 'POST' ? { preparation: value } : value },
+            { status: init.method === 'POST' ? 202 : 200 },
+         );
+      },
+   })) {
+      saved.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+      Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+   }
+   dom.window.HTMLAnchorElement.prototype.click = function () {
+      downloaded = this.href;
+   };
+   context.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+   const root = require('react-dom/client').createRoot(dom.window.document.getElementById('root'));
+   const flush = async () => {
+      await act(async () => {
+         await new Promise<void>((resolve) => setImmediate(resolve));
+      });
+   };
+   try {
+      await act(async () => root.render(React.createElement(module.exports.default, { backupId: 'backup-01', close() {} })));
+      await flush();
+      const radios = dom.window.document.querySelectorAll<HTMLInputElement>('input[type="radio"]');
+      assert.equal(radios.length, 2);
+      await act(async () => radios[1].click());
+      await flush();
+      assert.deepEqual(calls.slice(0, 3), [
+         { method: 'POST', mode: 'full' },
+         { method: 'DELETE', mode: 'full' },
+         { method: 'POST', mode: 'regular-files' },
+      ]);
+      assert.match(dom.window.document.body.textContent!, /This is a partial export/);
+      state = 'ready';
+      await act(async () => context.mock.timers.tick(1000));
+      await flush();
+      assert.match(dom.window.document.body.textContent!, /Included entries: 9 · Excluded entries: 3/);
+      assert.match(dom.window.document.body.textContent!, /Symbolic links: 2/);
+      assert(!/Restore mode/.test(dom.window.document.body.textContent!));
+      const button = [...dom.window.document.querySelectorAll('button')].find((button) => button.textContent === 'Download TAR')!;
+      await act(async () => button.click());
+      assert.equal(new URL(downloaded).searchParams.get('exportMode'), 'regular-files');
+      assert.equal(new URL(downloaded).searchParams.get('preparationId'), partialId);
+      const manifest = [...dom.window.document.querySelectorAll('a')].find((link) => link.textContent === 'Download export manifest')!;
+      assert.equal(new URL(manifest.href).searchParams.get('exportMode'), 'regular-files');
    } finally {
       await act(async () => root.unmount());
       context.mock.timers.reset();

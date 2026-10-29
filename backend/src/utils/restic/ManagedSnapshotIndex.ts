@@ -2,6 +2,14 @@ import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import Database from 'better-sqlite3';
+import { openSync, closeSync } from 'fs';
+import { ManagedExportProof } from './ManagedExportProof';
+import {
+	ManagedExportError,
+	MANAGED_EXPORT_LIMITS,
+	type ManagedExportBinding,
+	type ManagedExportMode,
+} from './ManagedExportPolicy';
 import { AppError } from '../AppError';
 import { managedSnapshotPath, assertManagedRestorePath } from '../managedSnapshotPath';
 import type { SnapShotFile } from '../../types/restic';
@@ -152,7 +160,59 @@ const asFile = (row: Row): SnapShotFile => ({
 
 /** A completed, immutable manifest. Iteration/lookup do not load the full tree. */
 export class ManagedSnapshotIndex implements Iterable<SnapShotFile> {
+	private proofDb?: Database.Database;
 	constructor(private readonly db: Database.Database) {}
+	typeCounts(): Record<string, number> {
+		return Object.fromEntries(
+			(
+				this.db
+					.prepare('SELECT type,count(*) AS n FROM nodes GROUP BY type ORDER BY type')
+					.all() as { type: string; n: number }[]
+			).map(row => [row.type, row.n])
+		);
+	}
+	exportProof(binding: ManagedExportBinding, mode: ManagedExportMode) {
+		try {
+			if (!this.proofDb) {
+				const file = this.db.name === ':memory:' ? ':memory:' : this.db.name + '.exports';
+				if (file !== ':memory:') {
+					if (!path.isAbsolute(file)) throw new ManagedExportError('export-proof-missing');
+					closeSync(openSync(file, 'wx', 0o600));
+				}
+				const db = new Database(file);
+				try {
+					db.pragma('cache_size=-4096');
+					db.pragma('temp_store=FILE');
+					db.pragma('journal_mode=MEMORY');
+					db.pragma('synchronous=OFF');
+					db.pragma(`max_page_count=${MANAGED_EXPORT_LIMITS.maxProofBytes / 4096}`);
+					this.proofDb = db;
+				} catch (error) {
+					db.close();
+					throw error;
+				}
+			}
+			return new ManagedExportProof(this.proofDb, binding, mode, this.typeCounts());
+		} catch (error) {
+			throw error instanceof ManagedExportError
+				? error
+				: new ManagedExportError('export-resource-limit');
+		}
+	}
+	/** Structural permission only. Symlink target/content proof is mandatory before
+	 * export or restore execution; assertSafe() retains its strict legacy default. */
+	assertExportEntries(mode: ManagedExportMode, restore = false) {
+		const counts = this.typeCounts();
+		if (
+			mode === 'full' &&
+			Object.keys(counts).some(type => !['file', 'dir', 'symlink'].includes(type))
+		)
+			throw new ManagedExportError('unsupported-node-type');
+		if (restore && process.platform === 'win32') {
+			if (counts.symlink) throw new ManagedExportError('posix-restore-required');
+			for (const file of this) assertManagedRestorePath(file.path);
+		}
+	}
 	get count(): number {
 		return (this.db.prepare('SELECT count(*) AS n FROM nodes').get() as { n: number }).n;
 	}
@@ -279,6 +339,7 @@ export class ManagedSnapshotIndex implements Iterable<SnapShotFile> {
 		};
 	}
 	close() {
+		this.proofDb?.close();
 		this.db.close();
 	}
 }

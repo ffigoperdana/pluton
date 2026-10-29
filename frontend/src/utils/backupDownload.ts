@@ -12,9 +12,12 @@ export function backupRowActions(backup: BackupRow, isSync: boolean, isRemoteMan
 }
 
 /** Browser-owned transfer avoids fetch().blob() buffering the complete archive. */
-export function startNativeBackupDownload(apiUrl: string, backupId: string, preparationId?: string) {
+export function startNativeBackupDownload(apiUrl: string, backupId: string, preparationId?: string, mode: 'full' | 'regular-files' = 'full') {
    const link = document.createElement('a');
-   link.href = `${apiUrl}/backups/${encodeURIComponent(backupId)}/action/download${preparationId ? `?${new URLSearchParams({ preparationId })}` : ''}`;
+   const query = new URLSearchParams();
+   if (preparationId) query.set('preparationId', preparationId);
+   if (mode === 'regular-files') query.set('exportMode', mode);
+   link.href = `${apiUrl}/backups/${encodeURIComponent(backupId)}/action/download${query.size ? `?${query}` : ''}`;
    link.download = '';
    document.body.appendChild(link);
    try {

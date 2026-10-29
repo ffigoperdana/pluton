@@ -21,6 +21,7 @@ import { Backup } from '../db/schema/backups';
 import { BackupMirror } from '../types/backups';
 import { PlanStats } from '../types/plans';
 import { AppError, NotFoundError } from '../utils/AppError';
+import { managedExportMode, type ManagedExportMode } from '../utils/restic/ManagedExportPolicy';
 import { RemoteBackupService } from './RemoteBackupService';
 import { RemoteRepositoryRecoveryService } from './RemoteRepositoryRecoveryService';
 import type { ManagedReplicationService } from './ManagedReplicationService';
@@ -124,15 +125,22 @@ export class BackupService {
 		return removeResult;
 	}
 
-	async getBackupDownload(backupId: string, preparationId?: string): Promise<any> {
+	async getBackupDownload(
+		backupId: string,
+		preparationId?: string,
+		exportMode: ManagedExportMode = 'full'
+	): Promise<any> {
+		const mode = managedExportMode(exportMode);
 		const backup = await this.backupStore.getById(backupId);
 		if (!backup) {
 			throw new Error('Backup not found');
 		}
 		if (backup.method === 'backup' && RemoteBackupService.isRemoteFilesystemPlan(backup)) {
 			if (!this.remoteRecovery) throw new AppError(501, 'REMOTE_CAPABILITY_NOT_IMPLEMENTED');
-			return this.remoteRecovery.download(backupId, preparationId);
+			return this.remoteRecovery.download(backupId, preparationId, mode);
 		}
+		if (mode !== 'full')
+			throw new AppError(400, 'Export modes apply only to managed remote snapshots.');
 		const backupDevice = backup.sourceId ? backup.sourceId : 'main';
 		const strategy = this.getSnapshotStrategy(backupDevice, backup.method);
 		const downloadResult = await strategy.getSnapshotDownload(backup.planId as string, backupId);
@@ -150,8 +158,10 @@ export class BackupService {
 		backupId: string,
 		replicationId?: string,
 		signal?: AbortSignal,
-		hasBody = false
+		hasBody = false,
+		exportMode: ManagedExportMode = 'full'
 	): Promise<any> {
+		const mode = managedExportMode(exportMode);
 		const backup = await this.backupStore.getById(backupId);
 		if (!backup) {
 			throw new Error('Backup not found');
@@ -160,8 +170,10 @@ export class BackupService {
 			if (!this.remoteRecovery) throw new AppError(501, 'REMOTE_CAPABILITY_NOT_IMPLEMENTED');
 			if (hasBody)
 				throw new AppError(400, 'Remote downloads support only the complete exact snapshot.');
-			return this.remoteRecovery.prepareDownload(backupId, replicationId, signal);
+			return this.remoteRecovery.prepareDownload(backupId, replicationId, signal, mode);
 		}
+		if (mode !== 'full')
+			throw new AppError(400, 'Export modes apply only to managed remote snapshots.');
 		// If replicationId is provided, download from mirror storage
 		let effectiveStorageId = backup.storageId as string;
 		let effectiveStoragePath = backup.storagePath as string;
@@ -187,9 +199,18 @@ export class BackupService {
 		return downloadResult.result;
 	}
 
-	async downloadPreparation(backupId: string, id: string, cancel = false) {
+	async downloadPreparation(
+		backupId: string,
+		id: string,
+		cancel = false,
+		mode: ManagedExportMode = 'full'
+	) {
 		if (!this.remoteRecovery) throw new AppError(501, 'REMOTE_CAPABILITY_NOT_IMPLEMENTED');
-		return this.remoteRecovery.downloadPreparation(backupId, id, cancel);
+		return this.remoteRecovery.downloadPreparation(backupId, id, cancel, mode);
+	}
+	async getExportManifest(backupId: string, id: string, mode: ManagedExportMode = 'full') {
+		if (!this.remoteRecovery) throw new AppError(501, 'REMOTE_CAPABILITY_NOT_IMPLEMENTED');
+		return this.remoteRecovery.downloadManifest(backupId, id, mode);
 	}
 
 	async cancelBackupDownload(planId: string, backupId: string): Promise<any> {

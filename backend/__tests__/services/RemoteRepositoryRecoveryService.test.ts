@@ -2,7 +2,10 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import Cryptr from 'cryptr';
+import crypto from 'crypto';
 import { Writable } from 'stream';
+import { pipeline } from 'stream/promises';
+import tar from 'tar-stream';
 import { planLogger } from '../../src/utils/logger';
 import { RemoteRepositoryRecoveryService } from '../../src/services/RemoteRepositoryRecoveryService';
 import { ManagedRepositoryAccessError } from '../../src/utils/restic/ManagedSftpRepositorySession';
@@ -53,6 +56,7 @@ describe('Phase 4 remote managed repository recovery', () => {
 	let options: jest.Mock;
 	let withSession: jest.Mock;
 	let rows: Map<string, any>;
+	let archiveNodes: Map<string, any[]>;
 
 	beforeEach(async () => {
 		scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'managed-recovery-test-'));
@@ -88,6 +92,7 @@ describe('Phase 4 remote managed repository recovery', () => {
 			encryptedPassword: new Cryptr(secret).encrypt(password),
 		};
 		rows = new Map();
+		archiveNodes = new Map();
 		stores = {
 			agents: {
 				getAgentById: jest.fn(async id =>
@@ -119,8 +124,38 @@ describe('Phase 4 remote managed repository recovery', () => {
 			port: '22',
 		}));
 		session = {
-			archive: jest.fn(async (_, destination) => {
-				destination.write(Buffer.from('synthetic-tar'));
+			archive: jest.fn(async (id, destination) => {
+				const pack = tar.pack();
+				const done = pipeline(pack, destination, { end: false });
+				void done.catch(() => undefined);
+				try {
+					for (const file of archiveNodes.get(id) || nodes) {
+						if (!['file', 'dir', 'symlink'].includes(file.type)) continue;
+						const header: tar.Headers = {
+							name: file.path.slice(1),
+							type: file.type === 'dir' ? 'directory' : file.type,
+							size: file.type === 'file' ? file.size : 0,
+							mode: 0o644,
+							mtime: new Date(file.mtime),
+							...(file.type === 'symlink'
+								? { linkname: '/outside-fixture/unsupported-target' }
+								: {}),
+						};
+						await new Promise<void>((resolve, reject) =>
+							pack
+								.entry(header, Buffer.alloc(header.size || 0), error =>
+									error ? reject(error) : resolve()
+								)
+								.on('error', () => undefined)
+						);
+					}
+					pack.finalize();
+					await done;
+				} catch (error) {
+					pack.destroy(error as Error);
+					await done.catch(() => undefined);
+					throw error;
+				}
 			}),
 			snapshot: jest.fn(async () => ({
 				id: snapshotId,
@@ -160,7 +195,17 @@ describe('Phase 4 remote managed repository recovery', () => {
 				signal?: AbortSignal
 			) => {
 				if (signal?.aborted) throw new ManagedRepositoryAccessError('cancelled');
-				return callback(session);
+				return callback({
+					...session,
+					streamFiles: async (id, consume) => {
+						const listed: any[] = [];
+						archiveNodes.set(id, listed);
+						await session.streamFiles(id, async node => {
+							listed.push(node);
+							await consume(node);
+						});
+					},
+				});
 			}
 		);
 		service = new RemoteRepositoryRecoveryService(
@@ -297,6 +342,7 @@ describe('Phase 4 remote managed repository recovery', () => {
 		const descriptor = await service.download('backup-01', oldId);
 		await prepareReady('backup-02');
 		await prepareReady('backup-03');
+		const verifiedArchives = session.archive.mock.calls.length;
 		expect((await service.downloadPreparation('backup-01', oldId)).state).toBe('expired');
 		await expect(service.download('backup-01', oldId)).rejects.toMatchObject({ statusCode: 409 });
 		expect(session.streamFiles).toHaveBeenCalledTimes(3);
@@ -310,7 +356,7 @@ describe('Phase 4 remote managed repository recovery', () => {
 			descriptor.streamTo(destination, new AbortController().signal, ready)
 		).rejects.toMatchObject({ statusCode: 409 });
 		expect(ready).not.toHaveBeenCalled();
-		expect(session.archive).not.toHaveBeenCalled();
+		expect(session.archive).toHaveBeenCalledTimes(verifiedArchives);
 		expect(session.streamFiles).toHaveBeenCalledTimes(3);
 		destination.destroy();
 		const next = await service.prepareDownload('backup-01');
@@ -586,7 +632,11 @@ describe('Phase 4 remote managed repository recovery', () => {
 					jest.fn(),
 					jest.fn()
 				)
-			).rejects.toMatchObject({ code: 'unsupported-snapshot-file' });
+			).rejects.toMatchObject(
+				process.platform === 'win32'
+					? { code: 'unsupported-snapshot-file' }
+					: { code: 'managed-export-refused', reason: 'unsafe-link-target' }
+			);
 			expect(session.restore).not.toHaveBeenCalled();
 			session.files.mockResolvedValue([{ path: '/../escape', type: 'file', size: 2 }] as any);
 			await expect(
@@ -669,7 +719,12 @@ describe('Phase 4 remote managed repository recovery', () => {
 			await expect(prepareReady('backup-01')).resolves.toEqual({ streaming: true });
 			const { descriptor, chunks, ready } = await transfer();
 			expect(descriptor.fileName).toBe('backup-backup-01.tar');
-			expect(Buffer.concat(chunks).toString()).toBe('synthetic-tar');
+			const bytes = Buffer.concat(chunks);
+			expect(crypto.createHash('sha256').update(bytes).digest('hex')).toBe(
+				descriptor.export!.archiveSha256
+			);
+			expect(bytes.length).toBe(descriptor.export!.archiveBytes);
+			expect(bytes.subarray(-1024).every(byte => byte === 0)).toBe(true);
 			expect(ready).toHaveBeenCalledTimes(1);
 			expect(session.archive).toHaveBeenCalledWith(snapshotId, expect.any(Writable));
 			expect(session.snapshot).toHaveBeenCalledWith(snapshotId);
@@ -747,17 +802,18 @@ describe('Phase 4 remote managed repository recovery', () => {
 			expect(session.archive).not.toHaveBeenCalled();
 		});
 		it.each(['symlink', 'dev', 'fifo', 'socket'])(
-			'refuses %s archive entries before sending headers',
+			'refuses unsafe %s archive entries before download authorization',
 			async type => {
 				session.files.mockResolvedValue([{ ...nodes[2], type } as any]);
 				await expect(prepareReady('backup-01')).rejects.toMatchObject({
 					statusCode: 409,
-					code: 'unsupported-snapshot-file',
+					code: 'managed-export-refused',
+					reason: type === 'symlink' ? 'unsafe-link-target' : 'unsupported-node-type',
 				});
 				await expect(
 					service.download('backup-01', preparationIds.get('backup-01'))
 				).rejects.toMatchObject({ statusCode: 409 });
-				expect(session.archive).not.toHaveBeenCalled();
+				expect(session.archive).toHaveBeenCalledTimes(type === 'symlink' ? 1 : 0);
 			}
 		);
 		it.each([
@@ -803,6 +859,7 @@ describe('Phase 4 remote managed repository recovery', () => {
 		it.each(['execution-failed', 'wrong-password', 'repository-unavailable'] as const)(
 			'sanitizes %s archive failures in errors and logs',
 			async code => {
+				await prepareReady('backup-01');
 				session.archive.mockRejectedValue(new ManagedRepositoryAccessError(code));
 				await expect(transfer()).rejects.toMatchObject({
 					code,
@@ -820,11 +877,11 @@ describe('Phase 4 remote managed repository recovery', () => {
 			'preserves %s diagnostics when closing HTTP also aborts the request',
 			async code => {
 				const controller = new AbortController();
+				await prepareReady('backup-01');
 				session.archive.mockImplementation(async () => {
 					controller.abort();
 					throw new ManagedRepositoryAccessError(code);
 				});
-				await prepareReady('backup-01');
 				const { destination } = sink();
 				await expect(
 					(await service.download('backup-01', preparationIds.get('backup-01'))).streamTo(
@@ -845,6 +902,7 @@ describe('Phase 4 remote managed repository recovery', () => {
 			}
 		);
 		it('does not expose arbitrary exceptions or credential materialization failures', async () => {
+			await prepareReady('backup-01');
 			session.archive.mockRejectedValue(new Error(`${password} synthetic-sftp-password`));
 			await expect(transfer()).rejects.toMatchObject({
 				code: 'execution-failed',
@@ -941,13 +999,20 @@ describe('Phase 4 remote managed repository recovery', () => {
 				type: 'symlink',
 			});
 		});
-		await expect(service.preview('backup-01', config)).rejects.toMatchObject({
-			code: 'unsupported-snapshot-file',
-		});
+		if (process.platform === 'win32')
+			await expect(service.preview('backup-01', config)).rejects.toMatchObject({
+				reason: 'posix-restore-required',
+			});
+		else
+			await expect(service.preview('backup-01', config)).resolves.toHaveProperty(
+				'stats.total_files',
+				6000
+			);
 		await expect(prepareReady('backup-01')).rejects.toMatchObject({
-			code: 'unsupported-snapshot-file',
+			code: 'managed-export-refused',
+			reason: 'unsafe-link-target',
 		});
-		expect(session.archive).not.toHaveBeenCalled();
+		expect(session.archive).toHaveBeenCalledTimes(1);
 		expect(session.restore).not.toHaveBeenCalled();
 	});
 	it('refuses a cached index after repository binding or exact snapshot ownership changes', async () => {
@@ -1166,13 +1231,30 @@ describe('Phase 4 remote managed repository recovery', () => {
 		).rejects.toMatchObject({ statusCode: 400 });
 		expect(session.restore).not.toHaveBeenCalled();
 	});
-	it('rejects individually selected links and special nodes before restore', async () => {
-		session.files.mockResolvedValue([{ ...nodes[2], type: 'symlink' }] as any);
-		await expect(
-			service.restore('backup-01', { ...config, includes: ['/srv/example-app/index.txt'] })
-		).rejects.toMatchObject({ statusCode: 400 });
-		expect(session.restore).not.toHaveBeenCalled();
-	});
+	it.each(['symlink', 'dev', 'chardev', 'fifo', 'socket'])(
+		'refuses an unsafe selected %s before native restore writes',
+		async type => {
+			session.files.mockResolvedValue([{ ...nodes[2], type }] as any);
+			const requested = service.restore('backup-01', {
+				...config,
+				includes: ['/srv/example-app/index.txt'],
+			});
+			if (type !== 'symlink' || process.platform === 'win32') {
+				await expect(requested).rejects.toMatchObject({ statusCode: 400 });
+			} else {
+				// POSIX admits link selection, then verifies the stored target before
+				// calling Restic. The synthetic fixture intentionally has an absolute target.
+				const id = await requested;
+				await finish(id);
+				expect(rows.get(id)).toMatchObject({ status: 'failed', inProgress: false });
+				await expect(fs.stat(path.join(staging, `restore-${id}`))).rejects.toMatchObject({
+					code: 'ENOENT',
+				});
+				expect(session.archive).toHaveBeenCalledTimes(1);
+			}
+			expect(session.restore).not.toHaveBeenCalled();
+		}
+	);
 	it('cleans partial staging and persists only a closed error category on failure', async () => {
 		session.restore.mockImplementation(async (_, __, target) => {
 			await fs.writeFile(path.join(target, 'partial.txt'), 'synthetic partial data');
