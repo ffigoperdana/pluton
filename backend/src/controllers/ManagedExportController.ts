@@ -58,6 +58,14 @@ export class ManagedExportController {
 			this.failure(error, res);
 		}
 	}
+	async inventory(req: Request, res: Response) {
+		try {
+			const owner = this.operator(req, res);
+			res.status(202).json({ success: true, result: await this.service.preflight(owner, true) });
+		} catch (error) {
+			this.failure(error, res);
+		}
+	}
 	async preflightStatus(req: Request, res: Response) {
 		try {
 			const owner = this.operator(req, res);

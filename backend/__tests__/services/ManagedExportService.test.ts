@@ -73,6 +73,7 @@ function harness() {
 		config = exportConfiguration(env())!;
 	const store = new ManagedExportStore(file);
 	const storage = {
+		inventory: jest.fn(async () => ({ objects: 0, uploads: 0, exclusive: true })),
 		preflight: jest.fn(async () => {}),
 		upload: jest.fn(async (_j: ExportJob, archive: any, signal: AbortSignal, update: any) => {
 			update({ state: 'uploading', uploadId: 'synthetic-upload' });
@@ -236,6 +237,58 @@ describe('temporary export policy and durable admission', () => {
 	});
 });
 describe('durable independent export lifecycle', () => {
+	test('inventory intent is durable in the first admission write, before any worker can run', async () => {
+		const h = harness();
+		try {
+			const value = h.store.admit(
+				owner,
+				{ ...binding, backupId: 'inventory-crash-fixture' },
+				h.config,
+				'inventory'
+			);
+			expect(h.store.get(value.id)).toMatchObject({
+				kind: 'inventory',
+				state: 'queued',
+				cleaned: true,
+			});
+			await h.service.recoverInterrupted();
+			expect(h.store.get(value.id)).toMatchObject({
+				kind: 'inventory',
+				state: 'failed',
+				failure: 'interrupted',
+				cleaned: true,
+			});
+			expect(h.storage.cleanup).not.toHaveBeenCalled();
+			expect(h.storage.preflight).not.toHaveBeenCalled();
+			expect(h.recovery.withVerifiedExport).not.toHaveBeenCalled();
+		} finally {
+			await h.close();
+		}
+	});
+	test('inventory-only jobs never upload, read a backup, or invoke cleanup even on failure/cancellation', async () => {
+		const h = harness();
+		try {
+			const inventory = await h.service.preflight(owner, true);
+			await until(() => h.store.get(inventory.id)?.state === 'ready');
+			expect((await h.service.preflightStatus(owner, inventory.id)).inventory).toEqual({
+				objects: 0,
+				uploads: 0,
+				exclusive: true,
+			});
+			await h.service.cancelPreflight(owner, inventory.id);
+			h.storage.inventory.mockRejectedValueOnce(new Error('synthetic inaccessible inventory'));
+			const failed = await h.service.preflight(owner, true);
+			await until(() => h.store.get(failed.id)?.state === 'failed');
+			expect(h.store.get(failed.id)?.cleaned).toBe(true);
+			expect(h.storage.preflight).not.toHaveBeenCalled();
+			expect(h.storage.upload).not.toHaveBeenCalled();
+			expect(h.storage.cleanup).not.toHaveBeenCalled();
+			expect(h.recovery.exportBindingFor).not.toHaveBeenCalled();
+			expect(h.recovery.withVerifiedExport).not.toHaveBeenCalled();
+		} finally {
+			await h.close();
+		}
+	});
 	test('standalone preflight uses durable random jobs, owner checks and no backup/repository reads', async () => {
 		const h = harness();
 		try {
@@ -604,6 +657,24 @@ describe('authenticated Range proxy and authorization boundaries', () => {
 				(await api.delete(cancellation).set('Cookie', cookie).send({ key: 'foreign' })).status
 			).toBe(400);
 			expect((await api.delete(cancellation).set('Cookie', cookie).send({})).status).toBe(200);
+			const inventoryPath = '/api/managed-exports/inventory-checks';
+			expect((await api.post(inventoryPath).send({})).status).toBe(401);
+			expect(
+				(await api.post(inventoryPath).set('Cookie', cookie).send({ prefix: 'foreign' })).status
+			).toBe(400);
+			const inventory = await api.post(inventoryPath).set('Cookie', cookie).send({});
+			expect(inventory.status).toBe(202);
+			await until(() => h.store.get(inventory.body.result.id)?.state === 'ready');
+			const inventoryUrl = inventoryPath + '/' + inventory.body.result.id;
+			const foreignCookie = `token=${jwt.sign({ user: 'other-user' }, configService.config.SECRET!)}`;
+			expect((await api.get(inventoryUrl).set('Cookie', foreignCookie)).status).toBe(404);
+			expect((await api.delete(inventoryUrl).set('Cookie', foreignCookie).send({})).status).toBe(
+				404
+			);
+			expect(
+				(await api.get(inventoryUrl).set('Cookie', cookie)).body.result.inventory.exclusive
+			).toBe(true);
+			expect((await api.delete(inventoryUrl).set('Cookie', cookie).send({})).status).toBe(200);
 		} finally {
 			await h.close();
 		}

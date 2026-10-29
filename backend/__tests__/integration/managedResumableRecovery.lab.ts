@@ -22,6 +22,7 @@ import {
 	ListObjectVersionsCommand,
 	PutBucketPolicyCommand,
 	DeleteBucketPolicyCommand,
+	DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { configService } from '../../src/services/ConfigService';
@@ -77,6 +78,55 @@ const root = await fs.mkdtemp('/lab/r-'),
 	stateFile = path.join(root, 'export-state', 'jobs.sqlite'),
 	clientFile = path.join(root, 'client.tar');
 const config = exportConfiguration()!;
+const replicaCount = mode === 'small' ? 5 : 1;
+const alternateReplicaCredential = {
+	accessKeyId: crypto.randomBytes(16).toString('hex'),
+	secretAccessKey: crypto.randomBytes(32).toString('hex'),
+};
+let replicaBefore: unknown;
+async function replicaManifest() {
+	const manifest: any[] = [];
+	for (let index = 0; index < replicaCount; index++) {
+		let keyMarker: string | undefined, versionMarker: string | undefined;
+		for (let page = 0; page < 64; page++) {
+			const listing = await admin.send(
+				new ListObjectVersionsCommand({
+					Bucket: config.bucket,
+					Prefix: `repositories/plan-${index}/`,
+					KeyMarker: keyMarker,
+					VersionIdMarker: versionMarker,
+				})
+			);
+			assert.equal(listing.DeleteMarkers?.length || 0, 0);
+			for (const object of listing.Versions || []) {
+				const response = await admin.send(
+					new GetObjectCommand({
+						Bucket: config.bucket,
+						Key: object.Key,
+						VersionId: object.VersionId,
+					})
+				);
+				const hash = crypto.createHash('sha256');
+				let bytes = 0;
+				for await (const chunk of response.Body as any) {
+					hash.update(chunk);
+					bytes += chunk.length;
+				}
+				manifest.push({
+					key: object.Key,
+					version: object.VersionId,
+					bytes,
+					sha256: hash.digest('hex'),
+				});
+			}
+			if (!listing.IsTruncated) break;
+			assert(page < 63 && listing.NextKeyMarker);
+			keyMarker = listing.NextKeyMarker;
+			versionMarker = listing.NextVersionIdMarker;
+		}
+	}
+	return manifest.sort((a, b) => `${a.key}/${a.version}`.localeCompare(`${b.key}/${b.version}`));
+}
 assert.equal(new URL(config.endpoint).hostname, 'minio');
 assert.equal(config.bucket, 'example-private-exports');
 const admin = new S3Client({
@@ -165,7 +215,14 @@ async function start(failure = '') {
 		if (message.event === 'held') held = true;
 		else inbox.push(message);
 	});
-	child.send({ action: 'start', config: appConfig, file: stateFile, fault: failure });
+	child.send({
+		action: 'start',
+		config: appConfig,
+		file: stateFile,
+		fault: failure,
+		replicaCount,
+		alternateReplicaCredential,
+	});
 	base = (await event('started')).base;
 }
 async function stop(hard = false) {
@@ -422,19 +479,25 @@ try {
 	mcUrl.password = process.env.FIXTURE_ADMIN_SECRET!;
 	process.env.MC_HOST_fixture = mcUrl.href;
 	process.env.MC_CONFIG_DIR = path.join(root, 'mc');
+	const sharedPrefixes = config.allowSharedNamespace ? ['repositories/*'] : [];
 	const policy = {
 		Version: '2012-10-17',
 		Statement: [
 			{
 				Effect: 'Allow',
-				Action: ['s3:GetBucketVersioning', 's3:ListBucketMultipartUploads', 's3:GetBucketPolicy'],
+				Action: [
+					's3:GetBucketVersioning',
+					's3:GetBucketLocation',
+					's3:ListBucketMultipartUploads',
+					's3:GetBucketPolicy',
+				],
 				Resource: [`arn:aws:s3:::${config.bucket}`],
 			},
 			{
 				Effect: 'Allow',
 				Action: ['s3:ListBucket', 's3:ListBucketVersions'],
 				Resource: [`arn:aws:s3:::${config.bucket}`],
-				Condition: { StringLike: { 's3:prefix': [`${config.prefix}/*`] } },
+				Condition: { StringLike: { 's3:prefix': [`${config.prefix}/*`, ...sharedPrefixes] } },
 			},
 			{
 				Effect: 'Allow',
@@ -447,7 +510,10 @@ try {
 					's3:AbortMultipartUpload',
 					's3:ListMultipartUploadParts',
 				],
-				Resource: [`arn:aws:s3:::${config.bucket}/${config.prefix}/*`],
+				Resource: [
+					`arn:aws:s3:::${config.bucket}/${config.prefix}/*`,
+					...sharedPrefixes.map(prefix => `arn:aws:s3:::${config.bucket}/${prefix}`),
+				],
 			},
 		],
 	};
@@ -517,6 +583,25 @@ try {
 		assert(denied, 'Scoped fixture credentials must deny unrelated access.');
 	}
 	results.leastPrivilege = 'PASS';
+	if (config.allowSharedNamespace && mode === 'small') {
+		await run('/usr/local/bin/mc', [
+			'admin',
+			'user',
+			'add',
+			'fixture',
+			alternateReplicaCredential.accessKeyId,
+			alternateReplicaCredential.secretAccessKey,
+		]);
+		await run('/usr/local/bin/mc', [
+			'admin',
+			'policy',
+			'attach',
+			'fixture',
+			'synthetic-export-only',
+			'--user',
+			alternateReplicaCredential.accessKeyId,
+		]);
+	}
 	const sentinel = crypto.randomBytes(32);
 	await admin.send(
 		new PutObjectCommand({ Bucket: config.bucket, Key: 'ownership-sentinel', Body: sentinel })
@@ -553,6 +638,68 @@ try {
 	const before = await hashTree(repository),
 		current = await hashTree(source),
 		sftpPort = await port();
+	if (config.allowSharedNamespace) {
+		stage('shared-repository-replicas');
+		Object.assign(process.env, {
+			RCLONE_CONFIG_SHARED_TYPE: 's3',
+			RCLONE_CONFIG_SHARED_PROVIDER: 'Other',
+			RCLONE_CONFIG_SHARED_ENDPOINT: config.endpoint,
+			RCLONE_CONFIG_SHARED_REGION: config.region,
+			RCLONE_CONFIG_SHARED_ACCESS_KEY_ID: config.accessKeyId,
+			RCLONE_CONFIG_SHARED_SECRET_ACCESS_KEY: config.secretAccessKey,
+			RCLONE_CONFIG_SHARED_NO_CHECK_BUCKET: 'true',
+			RCLONE_CONFIG_SHARED_FORCE_PATH_STYLE: 'true',
+			RCLONE_CONFIG_SHARED_SERVER_SIDE_ENCRYPTION: 'AES256',
+			AWS_ACCESS_KEY_ID: config.accessKeyId,
+			AWS_SECRET_ACCESS_KEY: config.secretAccessKey,
+		});
+		for (let index = 0; index < replicaCount; index++) {
+			if (index === 4) {
+				process.env.RCLONE_CONFIG_SHARED_ACCESS_KEY_ID = alternateReplicaCredential.accessKeyId;
+				process.env.RCLONE_CONFIG_SHARED_SECRET_ACCESS_KEY =
+					alternateReplicaCredential.secretAccessKey;
+				process.env.AWS_ACCESS_KEY_ID = alternateReplicaCredential.accessKeyId;
+				process.env.AWS_SECRET_ACCESS_KEY = alternateReplicaCredential.secretAccessKey;
+			}
+			await run(rclone, [
+				'copy',
+				repository,
+				`shared:${config.bucket}/repositories/plan-${index}`,
+				'--ca-cert',
+				process.env.MANAGED_EXPORT_CA_FILE!,
+				'--transfers',
+				'1',
+				'--checkers',
+				'1',
+				'--s3-upload-concurrency',
+				'1',
+			]);
+			const listing = await run(
+				restic,
+				[
+					'--no-cache',
+					'--no-lock',
+					'--cacert',
+					process.env.MANAGED_EXPORT_CA_FILE!,
+					'-r',
+					`s3:${config.endpoint}/${config.bucket}/repositories/plan-${index}`,
+					'snapshots',
+					'--json',
+				],
+				password
+			);
+			assert.deepEqual(
+				JSON.parse(listing.toString())
+					.map((row: any) => row.id)
+					.sort(),
+				Object.values(snapshots).sort()
+			);
+		}
+		replicaBefore = await replicaManifest();
+		results.sharedNamespaceReplicas = replicaCount;
+		results.sharedCredentials = 'PASS';
+		if (mode === 'small') results.differentReplicaCredentials = 'PASS';
+	}
 	sftp = spawn(
 		rclone,
 		[
@@ -590,6 +737,28 @@ try {
 		assert.equal(configuration.result.destinationFingerprint, config.fingerprint);
 		assert.equal(configuration.result.credentialsConfigured, true);
 		assert.equal(configuration.result.privateCaConfigured, true);
+		assert.equal(configuration.result.sharedNamespaceEnabled, !!config.allowSharedNamespace);
+		if (config.allowSharedNamespace) {
+			stage('readonly-reserved-prefix-inventory');
+			const response = await fetch(operatorBase + '/inventory-checks', {
+				method: 'POST',
+				headers,
+				body: '{}',
+			});
+			assert.equal(response.status, 202);
+			const id = (await json(response)).result.id;
+			let inventory: any;
+			await until(async () => {
+				inventory = (await json(await fetch(operatorBase + '/inventory-checks/' + id, { headers })))
+					.result;
+				return ['ready', 'failed'].includes(inventory.state);
+			});
+			assert.equal(inventory.state, 'ready');
+			assert.deepEqual(inventory.inventory, { objects: 0, uploads: 0, exclusive: true });
+			assert.equal((await stats()).archiveReads, 0);
+			await clean();
+			results.readOnlyInventory = 'PASS';
+		}
 		const response = await fetch(operatorBase + '/preflights', {
 			method: 'POST',
 			headers,
@@ -639,6 +808,44 @@ try {
 		await clean();
 		results.operatorPreflightWithoutBackupRead = 'PASS';
 		results.actualProcessConfiguration = 'PASS';
+		if (config.allowSharedNamespace) {
+			stage('foreign-reserved-prefix-object-refused-and-preserved');
+			const key = `${config.prefix}/${preflightId}.tar`,
+				bytes = crypto.randomBytes(32);
+			const foreign = await admin.send(
+				new PutObjectCommand({
+					Bucket: config.bucket,
+					Key: key,
+					Body: bytes,
+					ServerSideEncryption: 'AES256',
+					Metadata: { 'pluton-export-job': preflightId, 'pluton-export-binding': 'f'.repeat(64) },
+				})
+			);
+			const response = await fetch(operatorBase + '/inventory-checks', {
+				method: 'POST',
+				headers,
+				body: '{}',
+			});
+			const id = (await json(response)).result.id;
+			let inventory: any;
+			await until(async () => {
+				inventory = (await json(await fetch(operatorBase + '/inventory-checks/' + id, { headers })))
+					.result;
+				return ['ready', 'failed'].includes(inventory.state);
+			});
+			assert.equal(inventory.state, 'failed');
+			assert.equal(inventory.failureCapability, 'destination-isolation');
+			const preserved = await admin.send(
+				new GetObjectCommand({ Bucket: config.bucket, Key: key, VersionId: foreign.VersionId })
+			);
+			assert(Buffer.from(await preserved.Body!.transformToByteArray()).equals(bytes));
+			await admin.send(
+				new DeleteObjectCommand({ Bucket: config.bucket, Key: key, VersionId: foreign.VersionId })
+			);
+			assert.equal((await stats()).archiveReads, 0);
+			await clean();
+			results.foreignPrefixObjectPreserved = 'PASS';
+		}
 	}
 	assert.equal(
 		(
@@ -908,6 +1115,28 @@ try {
 	);
 	assert(Buffer.from(await sentinelRead.Body!.transformToByteArray()).equals(sentinel));
 	equalInventory(await hashTree(repository), before);
+	if (config.allowSharedNamespace) {
+		stage('replica-object-version-checksum-invariance');
+		assert.deepEqual(await replicaManifest(), replicaBefore);
+		for (let index = 0; index < replicaCount; index++)
+			await run(
+				restic,
+				[
+					'--no-cache',
+					'--no-lock',
+					'--cacert',
+					process.env.MANAGED_EXPORT_CA_FILE!,
+					'-r',
+					`s3:${config.endpoint}/${config.bucket}/repositories/plan-${index}`,
+					'check',
+					'--read-data',
+				],
+				password
+			);
+		assert.deepEqual(await replicaManifest(), replicaBefore);
+		results.sharedReplicaManifestUnchanged = 'PASS';
+		results.replicaResticReadDataCheck = 'PASS';
+	}
 	equalInventory(await hashTree(source), current);
 	results.repositoryReadOnly = 'PASS';
 	results.serverNodePeakRssBytes = (await stats()).nodePeakRssBytes;

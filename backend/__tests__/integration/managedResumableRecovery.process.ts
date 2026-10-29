@@ -16,6 +16,20 @@ import {
 } from '../../src/utils/managedExport/ExportPolicy';
 import { S3ExportStorage } from '../../src/utils/managedExport/S3ExportStorage';
 import { assertExportIsolation } from '../../src/utils/managedExport/ExportIsolation';
+import Database from 'better-sqlite3';
+import Cryptr from 'cryptr';
+import { configService } from '../../src/services/ConfigService';
+import {
+	initializeExportNamespaceReservations,
+	configureExportNamespaceSecurity,
+} from '../../src/utils/managedExport/NamespaceReservation';
+import {
+	canonicalS3Location,
+	s3RepositoryScope,
+	decryptStorageCredentials,
+	isS3Storage,
+} from '../../src/utils/storageSecurity';
+let namespaceDb: Database.Database | undefined;
 let running: Awaited<ReturnType<typeof startLinkFixture>> | undefined,
 	service: ManagedExportService | undefined,
 	store: ManagedExportStore | undefined,
@@ -68,6 +82,93 @@ process.on('message', async (message: any) => {
 			};
 			running = await startLinkFixture(config, sessions);
 			store = new ManagedExportStore(message.file);
+			const exportConfig = exportConfiguration()!;
+			if (exportConfig.allowSharedNamespace) {
+				configureExportNamespaceSecurity({
+					canonicalS3Location,
+					s3RepositoryScope,
+					decryptStorageCredentials,
+					isS3Storage,
+				});
+				namespaceDb = new Database(message.file + '.namespace.sqlite');
+				initializeExportNamespaceReservations(namespaceDb);
+				namespaceDb.exec(`CREATE TABLE IF NOT EXISTS storages(id TEXT PRIMARY KEY,name TEXT,type TEXT,credentials TEXT,settings TEXT);
+				CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY,storage_id TEXT,storage_path TEXT,settings TEXT);
+				CREATE TABLE IF NOT EXISTS managed_replication_destinations(destination_storage_id TEXT,destination_storage_path TEXT,destination_authority TEXT,destination_prefix TEXT);`);
+				if (!namespaceDb.prepare('SELECT id FROM storages LIMIT 1').get()) {
+					const cipher = new Cryptr(configService.config.SECRET!);
+					const credentials = Object.fromEntries(
+						Object.entries({
+							endpoint: exportConfig.endpoint,
+							bucket: exportConfig.bucket,
+							access_key_id: exportConfig.accessKeyId,
+							secret_access_key: exportConfig.secretAccessKey,
+						}).map(([key, value]) => [key, cipher.encrypt(value)])
+					);
+					namespaceDb
+						.prepare('INSERT INTO storages VALUES (?,?,?,?,?)')
+						.run(
+							'mirror-01',
+							'fixture_shared',
+							's3compatible',
+							JSON.stringify(credentials),
+							'{"hcp_mode":true}'
+						);
+					namespaceDb
+						.prepare('INSERT INTO storages VALUES (?,?,?,?,?)')
+						.run('source-01', 'fixture_source', 'sftp', '{}', '{}');
+					const alternate = Object.fromEntries(
+						Object.entries({
+							endpoint: exportConfig.endpoint,
+							bucket: exportConfig.bucket,
+							access_key_id: message.alternateReplicaCredential.accessKeyId,
+							secret_access_key: message.alternateReplicaCredential.secretAccessKey,
+						}).map(([key, value]) => [key, cipher.encrypt(String(value))])
+					);
+					namespaceDb
+						.prepare('INSERT INTO storages VALUES (?,?,?,?,?)')
+						.run(
+							'mirror-02',
+							'fixture_alternate',
+							's3compatible',
+							JSON.stringify(alternate),
+							'{"hcp_mode":true}'
+						);
+					for (let index = 0; index < (message.replicaCount || 5); index++) {
+						const prefix = `repositories/plan-${index}`;
+						namespaceDb.prepare('INSERT INTO plans VALUES (?,?,?,?)').run(
+							`plan-${index}`,
+							'source-01',
+							'/synthetic-source',
+							JSON.stringify({
+								replication: {
+									enabled: index !== 4,
+									storages: [
+										{
+											replicationId: `replica-${index}`,
+											storageId: index === 4 ? 'mirror-02' : 'mirror-01',
+											storagePath: `${exportConfig.bucket}/${prefix}`,
+										},
+									],
+								},
+							})
+						);
+						const identity = canonicalS3Location(
+							exportConfig.endpoint,
+							exportConfig.bucket,
+							`${exportConfig.bucket}/${prefix}`
+						);
+						namespaceDb
+							.prepare('INSERT INTO managed_replication_destinations VALUES (?,?,?,?)')
+							.run(
+								index === 4 ? 'mirror-02' : 'mirror-01',
+								`${exportConfig.bucket}/${prefix}`,
+								identity.authority,
+								identity.prefix
+							);
+					}
+				}
+			}
 			const factory = (configuration: NonNullable<ReturnType<typeof exportConfiguration>>) => {
 				const storage = new S3ExportStorage(configuration);
 				const upload = storage.upload.bind(storage),
@@ -144,7 +245,7 @@ process.on('message', async (message: any) => {
 				store,
 				running.recovery,
 				exportConfiguration,
-				async c => assertExportIsolation(c, []),
+				async c => assertExportIsolation(c, [], namespaceDb),
 				factory
 			);
 			running.app.use(
@@ -196,6 +297,7 @@ process.on('message', async (message: any) => {
 		} else if (message.action === 'stop') {
 			clearInterval(timer);
 			await service?.shutdown();
+			namespaceDb?.close();
 			await running?.close();
 			process.send?.({ event: 'stopped' });
 			process.disconnect();

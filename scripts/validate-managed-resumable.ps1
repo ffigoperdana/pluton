@@ -1,4 +1,4 @@
-param([ValidateSet('small','large','combined','four','metadata')][string[]]$Modes=@('small','large','combined','four','metadata'),[string]$Image='pluton-resumable-native:local',[switch]$ProductionCompose)
+param([ValidateSet('small','large','combined','four','metadata')][string[]]$Modes=@('small','large','combined','four','metadata'),[string]$Image='pluton-resumable-native:local',[switch]$ProductionCompose,[switch]$SharedNamespace)
 # Every resource belongs to this invocation. No published ports, production
 # storage inputs, Docker socket mount, global settings or application deployment.
 $ErrorActionPreference='Stop'
@@ -7,7 +7,7 @@ $id=[Guid]::NewGuid().ToString('N')
 $name="pluton-resumable-fixture-$id"
 $network="$name-network";$lab="$name-lab";$storage="$name-storage";$minio="$name-s3"
 $saved=@{}
-$names=@('FIXTURE_ADMIN_ACCESS','FIXTURE_ADMIN_SECRET','MANAGED_EXPORT_ENABLED','MANAGED_EXPORT_ENDPOINT','MANAGED_EXPORT_REGION','MANAGED_EXPORT_BUCKET','MANAGED_EXPORT_PREFIX','MANAGED_EXPORT_ACCESS_KEY_ID','MANAGED_EXPORT_SECRET_ACCESS_KEY','MANAGED_EXPORT_SESSION_TOKEN','MANAGED_EXPORT_CA_FILE','MANAGED_EXPORT_TTL_SECONDS','MANAGED_EXPORT_CA_HOST_FILE','PLUTON_IMAGE_REF','PLUTON_VOLUME_NAME','ENCRYPTION_KEY','USER_NAME','USER_PASSWORD','NODE_ENV','PLUTON_DATA_DIR')
+$names=@('FIXTURE_ADMIN_ACCESS','FIXTURE_ADMIN_SECRET','MANAGED_EXPORT_ENABLED','MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE','MANAGED_EXPORT_ENDPOINT','MANAGED_EXPORT_REGION','MANAGED_EXPORT_BUCKET','MANAGED_EXPORT_PREFIX','MANAGED_EXPORT_ACCESS_KEY_ID','MANAGED_EXPORT_SECRET_ACCESS_KEY','MANAGED_EXPORT_SESSION_TOKEN','MANAGED_EXPORT_CA_FILE','MANAGED_EXPORT_TTL_SECONDS','MANAGED_EXPORT_CA_HOST_FILE','PLUTON_IMAGE_REF','PLUTON_VOLUME_NAME','ENCRYPTION_KEY','USER_NAME','USER_PASSWORD','NODE_ENV','PLUTON_DATA_DIR')
 foreach($key in $names){$saved[$key]=[Environment]::GetEnvironmentVariable($key,'Process')}
 $createdNetwork=$false;$createdLab=$false;$createdStorage=$false
 $private=Join-Path $repo "tmp/$name";$appData="$name-app-data";$createdAppData=$false
@@ -21,9 +21,9 @@ try {
     & docker run --rm --network none --read-only --user 0 --mount "type=volume,source=$lab,target=/lab" --mount "type=volume,source=$storage,target=/storage" --entrypoint sh $Image -c 'mkdir -p /lab/tls; openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes -keyout /lab/tls/private.key -out /lab/tls/public.crt -subj /CN=minio -addext subjectAltName=DNS:minio,IP:127.0.0.1 >/dev/null 2>&1 && chown -R 1000:1000 /lab /storage && chmod 700 /lab /storage /lab/tls && chmod 600 /lab/tls/private.key'
     if($LASTEXITCODE -ne 0){throw 'Disposable TLS/volume initialization failed.'}
     $env:FIXTURE_ADMIN_ACCESS=[Guid]::NewGuid().ToString('N');$env:FIXTURE_ADMIN_SECRET=[Guid]::NewGuid().ToString('N')
-    $env:MANAGED_EXPORT_ENABLED='true';$env:MANAGED_EXPORT_ENDPOINT='https://minio:9000';$env:MANAGED_EXPORT_BUCKET='example-private-exports'
+    $env:MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE=if($SharedNamespace){'true'}else{'false'};$env:MANAGED_EXPORT_ENABLED='true';$env:MANAGED_EXPORT_ENDPOINT='https://minio:9000';$env:MANAGED_EXPORT_BUCKET='example-private-exports'
     $env:MANAGED_EXPORT_ACCESS_KEY_ID=[Guid]::NewGuid().ToString('N');$env:MANAGED_EXPORT_SECRET_ACCESS_KEY=[Guid]::NewGuid().ToString('N');$env:MANAGED_EXPORT_CA_FILE='/lab/tls/public.crt'
-    $env:MANAGED_EXPORT_REGION='us-east-1';$env:MANAGED_EXPORT_PREFIX='pluton-temporary-exports/uat';$env:MANAGED_EXPORT_SESSION_TOKEN='';$env:MANAGED_EXPORT_TTL_SECONDS='7200'
+    $env:MANAGED_EXPORT_REGION='us-east-1';$env:MANAGED_EXPORT_PREFIX='pluton-temporary-exports';$env:MANAGED_EXPORT_SESSION_TOKEN='';$env:MANAGED_EXPORT_TTL_SECONDS='7200'
     $env:ENCRYPTION_KEY=[Guid]::NewGuid().ToString('N');$env:USER_NAME='fixture-admin';$env:USER_PASSWORD=[Guid]::NewGuid().ToString('N');$env:NODE_ENV='test';$env:PLUTON_DATA_DIR='/data'
     $minioEnvironment=@("MINIO_ROOT_USER=$env:FIXTURE_ADMIN_ACCESS","MINIO_ROOT_PASSWORD=$env:FIXTURE_ADMIN_SECRET","MINIO_KMS_SECRET_KEY=fixture:$([Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)))")
     $minioArguments=@('run','-d','--name',$minio,'--network',$network,'--network-alias','minio','--read-only','--user','1000:1000','--cpus','1','--memory','1g','--memory-swap','1g','--pids-limit','128','--cap-drop','ALL','--security-opt','no-new-privileges:true','--mount',"type=volume,source=$lab,target=/lab,readonly",'--mount',"type=volume,source=$storage,target=/storage",'--tmpfs','/tmp:rw,noexec,nosuid,nodev,uid=1000,gid=1000,size=32m')

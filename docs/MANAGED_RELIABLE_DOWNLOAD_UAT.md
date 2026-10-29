@@ -8,6 +8,11 @@ been tested by the coding session. Publish the local commit, open a follow-up PR
 (#54 is already merged), and wait for **all Container Image jobs on that commit**
 before approving a production image digest. A local build is not hosted CI PASS.
 
+The explicitly selected shared-namespace workflow below supersedes the original
+separate-bucket requirement **only when** `MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE`
+is exactly `true`. It uses the existing namespace and currently authorized
+credentials. All other installations keep strict bucket/credential separation.
+
 ## Activation checklist
 
 - [ ] Hosted CI and runtime image checks completed on the published commit.
@@ -15,18 +20,18 @@ before approving a production image digest. A local build is not hosted CI PASS.
   approval/backup, project name, named `/data` volume and all existing overlays.
 - [ ] Arrange a maintenance window for application recreation. Let active backups,
   restores and exports finish; do not interrupt them to enable this feature.
-- [ ] Storage operator approves a **new private temporary bucket and dedicated
-  identity**, separate from every backup/replica bucket and identity. Review policy
-  and network access without copying backup credentials into export settings.
+- [ ] Storage operator reviews the selected destination contract: strict isolation
+  by default, or the explicit shared-namespace procedure below. Record authorized
+  namespace, reserved prefix and credential scope privately.
 - [ ] HTTPS endpoint, signing region, DNS, client reachability, certificate chain,
   clock synchronization, SSE-S3 AES256, versioning, cleanup permissions and storage
   quota approved. HCP must pass the same checks; there is no compatibility bypass.
 - [ ] Install the reviewed host bundle and new image with export disabled. Preserve
   `.env`, local overlays, database, export-job metadata and existing data mounts.
 - [ ] If needed, complete the explicit public-CA file mount procedure below.
-- [ ] Set the ten settings below privately and explicitly enable the feature;
+- [ ] Set the eleven settings below privately and explicitly enable the feature;
   recreate only the application using the approved deployment procedure.
-- [ ] Private comparison of effective Compose and running container reports all ten
+- [ ] Private comparison of effective Compose and running container reports all eleven
   environment fields equal; authenticated application configuration is valid.
 - [ ] Standalone preflight reaches `ready` with all 15 checks and no cleanup pending.
   **No backup content is admitted before this passes.**
@@ -45,11 +50,12 @@ callers. Do not change repository, replication, Restic, Agent or backup settings
 | Container setting | Operator value / default |
 | --- | --- |
 | `MANAGED_EXPORT_ENABLED` | `false`; set **exactly `true`** only for approved UAT |
+| `MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE` | `false`; exact `true` enables the reviewed shared-prefix contract below |
 | `MANAGED_EXPORT_ENDPOINT` | Approved `https://` S3 API origin, no embedded credentials/path/query |
 | `MANAGED_EXPORT_REGION` | Provider's actual signing region; default `us-east-1` |
-| `MANAGED_EXPORT_BUCKET` | New private temporary bucket, never a repository/replica bucket |
+| `MANAGED_EXPORT_BUCKET` | Approved private destination; existing `backup` in the shared workflow below |
 | `MANAGED_EXPORT_PREFIX` | `pluton-temporary-exports`, optionally followed by `/` and 1–64 letters, digits, `_` or `-` |
-| `MANAGED_EXPORT_ACCESS_KEY_ID` | Dedicated least-privilege export identity |
+| `MANAGED_EXPORT_ACCESS_KEY_ID` | Approved protected identity; shared credentials permitted only in explicit shared mode |
 | `MANAGED_EXPORT_SECRET_ACCESS_KEY` | Its protected secret |
 | `MANAGED_EXPORT_SESSION_TOKEN` | Optional matching session token; otherwise empty |
 | `MANAGED_EXPORT_CA_FILE` | Empty for system trust; overlay fixes it to `/run/secrets/pluton-managed-export-ca.pem` |
@@ -65,23 +71,267 @@ versions; prefix-scoped get/get-version/put/delete/delete-version and object ACL
 inspection; multipart create/upload/complete/abort/list-parts; and bucket multipart
 enumeration. Review provider-specific IAM action mappings (AWS maps multipart
 creation/completion and object ACL inspection to its respective S3 actions). Deny
-all access to backup/replication buckets and writes outside the export prefix.
+all unrelated access where provider policy permits. Shared mode's application
+boundaries do not remove existing backup/replication permissions from a shared key.
 The app neither creates buckets nor enables encryption/versioning nor edits policy.
-Configure those out of band before preflight. Application admission also rejects
-reuse of a registered repository/replica bucket or access-key ID. That comparison
+Inspect existing settings before preflight; never change namespace-wide settings
+just for UAT. Strict application admission rejects reuse of a registered
+repository/replica bucket or access-key ID. Explicit shared admission instead
+reserves and checks the exact disjoint prefix in both directions. That comparison
 does not replace the storage operator's IAM review or attest that a provider alias
 represents a different underlying account.
 
-Use a separate finite storage quota. UAT needs at least 512 MiB free for one 120 MB
+Use approved finite free capacity. UAT needs at least 512 MiB free for one 120 MB
 archive, probes and versions; allow additional headroom for concurrent retained
 exports. Existing hard bounds remain one worker, four admitted/uncleaned jobs,
 128 GiB per archive, 256 GiB aggregate reservations, 64 metadata records, and one
 16 MiB upload part in flight. **These are admission caps, not a guarantee that the
-VM or bucket can sustain that workload.** Configure provider lifecycle expiration
-of current/noncurrent export versions and abandoned multipart uploads as a safety
-net, with retention no shorter than the approved application TTL. Do not apply a
-bucket lifecycle policy to any backup repository. Existing jobs must retain their
+VM or bucket can sustain that workload.** Inspect provider lifecycle/retention,
+including noncurrent versions and abandoned uploads. This feature changes none
+of those settings. Do not alter shared namespace lifecycle, retention or pruning
+for exports. Existing jobs must retain their
 destination and credentials until cleanup finishes.
+
+## BATII HCP 9.7 — Existing Shared Namespace backup
+
+This workflow uses the **existing `backup` namespace**. No new namespace, bucket,
+tenant, provider or physical storage is required. The operator-supplied reference
+version is HCP 9.7.3.14; the documentation reviewed covers 9.7.x. The existing
+`meetingroom` replication and future plans stay in their own canonical repository
+prefixes. Those actual paths are resolved privately from application state; neither
+the plan title nor an assumed folder name defines ownership. Only
+`pluton-temporary-exports/` is reserved for Reliable Download.
+
+### Exact operator settings and preserved deployment
+
+Use a protected installation-local `.env`. Example values below are placeholders;
+the bucket and reserved prefix are the explicitly requested namespace contract:
+
+```dotenv
+MANAGED_EXPORT_ENABLED=false
+MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE=true
+MANAGED_EXPORT_ENDPOINT=https://tenant.example.internal
+MANAGED_EXPORT_REGION=us-east-1
+MANAGED_EXPORT_BUCKET=backup
+MANAGED_EXPORT_PREFIX=pluton-temporary-exports
+MANAGED_EXPORT_ACCESS_KEY_ID=YOUR_CURRENTLY_AUTHORIZED_HCP_ACCESS_KEY
+MANAGED_EXPORT_SECRET_ACCESS_KEY=YOUR_CURRENTLY_AUTHORIZED_HCP_SECRET_KEY
+MANAGED_EXPORT_SESSION_TOKEN=
+MANAGED_EXPORT_TTL_SECONDS=259200
+MANAGED_EXPORT_CA_FILE=/run/secrets/pluton-managed-export-ca.pem
+MANAGED_EXPORT_CA_HOST_FILE=/etc/pluton/certificates/export-ca.pem
+```
+
+Use the actual approved S3 API origin and signing region. Use the tenant/API
+origin without a bucket-qualified hostname: shared export
+uses path-style addressing and refuses a host beginning with `backup.` to avoid
+an unintended object-key prefix. Repository aliases are still compared canonically.
+If system trust suffices, leave `MANAGED_EXPORT_CA_FILE` empty and omit the CA
+overlay and host-file setting.
+Otherwise apply the reviewed single-file read-only overlay using the unchanged
+mount-contract procedure below. Set `MANAGED_EXPORT_ENABLED=true` only in the
+approved window to run authenticated inventory/preflight; leave normal users from
+starting downloads until the operator reports GO. Every real export independently
+repeats the gates before reading source contents. API input cannot select a prefix,
+bucket, endpoint, credentials or mode. Both feature flags default to `false` in Git.
+
+Do not change `PLUTON_STORAGE_CA_FILE`, existing storage credentials, plan schedules,
+Agent settings, encryption keys, repository locations or overlays to enable this
+feature. Operator environment settings supply the export credential separately,
+even if its value is the same currently authorized key. Do not extract backup
+credentials through a browser/API. Installing an image does not update installed
+host scripts; use the existing reviewed host-bundle process first. Preserve `/data`,
+its export SQLite files, and the main database containing the new reservations.
+
+After application recreation, compare protected effective Compose JSON with a
+protected container inspection using `compose-tools.py export-environment` below.
+Require `export-environment-matches-all-11-fields-no-values-emitted`, plus the
+authenticated configuration endpoint reporting `sharedNamespaceEnabled:true`.
+No values, credential hashes or signed URLs are logged by those checks.
+
+### Bidirectional protection and concurrency
+
+Shared admission installs a permanent main-database reservation under an IMMEDIATE
+SQLite transaction. In the same transaction it checks all primary plan scopes,
+enabled **and disabled** replica definitions, historical backup/mirror references,
+managed/retained repository records, all retained replica destinations regardless
+of initialization state, pending/running/uncertain/historical replica jobs, and
+self-backup destinations. Legacy registrations currently support local paths only;
+an unknown future non-local backend blocks shared admission until understood.
+Missing storage, root/inherited paths, ambiguous/encoded components or overlap
+fail closed without changing the repository record.
+
+The shared identity code calls the same `canonicalS3Location` normalization as
+repository identity: verified HTTPS origins, default ports/trailing hostname dot,
+virtual-host bucket forms and AWS regional aliases. It additionally treats **the
+same bucket name at any endpoint as a possible alias**. Thus an unknown DNS alias
+cannot hide overlap; this conservative rule can reject an unrelated installation
+with an identical bucket name. There is no alias allowlist/bypass. Prefix segments
+are case-sensitive and parent/child boundary checks are exact; a sibling such as
+`pluton-temporary-exports-other` is disjoint.
+
+Plan create/update, backup mirror receipt writes, replica reservation, settings
+self-backup writes and storage updates check the durable reservation at backend
+transaction boundaries. A plan created tomorrow cannot place a repository at the
+root, inside the reserved prefix or over its parent. Disjoint replication and
+existing scheduling/retention continue unchanged. The same checks work after
+export is disabled and after restart. There is no API to drop a reservation and
+cleanup never releases it. At most eight normalized namespace reservations can
+be retained; a configuration change cannot silently discard previous ownership.
+
+Storage service edits use a second durable journal spanning the remote rclone
+configuration change and final database publication. Remote names are reserved
+against conflicting creations, even through a non-S3 type. Once the namespace is
+reserved, ordinary edits of an existing storage for that namespace (including a
+credential/endpoint change) are refused before remote mutation. **Do not rotate
+its shared credentials during active exports or through an ordinary edit after
+reservation.** Coordinate rotation as a separately reviewed maintenance action,
+drain exports and reconcile all existing backup/replica bindings first. A new
+disjoint plan can still use the unchanged storage.
+
+An interrupted/failed storage edit remains marked uncertain; affected exports
+are refused rather than assuming the remote config reverted. Operators must
+reconcile actual protected rclone configuration with the saved database and review
+the exact journal entry before a separate approved recovery. Never clear the
+whole journal/reservation table or restore an older database merely to obtain GO.
+This patch does not automate that recovery or credential rotation.
+
+Admission, worker execution, source/publication boundaries, authorization/proxy
+resume and cleanup reconciliation revalidate the selected contract. Immutable
+job destination fingerprints remain unchanged for older jobs; changing endpoint,
+region, bucket, prefix or CA refuses their use until the matching config returns.
+Ready job metadata is retained, not silently repointed. A provider/credential or
+other application with write privilege is outside SQLite's control; the ownership
+and conditional-write checks remain mandatory on S3 as well.
+
+### Read-only inventory before disposable writes
+
+In the authenticated browser on the approved origin, request:
+
+```js
+const response = await fetch('/api/managed-exports/inventory-checks', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+});
+if (response.status !== 202) throw new Error('Inventory admission refused');
+const inventoryId = (await response.json()).result.id;
+```
+
+Poll `GET /api/managed-exports/inventory-checks/:id` with the same session, using
+the bounded polling pattern below. Require `state:ready` and
+`inventory:{objects:0,uploads:0,exclusive:true}` on the first empty-prefix setup.
+Existing live exports may produce nonzero counts only when their exact object
+versions/upload IDs are already recorded and their HEAD proof matches. A cleaned
+job cannot adopt a replayed object. Results return counts/state only, not object
+names or repository inventory. This job performs versioning inspection and bounded
+prefix-scoped version/upload listings, plus HEAD on already recorded owned versions;
+it performs **no S3 writes, deletes, aborts, content reads or Restic operations**.
+It records only local metadata/reservation. Cancellation uses its owner-bound
+DELETE endpoint and never starts storage cleanup for an inventory job.
+
+If any unknown object, foreign version, delete marker, unrecorded multipart upload,
+unreadable identity or incomplete/over-limit enumeration exists under the prefix,
+return NO-GO and preserve it. Do not claim it, remove it, move a repository or
+recursively clean the namespace. This check never inventories repository contents
+outside the reserved prefix. Inspection of any other names requires the storage
+operator's own authorized read-only procedure. The application will not sweep
+backup contents to infer ownership. The listing bound is eight pages of 100 entries
+each; exhaustion fails closed.
+
+After inventory succeeds, run `POST /api/managed-exports/preflights` with `{}` and
+poll its status as described below. Shared mode repeats inventory before probe
+writes and again at authorization/publication boundaries. Only generated random
+objects are used; no backup data is read until all 15 capability checks pass.
+
+### HCP console review and capability findings
+
+Review read-only with the storage operator: selected namespace identity, S3 API
+and HTTPS availability, verified certificate/host name, signing compatibility,
+cloud protocol optimization/multipart support, versioning state, encryption,
+private ACLs/anonymous denial, effective authorized access, retention/holds and
+delete-version/abort/list permissions. Do not toggle these namespace-wide settings
+to force acceptance. Versioning/retention changes can affect existing replication
+objects; enabling them is not an export-only action.
+The official [9.7 protocol-optimization reference](https://docs.hitachivantara.com/r/en-us/mk-95hcph001-20/administering-hcp/tenant-administration/protocol-optimization)
+states that multipart uploads require a cloud-optimized namespace. If the existing
+namespace cannot provide multipart, return NO-GO; do not modify its optimization
+or enable management privileges through this application.
+
+The official [HCP 9.7 multipart completion reference](https://docs.hitachivantara.com/r/en-us/mk-95hcph001-20/using-the-hitachi-api-for-amazon-s3/working-with-multipart-uploads/completing-a-multipart-upload)
+documents POST completion, an optional `If-Match` comparison and version IDs only
+when versioning is enabled. It does **not** document `If-None-Match: *` completion.
+Therefore this patch makes no claim that HCP 9.7.3.14 implements that operation;
+the existing 412 collision probe remains compulsory. It also tests successful
+two-part completion and full synthetic SHA256 readback. Generic multipart success
+does not prove conditional safety. An ignored header, 400, 501, different failure
+or inability to clean up yields the exact safe capability/status and NO-GO.
+
+**No versioning bypass is implemented.** Documentation alone, random key entropy,
+HEAD-before-write, a matching ETag or a successful Range GET cannot prove equivalent
+publication/resume/delete safety under another writer. Without a pinned historical
+version, replacement between grants/requests can mix stale generations; an
+unversioned HEAD-then-delete has an identity race. HCP's documented `If-Match`
+completion alone does not establish conditional creation of an absent key or
+safe version-specific deletion. There is no actual operator-authorized HCP API
+evidence demonstrating an equivalent primitive here. Consequently disabled or
+unavailable versioning, missing AES256, unreliable conditional completion, or
+uncertain cleanup remains NO-GO, without changing HCP settings. A future alternative
+requires independently verified native concurrency/collision/replay tests and a
+reviewed safety argument before any new mode is enabled.
+
+Shared cleanup requires a recorded upload ID before abort and an exact persisted
+version/length/ETag plus ownership metadata before deletion. For preflight versions
+these proofs are journaled as requests succeed; archives retain their full SHA256
+and snapshot/owner binding. Unknown versions with even a forged matching job marker
+are left untouched. A crash between provider success and local persistence leaves
+uncertainty and a cleanup blocker, not permission to adopt/delete by name. A
+successful delete response is followed by absence verification. No bucket-wide
+delete, repository-prefix deletion, Restic unlock/forget/prune, namespace lifecycle
+change or management API mutation is performed.
+
+Reusing the currently authorized HCP key is supported in this explicit mode. It
+does **not** provide IAM isolation: process/key compromise could permit unrelated
+operations using the shared privileges. Provider policy, network restriction and
+credential handling remain operator responsibilities. New credentials are not a
+prerequisite; never claim application prefix checks revoke the shared key's rights.
+
+### Operator GO / NO-GO, initial test and rollback
+
+1. Publish the local patch and require the hosted validation/build on its exact
+   commit; retain previous image/host bundle/configuration and compatible database
+   backup. This coding session does not push, deploy or access production.
+2. Review current repository/replica scopes privately. Any root, unresolved,
+   overlapping, retained or disabled scope is a blocker, never an invitation to
+   rename/migrate existing data. Keep the `meetingroom` plan and schedules intact.
+3. Install the approved host bundle/image with export disabled and unchanged volume,
+   overlays, encryption keys and Agent. Complete CA approval if needed. Set the
+   explicit shared flag/configuration privately, then enable export in the approved
+   maintenance window and recreate only the app using its approved digest.
+4. Require health, the eleven-field private configuration comparison, valid process
+   flags, read-only inventory, then all 15 preflight gates plus confirmed cleanup.
+   Any missing check, timeout, failed capability, unknown prefix object or cleanup
+   uncertainty is **NO-GO**. Keep Standard Download available and make no real export.
+5. After GO, run the synthetic 120 MB test below and verify exact SHA256 and
+   interrupted 10/50/90% resumes using the same export and renewed short-lived grants.
+   Compare existing replication's protected status/object manifest before/after and
+   check snapshot/pack/index/config integrity through an authorized read-only
+   procedure. Local synthetic evidence is not production full-recovery acceptance.
+6. Test admission of a future disjoint Backup Plan and rejection of parent/root/
+   export-prefix paths using disposable fixtures; do not create/delete a live plan
+   just for a negative test. Monitor existing HCP/SFTP backup, replica, Agent,
+   Standard/Full/Regular Files Only download, staging restore and Recovery Test
+   status under the resource checklist below. Triggering real operations needs its
+   own operator authorization. Do not change Agent or retention.
+7. Roll back by cancelling test exports while the matching config is still enabled,
+   verifying owned-object/part cleanup, then disabling export and recreating only
+   the app on a compatible approved image. Keep `/data`, both export SQLite metadata
+   and the main-database namespace reservation. Never remove a reservation to make
+   room for a repository. Keep the same destination/credentials for outstanding
+   cleanup. Old images predating this guard cannot safely admit new S3 plan/storage
+   edits in shared mode; do not use image rollback to bypass that restriction.
+
+GO requires both actual HCP preflight and client-network UAT evidence. If HCP cannot
+prove a mandatory feature, report that precise incompatibility and stop Reliable
+Download. Do not demand another namespace or change existing backup protection.
 
 ## Optional private CA without weakening the container
 
@@ -168,8 +418,8 @@ files, then run:
 python3 /opt/pluton/compose-tools.py export-environment "$work/effective.json" "$work/inspect.json"
 ```
 
-Require `export-environment-matches-all-10-fields-no-values-emitted`. The tool
-compares all ten settings, including credentials and token, in memory; it reports
+Require `export-environment-matches-all-11-fields-no-values-emitted`. The tool
+compares all eleven settings, including credentials and token, in memory; it reports
 only a fixed success or the mismatching variable's **name**. It checks the actual
 container identity/user/mount set too. Never run `docker inspect`, `docker compose
 config` or `env` to the terminal as a substitute.
@@ -235,7 +485,7 @@ an interrupted preflight fails and its owned probes are reconciled for cleanup.
 
 | Mandatory check | Proof |
 | --- | --- |
-| `destination-isolation` | Independent bucket and access-key ID vs registered repositories/replicas |
+| `destination-isolation` | Strict separate bucket/key, or durable bidirectional prefix reservation plus read-only exclusive inventory in explicit shared mode |
 | `https` | Successful verified HTTPS request using system/approved CA and hostname validation |
 | `versioning` | Versioning enabled, not suspended |
 | `sse-s3` | Random object's HEAD reports AES256 and expected ownership metadata |
@@ -248,7 +498,7 @@ an interrupted preflight fails and its owned probes are reconciled for cleanup.
 | `multipart-upload` | Real owned multipart creation and part upload |
 | `multipart-enumeration` | Real pending upload discoverable for crash cleanup |
 | `conditional-completion` | Completing against an existing key with If-None-Match `*` returns 412 |
-| `multipart-completion` | Two parts actually completed conditionally; length/version/AES256/ownership verified |
+| `multipart-completion` | Two parts actually completed conditionally; full random-object SHA256 readback, length/version/AES256/ownership verified |
 | `cleanup` | Owned versions removed, abandoned multipart aborted and absence verified |
 
 Safe failures report a capability plus `tls-validation`, `access-denied`,
@@ -386,7 +636,110 @@ post-CA state for recovery. Never use `down -v`, remove the named data volume, r
 the deployment contract, restore an old database over current metadata, or remove
 unrelated overlays as a shortcut.
 
-## Local evidence and remaining release gates
+## Shared-namespace local validation and release gates
+
+This work continues on `codex/managed-resumable-download`, directly after verified
+commit `12d4235da32aeb5efc9cfb534fb5c9093c788f7b`; the earlier implementation was
+preserved. Only disposable data and generated identities were used. No push,
+production access, HCP credentials, deployment, Agent upgrade or namespace-setting
+change was performed. Exact changed files can be reviewed with
+`git diff 12d4235..HEAD --name-only` after the local commit.
+
+| Final local regression gate | Result |
+| --- | --- |
+| Complete backend suite | 206 suites, 4,240 passed, four pre-existing skips; normal exit |
+| Frontend state/polling/accessibility/recovery | 360 passed |
+| Source/security/Compose/worker contract tests | 150 passed |
+| Relevant backend on Linux, 2 CPU / 4 GiB | Nine suites, 195 passed; includes standalone migrations and native SQLite races |
+| Linux deployment/CA/shared configuration policies and shell syntax | 36 passed; shell syntax valid |
+| Backend lint, backend/frontend type checks, production build | PASS with pinned pnpm 10.20.0 and existing lockfile |
+| API inventory | 190 contracts verified |
+| Hosted workflow / newly built production runtime image / actual HCP | Not run here; exact published-commit CI and operator preflight remain required |
+
+The new implementation is centered on `NamespaceReservation.ts`, the shared
+canonical S3 identity helpers, transactional Plan/Storage/Backup/Settings/replica
+store guards, the storage service's durable edit journal, inventory/preflight
+service/controller/router and exact version/upload proofs in `S3ExportStorage`.
+Compose, both environment examples, private environment comparison and tests
+forward/check eleven runtime settings. The new main-database tables are local
+ownership metadata; export jobs retain their prior private SQLite location and
+backward-compatible JSON. Inventory intent is saved atomically at admission so
+a hard restart cannot mistake a read-only inventory for an object-cleanup job.
+
+Reproduce native shared-mode checks on the prepared disposable Linux image:
+
+```powershell
+./scripts/validate-managed-resumable.ps1 -Modes small -ProductionCompose -SharedNamespace
+./scripts/validate-managed-resumable.ps1 -Modes combined -ProductionCompose -SharedNamespace
+```
+
+The small run uses five disjoint synthetic plan/replica scopes and real copied
+Restic repositories, with shared credentials and a second generated replica
+identity. A replica definition is disabled but still included in admission. The
+large run uses one disjoint replica. Both capture a complete repository-object
+manifest (names, version IDs, sizes and SHA256) before export and compare it after
+all export operations, then run read-only `restic check --read-data` and compare
+again. They validate historical snapshot IDs as well. No repository object is
+expected to change. These tests prove export non-interference; they do not claim
+a production application recovery or execute production schedules.
+
+| Native local check | Result |
+| --- | --- |
+| 120,000,000-byte source / 120,005,632-byte TAR | PASS; full SHA256, historical contents and symlink-safe extraction |
+| Five replica prefixes, shared and different credentials | PASS; all repository manifests unchanged; Restic read-data checks pass |
+| Read-only inventory, unknown/forged object preservation, all 15 preflight checks | PASS before any source archive read |
+| 10/50/90% interrupted resume, renewed grants, proxy, slow client | PASS on the same archive/version |
+| Restart, failed multipart, cancellation, expiry, cleanup retries | PASS; zero orphan objects/uploads and zero temporary server TAR bytes |
+| 3,170,000,000-byte source / 3,406,661,632-byte TAR, 115,570 TAR entries | PASS; SHA256, historical identity, resume, unchanged replica, Restic read-data check |
+
+The final small run prepared its TAR in 13.284 seconds, with maximum admission
+584 ms, application-server Node peak 349,454,336 bytes and whole fixture cgroup
+peak 1,133,600,768 bytes (~1.06 GiB), no OOM events/kills. Before transaction-local
+credential resolution, a contended five-replica run reached 3,495 ms admission;
+each transaction now derives credentials once per storage, discards that cache
+on return, and revalidates later edits. The cache budget/freshness has a regression
+test. Different runs have different synthetic archive hashes.
+
+The large stress run prepared its TAR in 265.584 seconds; server Node peak was
+662,052,864 bytes (~631 MiB), whole fixture cgroup peak 4,296,314,880 bytes
+(approximately the 4 GiB accounting boundary), CPU averaged 80.97% of its two-CPU
+allocation, with no OOM events/kills. The fixture includes client/Restic/Rclone and
+page cache. **This leaves insufficient demonstrated headroom for concurrent work
+on a 4 GiB production VM.** It exceeds the conservative production UAT stop
+threshold above: begin with 120 MB only; do not treat this stress pass as approval
+for multi-GB production downloads or simultaneous backups. Preserve normal backup
+capacity and require operator-observed resource margins before expanding UAT.
+
+Verification also covers actual SQLite transaction/permission boundaries: existing
+root/ambiguous scopes, disabled replicas, retained/detached/uncertain ownership,
+historical mirror receipts, aliases, future plan/replica/storage/self-backup paths,
+two competing database connections, edit/crash journals, restart/disablement,
+strict default isolation, auth/owner rejection, metadata forgery, unrecorded upload
+IDs, foreign versions/delete markers and incomplete enumeration. No provider-wide
+delete or lifecycle mutation is used.
+
+A first full regression run exposed an application-singleton import in the new
+store guard; it was fixed by startup-owned dependency injection, preserving
+standalone migration tools without environment bootstrapping. The ten original
+credential-migration tests then passed unchanged. A Linux-native concurrent-writer
+assertion now checks `SQLITE_BUSY` directly instead of matching the native Error
+class/message; the two-connection rejection assertion is retained. No CI gate,
+security assertion, scenario or timeout was removed/increased to obtain a pass.
+
+Hosted release checklist (operator publishes; this session does not):
+
+- [ ] Publish this branch and open/update the appropriate follow-up PR; PR #54 is merged.
+- [ ] Require the Container Image validation and production image build on the
+  exact published commit, including all backend/frontend/type/security/deployment
+  gates and the existing non-root native recovery-client runtime image checks.
+- [ ] Review the full source diff, credential-free configuration examples and
+  protected host-bundle digest; approve the exact produced image digest.
+- [ ] Run the actual existing HCP namespace inventory, all 15 preflight gates,
+  120 MB client resume/checksum and normal backup-protection checks above.
+- [ ] Record a sanitized operator GO/NO-GO and rollback readiness. Hosted CI and
+  production HCP compatibility remain unclaimed until those actual checks finish.
+
+## Earlier deployment follow-up evidence (historical)
 
 The follow-up builds on merged main `12e5fd7753eb27fe61225fda07faeefe690c591b`.
 The confirmed deployment gap was that `.env` export settings were never forwarded

@@ -16,7 +16,8 @@ test("every runtime export environment variable is explicitly forwarded, disable
       ].map((m) => m[1]),
     ),
   ];
-  assert.equal(keys.length, 10);
+  assert.equal(keys.length, 11);
+  assert.match(compose, /MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE: "\$\{MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE:-false\}"/);
   for (const key of keys) assert(compose.includes(`${key}: "\${${key}:-`), key);
   assert.match(
     compose,

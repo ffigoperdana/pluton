@@ -211,32 +211,48 @@ export function storageRcloneOptions(
 /** Standard bucket-root repositories overlap every child of the same authority. */
 export function s3RepositoryScope(
 	storage: StorageConfiguration,
-	repositoryPath?: string | null
+	repositoryPath?: string | null,
+	plaintext?: Record<string, string>
 ): { authority: string; prefix: string } {
-	const scopePath =
-		(repositoryPath || '').replace(/^\/+|\/+$/g, '') || decryptStorageCredentials(storage).bucket;
+	const credentials = plaintext || decryptStorageCredentials(storage);
+	const scopePath = (repositoryPath || '').replace(/^\/+|\/+$/g, '') || credentials.bucket;
 	const root = !scopePath?.includes('/');
 	const identity = canonicalS3RepositoryIdentity(
 		storage,
-		root ? `${scopePath}/scope-placeholder` : scopePath
+		root ? `${scopePath}/scope-placeholder` : scopePath,
+		credentials
 	);
 	return { authority: identity.authority, prefix: root ? '' : identity.prefix };
 }
 
 export function canonicalS3RepositoryIdentity(
 	storage: StorageConfiguration,
-	repositoryPath: string
+	repositoryPath: string,
+	plaintext?: Record<string, string>
 ): {
 	authority: string;
 	prefix: string;
 	fingerprint: string;
 } {
 	if (!isS3Storage(storage.type)) throw new AppError(400, 'S3 storage is required.');
-	const credentials = decryptStorageCredentials(storage);
+	const credentials = plaintext || decryptStorageCredentials(storage);
 	const bucket = credentials.bucket;
+	return canonicalS3Location(s3Endpoint(storage, credentials), bucket, repositoryPath);
+}
+
+/** One normalization contract for repository and temporary-export identities. */
+export function canonicalS3Location(
+	endpointInput: URL | string,
+	bucket: string,
+	repositoryPath: string
+): {
+	authority: string;
+	prefix: string;
+	fingerprint: string;
+} {
+	const endpoint = httpsS3Endpoint(String(endpointInput));
 	if (!bucket || !/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(bucket))
 		throw new AppError(400, 'A valid existing bucket is required.');
-	const endpoint = s3Endpoint(storage, credentials);
 	if (endpoint.hostname.startsWith(bucket + '.'))
 		endpoint.hostname = endpoint.hostname.slice(bucket.length + 1);
 	// AWS bucket names are global within a partition, irrespective of regional endpoint aliases.
@@ -313,7 +329,9 @@ export function protectedStorageEnvironment(args: string[]): Record<string, stri
 	)
 		return {};
 	const rows = database
-		.prepare("SELECT name,type,credentials,settings FROM storages WHERE type IN ('s3','s3compatible')")
+		.prepare(
+			"SELECT name,type,credentials,settings FROM storages WHERE type IN ('s3','s3compatible')"
+		)
 		.all() as Array<any>;
 	const environment: Record<string, string> = {};
 	for (const row of rows) {

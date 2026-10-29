@@ -231,6 +231,91 @@ describe('bounded multipart publication', () => {
 	});
 });
 describe('immutable object integrity and exact orphan cleanup', () => {
+	test.each([
+		'unknown-object',
+		'forged-version',
+		'unknown-upload',
+		'delete-marker',
+		'incomplete-list',
+	])('shared prefix inventory rejects %s without modifying any object', async failure => {
+		const f = fixture();
+		f.config.allowSharedNamespace = true;
+		const send = jest.spyOn(f.storage.client, 'send') as jest.Mock;
+		send.mockImplementation(async (command: any) => {
+			if (command.constructor.name === 'GetBucketVersioningCommand') return { Status: 'Enabled' };
+			if (command.constructor.name === 'ListObjectVersionsCommand') {
+				if (failure === 'unknown-object')
+					return { Versions: [{ Key: f.config.prefix + '/foreign-object', VersionId: 'foreign' }] };
+				if (failure === 'forged-version')
+					return { Versions: [{ Key: f.job.key, VersionId: 'foreign' }] };
+				if (failure === 'delete-marker')
+					return { DeleteMarkers: [{ Key: f.job.key, VersionId: 'foreign' }] };
+				if (failure === 'incomplete-list') return { IsTruncated: true }; // No continuation proof.
+				return {};
+			}
+			if (command.constructor.name === 'ListMultipartUploadsCommand')
+				return { Uploads: [{ Key: f.job.key, UploadId: 'foreign' }] };
+			throw new Error('Inventory must not inspect contents or modify objects');
+		});
+		try {
+			await expect(
+				f.storage.inventory([f.job], new AbortController().signal)
+			).rejects.toMatchObject({ capability: 'destination-isolation' });
+			expect(
+				send.mock.calls.every(([command]: any) =>
+					[
+						'GetBucketVersioningCommand',
+						'ListObjectVersionsCommand',
+						'ListMultipartUploadsCommand',
+					].includes(command.constructor.name)
+				)
+			).toBe(true);
+		} finally {
+			f.storage.close();
+		}
+	});
+	test('shared cleanup cannot adopt a forged version or an unrecorded upload even at its exact random job key', async () => {
+		const f = fixture();
+		f.config.allowSharedNamespace = true;
+		const send = jest.spyOn(f.storage.client, 'send') as jest.Mock;
+		send.mockImplementation(async (command: any) => {
+			if (command.constructor.name === 'ListMultipartUploadsCommand')
+				return { Uploads: [{ Key: f.job.key, UploadId: 'foreign-upload' }] };
+			throw new Error('Must not abort an unrecorded upload');
+		});
+		try {
+			await expect(f.storage.cleanup(f.job, new AbortController().signal)).rejects.toThrow(
+				'cleanup-pending'
+			);
+			expect(
+				send.mock.calls.some(
+					([command]: any) => command.constructor.name === 'AbortMultipartUploadCommand'
+				)
+			).toBe(false);
+			send.mockImplementation(async (command: any) => {
+				if (command.constructor.name === 'ListMultipartUploadsCommand') return {};
+				if (command.constructor.name === 'ListObjectVersionsCommand')
+					return { Versions: [{ Key: f.job.key, VersionId: 'foreign-version' }] };
+				if (command.constructor.name === 'HeadObjectCommand')
+					return {
+						VersionId: 'foreign-version',
+						Metadata: {
+							'pluton-export-job': f.job.id,
+							'pluton-export-binding': bindingDigest(f.job.binding),
+						},
+					};
+				throw new Error('Must not delete a foreign version');
+			});
+			await expect(f.storage.cleanup(f.job, new AbortController().signal)).rejects.toThrow(
+				'cleanup-pending'
+			);
+			expect(
+				send.mock.calls.some(([command]: any) => command.constructor.name === 'DeleteObjectCommand')
+			).toBe(false);
+		} finally {
+			f.storage.close();
+		}
+	});
 	for (const scenario of ['unsupported', 'unconditional', 'cleanup-failure'])
 		test(`conditional-completion preflight fails closed for ${scenario} before source publication`, async () => {
 			const f = fixture();

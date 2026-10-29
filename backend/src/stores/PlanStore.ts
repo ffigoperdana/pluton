@@ -19,6 +19,7 @@ import { remoteManagedRepositories } from '../db/schema/remoteManagedRepositorie
 import { retainedManagedRepositories } from '../db/schema/retainedManagedRepositories';
 import { AppError } from '../utils/AppError';
 import { assertManagedReplicationIdle, assertPlanReplicaIsolation, assertPlanUpdateReplicaIsolation } from '../utils/managedReplicationPolicy';
+import { assertExportPlanScope, assertExportPlanUpdate } from '../utils/managedExport/NamespaceReservation';
 import {
 	assertNoRetainedRestoreDependency,
 	beginSourceRemoval,
@@ -443,6 +444,7 @@ export class PlanStore {
 	): Promise<Plan | null> {
 		return this.db.transaction(tx => {
 			assertPlanReplicaIsolation(this.db.$client, planData);
+			assertExportPlanScope(this.db.$client, planData);
 			const [plan] = tx
 				.insert(plans)
 				.values({
@@ -493,6 +495,7 @@ export class PlanStore {
 		}
 		return this.db.transaction(tx => {
 			assertPlanUpdateReplicaIsolation(this.db.$client, id, updatedPlan);
+			assertExportPlanUpdate(this.db.$client, id, updatedPlan);
 			const [plan] = tx
 				.update(plans)
 				.set({ ...updatedPlan, updatedAt: sql`(unixepoch())` })

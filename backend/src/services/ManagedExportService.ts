@@ -72,7 +72,7 @@ export class ManagedExportService {
 		this.safeLog({ stage: 'admitted', state: job.state });
 		return this.public(job);
 	}
-	async preflight(owner: string) {
+	async preflight(owner: string, inventoryOnly = false) {
 		if (this.stopped || this.workerFault) throw new TemporaryExportError('interrupted');
 		const c = this.config();
 		await this.isolated(c);
@@ -87,15 +87,15 @@ export class ManagedExportService {
 				snapshotId: crypto.randomBytes(32).toString('hex'),
 				mode: 'full',
 			},
-			c
+			c,
+			inventoryOnly ? 'inventory' : 'preflight'
 		);
-		this.store.update(job.id, { kind: 'preflight', preflightChecks: ['destination-isolation'] });
 		this.schedule();
 		return this.public(this.store.get(job.id)!);
 	}
 	async preflightStatus(owner: string, id: string) {
 		const job = this.store.get(id);
-		if (!job || job.kind !== 'preflight' || job.owner !== owner)
+		if (!job || !['preflight', 'inventory'].includes(job.kind || '') || job.owner !== owner)
 			throw new AppError(404, 'Preflight not found.');
 		return this.public(job);
 	}
@@ -103,7 +103,8 @@ export class ManagedExportService {
 		await this.preflightStatus(owner, id);
 		const job = this.store.update(id, { state: 'cancelled', failure: 'cancelled' });
 		if (this.active?.id === id) this.active.controller.abort();
-		else setImmediate(() => void this.cleanup(job, true).catch(() => this.metadataFault()));
+		else if (job.kind !== 'inventory')
+			setImmediate(() => void this.cleanup(job, true).catch(() => this.metadataFault()));
 		return this.public(this.store.get(id)!);
 	}
 	private async owned(owner: string, backupId: string, id: string) {
@@ -126,6 +127,7 @@ export class ManagedExportService {
 		return {
 			id: job.id,
 			kind: job.kind || 'archive',
+			inventory: job.inventory,
 			state: job.state,
 			mode: job.binding.mode,
 			snapshotId: job.binding.snapshotId,
@@ -186,6 +188,7 @@ export class ManagedExportService {
 		await this.isolated(c);
 		const storage = this.storageFactory(c);
 		try {
+			if (c.allowSharedNamespace) await storage.inventory(this.store.all(), signal);
 			await storage.identity(job, signal);
 			const current = this.store.get(job.id);
 			if (
@@ -382,6 +385,7 @@ export class ManagedExportService {
 		this.store.update(job.id, { cleanupAttempts: job.cleanupAttempts + 1 });
 		try {
 			const c = this.config(job);
+			await this.isolated(c);
 			storage = this.storageFactory(c);
 			await storage.cleanup(job, AbortSignal.timeout(60_000));
 			this.store.update(job.id, {
@@ -409,8 +413,21 @@ export class ManagedExportService {
 			storage = this.storageFactory(c);
 			let job = this.store.update(original.id, {
 				state: 'validating',
-				preflightChecks: ['destination-isolation'],
+				preflightChecks: [],
 			});
+			if (c.allowSharedNamespace || original.kind === 'inventory') {
+				const inventory = await storage.inventory(
+					this.store.all(),
+					AbortSignal.any([bounded, AbortSignal.timeout(60_000)])
+				);
+				job = this.store.update(job.id, { inventory });
+			}
+			job = this.store.update(job.id, { preflightChecks: ['destination-isolation'] });
+			if (original.kind === 'inventory') {
+				bounded.throwIfAborted();
+				this.store.update(job.id, { state: 'ready', expiresAt: Date.now() + 15 * 60_000 });
+				return;
+			}
 			await storage.preflight(
 				job,
 				AbortSignal.any([bounded, AbortSignal.timeout(60_000)]),
@@ -428,6 +445,7 @@ export class ManagedExportService {
 				return;
 			}
 			stage = 'archive-validation';
+			await this.isolated(c);
 			await this.recovery.withVerifiedExport(job.binding, bounded, async archive => {
 				bounded.throwIfAborted();
 				const proof = archive.export;
@@ -442,6 +460,8 @@ export class ManagedExportService {
 				this.store.reserve(job.id, archive.export.archiveBytes);
 				job = this.store.update(job.id, { state: 'exporting', summary: archive.export });
 				stage = 'upload';
+				await this.isolated(c);
+				if (c.allowSharedNamespace) await storage!.inventory(this.store.all(), bounded);
 				await storage!.upload(job, archive, bounded, fields => {
 					const latest = this.store.get(job.id)!;
 					if (latest.state === 'cancelled') throw new TemporaryExportError('cancelled');
@@ -497,7 +517,7 @@ export class ManagedExportService {
 							? error.code
 							: undefined,
 			});
-			await this.cleanup(this.store.get(job.id)!);
+			if (original.kind !== 'inventory') await this.cleanup(this.store.get(job.id)!);
 			this.safeLog({ stage: 'failed', phase: stage, reason, jobId: job.id });
 		} finally {
 			storage?.close();

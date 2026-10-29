@@ -223,6 +223,9 @@ EXPORT_CA_TARGET = "/run/secrets/pluton-managed-export-ca.pem"
 def validate_export_ca(config):
     service = config["services"]["pluton"]
     environment = service.get("environment", {})
+    require(environment.get("MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE", "false") in ("true", "false"), "export-shared-mode-invalid")
+    if environment.get("MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE") == "true":
+        require(environment.get("MANAGED_EXPORT_PREFIX") == "pluton-temporary-exports", "export-shared-prefix-fixed")
     if environment.get("MANAGED_EXPORT_ENABLED") == "true":
         for name in ("ENDPOINT", "REGION", "BUCKET", "PREFIX", "ACCESS_KEY_ID", "SECRET_ACCESS_KEY"):
             require(bool(environment.get("MANAGED_EXPORT_" + name)), "export-configuration-incomplete")
@@ -264,12 +267,12 @@ def verify_export_environment(config_file, inspect_file):
     expected = load(config_file)["services"]["pluton"].get("environment", {})
     container = check_container(config_file, inspect_file)
     actual = dict(item.split("=", 1) for item in container["Config"].get("Env", []) if "=" in item)
-    for suffix in ("ENABLED", "ENDPOINT", "REGION", "BUCKET", "PREFIX", "ACCESS_KEY_ID",
+    for suffix in ("ENABLED", "ALLOW_SHARED_NAMESPACE", "ENDPOINT", "REGION", "BUCKET", "PREFIX", "ACCESS_KEY_ID",
                    "SECRET_ACCESS_KEY", "SESSION_TOKEN", "CA_FILE", "TTL_SECONDS"):
         name = "MANAGED_EXPORT_" + suffix
         require(name in expected and name in actual and expected[name] == actual[name],
                 "export-environment-mismatch-" + name)
-    return "export-environment-matches-all-10-fields-no-values-emitted"
+    return "export-environment-matches-all-11-fields-no-values-emitted"
 
 
 def check_container(config_file, inspect_file):

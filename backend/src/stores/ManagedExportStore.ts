@@ -82,7 +82,12 @@ export class ManagedExportStore {
 		this.save(j);
 		return j;
 	}
-	admit(owner: string, binding: ExportBinding, config: ExportConfig): ExportJob {
+	admit(
+		owner: string,
+		binding: ExportBinding,
+		config: ExportConfig,
+		kind?: ExportJob['kind']
+	): ExportJob {
 		return this.db.transaction(() => {
 			const jobs = this.all();
 			const existing = jobs.find(
@@ -105,6 +110,8 @@ export class ManagedExportStore {
 			const id = crypto.randomUUID();
 			const now = Date.now();
 			const job: ExportJob = {
+				kind,
+				preflightChecks: kind ? [] : undefined,
 				id,
 				owner,
 				binding,
@@ -116,7 +123,7 @@ export class ManagedExportStore {
 				uploadedBytes: 0,
 				processedBytes: 0,
 				reservedBytes: 0,
-				cleaned: false,
+				cleaned: kind === 'inventory',
 				cleanupAttempts: 0,
 			};
 			this.save(job);

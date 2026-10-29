@@ -18,6 +18,8 @@ import {
 	ListObjectVersionsCommand,
 	ListPartsCommand,
 	type CompletedPart,
+	type HeadObjectCommandOutput,
+	type ListMultipartUploadsCommandOutput,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
@@ -192,6 +194,20 @@ export class S3ExportStorage {
 			job.preflightChecks = [...new Set([...(job.preflightChecks || []), step])];
 			update({ preflightChecks: job.preflightChecks });
 		};
+		const remember = (
+			key: string,
+			result: { VersionId?: string; ETag?: string },
+			bytes: number
+		) => {
+			if (!this.config.allowSharedNamespace) return;
+			if (!result.VersionId || result.VersionId === 'null')
+				throw new TemporaryExportError('security-capability-missing');
+			job.ownedVersions = [
+				...(job.ownedVersions || []),
+				{ key, versionId: result.VersionId, etag: result.ETag, bytes },
+			];
+			update({ ownedVersions: job.ownedVersions });
+		};
 		try {
 			if (
 				(
@@ -209,7 +225,7 @@ export class S3ExportStorage {
 				params = this.scope(job, key);
 			let probeFailure: unknown;
 			try {
-				await this.client.send(
+				const initial = await this.client.send(
 					new PutObjectCommand({
 						...params,
 						Body: data,
@@ -219,6 +235,7 @@ export class S3ExportStorage {
 					}),
 					{ abortSignal: signal }
 				);
+				remember(key, initial, data.length);
 				const head = await this.client.send(new HeadObjectCommand(params), { abortSignal: signal });
 				if (
 					!head.VersionId ||
@@ -254,6 +271,7 @@ export class S3ExportStorage {
 					}),
 					{ abortSignal: signal }
 				);
+				remember(key, newer, data.length);
 				if (!newer.VersionId || newer.VersionId === head.VersionId)
 					throw new TemporaryExportError('security-capability-missing');
 				capability = 'range-resume';
@@ -352,7 +370,7 @@ export class S3ExportStorage {
 				capability = 'conditional-completion';
 				let refused = false;
 				try {
-					await this.client.send(
+					const unexpected = await this.client.send(
 						new CompleteMultipartUploadCommand({
 							...params,
 							UploadId: mp.UploadId,
@@ -361,6 +379,7 @@ export class S3ExportStorage {
 						}),
 						{ abortSignal: signal }
 					);
+					remember(key, unexpected, data.length);
 				} catch (error) {
 					if (
 						(error as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode !==
@@ -413,6 +432,7 @@ export class S3ExportStorage {
 					}),
 					{ abortSignal: signal }
 				);
+				remember(job.key, completed, random.length + data.length);
 				if (!completed.VersionId || completed.VersionId === 'null')
 					throw new TemporaryExportError('security-capability-missing');
 				const stored = await this.client.send(
@@ -425,6 +445,34 @@ export class S3ExportStorage {
 					!this.owns(job, stored)
 				)
 					throw new TemporaryExportError('security-capability-missing');
+				const readback = await this.client.send(
+					new GetObjectCommand({ ...full, VersionId: completed.VersionId, IfMatch: stored.ETag }),
+					{ abortSignal: signal }
+				);
+				let readBytes = 0;
+				const digest = crypto.createHash('sha256');
+				try {
+					if (
+						!readback.Body ||
+						readback.VersionId !== completed.VersionId ||
+						readback.ContentLength !== random.length + data.length
+					)
+						throw new TemporaryExportError('security-capability-missing');
+					for await (const chunk of readback.Body as Readable) {
+						readBytes += chunk.length;
+						if (readBytes > random.length + data.length)
+							throw new TemporaryExportError('security-capability-missing');
+						digest.update(chunk);
+					}
+					if (
+						readBytes !== random.length + data.length ||
+						digest.digest('hex') !==
+							crypto.createHash('sha256').update(random).update(data).digest('hex')
+					)
+						throw new TemporaryExportError('security-capability-missing');
+				} finally {
+					(readback.Body as Readable)?.destroy();
+				}
 				passed('multipart-completion');
 			} catch (error) {
 				probeFailure = error;
@@ -437,35 +485,167 @@ export class S3ExportStorage {
 			}
 			job.probeUploadId = undefined;
 			job.uploadId = undefined;
-			update({ probeUploadId: undefined, uploadId: undefined });
+			job.ownedVersions = undefined;
+			update({ probeUploadId: undefined, uploadId: undefined, ownedVersions: undefined });
 			if (probeFailure) throw probeFailure;
 		} catch (error) {
-			if (error instanceof ExportPreflightError) throw error;
-			const e = error as { code?: string; name?: string; $metadata?: { httpStatusCode?: number } };
-			const status = e.$metadata?.httpStatusCode;
-			const tls = [
-				'DEPTH_ZERO_SELF_SIGNED_CERT',
-				'SELF_SIGNED_CERT_IN_CHAIN',
-				'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
-				'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
-				'ERR_TLS_CERT_ALTNAME_INVALID',
-				'CERT_HAS_EXPIRED',
-			].includes(e.code || '');
-			const category = tls
-				? 'tls-validation'
-				: status === 401 || status === 403
-					? 'access-denied'
-					: status === 405 || status === 501
-						? 'unsupported-api'
-						: error instanceof TemporaryExportError || status
-							? 'unexpected-response'
-							: 'network-or-deadline';
-			throw new ExportPreflightError(
-				tls ? 'https' : capability,
-				category,
-				Number.isInteger(status) ? status : undefined
-			);
+			this.capabilityFailure(error, capability);
 		}
+	}
+	private capabilityFailure(error: unknown, capability: ExportCapability): never {
+		if (error instanceof ExportPreflightError) throw error;
+		const e = error as { code?: string; name?: string; $metadata?: { httpStatusCode?: number } };
+		const status = e.$metadata?.httpStatusCode;
+		const tls = [
+			'DEPTH_ZERO_SELF_SIGNED_CERT',
+			'SELF_SIGNED_CERT_IN_CHAIN',
+			'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+			'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+			'ERR_TLS_CERT_ALTNAME_INVALID',
+			'CERT_HAS_EXPIRED',
+		].includes(e.code || '');
+		const category = tls
+			? 'tls-validation'
+			: status === 401 || status === 403
+				? 'access-denied'
+				: status === 405 || status === 501
+					? 'unsupported-api'
+					: error instanceof TemporaryExportError || status
+						? 'unexpected-response'
+						: 'network-or-deadline';
+		throw new ExportPreflightError(
+			tls ? 'https' : capability,
+			category,
+			Number.isInteger(status) ? status : undefined
+		);
+	}
+	/** Read only names/version headers within the reserved prefix. Never inspect
+	 * repository contents, return keys, or adopt a foreign object/upload. */
+	async inventory(jobs: ExportJob[], signal: AbortSignal) {
+		const known = new Map(
+			jobs
+				.filter(job => !job.cleaned && job.destination === this.config.fingerprint)
+				.map(job => [job.key, job])
+		);
+		let capability: ExportCapability = 'versioning';
+		let objects = 0,
+			uploads = 0;
+		let keyMarker: string | undefined, versionMarker: string | undefined;
+		try {
+			const versioning = await this.client.send(
+				new GetBucketVersioningCommand({ Bucket: this.config.bucket }),
+				{ abortSignal: signal }
+			);
+			if (versioning.Status !== 'Enabled')
+				throw new ExportPreflightError('versioning', 'unexpected-response');
+			capability = 'destination-isolation';
+			for (let page = 0; page < 8; page++) {
+				const result = await this.client.send(
+					new ListObjectVersionsCommand({
+						Bucket: this.config.bucket,
+						Prefix: this.config.prefix + '/',
+						MaxKeys: 100,
+						KeyMarker: keyMarker,
+						VersionIdMarker: versionMarker,
+					}),
+					{ abortSignal: signal }
+				);
+				if (result.DeleteMarkers?.length) throw new Error();
+				for (const object of result.Versions || []) {
+					const job =
+						known.get(object.Key || '') || known.get((object.Key || '').replace(/\.probe$/, ''));
+					if (
+						!job ||
+						![job.key, job.key + '.probe'].includes(object.Key || '') ||
+						!object.VersionId ||
+						!this.versionProof(job, object.Key!, object.VersionId)
+					)
+						throw new Error();
+					const head = await this.client.send(
+						new HeadObjectCommand({ ...this.scope(job, object.Key), VersionId: object.VersionId }),
+						{ abortSignal: signal }
+					);
+					if (!this.matchesVersionProof(job, object.Key!, object.VersionId, head))
+						throw new Error();
+					objects++;
+				}
+				if (!result.IsTruncated) break;
+				if (
+					page === 7 ||
+					!result.NextKeyMarker ||
+					(result.NextKeyMarker === keyMarker && result.NextVersionIdMarker === versionMarker)
+				)
+					throw new Error();
+				keyMarker = result.NextKeyMarker;
+				versionMarker = result.NextVersionIdMarker;
+			}
+			let uploadMarker: string | undefined;
+			keyMarker = undefined;
+			capability = 'destination-isolation';
+			for (let page = 0; page < 8; page++) {
+				const result: ListMultipartUploadsCommandOutput = await this.client.send(
+					new ListMultipartUploadsCommand({
+						Bucket: this.config.bucket,
+						Prefix: this.config.prefix + '/',
+						MaxUploads: 100,
+						KeyMarker: keyMarker,
+						UploadIdMarker: uploadMarker,
+					}),
+					{ abortSignal: signal }
+				);
+				for (const upload of result.Uploads || []) {
+					const job =
+						known.get(upload.Key || '') || known.get((upload.Key || '').replace(/\.probe$/, ''));
+					if (!job || !upload.UploadId || !this.ownsUpload(job, upload.Key!, upload.UploadId))
+						throw new Error();
+					uploads++;
+				}
+				if (!result.IsTruncated) break;
+				if (
+					page === 7 ||
+					!result.NextKeyMarker ||
+					(result.NextKeyMarker === keyMarker && result.NextUploadIdMarker === uploadMarker)
+				)
+					throw new Error();
+				keyMarker = result.NextKeyMarker;
+				uploadMarker = result.NextUploadIdMarker;
+			}
+			return { objects, uploads, exclusive: true as const };
+		} catch (error) {
+			this.capabilityFailure(error, capability);
+		}
+	}
+	private ownsUpload(job: ExportJob, key: string, id: string): boolean {
+		return (
+			(key === job.key && job.uploadId === id) ||
+			(key === job.key + '.probe' && job.probeUploadId === id)
+		);
+	}
+	private versionProof(job: ExportJob, key: string, version: string) {
+		return (
+			job.ownedVersions?.find(item => item.key === key && item.versionId === version) ||
+			(key === job.key && version === job.versionId && job.summary
+				? { key, versionId: version, etag: job.etag, bytes: job.summary.archiveBytes }
+				: undefined)
+		);
+	}
+	private matchesVersionProof(
+		job: ExportJob,
+		key: string,
+		version: string,
+		head: HeadObjectCommandOutput
+	) {
+		const proof = this.versionProof(job, key, version);
+		return (
+			!!proof &&
+			this.owns(job, head) &&
+			head.VersionId === version &&
+			head.ContentLength === proof.bytes &&
+			head.ServerSideEncryption === 'AES256' &&
+			(!proof.etag || proof.etag === head.ETag) &&
+			(version !== job.versionId ||
+				head.Metadata?.['archive-sha256'] === job.summary?.archiveSha256)
+		);
 	}
 	/** Two authenticated requests prove the private URL can resume the SAME random
 	 * version. No URL, header, provider body or permanent key enters diagnostics. */
@@ -772,8 +952,14 @@ export class S3ExportStorage {
 				{ abortSignal: signal }
 			);
 			for (const upload of uploads.Uploads || [])
-				if ([job.key, job.key + '.probe'].includes(upload.Key || '') && upload.UploadId)
+				if ([job.key, job.key + '.probe'].includes(upload.Key || '') && upload.UploadId) {
+					if (
+						this.config.allowSharedNamespace &&
+						!this.ownsUpload(job, upload.Key!, upload.UploadId)
+					)
+						throw new TemporaryExportError('cleanup-pending');
 					await abort(upload.Key!, upload.UploadId);
+				}
 			if (!uploads.IsTruncated) break;
 			if (page === 3) throw new TemporaryExportError('cleanup-pending');
 			keyMarker = uploads.NextKeyMarker;
@@ -818,7 +1004,11 @@ export class S3ExportStorage {
 							new HeadObjectCommand({ ...this.scope(job, key), VersionId: item.VersionId }),
 							{ abortSignal: signal }
 						);
-						if (!this.owns(job, head)) {
+						if (
+							!this.owns(job, head) ||
+							(this.config.allowSharedNamespace &&
+								!this.matchesVersionProof(job, key, item.VersionId, head))
+						) {
 							foreign = true;
 							continue;
 						}
@@ -838,8 +1028,10 @@ export class S3ExportStorage {
 						}
 					}
 				for (const item of versions.DeleteMarkers || [])
-					if (item.Key === key && item.VersionId)
+					if (item.Key === key && item.VersionId) {
+						if (this.config.allowSharedNamespace) throw new TemporaryExportError('cleanup-pending');
 						markers.push({ Key: key, VersionId: item.VersionId });
+					}
 				if (!versions.IsTruncated) break;
 				if (page === 3) throw new TemporaryExportError('cleanup-pending');
 				marker = versions.NextKeyMarker;
