@@ -21,7 +21,7 @@ export default function ReliableDownload({ backupId, mode, close }: { backupId: 
       [error, setError] = useState(''),
       [retry, setRetry] = useState(0),
       [busy, setBusy] = useState(false),
-      [authorization, setAuthorization] = useState<{ url: string; expiresAt: number }>();
+      [authorization, setAuthorization] = useState<{ url: string; expiresAt: number; transport?: string }>();
    const current = useRef(job),
       controller = useRef<AbortController>();
    current.current = job;
@@ -120,7 +120,7 @@ export default function ReliableDownload({ backupId, mode, close }: { backupId: 
                   SHA-256: <code style={{ overflowWrap: 'anywhere' }}>{visible.summary.archiveSha256}</code>
                </p>
                <a href={`${prefix}/link`} referrerPolicy="no-referrer">
-                  Download TAR from temporary storage
+                  {visible.transport === 'authenticated-proxy' ? 'Download verified TAR through Pluton' : 'Download TAR from temporary storage'}
                </a>
                <p>
                   <a href={`${prefix}/content`} download>
@@ -131,13 +131,14 @@ export default function ReliableDownload({ backupId, mode, close }: { backupId: 
                   Your browser reports client transfer progress. Browser Resume depends on the browser and authorization expiry; it is not guaranteed.
                   A resume link can be renewed for the same immutable object until export expiry.
                </p>
+               {visible.transport === 'authenticated-proxy' && <p>Resuming requires an authenticated Pluton session. The server checks object identity on every Range request. Verify the final file size and SHA-256 after download.</p>}
                <button type="button" disabled={busy} onClick={() => void authorize()}>
                   Get or renew resume link
                </button>
                {authorization && (
                   <div>
                      <p>
-                        Private bearer link expires: {new Date(authorization.expiresAt).toLocaleString()}. Keep it out of logs and shared messages.
+                        {authorization.transport === 'authenticated-proxy' ? 'This link requires your authenticated Pluton session; it is not a public storage link.' : `Private bearer link expires: ${new Date(authorization.expiresAt).toLocaleString()}. Keep it out of logs and shared messages.`}
                      </p>
                      <input aria-label="Private resume link" readOnly value={authorization.url} onFocus={(event) => event.currentTarget.select()} />
                      <p>

@@ -14,9 +14,57 @@ overlap and uncertain remote edits, inventories only the reserved prefix, and
 requires journaled upload/version ownership for cleanup. Strict isolation remains
 the default. The [HCP operator procedure](MANAGED_RELIABLE_DOWNLOAD_UAT.md#batii-hcp-97--existing-shared-namespace-backup)
 contains the current contract, residual shared-key risks and mandatory GO/NO-GO
-gates. No provider versioning/conditional-completion bypass is implemented or
-production compatibility claimed; an equivalent unversioned design has not been
-demonstrated through authorized HCP API tests.
+gates. The subsequent [nonversioned write-once implementation](MANAGED_RELIABLE_DOWNLOAD_UAT.md#batii-hcp-97--nonversioned-write-once-reliable-download)
+adds a distinct capability model for an overwrite-disabled shared namespace. It
+requires actual PUT/multipart collision and concurrency probes, full readback,
+conditional Range, exact durable ownership and verified cleanup. Versioned mode
+retains its original guarantees. No authorized production HCP API test or hosted
+CI result is claimed by local protocol reference fixtures. The documented bounded
+nonversioned cleanup model cannot prevent an external shared-key deletion race.
+
+## Nonversioned write-once follow-up
+
+Root cause: VersionId, enabled versioning, If-None-Match completion and version
+enumeration were unconditional prerequisites in inventory, preparation, ready
+authorization and cleanup. They excluded an HCP namespace whose write-once policy
+can provide first-writer-wins publication without AWS conditional completion.
+
+The implementation now discovers a candidate mode from the versioning API and
+proves every required property rather than trusting vendor/version strings.
+`HcpWriteOnceStorage` tests initial PUT, rejected PUT and multipart collision,
+two-part completion/readback, separate concurrent MP/MP and MP/MP/PUT races, conditional HEAD/GET and exact
+Range, privacy/SSE, bounded listing, abort and cleanup. Each real archive repeats
+probes on a distinct durable random child; publication intent is journaled before
+completion and a lost response is never adopted/replayed. Real shared exports also
+require a fresh exact-configuration standalone operator GO before source access.
+
+Nonversioned identity stores key, ETag, size, SHA256, timestamp, snapshot/job binding
+and capability proof; every authenticated proxy request checks it. This mode does
+not issue unconditioned presigned links. Full transfers count bytes/hash the stream;
+resumed clients verify complete size/SHA256 and exact 206/Content-Range. Cleanup
+requires persisted response proof, nonce, complete checksum and another HEAD. A
+verified conditional delete is preferred; absent that API, the explicit exclusive
+prefix ownership assumption bounds cleanup. External shared credentials retain
+delete/recreate privilege; this is not equivalent to pinned version deletion.
+
+No new environment variable, bucket, credential, dependency or Agent change is
+needed. Committed feature flags remain false. Permanent namespace reservations and
+the transactional future-replication guards are unchanged. See the current UAT
+runbook for the ENABLED=true example, deployment order, API checks, resource limits,
+test evidence, actual-provider gates and metadata-preserving rollback.
+
+Local native evidence now includes both storage modes at 120 MB with five unchanged
+replicas and concurrent native backup/replication, plus isolated write-once reference
+3.17 GB / approximately 115,000-entry and 4 GB exports. Full SHA256, extracted trees,
+Range resume, historical identity, unchanged source/replicas, Restic read-data and
+zero orphan cleanup pass. These large reference fixtures approach the total 4 GiB
+memory boundary; they do not approve concurrent large production UAT. An ordinary
+nonversioned native S3 server that permits overwrite is correctly rejected. The
+compiled application also starts with enabled synthetic config under UID 10001,
+read-only root and no external network, while real export admission is gated on GO.
+The current [verification record](MANAGED_RELIABLE_DOWNLOAD_UAT.md#nonversioned-local-verification-record-2026-10-30)
+contains exact metrics, reproduction commands, environment limitations and remaining
+hosted-CI/actual-HCP acceptance requirements.
 
 ## Scope and baseline
 

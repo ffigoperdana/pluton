@@ -17,10 +17,13 @@ import { configService } from '../../src/services/ConfigService';
 import {
 	EXPORT_LIMITS,
 	TemporaryExportError,
+	ExportPreflightError,
 	exportConfiguration,
 	exportRange,
 	type ExportBinding,
 	type ExportJob,
+	exportCapabilityBinding,
+	exportCleanupDeadline,
 } from '../../src/utils/managedExport/ExportPolicy';
 import { assertExportIsolation } from '../../src/utils/managedExport/ExportIsolation';
 import type { ManagedExportSummary } from '../../src/utils/restic/ManagedExportPolicy';
@@ -73,6 +76,7 @@ function harness() {
 		config = exportConfiguration(env())!;
 	const store = new ManagedExportStore(file);
 	const storage = {
+		mode: jest.fn(async () => 'versioned'),
 		inventory: jest.fn(async () => ({ objects: 0, uploads: 0, exclusive: true })),
 		preflight: jest.fn(async () => {}),
 		upload: jest.fn(async (_j: ExportJob, archive: any, signal: AbortSignal, update: any) => {
@@ -237,6 +241,174 @@ describe('temporary export policy and durable admission', () => {
 	});
 });
 describe('durable independent export lifecycle', () => {
+	test('an uncertain concurrent prefix inventory denies grants without destroying an independently verified ready archive', async () => {
+		const h = harness();
+		try {
+			const admitted = await h.service.admit(owner, binding.backupId, 'full');
+			await until(() => h.store.get(admitted.id)?.state === 'ready');
+			h.config.allowSharedNamespace = true;
+			h.storage.inventory.mockRejectedValueOnce(
+				new ExportPreflightError('destination-isolation', 'unexpected-response')
+			);
+			await expect(h.service.authorize(owner, binding.backupId, admitted.id)).rejects.toThrow(
+				'storage-unavailable'
+			);
+			expect(h.store.get(admitted.id)?.state).toBe('ready');
+			await expect(
+				h.service.authorize(owner, binding.backupId, admitted.id)
+			).resolves.toHaveProperty('url');
+			h.storage.inventory.mockRejectedValueOnce(
+				new ExportPreflightError('destination-isolation', 'unexpected-response')
+			);
+			h.storage.identity.mockRejectedValueOnce(new TemporaryExportError('object-mismatch'));
+			await expect(h.service.authorize(owner, binding.backupId, admitted.id)).rejects.toThrow(
+				'object-mismatch'
+			);
+			expect(h.store.get(admitted.id)?.state).toBe('failed');
+		} finally {
+			await h.close();
+		}
+	});
+	test('size-bounded write-once cleanup aborts at shutdown and retains uncertain metadata for restart', async () => {
+		const h = harness();
+		try {
+			const admitted = await h.service.admit(owner, binding.backupId, 'full');
+			await until(() => h.store.get(admitted.id)?.state === 'ready');
+			const job = h.store.get(admitted.id)!;
+			expect(exportCleanupDeadline(job)).toBe(60_000);
+			expect(
+				exportCleanupDeadline({
+					...job,
+					integrityMode: 'hcp-write-once',
+					summary: { ...summary, archiveBytes: 4_000_000_000 },
+				})
+			).toBe(60_000 + Math.ceil(4_000_000_000 / 1024 ** 2) * 1000);
+			let entered = false,
+				aborted = false;
+			h.storage.cleanup.mockImplementation(async (_job?: ExportJob, signal?: AbortSignal) => {
+				entered = true;
+				await new Promise<void>((_resolve, reject) =>
+					signal!.addEventListener(
+						'abort',
+						() => {
+							aborted = true;
+							reject(new Error('synthetic shutdown'));
+						},
+						{ once: true }
+					)
+				);
+			});
+			await h.service.cancel(owner, binding.backupId, admitted.id);
+			await until(() => entered);
+			await h.service.shutdown();
+			expect(aborted).toBe(true);
+			const restarted = new ManagedExportStore(h.file);
+			try {
+				expect(restarted.get(admitted.id)).toMatchObject({
+					state: 'cancelled',
+					cleaned: false,
+					reservedBytes: data.length,
+				});
+			} finally {
+				restarted.close();
+			}
+		} finally {
+			await h.close();
+		}
+	});
+	test('shared exports are gated before source reads by fresh exact-configuration operator GO', async () => {
+		const h = harness();
+		h.config.allowSharedNamespace = true;
+		h.storage.preflight.mockImplementation(
+			async (job?: ExportJob, _signal?: AbortSignal, update?: any) => {
+				update?.({
+					integrityMode: 'versioned',
+					capabilityBinding: exportCapabilityBinding(h.config),
+					providerEvidence: {
+						mode: 'versioned',
+						versioning: 'enabled',
+						writeOnce: false,
+						conditionalRange: true,
+						cleanup: 'version-specific',
+						transport: 'versioned-presigned-and-proxy',
+						verifiedAt: Date.now(),
+					},
+					preflightChecks: ['cleanup'],
+				});
+			}
+		);
+		try {
+			await expect(h.service.admit(owner, binding.backupId, 'full')).rejects.toThrow(
+				'security-capability-missing'
+			);
+			expect(h.recovery.exportBindingFor).not.toHaveBeenCalled();
+			const check = await h.service.preflight(owner);
+			await until(() => h.store.get(check.id)?.state === 'ready');
+			expect((await h.service.preflightStatus(owner, check.id)).productionReadiness).toBe('GO');
+			const admitted = await h.service.admit(owner, binding.backupId, 'full');
+			await until(() => h.store.get(admitted.id)?.state === 'ready');
+			expect(h.storage.preflight).toHaveBeenCalledTimes(2); // operator GO plus fresh per-export checks
+			h.config.secretAccessKey = crypto.randomBytes(32).toString('hex');
+			await expect(h.service.admit(owner, binding.backupId, 'full')).rejects.toThrow(
+				'security-capability-missing'
+			);
+			const refreshed = await h.service.preflight(owner);
+			await until(() => h.store.get(refreshed.id)?.state === 'ready');
+			h.store.update(refreshed.id, { expiresAt: Date.now() - 1 });
+			await expect(h.service.admit(owner, binding.backupId, 'full')).rejects.toThrow(
+				'security-capability-missing'
+			);
+		} finally {
+			await h.close();
+		}
+	});
+	test('nonversioned grants use only authenticated proxy, fail changed identity and preserve owner binding', async () => {
+		const h = harness();
+		try {
+			const value = await h.service.admit(owner, binding.backupId, 'full');
+			await until(() => h.store.get(value.id)?.state === 'ready');
+			const identity = {
+				mode: 'hcp-write-once' as const,
+				key: h.store.get(value.id)!.key,
+				etag: '"synthetic-etag"',
+				bytes: data.length,
+				sha256: summary.archiveSha256,
+				binding: 'bound',
+				created: new Date().toISOString(),
+				capability: 'fixture',
+			};
+			h.store.update(value.id, { versionId: undefined, integrityMode: 'hcp-write-once', identity });
+			const grant = await h.service.authorize(owner, binding.backupId, value.id);
+			expect(grant).toMatchObject({
+				transport: 'authenticated-proxy',
+				url: `/api/backups/${binding.backupId}/exports/${value.id}/content`,
+			});
+			expect(h.storage.authorize).not.toHaveBeenCalled();
+			await expect(h.service.authorize('foreign', binding.backupId, value.id)).rejects.toThrow(
+				'Export not found'
+			);
+			await expect(
+				h.service.content(
+					owner,
+					binding.backupId,
+					value.id,
+					'bytes=1-3',
+					'"wrong"',
+					false,
+					new Writable({
+						write(_c, _e, done) {
+							done();
+						},
+					}),
+					AbortSignal.timeout(1000),
+					() => {}
+				)
+			).rejects.toThrow('object-mismatch');
+			expect(h.store.get(value.id)?.state).toBe('failed');
+		} finally {
+			await h.close();
+		}
+	});
 	test('inventory intent is durable in the first admission write, before any worker can run', async () => {
 		const h = harness();
 		try {

@@ -24,8 +24,8 @@ credentials. All other installations keep strict bucket/credential separation.
   by default, or the explicit shared-namespace procedure below. Record authorized
   namespace, reserved prefix and credential scope privately.
 - [ ] HTTPS endpoint, signing region, DNS, client reachability, certificate chain,
-  clock synchronization, SSE-S3 AES256, versioning, cleanup permissions and storage
-  quota approved. HCP must pass the same checks; there is no compatibility bypass.
+  clock synchronization, SSE-S3 AES256, the applicable versioned/write-once identity,
+  cleanup contract and storage quota approved. No mandatory property is bypassed.
 - [ ] Install the reviewed host bundle and new image with export disabled. Preserve
   `.env`, local overlays, database, export-job metadata and existing data mounts.
 - [ ] If needed, complete the explicit public-CA file mount procedure below.
@@ -33,7 +33,8 @@ credentials. All other installations keep strict bucket/credential separation.
   recreate only the application using the approved deployment procedure.
 - [ ] Private comparison of effective Compose and running container reports all eleven
   environment fields equal; authenticated application configuration is valid.
-- [ ] Standalone preflight reaches `ready` with all 15 checks and no cleanup pending.
+- [ ] Standalone preflight reports `productionReadiness:GO`, the observed provider
+  mode, every applicable capability and no cleanup pending.
   **No backup content is admitted before this passes.**
 - [ ] Synthetic 120 MB UAT, interrupted/resumed transfer, checksum, cleanup and
   existing backup/restore/Agent/replication checks pass within resource limits.
@@ -66,8 +67,9 @@ setting. `.env` alone does not inject container variables; the base Compose now
 forwards every runtime setting above explicitly. Review how Compose quotes values
 containing `$`, `#` or whitespace, using a private effective-config file.
 
-Storage policy needs bucket versioning inspection; prefix-scoped listing of
-versions; prefix-scoped get/get-version/put/delete/delete-version and object ACL
+Storage policy needs bucket versioning inspection (or an observed unsupported API
+for the explicit nonversioned contract); prefix-scoped listing of objects and,
+for versioned mode, versions; prefix-scoped get/get-version/put/delete/delete-version and object ACL
 inspection; multipart create/upload/complete/abort/list-parts; and bucket multipart
 enumeration. Review provider-specific IAM action mappings (AWS maps multipart
 creation/completion and object ACL inspection to its respective S3 actions). Deny
@@ -91,6 +93,316 @@ including noncurrent versions and abandoned uploads. This feature changes none
 of those settings. Do not alter shared namespace lifecycle, retention or pruning
 for exports. Existing jobs must retain their
 destination and credentials until cleanup finishes.
+
+## BATII HCP 9.7 — Nonversioned Write-Once Reliable Download
+
+This is the current activation procedure for the existing namespace `backup`,
+reserved prefix `pluton-temporary-exports/`, and currently authorized credentials.
+No new tenant, namespace, bucket, key, Agent, backup configuration or storage policy
+is required. Keep **S3 overwrite OFF**, HTTPS/authenticated access ON, cloud protocol
+optimization ON, Deletion Allowed/Enterprise retention unchanged, and the existing
+30-day incomplete-upload policy unchanged. Do not enable versioning automatically.
+
+There are two independently tested modes. A versioning API result `Enabled` selects
+`versioned`, preserving exact VersionId, conditional 412 publication, version-bound
+Range/presigned requests and version-specific cleanup. Missing/disabled versioning
+or HTTP 501 selects a **candidate** `hcp-write-once` mode only when shared namespace
+opt-in is explicit. Suspended versioning, access denial, TLS failures and ambiguous
+responses are refused. A candidate is never permission to read real backup data.
+
+### Evidence and provider limits
+
+The official [HCP 9.7 completion documentation](https://docs.hitachivantara.com/r/en-us/mk-95hcph001-20/using-the-hitachi-api-for-amazon-s3/working-with-multipart-uploads/completing-a-multipart-upload?contentId=lynj7qhRyB9IJQpFPhwHog)
+documents optional `If-Match`, VersionId only with enabled versioning, a multipart
+ETag that is not a content MD5, and possible errors inside an HTTP 200 response.
+The [9.7 S3 error table](https://docs.hitachivantara.com/r/en-us/mk-95hcph002-19/using-the-hitachi-api-for-amazon-s3/requests-and-responses/error-codes)
+also distinguishes status and body error codes. Therefore neither a resolved SDK
+call nor an ETag alone establishes integrity. This mode omits `If-None-Match` from
+publication and requires namespace-enforced collision rejection instead.
+
+The 9.7 manual links [same-name multipart behavior](https://docs.hitachivantara.com/r/en-us/mk-95hcph001-20/using-the-hitachi-api-for-amazon-s3/working-with-multipart-uploads/about-multipart-uploads/considerations-for-working-with-multipart-uploads/multiple-multipart-uploads-for-objects-with-the-same-name?contentId=b9Bo6WroKtMj_jLYpDqgPg)
+and [overwrite policy](https://docs.hitachivantara.com/r/en-us/mk-95hcph001-20/managing-a-tenant-and-its-namespaces/managing-namespaces/configuring-a-namespace/allowing-object-overwrites?contentId=5tJaHHek2ma3znoDM5iD7A).
+Those two individual 9.7 pages could not be retrieved in this coding session;
+the similarly titled supplied overwrite link is explicitly **9.6.x**, and newer
+search results explicitly **10.x**. Neither substitutes for 9.7.3.14 evidence.
+The operator's console observation is a prerequisite, not an API certification.
+Actual 409 first-writer-wins, conditional reads, SSE, retention/cleanup and private
+access on this HCP endpoint must pass the runtime probes below. An incompatible
+status or unchanged mandatory capability remains NO-GO without policy changes.
+
+### Publication, identity and transport
+
+Before each archive, a distinct durable random child probe repeats all applicable
+capabilities without reading backup contents. Its keys cannot become archive keys.
+The final archive uses one cryptographic UUID key for exactly one job. The uploader
+checks absence, records exact multipart IDs, rechecks write-once collision behavior
+before streaming and immediately before completion, and journals the publication
+attempt **before** sending it. It never retries an uncertain completion or adopts
+an existing object. A retry creates a new job/key.
+
+After completion, independent HEAD and streaming full SHA-256 readback verify the
+size, ETag, creation timestamp, nonce, job/snapshot binding, AES256 and archive hash.
+Durable identity is discriminated: a VersionId in versioned mode; otherwise the
+exact key/ETag/length/SHA-256/timestamp/binding/capability proof. No full TAR is staged
+on Pluton. One 16 MiB part is in flight, one exporter, with existing queue/quota limits.
+
+Nonversioned delivery is **authenticated Pluton proxy only**. Each Range uses the
+expected storage ETag in `If-Match`, checks all identity headers and exact 206,
+Content-Range and length, and checks identity again after streaming. Wrong ETag
+HEAD/GET behavior is tested before acceptance. A changed/missing object or invalid
+Range response invalidates the export; a mismatched `If-Range` cannot silently
+become a 200 continuation. Full transfers also count bytes and hash the stream.
+The client must verify final archive size and SHA-256, including resumed downloads.
+
+The authorization/link endpoint returns or redirects to the authenticated content
+route for this mode. It does not issue an unconditioned storage bearer URL or claim
+that a browser can attach a required signed header. Renew the Pluton login/session
+as needed; authorization never regenerates an archive. Standard Download retains
+its existing streaming behavior. TLS termination/proxy idle limits still apply;
+retain Range-capable access to the application and monitor its network throughput.
+
+### Cleanup and shared credential boundary
+
+Only exact generated keys and persisted upload IDs may be cleaned. Before deleting
+an unversioned object, the worker requires durable successful-publication proof,
+nonce/binding, ETag, timestamp, length, AES256, a full SHA-256 readback and another
+matching HEAD. Unknown keys, foreign metadata, changed identities, unrecorded
+successful responses, retention and uncertain abort/deletion keep cleanup-pending.
+No recursive, bucket-wide, repository, retention or lifecycle operation exists.
+An HTTP deletion success is followed by absence and multipart verification; prefix
+reservations and metadata remain durable even after successful cleanup or disablement.
+
+Preflight tries a wrong-ETag DELETE **only on its own random synthetic object**.
+If the provider returns 412 and preserves it, cleanup uses the verified conditional
+ETag. If the header is unsupported or ignored, the report says
+`cleanup:exclusive-prefix-bounded`. This mode is permitted only within the explicit
+shared-prefix contract: **Pluton is the sole writer/deleter of the reserved prefix**,
+and its durable process ownership prevents a competing Pluton exporter.
+
+This bounded model is not atomic compare-and-delete. Another holder of the shared
+credentials can bypass application guards, delete/recreate a key after the final
+HEAD, or clone its metadata/content; ETag may identify bytes rather than incarnation.
+Even conditional ETag deletion cannot defeat an adversarial identical-content
+recreation. The application cannot revoke those external privileges. If exclusive
+use of the prefix cannot be assured, or any identity check is uncertain, choose
+NO-GO/operator review; do not represent this as equivalent to pinned version deletion.
+No new credentials are demanded and existing replication rights remain unchanged.
+
+### Enabled production example and deployment order
+
+Placeholders only; edit the existing protected operator `.env`. Keep the existing
+endpoint, signing region, credentials, CA and TTL values. This example explicitly
+enables the feature; committed configuration remains disabled by default.
+
+```dotenv
+MANAGED_EXPORT_ENABLED=true
+MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE=true
+MANAGED_EXPORT_ENDPOINT=https://tenant.example.internal
+MANAGED_EXPORT_REGION=us-east-1
+MANAGED_EXPORT_BUCKET=backup
+MANAGED_EXPORT_PREFIX=pluton-temporary-exports
+MANAGED_EXPORT_ACCESS_KEY_ID=YOUR_CURRENTLY_AUTHORIZED_HCP_ACCESS_KEY
+MANAGED_EXPORT_SECRET_ACCESS_KEY=YOUR_CURRENTLY_AUTHORIZED_HCP_SECRET_KEY
+MANAGED_EXPORT_SESSION_TOKEN=
+MANAGED_EXPORT_TTL_SECONDS=259200
+MANAGED_EXPORT_CA_FILE=/run/secrets/pluton-managed-export-ca.pem
+MANAGED_EXPORT_CA_HOST_FILE=/etc/pluton/certificates/export-ca.pem
+```
+
+For system CA trust, leave `MANAGED_EXPORT_CA_FILE` empty, omit the host-file setting
+and CA overlay. Otherwise use the existing read-only single-file CA overlay below.
+Do not put private keys or credential values in commands, reports or Git.
+
+1. Operator publishes the reviewed commit and requires all Container Image jobs
+   on that exact commit, including the production runtime image checks.
+2. Retain the previous image/config, compatible database backup and export metadata.
+   Review all repository scopes and the exclusive-prefix assumption privately.
+3. Drain active work; recreate only the app using the approved image, same `/data`
+   volume, encryption keys, security restrictions and overlays. No Agent changes.
+4. Verify health and the private eleven-field environment comparison below.
+   Enabled valid configuration starts without a network probe or backup read.
+5. Run inventory, then capability preflight using an authenticated operator session.
+   Until a fresh GO exists for the exact configured destination **and credentials**,
+   real shared-mode export admission is refused before snapshot binding/source access.
+   A failed newer preflight, credential change or 15-minute GO expiry requires a
+   fresh operator preflight. Each admitted export repeats its own probes too.
+6. Run 120 MB UAT first, with full extraction and resume checks. Larger files are
+   a separate capacity decision; do not infer production headroom from queue caps.
+
+Run in the logged-in application's browser console; report only safe summaries:
+
+```js
+async function exportCheck(kind) {
+  const base = '/api/managed-exports/' + kind;
+  const started = await fetch(base, { method: 'POST', credentials: 'include',
+    headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  if (started.status !== 202) throw new Error('Check admission refused');
+  const id = (await started.json()).result.id;
+  for (;;) {
+    const response = await fetch(base + '/' + id, { credentials: 'include' });
+    if (!response.ok) throw new Error('Check status unavailable');
+    const check = (await response.json()).result;
+    if (['ready', 'failed', 'cancelled', 'expired'].includes(check.state)) return check;
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+}
+const configuration = (await (await fetch('/api/managed-exports/configuration')).json()).result;
+if (!configuration.configured || !configuration.sharedNamespaceEnabled) throw new Error('Configuration refused');
+const inventory = await exportCheck('inventory-checks');
+if (inventory.state !== 'ready' || !inventory.inventory?.exclusive) throw new Error('Inventory NO-GO');
+const check = await exportCheck('preflights');
+console.log({ id: check.id, readiness: check.productionReadiness, provider: check.provider,
+  checks: check.preflightChecks, cleanupPending: check.cleanupPending,
+  capability: check.failureCapability, category: check.failureCategory, status: check.failureHttpStatus, probeFailure: check.probeFailure });
+if (check.productionReadiness !== 'GO' || check.cleanupPending) throw new Error('Destination NO-GO');
+```
+
+GET/DELETE use the returned ID, no configuration overrides:
+`GET /api/managed-exports/preflights/:id`;
+`DELETE /api/managed-exports/preflights/:id` with `{}` cancels/retries exact cleanup.
+Inventory is metadata-only and never cleans unknown objects. An old GO report is
+reported NO-GO after credential/destination changes or a newer failed preflight.
+
+| Decision | Required observed evidence |
+| --- | --- |
+| Versioned GO | Original 15 checks, exact VersionId, conditional collision 412, cleanup complete |
+| Nonversioned candidate | Versioning disabled/unavailable, explicit shared opt-in; not yet GO |
+| Nonversioned GO | HTTPS/SSE/private ACL/anonymous denial; PUT collision 409; first MP creates, second MP is rejected and first bytes unchanged; separate MP/MP and MP/MP/PUT races each have exactly one winner; full readback; conditional HEAD/GET and exact Range; bounded object/upload enumeration; exact cleanup; exclusive prefix assumption accepted |
+| NO-GO | Overwrite succeeds, collision is only a generic/200 embedded error, both race writers succeed, condition ignored, wrong 200 Range, wrong checksum/identity, foreign/ambiguous inventory, retention or uncertain cleanup |
+| Production accepted | Applicable destination GO **plus** operator 120 MB checksum/extraction/resume and resource/compatibility UAT; not established by local fixtures |
+
+For nonversioned 120 MB UAT, use the UI Full Download then Regular Files Only on a
+disposable managed snapshot. Get the verified job summary and content link. Use an
+authenticated client, stop transfers at 10%, 50% and 90%, then continue with Range
+and the Pluton `ETag: "sha256-<archive hash>"` as `If-Range`. Require 206 and exact
+Content-Range for every continuation; never append a 200 response. Renew the session
+and obtain the same content route as necessary. Store any session cookie in a
+private mode-0600 client file, not shell arguments/history or this report.
+Compare the final byte count and `sha256sum`, extract to a new empty directory and
+compare every file/link against the synthetic source. Compare repository object
+manifests and use authorized `restic --no-lock check --read-data` before/after.
+
+Monitor 2 vCPU/4 GiB CPU throttling, RSS/cgroup memory, at least 512 MiB RAM reserve,
+metadata disk, local client disk, bandwidth, cleanup-pending jobs and exact orphan
+objects/parts. Stop the test near 3 GiB VM memory or on degraded backup latency,
+swap/OOM, disk pressure or cleanup uncertainty. Extra full readback is streaming but
+uses bandwidth, including ownership verification during cleanup. Do not schedule a
+large export alongside production backup work without measured headroom.
+Nonversioned cleanup has a size-based deadline (one minute plus object bytes at
+1 MiB/s, capped by the existing export deadline); idle storage requests still have
+their network inactivity bounds. Shutdown aborts that read and retains cleanup
+intent/reservations for restart. Versioned cleanup keeps its original 60-second bound.
+
+Rollback: cancel/drain exports with the matching config still enabled; verify
+cleanup or retain unresolved records for operator review; set ENABLED=false and
+recreate only the app. Preserve export SQLite files and permanent main-database
+reservations. Do not roll back to an image that permits unsafe future S3 edits,
+clear metadata, delete the prefix or change existing replication/retention.
+
+Local reference gateway tests are explicitly **not HCP emulation/certification**.
+They impose a first-writer-wins contract on native MinIO and prove how the client
+handles it. Ordinary nonversioned MinIO must be rejected for allowing overwrites.
+Hosted CI and all actual HCP properties remain operator-run release gates.
+
+### Nonversioned local verification record (2026-10-30)
+
+These are disposable synthetic tests on this branch, not access to the actual HCP.
+The production Compose base, read-only CA overlay, security restrictions, default
+disabled flags, existing database and permanent namespace reservation remain intact.
+The compiled startup smoke uses generated configuration and a fresh `/data`, UID
+10001, read-only root, dropped capabilities and **network none**. It confirms enabled
+startup, authenticated configuration, operator inventory/preflight admission and
+cancellation, and refusal of a real export before GO. It is not a newly built final
+runtime image; hosted Container Image validation remains required.
+
+| Native local fixture | Result and measured export |
+| --- | --- |
+| Versioned 120 MB, production Compose + CA overlay | PASS, 120,005,632-byte TAR, 17.524 s; all original 15 checks, presigned and proxy resume, restart, Full/Regular Files Only, cancellation/cleanup |
+| Write-once reference 120 MB with five replicas | PASS, 120,005,632-byte TAR, 19.504 s; 10/50/90% authenticated Range resume, full extraction, restart, Full/Regular Files Only, uncertain/failure paths and cleanup |
+| Write-once reference 3.17 GB / 115,566 source entries | PASS, 3,406,661,632-byte TAR / 115,570 TAR entries, 456.411 s; full SHA256, extraction comparison, resume, historical snapshot, Standard Download and cleanup |
+| Write-once reference 4 GB | PASS, 4,000,012,288-byte TAR, 347.546 s; complete SHA256/extraction, Range resume, Standard Download and cleanup |
+| Native ordinary nonversioned MinIO, overwrite allowed | Correctly NO-GO at collision rejection; test administrator removes only its exact disposable negative-control keys |
+
+| Final regression check | Result |
+| --- | --- |
+| Full backend, normal process exit | 207 suites, 4,265 passed, four pre-existing platform skips; 332.914 s |
+| Frontend Node suite | 361 passed, no skips |
+| Linux native security/recovery/namespace suites | 10 suites, 320 passed, one pre-existing platform skip |
+| Focused versioned/write-once/service suites | 80 passed |
+| Source/security/worker/Compose Node guards | 150 passed; the focused deployment/Compose invocation also passed all 17 tests |
+| Linux deployment, CA and fixture policy / POSIX syntax | 36 passed; all deployment shell scripts parse |
+| Backend lint; backend and frontend type checks; production build | PASS; three build tasks successful |
+| Compiled enabled-startup UID 10001 / read-only / network-none smoke | PASS, including authenticated operator-check admission/cancellation and real export refusal before GO |
+| Frontend lint | Existing ESLint configuration error described below, exit 2; not suppressed or changed |
+| Hosted CI / final image build / actual HCP 9.7.3.14 | Not run; operator release gates |
+
+The final native 120 MB repeat also passed after separating MP/MP from the three-way
+race: 16.830 s export, 598 ms maximum admission, 390,754,304-byte server Node peak,
+1,391,292,416-byte whole fixture peak, zero OOM/orphans and 135,680 metadata bytes.
+This repeat includes the native overwrite-allowed negative control and concurrent
+backup/replication. The earlier large runs exercise the same archive/identity/Range/
+cleanup path; the final additional race was independently exercised at 120 MB.
+
+Both 120 MB modes run a genuine new native Restic backup and Rclone replication to
+a separate future-plan prefix while an export upload is held at a deterministic
+barrier. This proves actual operation overlap without fixed sleeps. Existing
+replicas' keys, version identities, lengths and checksums remain unchanged; native
+`restic --no-lock check --read-data` passes afterward. The fifth replica uses another
+generated credential; the others share export credentials. Production managed-plan
+create/edit/receipt/reservation guards are independently tested with real SQLite,
+including two competing connections. No production plan was triggered or edited.
+
+All three successful sizes retain one export worker, a fixed 16 MiB part buffer,
+zero local server TAR staging, zero orphan objects/parts and zero OOM events/kills.
+The reference 120 MB server Node peak was 388,767,744 bytes; whole fixture peak
+1,239,953,408 bytes. For 3.17 GB, server Node peaked at 611,110,912 bytes and metadata
+at 326,169,088 bytes; whole fixture cgroup peak was 4,296,482,816 bytes. The 4 GB
+server Node peak was 380,657,664 bytes; whole fixture peak 4,295,716,864 bytes.
+Fixture client/source processes and page cache are included in the latter figures.
+**Both stress cases approach the 4 GiB accounting boundary and exceed the production
+UAT stop threshold. They demonstrate integrity, not headroom approval for multi-GB
+production transfers or concurrent scheduled backups.**
+
+An exploratory batch reused one namespace for several datasets and failed its later
+replica-invariance check. The driver now runs each requested mode in a fresh native
+namespace/network/volume; the separately isolated 3.17 GB and 4 GB runs above passed.
+Earlier exploratory runtime checks identified the need to use the production ESM
+loader and valid same-origin POST headers in the fixture; neither production gate
+was weakened. The Linux suite now mounts migrations for its real SQLite guard tests.
+An independent multipart-only race supplements the three-way race so a winning PUT
+cannot conceal unsafe MP/MP behavior; a violating-provider regression must refuse it.
+
+Run from the repository root with the pinned pnpm and existing disposable native
+fixture image (or build it from `scripts/fixtures/managed-resumable/Dockerfile`):
+
+```sh
+pnpm --filter @plutonhq/core-backend test --runInBand
+pnpm --filter @plutonhq/core-backend lint
+pnpm --filter @plutonhq/core-backend exec tsc --noEmit -p tsconfig.json
+node --experimental-strip-types --test frontend/__tests__/*.test.ts
+pnpm --filter @plutonhq/core-frontend exec tsc -b
+pnpm build
+node --test scripts/__tests__/*.test.cjs scripts/__tests__/*.test.mjs
+python3 scripts/__tests__/deployment_policy_test.py
+python3 scripts/__tests__/managed_export_ca_test.py
+python3 scripts/__tests__/deployment_fixture_test.py
+pwsh -File scripts/validate-managed-resumable-unit.ps1
+pwsh -File scripts/validate-managed-export-runtime.ps1
+pwsh -File scripts/validate-managed-resumable.ps1 -Modes small -SharedNamespace -ProductionCompose
+pwsh -File scripts/validate-managed-resumable.ps1 -Modes small -SharedNamespace -WriteOnceReference
+pwsh -File scripts/validate-managed-resumable.ps1 -Modes combined -SharedNamespace -WriteOnceReference
+pwsh -File scripts/validate-managed-resumable.ps1 -Modes four -SharedNamespace -WriteOnceReference
+git diff --check
+```
+
+Native drivers use random internal networks and owned volumes, generated credentials
+and certificates, no published port or production input. Their source/runtime tests
+remain outside production release artifacts. Source guards also verify the existing
+MySQL worker package and diagnostic boundaries. Windows source subprocess checks
+initially lacked permitted Bash access; their normal authorized host run passed.
+Frontend lint retains the existing `typescript-eslint` configuration error about
+the string `eslint-config-prettier` in `extends` (exit 2); frontend tests, type checks
+and production build pass. No dependency or unrelated lint configuration is changed.
 
 ## BATII HCP 9.7 — Existing Shared Namespace backup
 
@@ -240,7 +552,8 @@ each; exhaustion fails closed.
 After inventory succeeds, run `POST /api/managed-exports/preflights` with `{}` and
 poll its status as described below. Shared mode repeats inventory before probe
 writes and again at authorization/publication boundaries. Only generated random
-objects are used; no backup data is read until all 15 capability checks pass.
+objects are used; no backup data is read until every capability for the observed
+mode passes. The versioned mode retains the original 15 checks.
 
 ### HCP console review and capability findings
 
@@ -256,27 +569,14 @@ states that multipart uploads require a cloud-optimized namespace. If the existi
 namespace cannot provide multipart, return NO-GO; do not modify its optimization
 or enable management privileges through this application.
 
-The official [HCP 9.7 multipart completion reference](https://docs.hitachivantara.com/r/en-us/mk-95hcph001-20/using-the-hitachi-api-for-amazon-s3/working-with-multipart-uploads/completing-a-multipart-upload)
-documents POST completion, an optional `If-Match` comparison and version IDs only
-when versioning is enabled. It does **not** document `If-None-Match: *` completion.
-Therefore this patch makes no claim that HCP 9.7.3.14 implements that operation;
-the existing 412 collision probe remains compulsory. It also tests successful
-two-part completion and full synthetic SHA256 readback. Generic multipart success
-does not prove conditional safety. An ignored header, 400, 501, different failure
-or inability to clean up yields the exact safe capability/status and NO-GO.
-
-**No versioning bypass is implemented.** Documentation alone, random key entropy,
-HEAD-before-write, a matching ETag or a successful Range GET cannot prove equivalent
-publication/resume/delete safety under another writer. Without a pinned historical
-version, replacement between grants/requests can mix stale generations; an
-unversioned HEAD-then-delete has an identity race. HCP's documented `If-Match`
-completion alone does not establish conditional creation of an absent key or
-safe version-specific deletion. There is no actual operator-authorized HCP API
-evidence demonstrating an equivalent primitive here. Consequently disabled or
-unavailable versioning, missing AES256, unreliable conditional completion, or
-uncertain cleanup remains NO-GO, without changing HCP settings. A future alternative
-requires independently verified native concurrency/collision/replay tests and a
-reviewed safety argument before any new mode is enabled.
+Versioned mode keeps mandatory version IDs and the exact conditional 412 completion
+probe. The separately implemented nonversioned mode above instead proves overwrite
+rejection through unconditioned PUT/multipart races, full readback and conditional
+reads on the actual destination. Missing AES256, ignored read conditions, invalid
+collision behavior or uncertain cleanup remain NO-GO. Random names, HEAD-before-write
+or matching metadata alone never authorize publication/adoption. The nonversioned
+cleanup boundary is explicitly narrower than version-specific deletion under an
+external writer, as explained above; no production HCP acceptance is claimed here.
 
 Shared cleanup requires a recorded upload ID before abort and an exact persisted
 version/length/ETag plus ownership metadata before deletion. For preflight versions
@@ -307,7 +607,7 @@ prerequisite; never claim application prefix checks revoke the shared key's righ
    explicit shared flag/configuration privately, then enable export in the approved
    maintenance window and recreate only the app using its approved digest.
 4. Require health, the eleven-field private configuration comparison, valid process
-   flags, read-only inventory, then all 15 preflight gates plus confirmed cleanup.
+   flags, read-only inventory, then all applicable preflight gates plus confirmed cleanup.
    Any missing check, timeout, failed capability, unknown prefix object or cleanup
    uncertainty is **NO-GO**. Keep Standard Download available and make no real export.
 5. After GO, run the synthetic 120 MB test below and verify exact SHA256 and
@@ -483,6 +783,10 @@ backup-content preparation and needs no backup ID. Jobs share existing queue,
 record, resource, ownership and crash-recovery limits. Status survives restart;
 an interrupted preflight fails and its owned probes are reconciled for cleanup.
 
+The following original table applies to **versioned mode**. The nonversioned
+mode's actual evidence and decision matrix are in its dedicated section above;
+it never reports `versioning` as PASS when versioning is unavailable.
+
 | Mandatory check | Proof |
 | --- | --- |
 | `destination-isolation` | Strict separate bucket/key, or durable bidirectional prefix reservation plus read-only exclusive inventory in explicit shared mode |
@@ -504,14 +808,14 @@ an interrupted preflight fails and its owned probes are reconciled for cleanup.
 Safe failures report a capability plus `tls-validation`, `access-denied`,
 `unsupported-api`, `unexpected-response`, `network-or-deadline` or `cleanup-failed`,
 and an HTTP status when available. No raw provider response, endpoint, environment
-values, credentials or signed URL is exposed. For example, HCP versioning HTTP 501
-reports `versioning / unsupported-api / 501`; a rejected certificate reports
+values, credentials or signed URL is exposed. Versioning HTTP 501 can enter only
+the explicit candidate write-once contract; it is not GO. A rejected certificate reports
 `https / tls-validation`. Cleanup failure takes precedence and retains metadata
 for reconciliation. Some providers express unsupported APIs as 400; the exact
 failing capability and safe status remain visible. Storage operators must inspect
 their own protected logs for a more detailed provider diagnosis. Do not grant
-backup credentials, bypass TLS, disable versioning/SSE/conditional completion, or
-switch to a repository bucket to force a PASS. HCP is unaccepted until these gates
+additional backup privileges, bypass TLS/SSE or the selected publication contract,
+or remove namespace reservations to force a PASS. HCP is unaccepted until these gates
 and the real client-network test pass.
 
 If cleanup remains pending, correct the permission/connectivity problem without
@@ -734,7 +1038,7 @@ Hosted release checklist (operator publishes; this session does not):
   gates and the existing non-root native recovery-client runtime image checks.
 - [ ] Review the full source diff, credential-free configuration examples and
   protected host-bundle digest; approve the exact produced image digest.
-- [ ] Run the actual existing HCP namespace inventory, all 15 preflight gates,
+- [ ] Run the actual existing HCP namespace inventory, all applicable mode gates,
   120 MB client resume/checksum and normal backup-protection checks above.
 - [ ] Record a sanitized operator GO/NO-GO and rollback readiness. Hosted CI and
   production HCP compatibility remain unclaimed until those actual checks finish.

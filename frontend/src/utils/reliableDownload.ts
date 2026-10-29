@@ -15,13 +15,15 @@ export type ReliableJob = {
    summary?: VerifiedExport;
    failure?: string;
    cleanupPending: boolean;
+   integrityMode?: 'versioned' | 'hcp-write-once';
+   transport?: 'versioned-presigned-and-proxy' | 'authenticated-proxy';
 };
 export const reliableActive = (job: ReliableJob) => ['queued', 'validating', 'exporting', 'uploading', 'verifying'].includes(job.state);
 const reasons: Record<string, string> = {
    'not-configured': 'Reliable Download needs a separate private export destination configured by the administrator.',
    'configuration-invalid': 'The export destination configuration needs administrator attention.',
    'destination-not-isolated': 'The export destination must be separate from backup repositories and replication.',
-   'security-capability-missing': 'The storage provider did not pass the required privacy, encryption or resume checks.',
+   'security-capability-missing': 'An administrator must complete a successful destination preflight for privacy, encryption, publication and resume before exporting.',
    'storage-unavailable': 'Temporary storage is unavailable.',
    'archive-refused': 'The snapshot archive could not be verified.',
    'object-mismatch': 'Object integrity or identity verification failed.',
@@ -140,13 +142,18 @@ export async function reliableAuthorization(api: string, backupId: string, id: s
    if (!response.ok || body.success !== true) throw new Error(reliableFailure(body.reason));
    const a = body.result;
    let url: URL;
+   const proxy = a.transport === 'authenticated-proxy';
    try {
-      url = new URL(a.url);
+      url = proxy ? new URL(a.url, new URL(api, globalThis.location?.origin)) : new URL(a.url);
+      if (proxy) {
+         const expected = new URL(`${api}/backups/${encodeURIComponent(backupId)}/exports/${encodeURIComponent(id)}/content`, globalThis.location?.origin);
+         if (url.href !== expected.href) throw new Error();
+      }
    } catch {
       throw new Error('Download authorization was invalid.');
    }
    if (
-      url.protocol !== 'https:' ||
+      (url.protocol !== 'https:' && !(proxy && url.protocol === 'http:')) ||
       url.username ||
       url.password ||
       a.sha256 !== sha256 ||
@@ -156,5 +163,5 @@ export async function reliableAuthorization(api: string, backupId: string, id: s
       a.expiresAt > Date.now() + 301000
    )
       throw new Error('Download authorization was invalid.');
-   return { url: url.href, expiresAt: a.expiresAt as number };
+   return { url: url.href, expiresAt: a.expiresAt as number, transport: proxy ? 'authenticated-proxy' as const : 'versioned-presigned' as const };
 }

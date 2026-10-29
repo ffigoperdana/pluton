@@ -62,6 +62,13 @@ export type ExportCapability =
 	| 'multipart-completion'
 	| 'multipart-enumeration'
 	| 'conditional-completion'
+	| 'write-once-creation'
+	| 'collision-rejection'
+	| 'concurrent-publication'
+	| 'conditional-range'
+	| 'full-readback'
+	| 'object-enumeration'
+	| 'ownership-cleanup'
 	| 'presigned-get'
 	| 'cleanup';
 export class ExportPreflightError extends TemporaryExportError {
@@ -200,6 +207,65 @@ export type ExportBinding = {
 	snapshotId: string;
 	mode: ManagedExportMode;
 };
+export type ExportIntegrityMode = 'versioned' | 'hcp-write-once';
+export type ExportIdentity =
+	| { mode: 'versioned'; versionId: string; etag: string }
+	| {
+			mode: 'hcp-write-once';
+			key: string;
+			etag: string;
+			bytes: number;
+			sha256: string;
+			binding: string;
+			created: string;
+			capability: string;
+	  };
+/** No configuration values or credentials in the public capability report. */
+export type ExportProviderEvidence = {
+	mode: ExportIntegrityMode;
+	versioning: 'enabled' | 'disabled-or-unavailable';
+	writeOnce: boolean;
+	collisionStatus?: number;
+	concurrentPublication?: boolean;
+	conditionalRange: boolean;
+	cleanup: 'version-specific' | 'conditional-etag' | 'exclusive-prefix-bounded';
+	transport: 'versioned-presigned-and-proxy' | 'authenticated-proxy';
+	verifiedAt: number;
+};
+export const EXPORT_CAPABILITY_REVISION = 'write-once-v1';
+/** Nonversioned cleanup re-reads the complete object. Give healthy streaming a
+ * size-based bound (1 MiB/s plus one minute), not a metadata-only 60s deadline. */
+export const exportCleanupDeadline = (job: ExportJob) =>
+	job.integrityMode === 'hcp-write-once'
+		? Math.min(
+				EXPORT_LIMITS.deadlineMs,
+				60_000 +
+					Math.ceil(
+						Math.min(
+							EXPORT_LIMITS.maxObjectBytes,
+							Math.max(0, job.summary?.archiveBytes || job.reservedBytes || 0)
+						) /
+							1024 ** 2
+					) *
+						1000
+			)
+		: 60_000;
+/** Private proof binding; never returned or logged. Changing credentials or CA
+ * requires a fresh operator preflight, without orphaning historical job records. */
+export const exportCapabilityBinding = (c: ExportConfig) =>
+	crypto
+		.createHash('sha256')
+		.update(
+			JSON.stringify([
+				EXPORT_CAPABILITY_REVISION,
+				c.fingerprint,
+				!!c.allowSharedNamespace,
+				c.accessKeyId,
+				c.secretAccessKey,
+				c.sessionToken || '',
+			])
+		)
+		.digest('hex');
 export type ExportState =
 	| 'queued'
 	| 'validating'
@@ -212,6 +278,15 @@ export type ExportState =
 	| 'expired';
 export type ExportJob = {
 	kind?: 'archive' | 'preflight' | 'inventory';
+	integrityMode?: ExportIntegrityMode;
+	identity?: ExportIdentity;
+	providerEvidence?: ExportProviderEvidence;
+	capabilityBinding?: string;
+	ownershipNonce?: string;
+	publicationAttempted?: boolean;
+	ownedObjects?: { key: string; etag: string; bytes: number; sha256: string; created: string }[];
+	ownedUploads?: { key: string; uploadId: string }[];
+	capabilityProbe?: ExportJob;
 	ownedVersions?: { key: string; versionId: string; etag?: string; bytes: number }[];
 	inventory?: { objects: number; uploads: number; exclusive: true };
 	id: string;
@@ -242,6 +317,11 @@ export type ExportJob = {
 		| 'binding-validation';
 	failureDetail?: string;
 	preflightChecks?: ExportCapability[];
+	probeFailure?: {
+		capability: ExportCapability;
+		category: ExportPreflightError['category'];
+		httpStatus?: number;
+	};
 	failureCapability?: ExportCapability;
 	failureCategory?: ExportPreflightError['category'];
 	failureHttpStatus?: number;

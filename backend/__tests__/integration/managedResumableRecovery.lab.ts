@@ -26,8 +26,11 @@ import {
 } from '@aws-sdk/client-s3';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { configService } from '../../src/services/ConfigService';
-import { exportConfiguration } from '../../src/utils/managedExport/ExportPolicy';
+import { exportConfiguration, type ExportJob } from '../../src/utils/managedExport/ExportPolicy';
+import { S3ExportStorage } from '../../src/utils/managedExport/S3ExportStorage';
+import { writeOnceKeys } from '../../src/utils/managedExport/HcpWriteOnceStorage';
 import type { LinkFixtureConfig } from './managedSymlinkRecovery.runtime';
+import { writeOnceReferenceGateway } from './writeOnceReferenceGateway';
 import {
 	fixture,
 	hashTree,
@@ -77,6 +80,17 @@ const root = await fs.mkdtemp('/lab/r-'),
 	repository = path.join(root, 'sftp', 'application'),
 	stateFile = path.join(root, 'export-state', 'jobs.sqlite'),
 	clientFile = path.join(root, 'client.tar');
+const writeOnceReference = process.env.PLUTON_WRITE_ONCE_REFERENCE === 'true';
+const initialConfig = exportConfiguration()!;
+const gateway = writeOnceReference
+	? await writeOnceReferenceGateway(
+			initialConfig.endpoint,
+			initialConfig.ca!,
+			initialConfig.bucket,
+			initialConfig.prefix
+		)
+	: undefined;
+if (gateway) process.env.MANAGED_EXPORT_ENDPOINT = gateway.endpoint;
 const config = exportConfiguration()!;
 const replicaCount = mode === 'small' ? 5 : 1;
 const alternateReplicaCredential = {
@@ -127,7 +141,7 @@ async function replicaManifest() {
 	}
 	return manifest.sort((a, b) => `${a.key}/${a.version}`.localeCompare(`${b.key}/${b.version}`));
 }
-assert.equal(new URL(config.endpoint).hostname, 'minio');
+assert.equal(new URL(config.endpoint).hostname, writeOnceReference ? '127.0.0.1' : 'minio');
 assert.equal(config.bucket, 'example-private-exports');
 const admin = new S3Client({
 	endpoint: config.endpoint,
@@ -293,7 +307,14 @@ async function grant(id: string) {
 		body: '{}',
 	});
 	assert.equal(response.status, 200);
-	return (await json(response)).result;
+	const result = (await json(response)).result;
+	if (writeOnceReference) {
+		assert.equal(result.transport, 'authenticated-proxy');
+		assert.equal(result.url, `/api/backups/backup-01/exports/${id}/content`);
+		result.url = new URL(result.url, base).href;
+		result.etag = `"sha256-${result.sha256}"`;
+	}
+	return result;
 }
 async function cancel(id: string, backup = 'backup-01') {
 	const response = await fetch(`${base}/${backup}/exports/${id}`, { method: 'DELETE', headers });
@@ -348,7 +369,20 @@ async function request(url: string, extra: Record<string, string> = {}) {
 	return new Promise<http.IncomingMessage>((resolve, reject) => {
 		const parsed = new URL(url),
 			get = parsed.protocol === 'https:' ? https.get : http.get;
-		const req = get(parsed, { headers: extra, ca: config.ca, rejectUnauthorized: true }, resolve);
+		const req = get(
+			parsed,
+			{
+				headers: {
+					...(writeOnceReference && parsed.origin === new URL(base).origin
+						? { Cookie: headers.Cookie }
+						: {}),
+					...extra,
+				},
+				ca: config.ca,
+				rejectUnauthorized: true,
+			},
+			resolve
+		);
 		req.on('error', () => reject(new Error('Disposable HTTP request failed.')));
 	});
 }
@@ -398,6 +432,7 @@ async function partial(
 	return { offset, bytes, elapsedMs: Math.round(performance.now() - started) };
 }
 async function curlResume(url: string, file: string, total: number, extra: string[] = []) {
+	if (writeOnceReference && !extra.length) extra = ['--header', `Cookie: ${headers.Cookie}`];
 	const offset = (await fs.stat(file)).size,
 		headerFile = file + '.headers',
 		at = performance.now();
@@ -467,12 +502,13 @@ try {
 			return (error as any)?.name === 'BucketAlreadyOwnedByYou';
 		}
 	}, 30_000);
-	await admin.send(
-		new PutBucketVersioningCommand({
-			Bucket: config.bucket,
-			VersioningConfiguration: { Status: 'Enabled' },
-		})
-	);
+	if (!writeOnceReference)
+		await admin.send(
+			new PutBucketVersioningCommand({
+				Bucket: config.bucket,
+				VersioningConfiguration: { Status: 'Enabled' },
+			})
+		);
 	process.env.SSL_CERT_FILE = process.env.MANAGED_EXPORT_CA_FILE;
 	const mcUrl = new URL(config.endpoint);
 	mcUrl.username = process.env.FIXTURE_ADMIN_ACCESS!;
@@ -583,6 +619,50 @@ try {
 		assert(denied, 'Scoped fixture credentials must deny unrelated access.');
 	}
 	results.leastPrivilege = 'PASS';
+	if (writeOnceReference) {
+		stage('native-overwrite-allowed-negative-control');
+		const id = crypto.randomUUID();
+		const candidate: ExportJob = {
+			id,
+			kind: 'preflight',
+			owner: 'fixture',
+			binding: {
+				backupId: 'fixture',
+				planId: 'fixture',
+				sourceId: 'fixture',
+				repositoryId: 'fixture',
+				snapshotId: crypto.randomBytes(32).toString('hex'),
+				mode: 'full',
+			},
+			destination: initialConfig.fingerprint,
+			key: `${config.prefix}/${id}.tar`,
+			state: 'validating',
+			createdAt: Date.now(),
+			updatedAt: Date.now(),
+			uploadedBytes: 0,
+			processedBytes: 0,
+			reservedBytes: 0,
+			cleaned: false,
+			cleanupAttempts: 0,
+		};
+		const ordinary = new S3ExportStorage(initialConfig);
+		try {
+			await assert.rejects(
+				ordinary.preflight(candidate, AbortSignal.timeout(60_000), fields =>
+					Object.assign(candidate, fields)
+				)
+			);
+			assert.equal(candidate.probeFailure?.capability, 'collision-rejection');
+			assert(!candidate.preflightChecks?.includes('collision-rejection'));
+			results.nativeOverwriteAllowedRefused = 'PASS';
+		} finally {
+			ordinary.close();
+			// Test administrator removes only these exact disposable negative-control
+			// keys. Production cleanup must not adopt the replaced object's identity.
+			for (const key of writeOnceKeys(candidate))
+				await admin.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: key }));
+		}
+	}
 	if (config.allowSharedNamespace && mode === 'small') {
 		await run('/usr/local/bin/mc', [
 			'admin',
@@ -728,8 +808,8 @@ try {
 		port: sftpPort,
 		staging: path.join(root, 'staging'),
 	};
-	await start();
-	if (mode === 'small') {
+	await start(mode === 'small' && config.allowSharedNamespace ? 'concurrent-replication' : '');
+	if (mode === 'small' || config.allowSharedNamespace) {
 		stage('operator-only-preflight');
 		const operatorBase = base.replace('/api/backups', '/api/managed-exports');
 		const configuration = await json(await fetch(operatorBase + '/configuration', { headers }));
@@ -784,26 +864,43 @@ try {
 			);
 		assert.equal(preflight.state, 'ready');
 		assert.equal(preflight.cleanupPending, false);
-		assert.deepEqual(
-			preflight.preflightChecks.sort(),
-			[
-				'destination-isolation',
-				'https',
-				'versioning',
-				'sse-s3',
-				'private-acl',
-				'anonymous-denial',
-				'immutable-version',
-				'range-resume',
-				'version-enumeration',
-				'presigned-get',
-				'multipart-upload',
-				'multipart-enumeration',
-				'conditional-completion',
-				'multipart-completion',
+		if (writeOnceReference) {
+			assert.equal(preflight.productionReadiness, 'GO');
+			assert.equal(preflight.provider.mode, 'hcp-write-once');
+			assert.equal(preflight.provider.cleanup, 'exclusive-prefix-bounded');
+			assert.equal(preflight.provider.versioning, 'disabled-or-unavailable');
+			assert(!preflight.preflightChecks.includes('versioning'));
+			for (const capability of [
+				'write-once-creation',
+				'collision-rejection',
+				'concurrent-publication',
+				'conditional-range',
+				'full-readback',
+				'ownership-cleanup',
 				'cleanup',
-			].sort()
-		);
+			])
+				assert(preflight.preflightChecks.includes(capability));
+		} else
+			assert.deepEqual(
+				preflight.preflightChecks.sort(),
+				[
+					'destination-isolation',
+					'https',
+					'versioning',
+					'sse-s3',
+					'private-acl',
+					'anonymous-denial',
+					'immutable-version',
+					'range-resume',
+					'version-enumeration',
+					'presigned-get',
+					'multipart-upload',
+					'multipart-enumeration',
+					'conditional-completion',
+					'multipart-completion',
+					'cleanup',
+				].sort()
+			);
 		assert.equal((await stats()).archiveReads, 0);
 		await clean();
 		results.operatorPreflightWithoutBackupRead = 'PASS';
@@ -859,23 +956,25 @@ try {
 	);
 	stage('export-and-verify');
 	if (mode === 'small') {
-		stage('unsupported-versioning');
-		await admin.send(
-			new PutBucketVersioningCommand({
-				Bucket: config.bucket,
-				VersioningConfiguration: { Status: 'Suspended' },
-			})
-		);
-		const refused = await admit();
-		assert.equal((await terminal(refused, 'failed')).failure, 'security-capability-missing');
-		await until(async () => !(await status(refused)).cleanupPending);
-		await clean();
-		await admin.send(
-			new PutBucketVersioningCommand({
-				Bucket: config.bucket,
-				VersioningConfiguration: { Status: 'Enabled' },
-			})
-		);
+		if (!writeOnceReference) {
+			stage('unsupported-versioning');
+			await admin.send(
+				new PutBucketVersioningCommand({
+					Bucket: config.bucket,
+					VersioningConfiguration: { Status: 'Suspended' },
+				})
+			);
+			const refused = await admit();
+			assert.equal((await terminal(refused, 'failed')).failure, 'security-capability-missing');
+			await until(async () => !(await status(refused)).cleanupPending);
+			await clean();
+			await admin.send(
+				new PutBucketVersioningCommand({
+					Bucket: config.bucket,
+					VersioningConfiguration: { Status: 'Enabled' },
+				})
+			);
+		}
 		stage('public-destination-refused');
 		await admin.send(
 			new PutBucketPolicyCommand({
@@ -927,8 +1026,58 @@ try {
 	const started = performance.now(),
 		id = await admit();
 	assert.equal(await admit(), id);
+	let concurrent: Promise<void> | undefined;
 	if (mode === 'small') {
 		await until(() => inbox.some(m => m.event === 'source-archive'));
+		if (config.allowSharedNamespace) {
+			// Real native backup and replication in a NEW disjoint repository while
+			// the historical export streams. Existing replicas remain byte-identical.
+			concurrent = (async () => {
+				const source = path.join(root, 'concurrent-source'),
+					repo = path.join(root, 'concurrent-repository');
+				await fs.mkdir(source);
+				await fs.writeFile(path.join(source, 'random.bin'), crypto.randomBytes(1024 * 1024));
+				await run(restic, ['--no-cache', '-r', repo, 'init'], password);
+				await run(restic, ['--no-cache', '-r', repo, 'backup', source], password);
+				process.env.RCLONE_CONFIG_SHARED_ACCESS_KEY_ID = config.accessKeyId;
+				process.env.RCLONE_CONFIG_SHARED_SECRET_ACCESS_KEY = config.secretAccessKey;
+				process.env.AWS_ACCESS_KEY_ID = config.accessKeyId;
+				process.env.AWS_SECRET_ACCESS_KEY = config.secretAccessKey;
+				await until(() => held);
+				assert.equal((await status(id)).state, 'uploading');
+				await run(rclone, [
+					'copy',
+					repo,
+					`shared:${config.bucket}/repositories/future-plan`,
+					'--ca-cert',
+					process.env.MANAGED_EXPORT_CA_FILE!,
+					'--transfers',
+					'1',
+					'--checkers',
+					'1',
+					'--s3-upload-concurrency',
+					'1',
+				]);
+				await run(
+					restic,
+					[
+						'--no-cache',
+						'--no-lock',
+						'--cacert',
+						process.env.MANAGED_EXPORT_CA_FILE!,
+						'-r',
+						`s3:${config.endpoint}/${config.bucket}/repositories/future-plan`,
+						'check',
+						'--read-data',
+					],
+					password
+				);
+				results.concurrentNativeBackupReplicationExport = 'PASS';
+				child!.send({ action: 'release-upload' });
+			})();
+			// Attach rejection immediately while the export is independently awaited.
+			void concurrent.catch(() => {});
+		}
 		sftp!.kill('SIGSTOP');
 		const paused = performance.now();
 		await new Promise(r => setTimeout(r, 750));
@@ -936,6 +1085,7 @@ try {
 		results.sftpPauseMs = Math.round(performance.now() - paused);
 	}
 	const job = await terminal(id);
+	await concurrent;
 	results.exportMs = Math.round(performance.now() - started);
 	results.archiveBytes = job.totalBytes;
 	results.archiveSha256 = job.summary.archiveSha256;
@@ -1037,16 +1187,24 @@ try {
 		assert.equal(await sha(proxyFile), results.archiveSha256);
 		results.proxyResumeMs = proxyResume.elapsedMs;
 		await fs.unlink(proxyFile);
-		child!.send({ action: 'short-authorization', id });
-		const short = (await event('short-authorization')).url;
-		await new Promise(r => setTimeout(r, 2100));
-		const expired = await request(short, { Range: 'bytes=0-0' });
-		assert.equal(expired.statusCode, 403);
-		expired.resume();
-		const renewed = await request((await grant(id)).url, { Range: 'bytes=0-0' });
-		assert.equal(renewed.statusCode, 206);
-		renewed.resume();
-		results.expiredAuthorizationAndRenewal = 'PASS';
+		if (!writeOnceReference) {
+			child!.send({ action: 'short-authorization', id });
+			const short = (await event('short-authorization')).url;
+			await new Promise(r => setTimeout(r, 2100));
+			const expired = await request(short, { Range: 'bytes=0-0' });
+			assert.equal(expired.statusCode, 403);
+			expired.resume();
+			const renewed = await request((await grant(id)).url, { Range: 'bytes=0-0' });
+			assert.equal(renewed.statusCode, 206);
+			renewed.resume();
+			results.expiredAuthorizationAndRenewal = 'PASS';
+		} else {
+			const unauthenticated = await fetch((await grant(id)).url, {
+				headers: { Range: 'bytes=0-0' },
+			});
+			assert.equal(unauthenticated.status, 401);
+			results.authenticatedProxyRenewal = 'PASS';
+		}
 	}
 	stage('expiry');
 	child!.send({ action: 'expire', id });
@@ -1162,7 +1320,9 @@ try {
 	results.cpuUsageMicroseconds = process.cpuUsage();
 	Object.assign(results, monitor.result());
 	results.httpRangeResume = 'PASS';
-	results.provider = 'local MinIO only';
+	results.provider = writeOnceReference
+		? 'local protocol reference gateway + native MinIO; NOT HCP certification'
+		: 'local MinIO only';
 	results.s3DownloadMiBPerSecond = +(
 		job.totalBytes /
 		1024 ** 2 /
@@ -1199,6 +1359,7 @@ try {
 	sftp?.kill('SIGTERM');
 	admin.destroy();
 	restricted.destroy();
+	await gateway?.close();
 	assert(path.dirname(root) === '/lab' && /^r-[A-Za-z0-9]{6}$/.test(path.basename(root)));
 	await fs.rm(root, { recursive: true, force: true });
 	console.log(JSON.stringify({ event: 'managed_resumable_cleanup', fixture: mode, removed: true }));
