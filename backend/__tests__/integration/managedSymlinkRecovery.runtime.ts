@@ -55,6 +55,17 @@ export async function startLinkFixture(
 				: undefined,
 	};
 	const plans = { getById: async () => plan };
+	Object.assign(backups, {
+		comparisonCandidates: async (current: any) => {
+			const ids = Object.keys(config.snapshots);
+			return Promise.all(
+				ids
+					.slice(0, ids.indexOf(current.id))
+					.reverse()
+					.map(id => backups.getById(id))
+			);
+		},
+	});
 	const rows = new Map<string, any>();
 	const restores = {
 		isRestoreRunning: async () => false,

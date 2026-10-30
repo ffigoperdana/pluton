@@ -413,7 +413,12 @@ export class ManagedSnapshotIndexCache {
 			entry &&
 			(entry.readers > 0 || !entry.settled || Date.now() - entry.updated < this.limits.ttlMs);
 		return live
-			? { state: this.status(key), entries: entry.count, generation: entry.generation }
+			? {
+					state: this.status(key),
+					entries: entry.count,
+					generation: entry.generation,
+					elapsedMs: Math.max(0, (entry.settled ? entry.updated : Date.now()) - entry.started),
+				}
 			: undefined;
 	}
 	/** Atomic cache-only handoff. Missing/expired/replaced indexes never rebuild on GET. */

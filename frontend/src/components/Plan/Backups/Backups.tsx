@@ -24,7 +24,7 @@ import BackupEvents from '../BackupEvents/BackupEvents';
 import Input from '../../common/form/Input/Input';
 import MirrorStatusBadge from '../Mirrors/MirrorStatusBadge';
 import MirrorStorageSelectorModal from '../Mirrors/MirrorStorageSelectorModal';
-import { Modal, SidePanel, SnapshotViewer } from '../..';
+import { Modal } from '../..';
 import { useRecoveryAction, useRecoveryTests } from '../../../services/recoveryTests';
 import { canTestRecovery, recoveryActive, recoveryForBackup, recoveryStatusLabel } from '../../../utils/recoveryTests';
 import RecoveryResult from '../RecoveryTesting/RecoveryResult';
@@ -35,6 +35,9 @@ import { backupStatistics, statisticHelp } from '../../../utils/backupStatistics
 import { displayTimeZone, formatHistoryDate, historyIsoDate } from '../../../utils/backupHistory';
 import BackupRowMenu from './BackupRowMenu';
 import DownloadPreparation from './DownloadPreparation';
+import SnapshotDetails from './SnapshotDetails';
+import SnapshotExplorerModal from '../SnapshotViewer/SnapshotExplorerModal';
+import type { ChangeFilter } from '../../../utils/snapshotReview';
 
 const DownloadLabel = ({ download, downloadBackup }: { download: Backup['download']; downloadBackup: () => void }) => {
    if (download?.status === 'started') {
@@ -118,6 +121,8 @@ const Backups = ({
    const [showRestoreModal, setShowRestoreModal] = useState<Backup | false>(false);
    const [showBackupEvents, setShowBackupEvents] = useState<false | string>(false);
    const [showSnapshotViewer, setShowSnapshotViewer] = useState<Backup | false>(false);
+   const [showDetails, setShowDetails] = useState<string>();
+   const [changeFilter, setChangeFilter] = useState<ChangeFilter>('all');
    const [showBackupError, setShowBackupError] = useState<{ id: string; message: string } | false>(false);
    const [showEditModal, setShowEditModal] = useState<Backup | false>(false);
    const [showStorageSelector, setShowStorageSelector] = useState<Backup | false>(false);
@@ -183,7 +188,10 @@ const Backups = ({
    };
 
    const handleDownloadClick = (backup: Backup) => {
-      if (isRemoteManaged) { setPreparingDownload(backup.id); return; }
+      if (isRemoteManaged) {
+         setPreparingDownload(backup.id);
+         return;
+      }
       if (!isRemoteManaged && replicationSettings?.enabled && backup.mirrors && backup.mirrors.some((m) => m.status === 'completed')) {
          setShowStorageSelector(backup);
       } else {
@@ -353,6 +361,14 @@ const Backups = ({
                         </div>
                         <div className={classes.snapOptsBtn}>
                            <BackupRowMenu backupId={id} open={showSnapOptions === id} onOpenChange={(open) => setShowSnapOptions(open ? id : false)}>
+                              <button
+                                 onClick={() => {
+                                    setShowDetails(id);
+                                    setShowSnapOptions(false);
+                                 }}
+                              >
+                                 <Icon type="note" size={14} /> View Details
+                              </button>
                               {isRemoteManaged && canTestRecovery(snapshot) && (
                                  <button
                                     disabled={recoveryAction.isPending || (recoveryTests.data || []).some(recoveryActive)}
@@ -418,6 +434,7 @@ const Backups = ({
                                           });
                                        setShowSnapOptions(false);
                                        setShowSnapshotViewer(snapshot);
+                                       setChangeFilter('all');
                                     }}
                                  >
                                     <Icon type="folders" size={14} /> Browse
@@ -587,19 +604,29 @@ const Backups = ({
                onClose={() => setShowStorageSelector(false)}
             />
          )}
+         {showDetails && (
+            <SnapshotDetails
+               backupId={showDetails}
+               close={() => setShowDetails(undefined)}
+               onBrowse={(backup, filter) => {
+                  setShowDetails(undefined);
+                  setChangeFilter(filter);
+                  setShowSnapshotViewer(backup);
+               }}
+            />
+         )}
          {showSnapshotViewer && showSnapshotViewer.id && (isRemoteManaged || browseSnapshotMutation.isSuccess) && (
-            <SidePanel width="100%" title="Browse Snapshot" icon={<Icon type={'folders'} size={20} />} close={() => setShowSnapshotViewer(false)}>
-               <SnapshotViewer
-                  files={snapshotFiles || []}
-                  backup={showSnapshotViewer}
-                  planId={planId}
-                  isSync={isSync}
-                  stagingOnly={isRemoteManaged}
-                  onClose={() => setShowSnapshotViewer(false)}
-                  mirrors={!isRemoteManaged && replicationSettings?.enabled ? showSnapshotViewer.mirrors : undefined}
-                  primaryStorage={!isRemoteManaged && replicationSettings?.enabled ? storage : undefined}
-               />
-            </SidePanel>
+            <SnapshotExplorerModal
+               initialFilter={changeFilter}
+               files={snapshotFiles || []}
+               backup={showSnapshotViewer}
+               planId={planId}
+               isSync={isSync}
+               stagingOnly={isRemoteManaged}
+               onClose={() => setShowSnapshotViewer(false)}
+               mirrors={!isRemoteManaged && replicationSettings?.enabled ? showSnapshotViewer.mirrors : undefined}
+               primaryStorage={!isRemoteManaged && replicationSettings?.enabled ? storage : undefined}
+            />
          )}
          {showBackupError && (
             <Modal title="Error Details" stableLayout closeModal={() => setShowBackupError(false)} width={'680px'}>

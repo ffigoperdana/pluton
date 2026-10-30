@@ -22,6 +22,7 @@ import classes from '../../common/SnapshotBrowser/SnapshotBrowser.module.scss';
 import ManagedSnapshotViewer from './ManagedSnapshotViewer';
 
 export interface SnapshotViewerProps {
+   comparison?: { enabled: boolean; initialFilter?: import('../../../utils/snapshotReview').ChangeFilter; onPrevious?: (backupId: string) => void };
    files: FileItem[];
    backup: Backup;
    planId: string;
@@ -47,6 +48,7 @@ const GRID_COLUMNS = '1fr 120px minmax(100px, auto) 120px';
 const GRID_COLUMNS_SYNC = '1fr 120px minmax(100px, auto)';
 
 const LocalSnapshotViewer = ({
+   comparison,
    files,
    backup,
    planId,
@@ -196,7 +198,7 @@ const LocalSnapshotViewer = ({
    };
 
    // File row renderer
-   const gridColumns = isSync ? GRID_COLUMNS_SYNC : GRID_COLUMNS;
+   const gridColumns = comparison ? 'minmax(220px,1fr) 160px 110px 130px 120px' : isSync ? GRID_COLUMNS_SYNC : GRID_COLUMNS;
 
    const renderFileRow = useCallback(
       ({ index, style }: { index: number; style: React.CSSProperties }) => {
@@ -212,6 +214,7 @@ const LocalSnapshotViewer = ({
                onGoUp={handleGoUp}
                onDirectoryClick={handleDirectoryClick}
                onRestore={(file) => setShowRestoreModal(file)}
+               changeStatus={comparison ? 'not-compared' : undefined}
                renderFileActions={stagingOnly ? () => null : renderFileActions}
             />
          );
@@ -268,6 +271,12 @@ const LocalSnapshotViewer = ({
             }
          />
 
+         {comparison && (
+            <div className={classes.stats} role="status">
+               Not compared. Verified comparison metadata is unavailable for this repository adapter.
+            </div>
+         )}
+
          {isExternalLoading || browseSnapshotMutation.isPending ? (
             <div className={`${classes.browserContent} ${classes.loadingState}`}>
                <div>
@@ -303,6 +312,7 @@ const LocalSnapshotViewer = ({
                            <div onClick={() => handleSort('size')} className={sortField === 'size' ? classes.activeSort : ''}>
                               Size {sortField === 'size' && (sortDirection === 'asc' ? '↑' : '↓')}
                            </div>
+                           {comparison && <div>Change</div>}
                            {!isSync && <div className={classes.headerActions}>Actions</div>}
                         </>
                      }

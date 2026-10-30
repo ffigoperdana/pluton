@@ -7,7 +7,14 @@ ENV_FILE="$DEPLOY_DIR/.env"
 STATE_FILE="$DEPLOY_DIR/.deploy-state"
 # shellcheck source=lib.sh
 . "$SCRIPT_DIR/lib.sh"
-[ "$#" -eq 1 ] || die "Usage: sh deploy.sh sha256:<approved-digest>"
+[ "$#" -eq 1 ] || [ "$#" -eq 4 ] || die "Usage: sh deploy.sh sha256:<approved-digest> [--reapply-config --approve-bundle sha256:<reviewed-bundle>]"
+reapply=0
+if [ "$#" -eq 4 ]; then
+ [ "$2" = --reapply-config ] && [ "$3" = --approve-bundle ] || die "Invalid configuration reapply arguments."
+ reviewed_bundle=$(python3 "$SCRIPT_DIR/bundle-tools.py" --print-digest) || die "Cannot validate the host bundle."
+ [ "$4" = "$reviewed_bundle" ] || die "Configuration reapply requires approval of this exact host bundle."
+ reapply=1
+fi
 requested_version=$1
 validate_version "$requested_version"
 require_file "$ENV_FILE"
@@ -35,8 +42,12 @@ info "Pulling the approved immutable application image."
 docker pull "$target_ref" > "$WORK_DIR/pull-output" 2>&1 || die "Immutable image pull failed; existing service was not stopped."
 docker image inspect "$target_ref" > "$WORK_DIR/target-image.json" 2> "$WORK_DIR/docker-error" || die "Pulled image is unavailable."
 target_image=$(policy image "$WORK_DIR/target-image.json" "$target_ref") || die "Pulled image failed identity/runtime checks."
-if [ -n "$previous_ref" ] && [ "$previous_ref" = "$target_ref" ] && wait_for_healthy; then
- verify_container "$target_image" || die "Unchanged container failed image/mount validation."
+if [ "$reapply" = 1 ]; then
+ [ -n "$previous_ref" ] && [ "$previous_ref" = "$target_ref" ] || die "Configuration reapply requires the current approved immutable image digest."
+ policy prepare-reapply "$WORK_DIR" || die "Cannot preserve the running application configuration for rollback."
+fi
+if [ "$reapply" = 0 ] && [ -n "$previous_ref" ] && [ "$previous_ref" = "$target_ref" ] && wait_for_healthy; then
+ verify_container "$target_image" || die "Unchanged container differs from approved image, mounts or export environment. Review and explicitly approve --reapply-config for intended configuration changes."
  write_image_configuration "$target_ref" "$requested_version"
  policy record "$DEPLOY_DIR" "$WORK_DIR"
  record_result none not-needed
@@ -53,9 +64,13 @@ rollback_to_previous() {
  fi
  info "Deployment failed ($failure). Restoring the previous immutable image with the same overlays."
  write_image_configuration "$previous_ref" "$previous_version"
+ if [ "$reapply" = 1 ]; then
+  policy activate-reapply-rollback "$WORK_DIR" || die "Cannot activate preserved environment rollback."
+  VERIFY_LEGACY_EXPORT_ENV=legacy
+ fi
  if compose up -d --no-deps --force-recreate pluton > "$WORK_DIR/rollback-output" 2>&1 && wait_for_healthy && verify_container "$old_image"; then
   record_result "$failure" healthy
-  die "Deployment failed ($failure); rollback verified healthy with unchanged mounts. SQLite backups remain operator-controlled."
+  die "Deployment failed ($failure); rollback verified healthy with unchanged mounts. The operator .env is preserved; review desired/running environment drift before retrying. SQLite backups remain operator-controlled."
  fi
  record_result "$failure" failed
  die "Deployment failed ($failure); rollback could not be verified healthy. Stop and investigate locally; data was not reset."
@@ -69,6 +84,12 @@ write_image_configuration "$target_ref" "$requested_version"
 if ! compose up -d --no-deps --force-recreate pluton > "$WORK_DIR/up-output" 2>&1; then rollback_to_previous recreate-failed; fi
 if ! wait_for_healthy; then rollback_to_previous "$HEALTH_FAILURE"; fi
 if ! verify_container "$target_image"; then rollback_to_previous post-start-image-or-mount-mismatch; fi
-write_deploy_state "$previous_ref" "$previous_version" "$target_ref" "$requested_version"
+if [ "$reapply" = 1 ]; then
+ # A config-only change must not replace the previous *image* rollback target
+ # with a second copy of the current digest.
+ policy record "$DEPLOY_DIR" "$WORK_DIR"
+else
+ write_deploy_state "$previous_ref" "$previous_version" "$target_ref" "$requested_version"
+fi
 record_result none not-needed
-info "Deployment verified healthy at the approved digest; all mounts preserved."
+info "Deployment verified healthy at the approved digest; all mounts and eleven export environment fields verified without emitting values."

@@ -19,5 +19,5 @@ docker image inspect "$ref" > "$WORK_DIR/image.json" 2> "$WORK_DIR/docker-error"
 image=$(policy image "$WORK_DIR/image.json" "$ref") || die "Configured image is invalid."
 attempts=1
 if ! wait_for_healthy; then die "Application is not healthy ($HEALTH_FAILURE)."; fi
-verify_container "$image" || die "Application image, runtime user or mounts do not match."
-info "Application healthy; approved image, UID/GID and complete mount contract verified."
+verify_container "$image" || die "Application image, runtime user, mounts or export environment do not match."
+info "Application healthy; approved image, UID/GID, complete mount contract and all eleven export environment fields verified without emitting values."

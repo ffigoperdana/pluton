@@ -25,6 +25,8 @@ import { managedExportMode, type ManagedExportMode } from '../utils/restic/Manag
 import { RemoteBackupService } from './RemoteBackupService';
 import { RemoteRepositoryRecoveryService } from './RemoteRepositoryRecoveryService';
 import type { ManagedReplicationService } from './ManagedReplicationService';
+import type { RecoveryTestStore } from '../stores/RecoveryTestStore';
+import { managedSnapshotPath } from '../utils/managedSnapshotPath';
 
 export class BackupService {
 	constructor(
@@ -36,8 +38,127 @@ export class BackupService {
 		protected storageStore: StorageStore,
 		private readonly remoteBackupService?: RemoteBackupService,
 		private readonly remoteRecovery?: RemoteRepositoryRecoveryService,
-		private readonly managedReplications?: ManagedReplicationService
+		private readonly managedReplications?: ManagedReplicationService,
+		private readonly recoveryTests?: RecoveryTestStore
 	) {}
+	async snapshotDetails(backupId: string) {
+		const backup = await this.backupStore.getById(backupId);
+		if (!backup) throw new NotFoundError('Backup not found.');
+		const plan = backup.planId ? await this.planStore.getById(backup.planId) : null;
+		const storage = backup.storageId ? await this.storageStore.getById(backup.storageId) : null;
+		const stats = backup.completionStats;
+		const measured = (key: string) => {
+			const value = stats?.[key as keyof typeof stats];
+			return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+		};
+		const snapshotId = /^[a-f0-9]{64}$/.test(stats?.snapshot_id || '') ? stats!.snapshot_id : null;
+		const artifact = (value: unknown) => {
+			if (!value || typeof value !== 'object') return null;
+			const a = value as Record<string, unknown>;
+			if (
+				typeof a.path !== 'string' ||
+				!a.path.startsWith('/pluton/database/') ||
+				typeof a.bytes !== 'number' ||
+				!Number.isSafeInteger(a.bytes) ||
+				a.bytes < 0 ||
+				typeof a.sha256 !== 'string' ||
+				!/^[a-f0-9]{64}$/.test(a.sha256)
+			)
+				return null;
+			try {
+				managedSnapshotPath(a.path);
+			} catch {
+				return null;
+			}
+			return {
+				reference: typeof a.databaseId === 'string' ? a.databaseId : null,
+				engine: ['mysql', 'mariadb', 'postgresql'].includes(String(a.engine)) ? a.engine : null,
+				database: typeof a.database === 'string' ? a.database : null,
+				path: a.path,
+				bytes: a.bytes,
+				sha256: a.sha256,
+				status: 'recorded-completed',
+			};
+		};
+		const artifacts =
+			snapshotId && backup.status === 'completed'
+				? (stats?.lifecycle?.databases || [stats?.lifecycle?.database])
+						.slice(0, 8)
+						.map(artifact)
+						.filter(Boolean)
+				: [];
+		return {
+			backupId: backup.id,
+			planId: backup.planId,
+			planName: plan?.title || null,
+			status: backup.status,
+			snapshotId,
+			started: backup.started,
+			completed: backup.ended,
+			durationSeconds: measured('total_duration'),
+			timeZone: plan?.settings?.interval?.timeZone || 'UTC',
+			storage: storage ? { id: storage.id, name: storage.name, type: storage.type } : null,
+			source: { id: backup.sourceId, type: backup.sourceType },
+			statistics: {
+				totalFiles: measured('total_files_processed'),
+				logicalBytes: measured('total_bytes_processed'),
+				newFiles: measured('files_new'),
+				modifiedFiles: measured('files_changed'),
+				unchangedFiles: measured('files_unmodified'),
+				totalDirectories:
+					stats &&
+					['dirs_new', 'dirs_changed', 'dirs_unmodified'].every(key => measured(key) !== null)
+						? ['dirs_new', 'dirs_changed', 'dirs_unmodified'].reduce(
+								(n, key) => n + measured(key)!,
+								0
+							)
+						: null,
+				deletedFiles: null,
+				addedRepositoryBytes: measured('data_added'),
+				packedRepositoryBytes: measured('data_added_packed'),
+			},
+			databases: artifacts,
+			recovery:
+				snapshotId && backup.planId && this.recoveryTests
+					? await this.recoveryTests.latestForSnapshot(backup.planId, backup.id, snapshotId)
+					: null,
+			replication: (backup.mirrors || []).slice(0, 32).map(m => ({
+				id: m.replicationId,
+				storageName: m.storageName,
+				status: m.status,
+				snapshotId: m.snapshotId || null,
+				verifiedAt: m.verifiedAt || null,
+			})),
+			warnings: (stats?.lifecycle?.warnings || [])
+				.slice(0, 16)
+				.map(w => ({ stage: w.stage, code: w.code })),
+			comparisonAvailable:
+				backup.method === 'backup' &&
+				RemoteBackupService.isRemoteFilesystemPlan(backup) &&
+				backup.status === 'completed' &&
+				!!snapshotId,
+		};
+	}
+	async snapshotComparison(
+		backupId: string,
+		action: 'start' | 'status' | 'cancel' | 'page',
+		query: import('../utils/restic/SnapshotComparison').ComparisonQuery = {},
+		retry = false,
+		signal?: AbortSignal
+	) {
+		const backup = await this.backupStore.getById(backupId);
+		if (!backup) throw new NotFoundError('Backup not found.');
+		if (
+			!this.remoteRecovery ||
+			backup.method !== 'backup' ||
+			!RemoteBackupService.isRemoteFilesystemPlan(backup)
+		)
+			return {
+				state: 'unavailable' as const,
+				reason: 'Verified comparison is unavailable for this repository adapter.',
+			};
+		return this.remoteRecovery.comparison(backupId, action, query, retry, signal);
+	}
 
 	getSnapshotStrategy(deviceId: string, method?: string): SnapshotStrategy {
 		const isRemote = deviceId !== 'main';

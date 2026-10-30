@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { SnapshotComparisonCache, type ComparisonQuery } from '../utils/restic/SnapshotComparison';
 import fs from 'fs/promises';
 import path from 'path';
 import Cryptr from 'cryptr';
@@ -91,6 +92,7 @@ export class RemoteRepositoryRecoveryService {
 	private readonly preparing = new Set<string>();
 	private readonly downloads = new ManagedDownloadPreparation();
 	private readonly indexes: ManagedSnapshotIndexCache;
+	private readonly comparisons: SnapshotComparisonCache;
 
 	constructor(
 		private readonly repositories: RemoteManagedRepositoryStore,
@@ -108,14 +110,118 @@ export class RemoteRepositoryRecoveryService {
 			SNAPSHOT_INDEX_LIMITS,
 			record => planLogger('snapshot-index').info(record, 'Managed snapshot cache lifecycle.')
 		);
+		this.comparisons = new SnapshotComparisonCache(
+			path.join(path.dirname(stagingRoot), 'managed-snapshot-comparisons')
+		);
 	}
 
 	/** Stop background metadata work and close disposable indexes during shutdown/tests. */
 	async close() {
+		await this.comparisons.close();
 		await this.downloads.close();
 		for (const job of this.jobs.values()) job.controller.abort();
 		await Promise.allSettled([...this.jobs.values()].map(job => job.done));
 		await this.indexes.close();
+	}
+	private async comparisonContext(backupId: string) {
+		const current = await this.context(backupId);
+		const row = (await this.backups.getById(backupId))!;
+		const scope = (paths: string[]) => JSON.stringify([...paths].sort());
+		for (const candidate of await this.backups.comparisonCandidates(row)) {
+			if (!fullSnapshotId.safeParse(candidate.completionStats?.snapshot_id).success) continue;
+			const paths =
+				candidate.completionStats?.sourcePaths || candidate.sourceConfig?.includes || [];
+			if (
+				!paths.length ||
+				!current.sourcePaths.length ||
+				scope(paths) !== scope(current.sourcePaths)
+			)
+				continue;
+			const previous = await this.context(candidate.id, current.planId);
+			if (
+				previous.repositoryId !== current.repositoryId ||
+				previous.snapshotId === current.snapshotId
+			)
+				continue;
+			return { current, previous, key: ManagedSnapshotIndexCache.key([current, previous]) };
+		}
+		return { current, previous: undefined, key: undefined };
+	}
+	async comparison(
+		backupId: string,
+		action: 'start' | 'status' | 'cancel' | 'page',
+		query: ComparisonQuery = {},
+		retry = false,
+		signal?: AbortSignal
+	) {
+		const { current, previous, key } = await this.comparisonContext(backupId);
+		if (!previous || !key)
+			return {
+				state: 'unavailable' as const,
+				reason: 'No compatible previous completed snapshot with recorded source scope.',
+			};
+		const binding = {
+			currentBackupId: backupId,
+			previousBackupId: previous.backupId,
+			currentSnapshotId: current.snapshotId,
+			previousSnapshotId: previous.snapshotId,
+		};
+		if (action === 'start')
+			return this.comparisons.start(
+				key,
+				binding,
+				async (index, bounded) => {
+					await this.withIndex(
+						current,
+						async currentIndex =>
+							this.withIndex(
+								previous,
+								async previousIndex => {
+									await this.sessions.withSession(
+										current.access,
+										async session => {
+											const a = await this.verifySnapshot(current, session),
+												b = await this.verifySnapshot(previous, session);
+											if (
+												JSON.stringify([...a.paths].sort()) !==
+													JSON.stringify([...b.paths].sort()) ||
+												!session.diff
+											)
+												throw new AppError(
+													409,
+													'Compatible snapshot comparison metadata is unavailable.'
+												);
+											await index.populate(
+												currentIndex,
+												previousIndex,
+												consume => session.diff!(previous.snapshotId, current.snapshotId, consume),
+												bounded
+											);
+											await this.verifySnapshot(current, session);
+											await this.verifySnapshot(previous, session);
+											await this.assertCurrentContext(current);
+											await this.assertCurrentContext(previous);
+										},
+										bounded
+									);
+								},
+								bounded
+							),
+						bounded
+					);
+				},
+				retry
+			);
+		if (action === 'cancel') return this.comparisons.cancel(key);
+		await this.sessions.withSession(
+			current.access,
+			async session => {
+				await this.verifySnapshot(current, session);
+				await this.verifySnapshot(previous, session);
+			},
+			signal
+		);
+		return action === 'page' ? this.comparisons.page(key, query) : this.comparisons.status(key);
 	}
 
 	/** Metadata only. Source agent identity is checked in SQLite, never contacted. */
@@ -384,6 +490,7 @@ export class RemoteRepositoryRecoveryService {
 				status: 'indexing' as const,
 				retryAfterMs: 1000,
 				indexedEntries: this.indexes.inspect(key)?.entries || 0,
+				elapsedMs: this.indexes.inspect(key)?.elapsedMs || 0,
 			};
 		}
 		return this.withIndex(

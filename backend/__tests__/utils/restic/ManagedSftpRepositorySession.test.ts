@@ -178,6 +178,7 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 		await new ManagedSftpRepositorySession().withSession(access, async session => {
 			expect(Object.keys(session).sort()).toEqual([
 				'archive',
+				'diff',
 				'files',
 				'restore',
 				'snapshot',
@@ -201,6 +202,40 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 		expect(args).not.toEqual(
 			expect.arrayContaining(['init', 'backup', 'forget', 'prune', 'unlock', 'repair', '--delete'])
 		);
+	});
+	it('compares only two full exact identities with bounded metadata and mandatory no-lock flags', async () => {
+		const previous = 'b'.repeat(64),
+			records: any[] = [];
+		responses.push({
+			stdout:
+				JSON.stringify({ message_type: 'change', path: '/srv/example-app/', modifier: 'U' }) +
+				'\n' +
+				JSON.stringify({
+					message_type: 'statistics',
+					source_snapshot: previous,
+					target_snapshot: id,
+				}) +
+				'\n',
+		});
+		await new ManagedSftpRepositorySession().withSession(access, async session => {
+			await session.diff!(previous, id, record => records.push(record));
+		});
+		const args = (spawn as jest.Mock).mock.calls[1][1];
+		expect(args).toEqual(
+			expect.arrayContaining([
+				'--no-lock',
+				'--no-cache',
+				'--json',
+				'diff',
+				'--metadata',
+				previous,
+				id,
+			])
+		);
+		expect(args).not.toEqual(
+			expect.arrayContaining(['latest', 'init', 'backup', 'forget', 'prune', 'unlock', 'repair'])
+		);
+		expect(records).toHaveLength(2);
 	});
 	it.each([
 		'not-json\n',

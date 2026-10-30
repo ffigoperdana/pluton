@@ -60,6 +60,28 @@ export class BackupStore {
 
 		return backup || null;
 	}
+	/** Bounded history lookup; never hydrate an entire plan history for comparison. */
+	async comparisonCandidates(current: Backup) {
+		const at = Math.floor((current.ended || current.started || current.createdAt).getTime() / 1000);
+		return this.db
+			.select()
+			.from(backups)
+			.where(
+				and(
+					eq(backups.planId, current.planId!),
+					eq(backups.method, 'backup'),
+					eq(backups.status, 'completed'),
+					eq(backups.sourceId, current.sourceId),
+					eq(backups.sourceType, current.sourceType),
+					eq(backups.storageId, current.storageId!),
+					eq(backups.storagePath, current.storagePath || ''),
+					sql`coalesce(${backups.inProgress},0)=0 AND coalesce(${backups.success},1)!=0`,
+					sql`(${backupHistoryDate}<${at} OR (${backupHistoryDate}=${at} AND ${backups.id}<${current.id}))`
+				)
+			)
+			.orderBy(desc(backupHistoryDate), desc(backups.id))
+			.limit(32);
+	}
 
 	async getHistoryPage(planId: string, query: BackupHistoryQuery) {
 		const where = and(

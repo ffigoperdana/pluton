@@ -89,6 +89,54 @@ describe('bounded backup history API against real migrated disposable SQLite', (
 		app.use('/api/plans', createPlanRouter(controller));
 	});
 	afterEach(() => sqlite.close());
+	it('comparison candidates are completed earlier rows in the exact plan/source/repository scope, bounded to 32', async () => {
+		db.insert(storages)
+			.values([
+				{ id: 'storage-01', name: 'Example storage' },
+				{ id: 'storage-other', name: 'Other storage' },
+			])
+			.run();
+		const current: any = {
+			id: 'zz-current',
+			planId: 'plan-01',
+			sourceId: 'app-01',
+			sourceType: 'device',
+			method: 'backup',
+			status: 'completed',
+			inProgress: false,
+			success: true,
+			storageId: 'storage-01',
+			storagePath: 'application',
+			ended: new Date('2026-01-02T00:00:00Z'),
+			createdAt: new Date('2026-01-02T00:00:00Z'),
+		};
+		db.insert(backups).values(current).run();
+		for (let i = 0; i < 40; i++)
+			db.insert(backups)
+				.values({
+					...current,
+					id: `earlier-${String(i).padStart(3, '0')}`,
+					ended: new Date('2026-01-01T00:00:00Z'),
+				})
+				.run();
+		for (const patch of [
+			{ planId: 'plan-02' },
+			{ storageId: 'storage-other' },
+			{ sourceId: 'app-other' },
+			{ storagePath: 'another' },
+			{ status: 'failed' },
+			{ inProgress: true },
+			{ success: false },
+			{ ended: new Date('2026-01-03T00:00:00Z') },
+		])
+			db.insert(backups)
+				.values({ ...current, id: 'excluded-' + Math.random().toString(36).slice(2), ...patch })
+				.run();
+		const candidates = await store.comparisonCandidates(current);
+		expect(candidates).toHaveLength(32);
+		expect(candidates.every(row => row.id.startsWith('earlier-'))).toBe(true);
+		expect(candidates[0].id).toBe('earlier-039');
+	});
 	function seed(count: number, planId = 'plan-01') {
 		for (let i = 0; i < count; i++)
 			db.insert(backups)

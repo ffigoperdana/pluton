@@ -222,6 +222,28 @@ describe('Phase 4 remote managed repository recovery', () => {
 	});
 
 	const preparationIds = new Map<string, string>();
+	it('missing previous identities/source scope remain Not compared and cross-plan predecessor injection is refused before session access', async () => {
+		stores.backups.comparisonCandidates = jest.fn(async () => []);
+		expect((await service.comparison('backup-01', 'status')).state).toBe('unavailable');
+		stores.backups.comparisonCandidates.mockResolvedValue([
+			{ ...backup, id: 'backup-old', completionStats: { snapshot_id: 'b'.repeat(64) } },
+		]);
+		expect((await service.comparison('backup-01', 'status')).state).toBe('unavailable');
+		backup.completionStats.sourcePaths = ['/srv/example-app'];
+		const foreign = {
+			...backup,
+			id: 'backup-old',
+			planId: 'foreign-plan',
+			completionStats: { snapshot_id: 'b'.repeat(64), sourcePaths: ['/srv/example-app'] },
+		};
+		stores.backups.comparisonCandidates.mockResolvedValue([foreign]);
+		stores.backups.getById.mockImplementation(async (id: string) =>
+			id === 'backup-old' ? foreign : backup
+		);
+		await expect(service.comparison('backup-01', 'start')).rejects.toBeDefined();
+		expect(withSession).not.toHaveBeenCalled();
+		expect(session.archive).not.toHaveBeenCalled();
+	});
 	it('an explicitly retried durable export rebuilds a failed index and streams only its verified snapshot', async () => {
 		const binding = await service.exportBindingFor('backup-01', 'full'),
 			signal = new AbortController().signal;

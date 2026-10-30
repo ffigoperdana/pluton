@@ -48,6 +48,74 @@ const failureCode = (error: unknown) =>
 
 export class BackupController {
 	constructor(protected backupService: BackupService) {}
+	async snapshotDetails(req: Request, res: Response) {
+		try {
+			if (Object.keys(req.query).length) throw new AppError(400, 'Details accepts no overrides.');
+			res.setHeader('Cache-Control', 'private, no-store');
+			res.json({ success: true, result: await this.backupService.snapshotDetails(req.params.id) });
+		} catch (error) {
+			res
+				.status(error instanceof AppError ? error.statusCode : 500)
+				.json({
+					success: false,
+					error: error instanceof AppError ? error.message : 'Snapshot details unavailable.',
+				});
+		}
+	}
+	async snapshotComparison(req: Request, res: Response) {
+		const request = this.downloadRequest(req, res);
+		try {
+			const query = pageQuery
+				.omit({ retry: true, directoriesOnly: true })
+				.extend({
+					change: z.enum(['added', 'modified', 'unchanged', 'deleted']).optional(),
+					recursive: z
+						.enum(['true', 'false'])
+						.transform(v => v === 'true')
+						.optional(),
+					view: z.literal('files').optional(),
+				})
+				.safeParse(req.query);
+			const body = z.strictObject({ retry: z.boolean().optional() }).safeParse(req.body || {});
+			if (
+				!query.success ||
+				!body.success ||
+				(req.method !== 'GET' && Object.keys(req.query).length)
+			)
+				throw new AppError(400, 'Invalid comparison request.');
+			if (query.data.path) managedSnapshotPath(query.data.path);
+			if (query.data.limit && query.data.limit > 200)
+				throw new AppError(400, 'Comparison pages are limited to 200 entries.');
+			const action =
+				req.method === 'POST'
+					? 'start'
+					: req.method === 'DELETE'
+						? 'cancel'
+						: query.data.view === 'files'
+							? 'page'
+							: 'status';
+			const result = await this.backupService.snapshotComparison(
+				req.params.id,
+				action,
+				query.data,
+				body.data.retry,
+				request.signal
+			);
+			res.setHeader('Cache-Control', 'private, no-store');
+			if ('state' in result && result.state === 'preparing') res.setHeader('Retry-After', '2');
+			res.status(action === 'start' ? 202 : 200).json({ success: true, result });
+		} catch (error) {
+			if (error instanceof AppError && error.statusCode === 429) res.setHeader('Retry-After', '2');
+			res
+				.status(error instanceof AppError ? error.statusCode : 500)
+				.json({
+					success: false,
+					error: error instanceof AppError ? error.message : 'Snapshot comparison unavailable.',
+				});
+		} finally {
+			request.cleanup();
+		}
+	}
 
 	async getBackupDownload(req: Request, res: Response): Promise<void> {
 		if (!req.params.id) {
@@ -221,13 +289,11 @@ export class BackupController {
 			} else {
 				res.removeHeader('Content-Type');
 				res.removeHeader('Content-Disposition');
-				res
-					.status(error instanceof AppError ? error.statusCode : 500)
-					.json({
-						success: false,
-						error: error instanceof AppError ? error.message : 'Export manifest unavailable.',
-						...failureCode(error),
-					});
+				res.status(error instanceof AppError ? error.statusCode : 500).json({
+					success: false,
+					error: error instanceof AppError ? error.message : 'Export manifest unavailable.',
+					...failureCode(error),
+				});
 			}
 		} finally {
 			request.cleanup();

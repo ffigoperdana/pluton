@@ -87,6 +87,7 @@ inspect_container() { docker inspect "$1" > "$WORK_DIR/container.json" 2> "$WORK
 verify_container() {
  verify_id=$(service_container_id) && [ -n "$verify_id" ] && inspect_container "$verify_id" &&
  policy check-container "$WORK_DIR/config.json" "$WORK_DIR/container.json" "$1" &&
+ policy export-environment "$WORK_DIR/config.json" "$WORK_DIR/container.json" "${VERIFY_LEGACY_EXPORT_ENV:-strict}" > "$WORK_DIR/environment-verification" &&
  docker exec "$verify_id" node -e 'if(process.getuid()!==10001 || process.getgid()!==10001)process.exit(1)' >/dev/null 2>&1
 }
 wait_for_healthy() {

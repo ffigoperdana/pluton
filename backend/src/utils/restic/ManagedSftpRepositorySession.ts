@@ -6,6 +6,7 @@ import path from 'path';
 import { Writable } from 'stream';
 import { pipeline } from 'stream/promises';
 import { z } from 'zod';
+import type { SnapshotDiffRecord } from './SnapshotComparison';
 import { AppError } from '../AppError';
 import { getBinaryPath } from '../binaryPathResolver';
 import { killProcessTree } from '../processTree';
@@ -66,6 +67,11 @@ export type ManagedSnapshotNode = z.infer<typeof nodeSchema>;
 export type ManagedRestoreSummary = { files_restored: number; bytes_restored: number };
 
 export interface ManagedRepositorySession {
+	diff?(
+		previous: string,
+		current: string,
+		consume: (record: SnapshotDiffRecord) => void
+	): Promise<void>;
 	snapshot(id: string): Promise<ManagedSnapshot>;
 	/** Bounded compatibility helper. Production consumers use streamFiles. */
 	files(id: string): Promise<ManagedSnapshotNode[]>;
@@ -250,6 +256,34 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			};
 			return await consume({
 				streamFiles,
+				diff: async (previous, current, onRecord) => {
+					checkId(previous);
+					checkId(current);
+					await this.streamMetadata(
+						restic,
+						[...prefix, 'diff', '--metadata', previous, current],
+						resticEnvironment,
+						async line => {
+							const record = this.parse(
+								z.discriminatedUnion('message_type', [
+									z.object({
+										message_type: z.literal('change'),
+										path: z.string().max(1025),
+										modifier: z.string().min(1).max(8),
+									}),
+									z.object({
+										message_type: z.literal('statistics'),
+										source_snapshot: fullSnapshotId,
+										target_snapshot: fullSnapshotId,
+									}),
+								]),
+								line
+							);
+							onRecord(record);
+						},
+						signal
+					);
+				},
 				archive: async (id, destination) => {
 					checkId(id);
 					await this.streamArchive(

@@ -707,7 +707,10 @@ while preserving the same already deployed image and every existing mount:
 
 With no active operations, set the settings privately and explicitly set
 `MANAGED_EXPORT_ENABLED=true`. Apply the **same approved image digest** with
-`deploy.sh`; this recreates only the application and retains `/data`. Preserve
+the explicitly approved `deploy.sh --reapply-config` procedure in
+[the snapshot review release handoff](SNAPSHOT_REVIEW_RELEASE.md#approved-host-bundle-and-application-recreation);
+ordinary identical-digest deployment deliberately skips recreation and refuses
+environment drift. The approved procedure recreates only the application and retains `/data`. Preserve
 all existing overlays. Review and retain the usual sanitized status/health result.
 
 Create another private snapshot/effective config as above. Capture the application

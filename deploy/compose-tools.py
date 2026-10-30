@@ -260,7 +260,7 @@ def actual_mounts(container):
     return sorted(result, key=lambda item: item["target"])
 
 
-def verify_export_environment(config_file, inspect_file):
+def verify_export_environment(config_file, inspect_file, mode="strict"):
     """Compare private inputs in memory; never emit destination/credential values."""
     trusted(config_file)
     trusted(inspect_file)
@@ -270,9 +270,38 @@ def verify_export_environment(config_file, inspect_file):
     for suffix in ("ENABLED", "ALLOW_SHARED_NAMESPACE", "ENDPOINT", "REGION", "BUCKET", "PREFIX", "ACCESS_KEY_ID",
                    "SECRET_ACCESS_KEY", "SESSION_TOKEN", "CA_FILE", "TTL_SECONDS"):
         name = "MANAGED_EXPORT_" + suffix
+        if mode == "legacy" and name not in expected and name not in actual:
+            continue
         require(name in expected and name in actual and expected[name] == actual[name],
                 "export-environment-mismatch-" + name)
-    return "export-environment-matches-all-11-fields-no-values-emitted"
+    return "previous-runtime-export-environment-restored-no-values-emitted" if mode == "legacy" else "export-environment-matches-all-11-fields-no-values-emitted"
+
+
+def prepare_reapply(workspace):
+    """Freeze running environment privately; never modify operator .env."""
+    root = Path(workspace)
+    container = check_container(root / "config.json", root / "container.json")
+    config = load(root / "config.json")
+    actual = dict(item.split("=", 1) for item in container["Config"].get("Env", []) if "=" in item)
+    expected = config["services"]["pluton"].get("environment", {})
+    require(actual.get("ENCRYPTION_KEY") == expected.get("ENCRYPTION_KEY"), "reapply-encryption-key-change-refused")
+    environment = {key: actual.get(key) for key in set(expected) | set(actual)}
+    save(root / "reapply-rollback.json", {"services": {"pluton": {"environment": environment}}})
+    old = dict(config)
+    old["services"] = dict(config["services"])
+    old["services"]["pluton"] = dict(config["services"]["pluton"], environment=actual)
+    save(root / "reapply-previous-config.json", old)
+
+
+def activate_reapply_rollback(workspace):
+    root = Path(workspace)
+    trusted(root / "reapply-rollback.json")
+    target = root / "compose" / "compose.reapply-rollback.json"
+    shutil.copyfile(root / "reapply-rollback.json", target)
+    os.chmod(target, 0o600)
+    save(root / "files.json", load(root / "files.json") + [target.name])
+    shutil.copyfile(root / "reapply-previous-config.json", root / "config.json")
+    os.chmod(root / "config.json", 0o600)
 
 
 def check_container(config_file, inspect_file):
@@ -375,6 +404,10 @@ def main(args):
         require(container["Image"] == values[2], "new-container-image-mismatch")
     elif action == "export-environment":
         print(verify_export_environment(*values))
+    elif action == "prepare-reapply":
+        prepare_reapply(*values)
+    elif action == "activate-reapply-rollback":
+        activate_reapply_rollback(*values)
     elif action == "field":
         value = load(values[0])[0]
         for field in values[1].split("."):

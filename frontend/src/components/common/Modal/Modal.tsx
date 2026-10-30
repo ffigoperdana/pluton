@@ -1,7 +1,21 @@
-import React, { useEffect, useId, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useId, useRef, useState } from 'react';
 import Icon from '../Icon/Icon';
 import classes from './Modal.module.scss';
 import { createPortal } from 'react-dom';
+const DialogDepth = createContext(0);
+const openDialogs: { token: symbol; depth: number }[] = [];
+const topDialog = () => {
+   let selected: symbol | undefined,
+      depth = -1;
+   for (const item of openDialogs)
+      if (item.depth >= depth) {
+         selected = item.token;
+         depth = item.depth;
+      }
+   return selected;
+};
+let scrollLocks = 0,
+   originalOverflow = '';
 
 export interface ModalProps {
    children: React.ReactNode;
@@ -13,6 +27,7 @@ export interface ModalProps {
    closeModal: () => void;
    stableLayout?: boolean;
    closeDisabled?: boolean;
+   layout?: 'explorer' | 'details';
 }
 
 const Modal = ({
@@ -25,6 +40,7 @@ const Modal = ({
    disableBackdropClick = false,
    stableLayout = false,
    closeDisabled = false,
+   layout,
 }: ModalProps) => {
    const [isActive, setIsActive] = useState(false);
    const [isAutoVertical, setIsAutoVertical] = useState(false);
@@ -37,10 +53,19 @@ const Modal = ({
    const focusedRef = useRef<HTMLElement | null>(null);
    const titleId = useId();
    const closeTimer = useRef<ReturnType<typeof setTimeout>>();
+   const dialogToken = useRef(Symbol('dialog'));
+   const depth = useContext(DialogDepth);
 
    useEffect(() => {
+      const token = dialogToken.current;
+      openDialogs.push({ token, depth });
+      if (stableLayout) {
+         if (!scrollLocks) originalOverflow = document.body.style.overflow;
+         scrollLocks++;
+         document.body.style.overflow = 'hidden';
+      }
       const closeModalOnEsc = (event: KeyboardEvent) => {
-         if (event.key === 'Escape' && !closeDisabledRef.current) {
+         if (event.key === 'Escape' && topDialog() === token && !closeDisabledRef.current) {
             closeRef.current();
          }
       };
@@ -52,6 +77,9 @@ const Modal = ({
       }, 10);
 
       return () => {
+         const index = openDialogs.findIndex((item) => item.token === token);
+         if (index >= 0) openDialogs.splice(index, 1);
+         if (stableLayout && !--scrollLocks) document.body.style.overflow = originalOverflow;
          window.removeEventListener('keydown', closeModalOnEsc, false);
          clearTimeout(animation);
          clearTimeout(closeTimer.current);
@@ -61,7 +89,7 @@ const Modal = ({
    useEffect(() => {
       if (!stableLayout) return;
       const previous = document.activeElement as HTMLElement | null;
-      modalContentRef.current?.focus({ preventScroll: true });
+      if (topDialog() === dialogToken.current) modalContentRef.current?.focus({ preventScroll: true });
       return () => {
          if (previous?.isConnected) previous.focus({ preventScroll: true });
       };
@@ -94,13 +122,20 @@ const Modal = ({
    };
 
    const keepFocus = (event: React.KeyboardEvent<HTMLDivElement>) => {
-      if (!stableLayout || event.key !== 'Tab') return;
+      if (!stableLayout || event.key !== 'Tab' || topDialog() !== dialogToken.current) return;
       const panel = modalContentRef.current!;
       const nodes = [
          ...panel.querySelectorAll<HTMLElement>(
             'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
          ),
-      ].filter((node) => !node.closest('[hidden], [aria-hidden="true"]'));
+      ].filter((node) => {
+         if (node.closest('[hidden], [aria-hidden="true"]')) return false;
+         for (let ancestor: HTMLElement | null = node; ancestor && ancestor !== panel; ancestor = ancestor.parentElement) {
+            const style = window.getComputedStyle(ancestor);
+            if (style.display === 'none' || style.visibility === 'hidden') return false;
+         }
+         return true;
+      });
       const first = nodes[0],
          last = nodes[nodes.length - 1];
       if (!first) {
@@ -127,7 +162,7 @@ const Modal = ({
    const renderModalContent = () => {
       return (
          <div
-            className={`${classes.modal} ${classNames} ${stableLayout ? classes.stableLayout : isAutoVertical ? classes.autoVertical : ''} ${isActive ? classes.active : ''}`}
+            className={`${classes.modal} ${classNames} ${layout ? classes[layout] : ''} ${stableLayout ? classes.stableLayout : isAutoVertical ? classes.autoVertical : ''} ${isActive ? classes.active : ''}`}
             onClick={closeOnBGClick}
             data-testid="modal"
          >
@@ -149,7 +184,9 @@ const Modal = ({
                <button type="button" className={classes.modalClose} onClick={handleClose} disabled={closeDisabled} aria-label="Close dialog">
                   <Icon type="close" size={24} />
                </button>
-               <div className={classes.modalChildren}>{children}</div>
+               <div className={classes.modalChildren}>
+                  <DialogDepth.Provider value={depth + 1}>{children}</DialogDepth.Provider>
+               </div>
             </div>
          </div>
       );

@@ -46,6 +46,27 @@ export class RecoveryTestStore {
 	async get(id: string): Promise<RecoveryTest | null> {
 		return this.db.select().from(recoveryTests).where(eq(recoveryTests.id, id)).get() || null;
 	}
+	async latestForSnapshot(planId: string, backupId: string, snapshotId: string) {
+		return (
+			this.db
+				.select({
+					id: recoveryTests.id,
+					status: recoveryTests.status,
+					createdAt: recoveryTests.createdAt,
+				})
+				.from(recoveryTests)
+				.where(
+					and(
+						eq(recoveryTests.planId, planId),
+						eq(recoveryTests.backupId, backupId),
+						eq(recoveryTests.snapshotId, snapshotId)
+					)
+				)
+				.orderBy(desc(recoveryTests.createdAt), desc(sql`rowid`))
+				.limit(1)
+				.get() || null
+		);
+	}
 	async activity() {
 		return {
 			backup: !!this.db

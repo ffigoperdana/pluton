@@ -14,6 +14,40 @@ SPEC.loader.exec_module(POLICY)
 
 
 class DeploymentPolicyTests(unittest.TestCase):
+    def reapply_fixture(self):
+        config = self.config()
+        previous = {"ENCRYPTION_KEY": os.urandom(32).hex(), "MANAGED_EXPORT_ENABLED": "false", "MANAGED_EXPORT_PREFIX": "disposable-old"}
+        expected = dict(previous, MANAGED_EXPORT_PREFIX="disposable-new", NODE_OPTIONS="--disposable-invalid-option")
+        config["services"]["pluton"]["environment"] = expected
+        container = {"Config": {"User": "10001:10001", "Env": [key + "=" + value for key, value in previous.items()], "Labels": {"com.docker.compose.service": "pluton", "com.docker.compose.project": config["name"]}}, "Mounts": [{"Type": m["type"], "Name": m["source"], "Source": m["source"], "Destination": m["target"], "RW": not m["read_only"], "Propagation": m["propagation"]} for m in POLICY.mounts(config)]}
+        self.write("config.json", json.dumps(config))
+        self.write("container.json", json.dumps([container]))
+        self.write("files.json", '["compose.yml"]')
+        (self.root / "compose").mkdir(mode=0o700)
+        return config, previous
+
+    def test_reapply_preserves_private_previous_environment_and_removes_new_settings_on_rollback(self):
+        config, previous = self.reapply_fixture()
+        env_before = (self.root / ".env").read_bytes()
+        POLICY.prepare_reapply(self.root)
+        rollback = json.loads((self.root / "reapply-rollback.json").read_text())["services"]["pluton"]["environment"]
+        self.assertTrue(rollback["ENCRYPTION_KEY"] == previous["ENCRYPTION_KEY"], "encryption key changed")
+        self.assertEqual(rollback["MANAGED_EXPORT_PREFIX"], "disposable-old")
+        self.assertIsNone(rollback["NODE_OPTIONS"])
+        self.assertEqual((self.root / "reapply-rollback.json").stat().st_mode & 0o777, 0o600)
+        POLICY.activate_reapply_rollback(self.root)
+        self.assertTrue(json.loads((self.root / "config.json").read_text())["services"]["pluton"]["environment"] == previous, "previous runtime environment changed")
+        self.assertEqual(json.loads((self.root / "files.json").read_text())[-1], "compose.reapply-rollback.json")
+        self.assertEqual((self.root / ".env").read_bytes(), env_before)
+
+    def test_reapply_refuses_encryption_key_rotation_before_capture(self):
+        config, _ = self.reapply_fixture()
+        config["services"]["pluton"]["environment"]["ENCRYPTION_KEY"] = os.urandom(32).hex()
+        self.write("config.json", json.dumps(config))
+        with self.assertRaisesRegex(POLICY.Refused, "encryption-key-change-refused"):
+            POLICY.prepare_reapply(self.root)
+        self.assertFalse((self.root / "reapply-rollback.json").exists())
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)

@@ -4,6 +4,8 @@ import FileIcon from '../../common/FileIcon/FileIcon';
 import { formatBytes, formatDateTime, timeAgo } from '../../../utils/helpers';
 import { FileItem } from '../../../@types/system';
 import classes from '../../common/SnapshotBrowser/SnapshotBrowser.module.scss';
+import reviewClasses from './SnapshotReview.module.scss';
+import { snapshotChangeLabel } from '../../../utils/snapshotReview';
 
 interface SnapshotViewerFileProps {
    style: React.CSSProperties;
@@ -16,6 +18,8 @@ interface SnapshotViewerFileProps {
    renderFileActions?: (file: FileItem, meta: { fileExtension: string; isDirectory: boolean }) => ReactNode;
    showUpgradeModal?: () => void;
    showRestoreAction?: boolean;
+   changeStatus?: string;
+   historical?: boolean;
 }
 
 const SnapshotViewerFile = ({
@@ -28,6 +32,8 @@ const SnapshotViewerFile = ({
    onRestore,
    renderFileActions,
    showRestoreAction = true,
+   changeStatus,
+   historical = false,
 }: SnapshotViewerFileProps) => {
    if (!file) return null;
 
@@ -40,6 +46,7 @@ const SnapshotViewerFile = ({
          >
             <div className={classes.fileName}>...</div>
             <div></div>
+            {changeStatus && <div></div>}
             <div></div>
             {!isSync && <div></div>}
          </div>
@@ -56,27 +63,48 @@ const SnapshotViewerFile = ({
          style={{ ...style, gridTemplateColumns: gridColumns }}
          className={`${classes.snapshotFile} ${isDirectory ? classes.fileIsDir : ''}`}
          onClick={() => {
-            if (isDirectory) {
+            if (isDirectory && !historical) {
                onDirectoryClick(typedFile.path);
             }
          }}
       >
          <div className={classes.fileName}>
-            {isDirectory ? <Icon type={'fm-directory'} size={16} /> : <FileIcon filename={fileName} />} {fileName}
+            {isDirectory ? <Icon type={'fm-directory'} size={16} /> : <FileIcon filename={fileName} />}{' '}
+            {isDirectory && !historical ? (
+               <button
+                  type="button"
+                  onClick={(event) => {
+                     event.stopPropagation();
+                     onDirectoryClick(typedFile.path);
+                  }}
+               >
+                  {fileName}
+               </button>
+            ) : (
+               fileName
+            )}
          </div>
          <div className={classes.fileModifiedAt} title={formatDateTime(typedFile.modifiedAt)}>
             <i>{timeAgo(new Date(typedFile.modifiedAt))}</i>
          </div>
          <div className={classes.fileSize}>{!isDirectory ? formatBytes(typedFile.size || 0) : ''}</div>
+         {changeStatus && (
+            <div>
+               <span className={`${reviewClasses.change} ${reviewClasses[changeStatus] || reviewClasses.neutral}`}>
+                  {snapshotChangeLabel(changeStatus)}
+               </span>
+            </div>
+         )}
          {!isSync && (
             <div className={classes.fileActions}>
-               {renderFileActions?.(typedFile, { fileExtension, isDirectory })}
-               {showRestoreAction && (
+               {!historical && renderFileActions?.(typedFile, { fileExtension, isDirectory })}
+               {showRestoreAction && !historical && (
                   <button
                      data-tooltip-id="htmlToolTip"
                      data-tooltip-place="top"
                      data-tooltip-delay-show={500}
                      data-tooltip-html="Restore"
+                     aria-label={`Restore ${fileName}`}
                      onClick={(e) => {
                         e.stopPropagation();
                         onRestore(typedFile);

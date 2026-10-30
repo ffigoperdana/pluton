@@ -540,7 +540,8 @@
     "available": "session-only; unavailable with legacy key",
     "testReferences": [
       "backend/__tests__/controllers/BackupController.test.ts",
-      "backend/__tests__/routes/backups.test.ts"
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
     ],
     "source": "backend/src/controllers/BackupController.ts",
     "routeSource": "backend/src/routes/backups.ts",
@@ -569,7 +570,8 @@
     "available": "session-only; unavailable with legacy key",
     "testReferences": [
       "backend/__tests__/controllers/BackupController.test.ts",
-      "backend/__tests__/routes/backups.test.ts"
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
     ],
     "source": "backend/src/controllers/BackupController.ts",
     "routeSource": "backend/src/routes/backups.ts",
@@ -598,7 +600,8 @@
     "available": "session-only; unavailable with legacy key",
     "testReferences": [
       "backend/__tests__/controllers/BackupController.test.ts",
-      "backend/__tests__/routes/backups.test.ts"
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
     ],
     "source": "backend/src/controllers/BackupController.ts",
     "routeSource": "backend/src/routes/backups.ts",
@@ -627,7 +630,8 @@
     "available": "session-only; unavailable with legacy key",
     "testReferences": [
       "backend/__tests__/controllers/BackupController.test.ts",
-      "backend/__tests__/routes/backups.test.ts"
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
     ],
     "source": "backend/src/controllers/BackupController.ts",
     "routeSource": "backend/src/routes/backups.ts",
@@ -657,7 +661,8 @@
     "available": "session-only; unavailable with legacy key",
     "testReferences": [
       "backend/__tests__/controllers/BackupController.test.ts",
-      "backend/__tests__/routes/backups.test.ts"
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
     ],
     "source": "backend/src/controllers/BackupController.ts",
     "routeSource": "backend/src/routes/backups.ts",
@@ -688,7 +693,8 @@
     "available": "session-only; unavailable with legacy key",
     "testReferences": [
       "backend/__tests__/controllers/BackupController.test.ts",
-      "backend/__tests__/routes/backups.test.ts"
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
     ],
     "source": "backend/src/controllers/BackupController.ts",
     "routeSource": "backend/src/routes/backups.ts",
@@ -717,11 +723,135 @@
     "available": "session-only; unavailable with legacy key",
     "testReferences": [
       "backend/__tests__/controllers/BackupController.test.ts",
-      "backend/__tests__/routes/backups.test.ts"
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
     ],
     "source": "backend/src/controllers/BackupController.ts",
     "routeSource": "backend/src/routes/backups.ts",
     "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "backups",
+    "method": "DELETE",
+    "route": "/api/backups/:id/comparison",
+    "handler": "BackupController.snapshotComparison",
+    "services": [
+      "backupService.snapshotComparison"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "destructive/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "body",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "backups",
+    "method": "GET",
+    "route": "/api/backups/:id/comparison",
+    "handler": "BackupController.snapshotComparison",
+    "services": [
+      "backupService.snapshotComparison"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "body",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "backups",
+    "method": "POST",
+    "route": "/api/backups/:id/comparison",
+    "handler": "BackupController.snapshotComparison",
+    "services": [
+      "backupService.snapshotComparison"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "body",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "backups",
+    "method": "GET",
+    "route": "/api/backups/:id/details",
+    "handler": "BackupController.snapshotDetails",
+    "services": [
+      "backupService.snapshotDetails"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
   },
   {
     "feature": "backups",
@@ -749,7 +879,8 @@
     "available": "session-only; unavailable with legacy key",
     "testReferences": [
       "backend/__tests__/controllers/BackupController.test.ts",
-      "backend/__tests__/routes/backups.test.ts"
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
     ],
     "source": "backend/src/controllers/BackupController.ts",
     "routeSource": "backend/src/routes/backups.ts",
@@ -781,7 +912,8 @@
     "available": "session-only; unavailable with legacy key",
     "testReferences": [
       "backend/__tests__/controllers/BackupController.test.ts",
-      "backend/__tests__/routes/backups.test.ts"
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
     ],
     "source": "backend/src/controllers/BackupController.ts",
     "routeSource": "backend/src/routes/backups.ts",
@@ -813,7 +945,8 @@
     "available": "session-only; unavailable with legacy key",
     "testReferences": [
       "backend/__tests__/controllers/BackupController.test.ts",
-      "backend/__tests__/routes/backups.test.ts"
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
     ],
     "source": "backend/src/controllers/BackupController.ts",
     "routeSource": "backend/src/routes/backups.ts",
@@ -1032,7 +1165,8 @@
     "available": "session-only; unavailable with legacy key",
     "testReferences": [
       "backend/__tests__/controllers/BackupController.test.ts",
-      "backend/__tests__/routes/backups.test.ts"
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
     ],
     "source": "backend/src/controllers/BackupController.ts",
     "routeSource": "backend/src/routes/backups.ts",
@@ -1061,7 +1195,8 @@
     "available": "session-only; unavailable with legacy key",
     "testReferences": [
       "backend/__tests__/controllers/BackupController.test.ts",
-      "backend/__tests__/routes/backups.test.ts"
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
     ],
     "source": "backend/src/controllers/BackupController.ts",
     "routeSource": "backend/src/routes/backups.ts",
@@ -1091,7 +1226,8 @@
     "available": "session-only; unavailable with legacy key",
     "testReferences": [
       "backend/__tests__/controllers/BackupController.test.ts",
-      "backend/__tests__/routes/backups.test.ts"
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
     ],
     "source": "backend/src/controllers/BackupController.ts",
     "routeSource": "backend/src/routes/backups.ts",

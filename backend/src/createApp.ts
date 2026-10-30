@@ -265,7 +265,8 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		storageStore,
 		remoteBackupService,
 		remoteRecoveryService,
-		managedReplicationService
+		managedReplicationService,
+		recoveryTestStore
 	);
 	const restoreService = new RestoreService(
 		localRestoreAgent,

@@ -139,7 +139,7 @@ def verify_app(target, previous_mounts=None):
     state = inspect(cid(target))
     assert state["State"]["Running"] and state["State"]["Health"]["Status"] == "healthy", "app-not-healthy"
     assert state["Config"]["User"] in ("pluton", "10001:10001"), "application-not-nonroot"
-    actual_env = dict(item.split("=", 1) for item in state["Config"]["Env"])
+    actual_env = dict(item.split("=", 1) for item in state["Config"]["Env"] if "=" in item)
     assert actual_env["APP_URL"] == "https://pluton.example.internal", "canonical-env-not-propagated"
     assert actual_env["APP_ALLOWED_ORIGINS"].endswith("http://192.0.2.10:5173"), "origins-env-not-propagated"
     assert actual_env["AGENT_SERVER_URL"] == "http://192.0.2.10:5173", "agent-env-not-propagated"
@@ -269,6 +269,34 @@ def main(workspace):
     backups = list((lab / "backups").glob("*/pluton.db"))
     assert backups and all(path.stat().st_size > 0 for path in backups), "sqlite-backup-missing"
     passed("existing SQLite consistently copied after stopping only Pluton")
+    stable = cid(lab)
+    image_history_before = (lab / ".deploy-state").read_bytes()
+    write(lab / ".env", (lab / ".env").read_text() + "\nMANAGED_EXPORT_PREFIX=disposable-exports-new\n")
+    command(lab, "install.sh", good, succeeds=False)
+    assert cid(lab) == stable, "unapproved-reapply-recreated-container"
+    approved_bundle = run(["sh", str(lab / "upgrade-host.sh"), "--print-digest"]).stdout.strip()
+    command(lab, "deploy.sh", good, "--reapply-config", "--approve-bundle", "sha256:" + "0" * 64, succeeds=False)
+    assert cid(lab) == stable, "wrong-bundle-approval-recreated-container"
+    command(lab, "deploy.sh", good, "--reapply-config", "--approve-bundle", approved_bundle)
+    assert cid(lab) != stable, "approved-reapply-skipped-recreation"
+    assert "MANAGED_EXPORT_PREFIX=disposable-exports-new" in inspect(cid(lab))["Config"]["Env"], "export-prefix-not-applied"
+    verify_app(lab, mounts_before)
+    assert (lab / ".deploy-state").read_bytes() == image_history_before, "config-reapply-lost-image-rollback-history"
+    passed("approved same-digest config reapply recreates only Pluton, verifies all export fields and preserves SQLite/volumes")
+    previous_environment = sorted(inspect(cid(lab))["Config"]["Env"])
+    write(lab / "compose.lab.yml", overlay.replace("APP_TITLE: lab-precedence", "APP_TITLE: lab-precedence\n      NODE_OPTIONS: --disposable-invalid-option"))
+    changed_approval = run(["sh", str(lab / "upgrade-host.sh"), "--print-digest"]).stdout.strip()
+    command(lab, "deploy.sh", good, "--reapply-config", "--approve-bundle", changed_approval, succeeds=False)
+    assert "ROLLBACK=healthy" in (lab / ".deploy-result").read_text(), "same-digest-rollback-not-healthy"
+    # Compose null overrides can retain unset-key OCI Config.Env markers.
+    # Compare effective values; an unset marker is not an environment value.
+    restored = dict(item.split("=", 1) for item in inspect(cid(lab))["Config"]["Env"] if "=" in item)
+    expected_previous = dict(item.split("=", 1) for item in previous_environment if "=" in item)
+    different_names = sorted(name for name in set(restored) | set(expected_previous) if restored.get(name) != expected_previous.get(name))
+    assert not different_names, "same-digest-rollback-environment-mismatch-keys:" + ",".join(different_names)
+    write(lab / "compose.lab.yml", overlay)
+    verify_app(lab, mounts_before)
+    passed("failed config reapply restores prior running environment with the same digest, healthy state, data and mount contract")
     command(lab, "install.sh", bad, succeeds=False)
     verify_app(lab, mounts_before)
     state = (lab / ".deploy-result").read_text()

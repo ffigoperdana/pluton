@@ -121,6 +121,49 @@
       transition: none;
    }
 }
+.modal.stableLayout.explorer,
+.modal.stableLayout.details {
+   align-items: center;
+   background: rgba(0, 0, 0, 0.64);
+   .modalContent {
+      width: min(90vw, 1400px) !important;
+      height: 84dvh;
+      max-height: 84dvh;
+      max-width: 1400px;
+      border-radius: 12px;
+      padding: 20px 0 0;
+   }
+   .modalContent > h3 {
+      padding-left: 20px;
+   }
+   .modalChildren {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+   }
+}
+.modal.stableLayout.details .modalContent {
+   width: min(90vw, 880px) !important;
+}
+.modal.stableLayout.explorer .modalChildren > div {
+   overflow: hidden;
+}
+.modal.stableLayout.details .modalChildren > div {
+   overflow: auto;
+   flex: 1;
+}
+@media (max-width: 768px) {
+   .modal.stableLayout.explorer,
+   .modal.stableLayout.details {
+      padding: 8px;
+      .modalContent {
+         width: 100% !important;
+         max-width: 100%;
+         height: calc(100dvh - 16px);
+         max-height: calc(100dvh - 16px);
+      }
+   }
+}
 
 @media only screen and (max-width: 768px) {
    .modal .modalContent {

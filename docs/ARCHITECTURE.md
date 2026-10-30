@@ -109,6 +109,13 @@ proprietary implementations.
 
 ## Validation commands
 
+The centered snapshot explorer, exact read-only comparison, Snapshot Details and
+approved same-digest configuration reapply are documented in
+[SNAPSHOT_REVIEW_RELEASE.md](SNAPSHOT_REVIEW_RELEASE.md), including the production
+operator handoff and local performance limits. Managed comparison is opt-in;
+unsupported adapters retain ordinary browsing with Not compared. No Dataset or
+application database migration was introduced.
+
 Backup source diagnostic transport, private persistence, historical UI behavior,
 standalone Agent 0.7.1 negotiation and the explicit preflight audit are documented
 in [SOURCE_ACCESS_DIAGNOSTICS.md](SOURCE_ACCESS_DIAGNOSTICS.md). The Agent patch is

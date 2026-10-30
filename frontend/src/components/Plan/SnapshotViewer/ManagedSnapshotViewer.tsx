@@ -15,6 +15,9 @@ import SnapshotViewerFile from './SnapshotViewerFile';
 import ManagedSnapshotDirectories from './ManagedSnapshotDirectories';
 import type { SnapshotViewerProps } from './SnapshotViewer';
 import classes from '../../common/SnapshotBrowser/SnapshotBrowser.module.scss';
+import reviewClasses from './SnapshotReview.module.scss';
+import { useSnapshotComparison } from '../../../hooks/useSnapshotComparison';
+import { snapshotRequest, type ChangeFilter } from '../../../utils/snapshotReview';
 
 const consumeRetry = (request: { current: boolean }) => {
    const retry = request.current;
@@ -22,13 +25,30 @@ const consumeRetry = (request: { current: boolean }) => {
    return retry;
 };
 
+type ManagedViewerProps = SnapshotViewerProps & {
+   selection?: { includes: string[]; excludes: string[]; onChange: (includes: string[], excludes: string[]) => void };
+};
+const noReview = {
+   query: { data: undefined, isError: false },
+   action: { isPending: false, isError: false, mutate: () => {} },
+} as unknown as ReturnType<typeof useSnapshotComparison>;
+function ComparedViewer(props: ManagedViewerProps) {
+   const review = useSnapshotComparison(props.backup.id, !!props.comparison?.enabled);
+   return <ManagedViewer {...props} review={review} />;
+}
+export default function ManagedSnapshotViewer(props: ManagedViewerProps) {
+   return props.comparison ? <ComparedViewer {...props} /> : <ManagedViewer {...props} />;
+}
 /** Only the current page is retained. Managed metadata never enters Dexie. */
-export default function ManagedSnapshotViewer({backup,
+function ManagedViewer({
+   backup,
    planId,
    onClose,
-   selection,}: SnapshotViewerProps & {
-   selection?: { includes: string[]; excludes: string[]; onChange: (includes: string[], excludes: string[]) => void };
-}) {
+   comparison,
+   selection,
+   toolbarLeftContent,
+   review = noReview,
+}: ManagedViewerProps & { review?: ReturnType<typeof useSnapshotComparison> }) {
    const [directory, setDirectory] = useState('');
    const [search, setSearch] = useState('');
    const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -41,6 +61,14 @@ export default function ManagedSnapshotViewer({backup,
    const [treeReady, setTreeReady] = useState(false);
    const [showFolders, setShowFolders] = useState(false);
    const [height, setHeight] = useState(520);
+   const [change, setChange] = useState<ChangeFilter>(comparison?.initialFilter || 'all');
+   const comparisonReady = review.query.data?.state === 'ready';
+   const [elapsed, setElapsed] = useState(0);
+   const opened = useRef(Date.now());
+   useEffect(() => {
+      const timer = setInterval(() => setElapsed(Math.floor((Date.now() - opened.current) / 1000)), 1000);
+      return () => clearInterval(timer);
+   }, []);
    useEffect(() => {
       if (!content.current || typeof ResizeObserver === 'undefined') return;
       const observer = new ResizeObserver(([entry]) => setHeight(Math.max(120, entry.contentRect.height - 110)));
@@ -59,10 +87,31 @@ export default function ManagedSnapshotViewer({backup,
       }, 300);
       return () => clearTimeout(timer);
    }, [search, debouncedSearch]);
-   const query = useQuery({queryKey: ['managed-snapshot-page', backup.id, directory, debouncedSearch, offset, sort, order],
+   const query = useQuery({
+      queryKey: ['managed-snapshot-page', backup.id, directory, debouncedSearch, offset, sort, order, comparisonReady, change],
       meta: { retryIndex },
       queryFn: async ({ signal, meta }) => {
          const retry = consumeRetry(meta!.retryIndex as { current: boolean });
+         if (comparisonReady) {
+            const params = new URLSearchParams({
+               view: 'files',
+               path: directory,
+               search: debouncedSearch,
+               offset: String(offset),
+               limit: '200',
+               sort: sort!,
+               order: order!,
+               ...(change === 'all' ? {} : { change }),
+               ...(!directory && change !== 'all' ? { recursive: 'true' } : {}),
+            });
+            const value = await snapshotRequest<any>(API_URL, backup.id, `comparison?${params}`, signal);
+            setTreeReady(true);
+            return {
+               ...value,
+               snapshotId: value.currentSnapshotId,
+               entries: value.entries,
+            } as import('../../../utils/managedSnapshotBrowse').ManagedSnapshotPage;
+         }
          const result = await fetchManagedSnapshotPage(
             API_URL,
             backup.id,
@@ -77,7 +126,8 @@ export default function ManagedSnapshotViewer({backup,
       retry: false,
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
-      refetchInterval: (state) => (state.state.status !== 'error' && state.state.data?.status === 'indexing' ? state.state.data.retryAfterMs : false),});
+      refetchInterval: (state) => (state.state.status !== 'error' && state.state.data?.status === 'indexing' ? state.state.data.retryAfterMs : false),
+   });
    const page = query.data?.status === 'ready' ? query.data : null;
    const openDirectory = (value: string) => {
       setShowFolders(false);
@@ -97,7 +147,7 @@ export default function ManagedSnapshotViewer({backup,
          ? [{ isGoUp: true as const, path: '..', name: '..', isDirectory: true as const }, ...page.files]
          : page.files
       : [];
-   const gridColumns = '1fr 120px minmax(100px, auto) 120px';
+   const gridColumns = comparison ? 'minmax(180px,1fr) 120px 100px 110px 120px' : '1fr 120px minmax(100px, auto) 120px';
    const toggleSelection = (file: FileItem, exclude = false) => {
       if (!selection) return;
       const field = exclude ? selection.excludes : selection.includes;
@@ -133,18 +183,80 @@ export default function ManagedSnapshotViewer({backup,
                </div>
             }
             leftContent={
-               <div className={classes.stats}>
-                  <Icon type="box" />
-                  <strong>backup-{backup.id}</strong> • {formatBytes(backup.totalSize)}
-               </div>
+               toolbarLeftContent || (
+                  <div className={classes.stats}>
+                     <Icon type="box" />
+                     <strong>backup-{backup.id}</strong> • {formatBytes(backup.totalSize)}
+                  </div>
+               )
             }
          />
          <div className={classes.managedNavigation}>
-            <button className={classes.folderToggle} disabled={!treeReady} aria-expanded={showFolders} onClick={() => setShowFolders((value) => !value)}>
+            <button
+               className={classes.folderToggle}
+               disabled={!treeReady}
+               aria-expanded={showFolders}
+               onClick={() => setShowFolders((value) => !value)}
+            >
                Folders
             </button>
-            <span title={directory || '/'}>{directory || 'All files'}</span>
+            <nav className={reviewClasses.breadcrumbs} aria-label="Snapshot path">
+               <button onClick={() => openDirectory('')}>All files</button>
+               {directory
+                  .split('/')
+                  .filter(Boolean)
+                  .map((part, index, parts) => (
+                     <button key={index} onClick={() => openDirectory('/' + parts.slice(0, index + 1).join('/'))}>
+                        {part}
+                     </button>
+                  ))}
+            </nav>
          </div>
+         {comparison?.enabled && (
+            <div className={reviewClasses.comparison}>
+               <span>
+                  {comparisonReady
+                     ? `Compared with ${review.query.data?.previousSnapshotId}`
+                     : review.query.data?.state === 'preparing'
+                       ? `Comparing snapshots · ${review.query.data.processedEntries?.toLocaleString() || 0} metadata entries · ${Math.floor((review.query.data.elapsedMs || 0) / 1000)}s`
+                       : 'Not compared'}
+               </span>
+               {review.query.data?.state === 'preparing' ? (
+                  <button disabled={review.action.isPending} onClick={() => review.action.mutate('cancel')}>
+                     Cancel comparison
+                  </button>
+               ) : (
+                  <button disabled={review.action.isPending} onClick={() => review.action.mutate('start')}>
+                     {review.query.data?.state === 'failed' ? 'Retry comparison' : 'Compare with previous'}
+                  </button>
+               )}
+               <label>
+                  Changes{' '}
+                  <select
+                     aria-label="Filter changes"
+                     disabled={!comparisonReady}
+                     value={change}
+                     onChange={(event) => {
+                        setChange(event.target.value as ChangeFilter);
+                        setOffset(0);
+                     }}
+                  >
+                     {['all', 'added', 'modified', 'unchanged', 'deleted'].map((value) => (
+                        <option key={value} value={value}>
+                           {value[0].toUpperCase() + value.slice(1)}
+                        </option>
+                     ))}
+                  </select>
+               </label>
+               {(review.query.isError || review.action.isError) && <span role="alert">Comparison unavailable. Ordinary browsing is available.</span>}
+               {change === 'deleted' && comparisonReady && (
+                  <>
+                     <strong>Historical results from the previous snapshot. Restore is unavailable here.</strong>
+                     <button onClick={() => comparison.onPrevious?.(review.query.data!.previousBackupId!)}>Browse previous snapshot</button>
+                  </>
+               )}
+            </div>
+         )}
          {selection && (
             <div style={{ padding: 12 }}>
                <button onClick={() => selection.onChange([], [])}>Recover entire snapshot</button>{' '}
@@ -179,6 +291,12 @@ export default function ManagedSnapshotViewer({backup,
                   <div className={classes.loadingState} role="status">
                      <Icon type="loading" size={24} />
                      <p>{query.data?.status === 'indexing' ? 'Indexing snapshot metadata…' : 'Loading snapshot metadata…'}</p>
+                     {query.data?.status === 'indexing' && (
+                        <small>
+                           {(query.data as { indexedEntries?: number })?.indexedEntries?.toLocaleString() || '0'} entries indexed ·{' '}
+                           {Math.floor(((query.data as { elapsedMs?: number })?.elapsedMs || elapsed * 1000) / 1000)}s elapsed
+                        </small>
+                     )}
                      <small>You can close this view and return while indexing finishes.</small>
                   </div>
                ) : (
@@ -195,6 +313,7 @@ export default function ManagedSnapshotViewer({backup,
                               <button onClick={() => changeSort('name')}>Name {sort === 'name' ? (order === 'asc' ? '↑' : '↓') : ''}</button>
                               <button onClick={() => changeSort('modifiedAt')}>Last modified</button>
                               <button onClick={() => changeSort('size')}>Size</button>
+                              {comparison && <div>Change status</div>}
                               <div>Actions</div>
                            </>
                         }
@@ -207,6 +326,8 @@ export default function ManagedSnapshotViewer({backup,
                               onDirectoryClick={openDirectory}
                               onRestore={selection ? (file) => toggleSelection(file) : setSelected}
                               showRestoreAction={!selection}
+                              changeStatus={comparison ? (files[index] as FileItem & { change?: string }).change || 'not-compared' : undefined}
+                              historical={change === 'deleted' && comparisonReady}
                               renderFileActions={
                                  selection
                                     ? (file) => (
@@ -251,20 +372,24 @@ export default function ManagedSnapshotViewer({backup,
                   </>
                }
                closeModal={() => setSelected(null)}
-               primaryAction={{title: 'Restore to staging',
+               primaryAction={{
+                  title: 'Restore to staging',
                   type: 'default',
                   isPending: restore.isPending,
                   action: () =>
                      restore.mutate(
                         { backupId: backup.id, planId, target: '', includes: [selected.path], overwrite: 'never', deleteOption: false },
-                        {onSuccess: () => {
+                        {
+                           onSuccess: () => {
                               toast.success('Staged restoration started.');
                               navigate(`/plan/${planId}`);
                               onClose();
                            },
                            onError: (error) => toast.error(error.message),
-                           onSettled: () => setSelected(null),},
-                     ),}}
+                           onSettled: () => setSelected(null),
+                        },
+                     ),
+               }}
             />
          )}
       </div>
