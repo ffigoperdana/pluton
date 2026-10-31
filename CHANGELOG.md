@@ -1,5 +1,78 @@
 # Changelog
 
+## [0.18.0-alpha.2](https://github.com/ffigoperdana/pluton/compare/v0.18.0-alpha.1...v0.18.0-alpha.2) (2026-10-31)
+
+
+### Features
+
+* add verified resumable managed snapshot downloads ([12e5fd7](https://github.com/ffigoperdana/pluton/commit/12e5fd7753eb27fe61225fda07faeefe690c591b))
+* add verified resumable managed snapshot downloads ([4d05d38](https://github.com/ffigoperdana/pluton/commit/4d05d381fce73955833a9975e7410f58ae031b56))
+* add verified snapshot review and approved config reapply ([7be5c0c](https://github.com/ffigoperdana/pluton/commit/7be5c0cba6a51b993b3645f3c7b48bd1e15ffcc4))
+* **agent:** add safe upgrade-only installer ([c41e7e3](https://github.com/ffigoperdana/pluton/commit/c41e7e309097eedcb8549e515c4d3d29cc599bcf))
+* **agent:** add safe upgrade-only installer ([d938bd4](https://github.com/ffigoperdana/pluton/commit/d938bd43892732ce9aa8f87dab1448cc868a9af8))
+* **agent:** enroll new machines from pinned standalone distribution ([b9aaa77](https://github.com/ffigoperdana/pluton/commit/b9aaa77731dee939d0c4f0446502de5df0db4813))
+* **agent:** enroll new machines from pinned standalone distribution ([99d6613](https://github.com/ffigoperdana/pluton/commit/99d6613700b77e3ee934c420f164dca0c4b53d8f))
+* **agent:** support server-managed and host-approved source access ([a74c957](https://github.com/ffigoperdana/pluton/commit/a74c957b56f9d66465afa82162b78b63e97a00db))
+* **agent:** support server-managed and host-approved source access ([268c8c6](https://github.com/ffigoperdana/pluton/commit/268c8c656c2edb926a7d00cf4a4fef84f077cbe6))
+* **backup:** add safe exclusions and plan visibility ([c68f2f4](https://github.com/ffigoperdana/pluton/commit/c68f2f44bb82b81c1575394c2a95096f5dee6947))
+* **backups:** expose private source access diagnostics ([4377c7c](https://github.com/ffigoperdana/pluton/commit/4377c7c586df5297a00a789b19a1aea38e29da34))
+* **backups:** guide source access troubleshooting ([9b6842a](https://github.com/ffigoperdana/pluton/commit/9b6842af65dd36e5f0e324d261bbbe5044a1c116))
+* **mcp:** add administrator client and audit dashboard ([839ffdf](https://github.com/ffigoperdana/pluton/commit/839ffdfc20be829c3daa02803de80eff624579d1))
+* **mcp:** add native tokens and durable human-approved actions ([152396f](https://github.com/ffigoperdana/pluton/commit/152396f786031f342ab115d13982767604966307))
+* **mcp:** add scoped read-only OAuth resource server ([55f7069](https://github.com/ffigoperdana/pluton/commit/55f7069d8d17f7473f5419b93d0e449fe00c1314))
+* **recovery:** add MySQL Internal lifecycle with durable explicit Resume ([56dd252](https://github.com/ffigoperdana/pluton/commit/56dd2520c3b262a383004b059cba0dd3354f414f))
+* **replication:** add durable Managed Agent S3 replication and HCP s… ([e2575cc](https://github.com/ffigoperdana/pluton/commit/e2575cc734ec002518e919c7e71567832fc4ded7))
+* **replication:** add durable Managed Agent S3 replication and HCP support ([cbf767f](https://github.com/ffigoperdana/pluton/commit/cbf767f6ea69c3075700a74486edcd3d3ae9408a))
+* reserve shared S3 namespace for reliable exports ([5de7b20](https://github.com/ffigoperdana/pluton/commit/5de7b207e600c15258d9bfc148a15d008772da6e))
+* **source-access:** add compact paged request history ([f778e8f](https://github.com/ffigoperdana/pluton/commit/f778e8f590dc0a8481bd7c9b82d40cfe6148382a))
+* support verified nonversioned HCP exports ([0811d85](https://github.com/ffigoperdana/pluton/commit/0811d852ad0037f237f4814055cfc2a335679f79))
+* support verified nonversioned HCP exports ([c17c776](https://github.com/ffigoperdana/pluton/commit/c17c77646a54a52bcdc3b339bfbc82458f6a5dc5))
+* wire reliable download for controlled UAT ([12d4235](https://github.com/ffigoperdana/pluton/commit/12d4235da32aeb5efc9cfb534fb5c9093c788f7b))
+
+
+### Bug Fixes
+
+* **agent:** bound and classify post-dump status failures ([edcfe5f](https://github.com/ffigoperdana/pluton/commit/edcfe5fba3a2eb47730307fa53c90730177b5430))
+* **agent:** bound and classify post-dump status failures ([c4f2548](https://github.com/ffigoperdana/pluton/commit/c4f25489afffb23d2091b3a5b9cced923ff5ec89))
+* **agent:** bound full-tree provenance verification separately ([4b34320](https://github.com/ffigoperdana/pluton/commit/4b343206a5ee00df32c0cbadf8e5b460efa334e8))
+* **agent:** bound full-tree provenance verification separately ([b278ec4](https://github.com/ffigoperdana/pluton/commit/b278ec4ed79578397c71fba8e7b609eb598d388d))
+* **agent:** canonicalize integrity hashes and document backup operations ([9021b12](https://github.com/ffigoperdana/pluton/commit/9021b1274f3ea084a887446e321bc6984a688497))
+* **agent:** canonicalize integrity hashes and document backup operations ([1ec588b](https://github.com/ffigoperdana/pluton/commit/1ec588b3d3f85ea56880a6328b9d9f1a0e6eaa7d))
+* **agent:** keep enrollment errors visible inside dialog ([2633c66](https://github.com/ffigoperdana/pluton/commit/2633c66299fef0941024d86e9c866ed7d1bda86f))
+* **agent:** keep enrollment errors visible inside dialog ([828b5c2](https://github.com/ffigoperdana/pluton/commit/828b5c29ec3e7903525a0b899a75542a9a688644))
+* **agent:** preserve safe upgrade failure diagnostics ([d46e72c](https://github.com/ffigoperdana/pluton/commit/d46e72caae05b46b038414edf747f22666455290))
+* **agent:** preserve safe upgrade failure diagnostics ([d33734f](https://github.com/ffigoperdana/pluton/commit/d33734fca652e3fd5818ce5607d80a19fa938f71))
+* **agent:** sync upgrade backups without following build links ([23d2716](https://github.com/ffigoperdana/pluton/commit/23d2716867eb9e27de076f31d7dfea6182e1c4a8))
+* **agent:** sync upgrade backups without following build links ([d3b9b5c](https://github.com/ffigoperdana/pluton/commit/d3b9b5c142b27d40cf1f7aacbf11c5cfaacb178c))
+* **ci:** wait for measured MySQL fixture admission ([5e5d34d](https://github.com/ffigoperdana/pluton/commit/5e5d34df75a8e840ae23c73ea998de464eed9c95))
+* close Jest logging transports before environment teardown ([dee456a](https://github.com/ffigoperdana/pluton/commit/dee456a35d175d5aa8028c786b595d3f28802e32))
+* harden deletion safety and improve collection tables ([c69dfd8](https://github.com/ffigoperdana/pluton/commit/c69dfd8b0c93ad97cb50a28ad4a9b2310edae95a))
+* harden deletion safety and improve collection tables ([5565773](https://github.com/ffigoperdana/pluton/commit/55657735aa1c148d7bc13c962637c987b3f955bc))
+* **managed:** await cancelled index cleanup before retry ([295e281](https://github.com/ffigoperdana/pluton/commit/295e281f5bef25e5ce073d1fd1f420bc2115f6a4))
+* **managed:** prepare snapshot downloads asynchronously ([061aa34](https://github.com/ffigoperdana/pluton/commit/061aa34539dc2ed2c39597c1fd13641c52e87a2c))
+* **managed:** preserve POSIX snapshot paths and stabilize recovery browsing ([bdf2f5f](https://github.com/ffigoperdana/pluton/commit/bdf2f5ff4e390e981efcb972ef91c93356a5afc6))
+* **managed:** prevent no-op search debounce from resetting pages ([2919d08](https://github.com/ffigoperdana/pluton/commit/2919d08af25fc86b8f41b9511cf70189c8fae26a))
+* **managed:** restore classic browser and bound index admission ([b086189](https://github.com/ffigoperdana/pluton/commit/b0861892b1a1e9e511a33decd02f76102725bbfd))
+* **managed:** stream and paginate snapshot metadata ([ac77329](https://github.com/ffigoperdana/pluton/commit/ac7732910f020930cd4bb147caf693a1146fdd4c))
+* **mysql-worker:** isolate manifest types and verify startup ([4f3e020](https://github.com/ffigoperdana/pluton/commit/4f3e0200e16372be25dbe2fdb8d1bdc0c7fac84a))
+* **mysql:** install pinned worker packages from Oracle archive ([23f1d9e](https://github.com/ffigoperdana/pluton/commit/23f1d9e6761c4a8579b3fc88ed1d8c3c58517928))
+* **mysql:** install pinned worker packages from Oracle archive ([fc0a4a8](https://github.com/ffigoperdana/pluton/commit/fc0a4a8ba3d6642b2643e855cb4e767503c6706e))
+* **mysql:** install verified worker packages in one APT transaction ([ba83c36](https://github.com/ffigoperdana/pluton/commit/ba83c362fd848f10196a853abe71a3c24877b2ae))
+* preserve remote device settings during display rename ([c2e6ae1](https://github.com/ffigoperdana/pluton/commit/c2e6ae1c0a83ee06a062390e9742bde0d83c664a))
+* preserve remote device settings during display rename ([afbc14e](https://github.com/ffigoperdana/pluton/commit/afbc14eea3c9baf4283947ecc4265eb106e1ad16))
+* **recovery:** verify managed symlink exports and staged restores ([3a78cee](https://github.com/ffigoperdana/pluton/commit/3a78cee1870fc1a23302a9f8f0ccaaf4b2a963d8))
+* **recovery:** verify managed symlink exports and staged restores ([c9017b8](https://github.com/ffigoperdana/pluton/commit/c9017b809efa92a62a542a346910a862a2b3a07f))
+* **scheduler:** add explicit WIB timezone and safe backup dispatch ([5126fb7](https://github.com/ffigoperdana/pluton/commit/5126fb78e25d3f0314ba3987e804ca626e2ae634))
+* **scheduler:** add explicit WIB timezone and safe backup dispatch ([ce314b8](https://github.com/ffigoperdana/pluton/commit/ce314b8d54d83c62611a085c71dcdcdb2253ff37))
+* **security:** pin Server and recovery worker to Node.js 24.22.1 ([0c74138](https://github.com/ffigoperdana/pluton/commit/0c741389194410e9424cb915f6b5103b78797af8))
+* **security:** pin Server and recovery worker to Node.js 24.22.1 ([b200722](https://github.com/ffigoperdana/pluton/commit/b20072255ba8a091cf47594d9a7c9b0dcb12b57d))
+
+
+### Documentation
+
+* **api:** record route audit and MCP delivery evidence ([0c0b29e](https://github.com/ffigoperdana/pluton/commit/0c0b29e7f312aeb37a8ed5f6ede099f5c953d668))
+* **mcp:** record v2 validation and staging acceptance gates ([c0e3cf1](https://github.com/ffigoperdana/pluton/commit/c0e3cf1a78513a8b1e0b4488591da227f8d51554))
+
 ## [0.18.0-alpha.1](https://github.com/ffigoperdana/pluton/compare/v0.17.0-alpha.1...v0.18.0-alpha.1) (2026-10-06)
 
 
