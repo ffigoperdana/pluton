@@ -93,6 +93,50 @@ export function initializeLogger(): void {
 // Cache for plan-specific loggers to avoid creating multiple instances
 const planLoggers: Record<string, pino.Logger> = {};
 
+/** Drain owned main/plan transports before their runtime is disposed. In Jest,
+ * worker readiness can arrive after the suite ends; unref-on-ready is not teardown.
+ * Production logging configuration and startup behavior are unchanged. */
+export async function closeLoggers(): Promise<void> {
+	type OwnedStream = NodeJS.EventEmitter & { end(): void; closed?: boolean; destroyed?: boolean };
+	const key = pino.symbols?.streamSym;
+	const streams = new Set<OwnedStream>();
+	for (const owner of [logger, ...Object.values(planLoggers)]) {
+		const stream = key && owner && (owner as unknown as Record<symbol, OwnedStream>)[key];
+		if (stream && typeof stream.end === 'function' && !stream.closed && !stream.destroyed)
+			streams.add(stream);
+	}
+	const results = await Promise.allSettled(
+		[...streams].map(
+			stream =>
+				new Promise<void>((resolve, reject) => {
+					const cleanup = () => {
+						stream.removeListener('close', closed);
+						stream.removeListener('error', failed);
+					};
+					const closed = () => {
+						cleanup();
+						resolve();
+					};
+					const failed = () => {
+						cleanup();
+						reject(new Error('Logger transport shutdown failed.'));
+					};
+					stream.once('close', closed);
+					stream.once('error', failed);
+					try {
+						stream.end();
+					} catch {
+						failed();
+					}
+				})
+		)
+	);
+	logger = undefined!;
+	for (const id of Object.keys(planLoggers)) delete planLoggers[id];
+	if (results.some(result => result.status === 'rejected'))
+		throw new Error('Logger transport shutdown failed.');
+}
+
 // Specialized backup logger that writes to plan-specific log files
 /**
  * Returns a logger for plan-specific or backup-specific logging.

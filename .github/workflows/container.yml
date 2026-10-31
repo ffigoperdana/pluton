@@ -44,6 +44,7 @@ jobs:
         run: pnpm --filter @plutonhq/core-backend lint
 
       - name: Test backend
+        timeout-minutes: 10
         run: pnpm --filter @plutonhq/core-backend test --runInBand
 
       - name: Check deployment probe, overlay policy and POSIX shell syntax

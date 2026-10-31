@@ -1,7 +1,7 @@
 // import { drizzle } from 'drizzle-orm/better-sqlite3';
 // import Database from 'better-sqlite3';
 // import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
-import { initializeLogger } from '../src/utils/logger';
+import { initializeLogger, closeLoggers } from '../src/utils/logger';
 import 'dotenv/config';
 
 // Mock templateLoader globally to avoid import.meta.url issues in Jest
@@ -27,4 +27,10 @@ beforeAll(() => {
 
 	// might need to mock the main 'db' export to use this test instance.
 	// Jest's module mocking capabilities are perfect for this.
+});
+
+// Each suite owns its real Pino transports, even when its application imports
+// use mocks. Await close before Jest tears down the environment/timer callbacks.
+afterAll(async () => {
+	await closeLoggers?.();
 });

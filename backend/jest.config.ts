@@ -5,6 +5,7 @@ const config: Config = {
 	testEnvironment: 'node',
 	verbose: true,
 	clearMocks: true,
+	reporters: process.env.CI ? ['default', '<rootDir>/scripts/jest-lifecycle-reporter.cjs'] : ['default'],
 
 	// Limit workers to prevent OOM and recycle workers that accumulate memory.
 	// A fixed cap (not a core-percentage) keeps concurrent ts-jest compilation
