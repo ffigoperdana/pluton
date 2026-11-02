@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -23,6 +24,16 @@ EXPECTED = "85cd8b7fe1e2d66a72d9d0a1c4adfc3bae5a8ed0c504f8ae309c37017b4bc34d"
 
 
 class HistoricalDeploymentFixture(unittest.TestCase):
+    def test_copied_fixture_contains_every_required_host_bundle_file(self):
+        with tempfile.TemporaryDirectory(prefix="pluton-bundle-copy-") as directory:
+            target = Path(directory) / "deployment"
+            VALIDATION.copy_bundle(target)
+            for name in BUNDLE.BUNDLE:
+                with self.subTest(bundle_file=name):
+                    copied = target / name
+                    self.assertTrue(copied.is_file(), "required-host-bundle-file-missing:" + name)
+                    self.assertEqual(copied.read_bytes(), (ROOT / "deploy" / name).read_bytes())
+
     def test_exact_prior_public_template_remains_recognized_by_real_bundle_policy(self):
         content = VALIDATION.previous_compose_template()
         self.assertEqual(hashlib.sha256(content.encode()).hexdigest(), EXPECTED)
