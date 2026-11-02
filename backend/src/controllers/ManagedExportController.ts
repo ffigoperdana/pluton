@@ -88,6 +88,24 @@ export class ManagedExportController {
 			this.failure(error, res);
 		}
 	}
+	async inspectPreflight(req: Request, res: Response) {
+		const stop = new AbortController();
+		const close = () => {
+			if (!res.writableFinished) stop.abort();
+		};
+		res.once('close', close);
+		try {
+			const owner = this.operator(req, res);
+			res.json({
+				success: true,
+				result: await this.service.inspectPreflight(owner, req.params.preflightId, stop.signal),
+			});
+		} catch (error) {
+			this.failure(error, res);
+		} finally {
+			res.removeListener('close', close);
+		}
+	}
 	private failure(error: unknown, res: Response) {
 		if (res.headersSent || res.destroyed) {
 			if (!res.destroyed) res.destroy();

@@ -240,6 +240,11 @@ export class S3ExportStorage {
 					publicationAttempted: undefined,
 					ownedObjects: undefined,
 					ownedUploads: undefined,
+					creationReceipts: undefined,
+					preflightFailure: undefined,
+					cleanupFailure: undefined,
+					lastCleanupFailure: undefined,
+					cleanupState: undefined,
 					preflightChecks: job.preflightChecks,
 				};
 				job.capabilityProbe = probe;
@@ -1081,10 +1086,25 @@ export class S3ExportStorage {
 			{ expiresIn: Math.max(1, Math.min(EXPORT_LIMITS.authorizationSeconds, seconds)) }
 		);
 	}
-	async cleanup(job: ExportJob, signal: AbortSignal) {
-		if (job.capabilityProbe && !job.capabilityProbe.cleaned)
-			await this.writeOnce.cleanup(job.capabilityProbe, signal);
-		if (job.integrityMode === 'hcp-write-once') return this.writeOnce.cleanup(job, signal);
+	async inspectPreflight(job: ExportJob, signal: AbortSignal) {
+		if (job.kind !== 'preflight' || job.integrityMode !== 'hcp-write-once')
+			throw new TemporaryExportError('security-capability-missing');
+		return this.writeOnce.inspect(job, signal);
+	}
+	async cleanup(
+		job: ExportJob,
+		signal: AbortSignal,
+		update: (fields: Partial<ExportJob>) => void = () => {}
+	) {
+		if (job.capabilityProbe && !job.capabilityProbe.cleaned) {
+			await this.writeOnce.cleanup(job.capabilityProbe, signal, fields => {
+				Object.assign(job.capabilityProbe!, fields);
+				update({ capabilityProbe: job.capabilityProbe });
+			});
+			job.capabilityProbe.cleaned = true;
+			update({ capabilityProbe: job.capabilityProbe });
+		}
+		if (job.integrityMode === 'hcp-write-once') return this.writeOnce.cleanup(job, signal, update);
 		const params = this.scope(job);
 		const aborted = new Set<string>();
 		const abort = async (key: string, id: string) => {

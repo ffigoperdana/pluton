@@ -26,6 +26,11 @@ import { ManagedRepositoryAccessError } from '../utils/restic/ManagedSftpReposit
 import { SnapshotIndexError } from '../utils/restic/ManagedSnapshotIndex';
 import { AppError } from '../utils/AppError';
 import { planLogger } from '../utils/logger';
+import {
+	ExportCleanupError,
+	exportDiagnostic,
+	publicExportDiagnostic,
+} from '../utils/managedExport/ExportDiagnostics';
 
 /** One durable exporter per process. Credentials come only from the separate
  * server configuration; queued JSON never contains provider credentials or URLs. */
@@ -35,6 +40,7 @@ export class ManagedExportService {
 	private ticking?: Promise<void>;
 	private downloads = 0;
 	private grants = 0;
+	private inspections = 0;
 	private closed = false;
 	private workerFault = false;
 	private readonly cleanups = new Map<string, Promise<void>>();
@@ -128,6 +134,36 @@ export class ManagedExportService {
 			setImmediate(() => void this.cleanup(job, true).catch(() => this.metadataFault()));
 		return this.public(this.store.get(id)!);
 	}
+	async inspectPreflight(owner: string, id: string, signal: AbortSignal) {
+		await this.preflightStatus(owner, id); // ownership before configuration/provider access
+		const job = this.store.get(id)!;
+		if (
+			job.kind !== 'preflight' ||
+			!['failed', 'cancelled', 'expired'].includes(job.state) ||
+			this.active?.id === id ||
+			this.cleanups.has(id) ||
+			job.integrityMode !== 'hcp-write-once'
+		)
+			throw new TemporaryExportError('security-capability-missing');
+		if (this.inspections >= 1) throw new TemporaryExportError('queue-full');
+		this.inspections++;
+		let storage: S3ExportStorage | undefined;
+		try {
+			const c = this.config(job);
+			await this.isolated(c);
+			storage = this.storageFactory(c);
+			return {
+				status: this.public(job),
+				...(await storage.inspectPreflight(
+					job,
+					AbortSignal.any([signal, AbortSignal.timeout(30_000)])
+				)),
+			};
+		} finally {
+			storage?.close();
+			this.inspections--;
+		}
+	}
 	private async owned(owner: string, backupId: string, id: string) {
 		if (!/^[a-f0-9-]{36}$/.test(id)) throw new AppError(404, 'Export not found.');
 		const job = this.store.get(id);
@@ -193,6 +229,15 @@ export class ManagedExportService {
 			probeFailure: job.capabilityProbe?.probeFailure || job.probeFailure,
 			failureCategory: job.failureCategory,
 			failureHttpStatus: job.failureHttpStatus,
+			preflightFailure: publicExportDiagnostic(
+				job.capabilityProbe?.preflightFailure || job.preflightFailure
+			),
+			cleanupFailure: publicExportDiagnostic(
+				job.cleanupFailure || job.capabilityProbe?.cleanupFailure
+			),
+			lastCleanupFailure: publicExportDiagnostic(
+				job.lastCleanupFailure || job.capabilityProbe?.lastCleanupFailure
+			),
 			cleanupPending: !job.cleaned && ['failed', 'cancelled', 'expired'].includes(job.state),
 		};
 	}
@@ -493,7 +538,8 @@ export class ManagedExportService {
 			storage = this.storageFactory(c);
 			await storage.cleanup(
 				job,
-				AbortSignal.any([stop, AbortSignal.timeout(exportCleanupDeadline(job))])
+				AbortSignal.any([stop, AbortSignal.timeout(exportCleanupDeadline(job))]),
+				fields => this.store.update(job.id, fields)
 			);
 			this.store.update(job.id, {
 				cleaned: true,
@@ -502,8 +548,22 @@ export class ManagedExportService {
 				probeUploadId: undefined,
 			});
 			this.safeLog({ stage: 'cleanup', success: true });
-		} catch {
-			this.safeLog({ stage: 'cleanup', success: false });
+		} catch (error) {
+			const diagnostic = publicExportDiagnostic(
+				exportDiagnostic(error, job, 'cleanup', 'cleanup')
+			)!;
+			const latest = this.store.get(job.id)!;
+			this.store.update(job.id, {
+				cleanupFailure: latest.cleanupFailure || diagnostic,
+				lastCleanupFailure: diagnostic,
+			});
+			this.safeLog({
+				...diagnostic,
+				httpStatus: diagnostic.httpStatus || 0,
+				stage: 'cleanup',
+				success: false,
+				jobId: job.id,
+			});
 		} finally {
 			storage?.close();
 		}
@@ -616,6 +676,12 @@ export class ManagedExportService {
 								: 'storage-unavailable';
 			this.store.update(job.id, {
 				state: reason === 'cancelled' ? 'cancelled' : 'failed',
+				...(error instanceof ExportCleanupError
+					? {
+							cleanupFailure: job.cleanupFailure || error.diagnostic,
+							lastCleanupFailure: error.diagnostic,
+						}
+					: {}),
 				failure: reason,
 				failureStage: stage,
 				failureCapability: error instanceof ExportPreflightError ? error.capability : undefined,

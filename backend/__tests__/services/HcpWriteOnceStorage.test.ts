@@ -83,14 +83,26 @@ function fixture() {
 			name = command.constructor.name;
 		calls.push({ name, ...p });
 		await new Promise<void>(resolve => setImmediate(resolve)); // real async ordering
-		if (name === 'GetBucketVersioningCommand')
+		if (name === 'GetBucketVersioningCommand') {
+			if (fault === 'versioning-unavailable') throw fail(501);
+			if (fault === 'versioning-denied') throw fail(403);
 			return fault === 'versioning-changed' ? { Status: 'Enabled' } : {};
+		}
 		if (name === 'HeadObjectCommand' || name === 'GetObjectCommand') {
 			const object = objects.get(p.Key);
 			if (!object) throw fail(404);
 			if (p.IfMatch && p.IfMatch !== object.ETag && fault !== 'ignored-if-match') throw fail(412);
-			if (name === 'HeadObjectCommand')
-				return { ...object, body: undefined, $metadata: { httpStatusCode: 200 } };
+			if (name === 'HeadObjectCommand') {
+				if (fault === 'head-denied') throw fail(403);
+				const result = { ...object, body: undefined, $metadata: { httpStatusCode: 200 } };
+				if (fault === 'head-missing-etag') delete result.ETag;
+				if (fault === 'head-mismatched-etag') result.ETag = '"other"';
+				if (fault === 'head-missing-time') delete result.LastModified;
+				if (fault === 'sse-missing') delete result.ServerSideEncryption;
+				if (fault === 'sse-unsupported') result.ServerSideEncryption = 'aws:kms';
+				if (fault === 'head-unexpected') result.$metadata.httpStatusCode = 206;
+				return result;
+			}
 			const match = p.Range && /^bytes=(\d+)-(\d+)$/.exec(p.Range);
 			const start = match ? Number(match[1]) : 0,
 				end = match ? Number(match[2]) : object.body.length - 1;
@@ -107,7 +119,12 @@ function fixture() {
 				$metadata: { httpStatusCode: match && fault !== 'range-200' ? 206 : 200 },
 			};
 		}
-		if (name === 'PutObjectCommand') return store(p, p.Body);
+		if (name === 'PutObjectCommand') {
+			const result = store(p, p.Body);
+			if (fault === 'put-lost-response') throw Object.assign(fail(503), { code: 'ECONNRESET' });
+			if (fault === 'put-missing-etag') return { $metadata: { httpStatusCode: 200 } };
+			return result;
+		}
 		if (name === 'GetObjectAclCommand')
 			return {
 				Owner: { ID: 'fixture-owner' },
@@ -121,7 +138,7 @@ function fixture() {
 			return { UploadId: id };
 		}
 		if (name === 'UploadPartCommand') {
-			if (fault === 'part-failure') throw fail(503);
+			if (fault === 'part-failure' || fault === 'part-and-abort-failure') throw fail(503);
 			const upload = uploads.get(p.UploadId);
 			if (!upload) throw fail(404);
 			upload.parts.set(p.PartNumber, Buffer.from(p.Body));
@@ -146,14 +163,16 @@ function fixture() {
 					.filter(([key]) => key.startsWith(p.Prefix))
 					.map(([Key]) => ({ Key })),
 			};
-		if (name === 'ListMultipartUploadsCommand')
+		if (name === 'ListMultipartUploadsCommand') {
+			if (fault === 'multipart-list-incompatible') throw fail(501);
 			return {
 				Uploads: [...uploads]
 					.filter(([, u]) => u.Key.startsWith(p.Prefix))
 					.map(([UploadId, u]) => ({ Key: u.Key, UploadId })),
 			};
+		}
 		if (name === 'AbortMultipartUploadCommand') {
-			if (fault === 'abort-failure') throw fail(503);
+			if (fault === 'abort-failure' || fault === 'part-and-abort-failure') throw fail(503);
 			uploads.delete(p.UploadId);
 			return {};
 		}
@@ -231,6 +250,172 @@ async function publish(f: ReturnType<typeof fixture>, bytes = 2048) {
 	return { data, archive };
 }
 describe('nonversioned write-once capability contract', () => {
+	test('incomplete multipart failure keeps exact durable upload ownership for safe retry after restart', async () => {
+		const f = fixture();
+		try {
+			f.fault('part-and-abort-failure');
+			await expect(
+				f.storage.preflight(f.job, AbortSignal.timeout(2000), f.update)
+			).rejects.toThrow();
+			expect(f.job.preflightFailure).toMatchObject({
+				operation: 'UploadPart',
+				target: 'archive',
+				httpStatus: 503,
+				creationAcknowledged: false,
+				durableOwnershipProof: false,
+			});
+			expect(f.job.cleanupFailure).toMatchObject({
+				operation: 'AbortMultipartUpload',
+				httpStatus: 503,
+				multipartCleanupPending: true,
+			});
+			expect(f.job.ownedUploads).toHaveLength(1);
+			const restarted = structuredClone(f.job),
+				first = structuredClone(f.job.cleanupFailure);
+			f.fault('');
+			f.calls.length = 0;
+			await f.storage.cleanup(restarted, AbortSignal.timeout(2000), fields =>
+				Object.assign(restarted, fields)
+			);
+			expect(restarted.cleanupState).toEqual({
+				objects: 'verified-absent',
+				multipart: 'verified-absent',
+			});
+			expect(restarted.cleanupFailure).toEqual(first);
+			expect(f.objects.size).toBe(0);
+			expect(f.uploads.size).toBe(0);
+			expect(
+				f.calls
+					.filter(c => c.name === 'AbortMultipartUploadCommand')
+					.every(c =>
+						restarted.ownedUploads?.some(u => u.key === c.Key && u.uploadId === c.UploadId)
+					)
+			).toBe(true);
+		} finally {
+			f.storage.close();
+		}
+	});
+	test.each([
+		['put-missing-etag', 'creation-response', 'missing-etag', true],
+		['put-lost-response', 'PutObject', 'provider-error', false],
+		['head-missing-etag', 'HeadObject', 'etag-mismatch', true],
+		['head-mismatched-etag', 'HeadObject', 'etag-mismatch', true],
+		['head-missing-time', 'HeadObject', 'missing-last-modified', true],
+		['sse-missing', 'HeadObject', 'sse-s3-unverified', true],
+		['sse-unsupported', 'HeadObject', 'sse-s3-unverified', true],
+		['head-unexpected', 'HeadObject', 'unexpected-head-status', true],
+		['head-denied', 'HeadObject', 'provider-error', true],
+	])(
+		'creation failure and independent cleanup refusal survive restart: %s',
+		async (fault, operation, detail, acknowledged) => {
+			const f = fixture();
+			f.fault(fault as string);
+			try {
+				await expect(
+					f.storage.preflight(f.job, AbortSignal.timeout(1000), f.update)
+				).rejects.toThrow();
+				expect(f.job.preflightFailure).toMatchObject({
+					stage: 'preflight',
+					capability: 'write-once-creation',
+					operation,
+					detail,
+					creationAcknowledged: acknowledged,
+					durableOwnershipProof: false,
+				});
+				expect(f.job.cleanupFailure).toMatchObject({
+					stage: 'cleanup',
+					objectCleanupPending: true,
+					operation: fault === 'head-denied' ? 'HeadObject' : 'ownership-proof',
+				});
+				expect(f.job.ownedObjects).toBeUndefined();
+				expect(f.calls.some(c => c.name === 'DeleteObjectCommand')).toBe(false);
+				const first = structuredClone(f.job.preflightFailure),
+					cleanup = structuredClone(f.job.cleanupFailure);
+				const restarted = structuredClone(f.job);
+				f.fault('');
+				await expect(
+					f.storage.cleanup(restarted, AbortSignal.timeout(1000), fields =>
+						Object.assign(restarted, fields)
+					)
+				).rejects.toThrow();
+				expect(restarted.preflightFailure).toEqual(first);
+				expect(restarted.cleanupFailure).toEqual(cleanup);
+				expect(restarted.lastCleanupFailure?.detail).toBe('ownership-proof-missing');
+				expect(f.objects.has(f.job.key + '.probe')).toBe(true);
+				expect(f.calls.some(c => /DeleteObject|AbortMultipart/.test(c.name))).toBe(false);
+			} finally {
+				f.storage.close();
+			}
+		}
+	);
+	test('501 versioning inspection remains a candidate requiring all write-once gates', async () => {
+		const f = fixture();
+		f.fault('versioning-unavailable');
+		try {
+			await prepare(f);
+		} finally {
+			f.storage.close();
+		}
+	});
+	test('cleanup identifies incompatible multipart listing and preserves it independently of the creation failure', async () => {
+		const f = fixture();
+		try {
+			f.fault('put-missing-etag');
+			await expect(
+				f.storage.preflight(f.job, AbortSignal.timeout(1000), f.update)
+			).rejects.toThrow();
+			const first = structuredClone(f.job.cleanupFailure);
+			f.fault('multipart-list-incompatible');
+			await expect(f.storage.cleanup(f.job, AbortSignal.timeout(1000), f.update)).rejects.toThrow();
+			expect(f.job.preflightFailure?.detail).toBe('missing-etag');
+			expect(f.job.cleanupFailure).toEqual(first);
+			expect(f.job.lastCleanupFailure).toMatchObject({
+				operation: 'ListMultipartUploads',
+				httpStatus: 501,
+				category: 'unsupported-api',
+				providerCategory: 'unsupported-api',
+				multipartCleanupPending: true,
+			});
+		} finally {
+			f.storage.close();
+		}
+	});
+	test('read-only inspection distinguishes unknown ownership and never repairs or reads content', async () => {
+		const f = fixture();
+		try {
+			f.fault('put-missing-etag');
+			await expect(
+				f.storage.preflight(f.job, AbortSignal.timeout(1000), f.update)
+			).rejects.toThrow();
+			const before = structuredClone(f.job);
+			f.fault('');
+			f.calls.length = 0;
+			const result = await f.storage.inspectPreflight(f.job, AbortSignal.timeout(1000));
+			expect(result).toMatchObject({ readOnly: true, ownershipAdopted: false });
+			expect(result.observations.find(o => o.target === 'probe')).toMatchObject({
+				present: true,
+				creationAcknowledged: true,
+				durableOwnershipProof: false,
+				metadataMatchesProof: false,
+				sseS3Verified: true,
+			});
+			expect(f.job).toEqual(before);
+			expect(
+				f.calls.every(c =>
+					[
+						'HeadObjectCommand',
+						'GetBucketVersioningCommand',
+						'ListMultipartUploadsCommand',
+						'ListPartsCommand',
+					].includes(c.name)
+				)
+			).toBe(true);
+			expect(JSON.stringify(result)).not.toContain(f.job.key);
+			expect(JSON.stringify(result)).not.toContain(f.config.endpoint);
+		} finally {
+			f.storage.close();
+		}
+	});
 	test('a preexisting final key is never adopted or overwritten by a fresh export', async () => {
 		const f = fixture();
 		try {

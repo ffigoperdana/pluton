@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { AppError } from '../AppError';
 import { httpsS3Endpoint } from '../storageSecurity';
 import type { ManagedExportMode, ManagedExportSummary } from '../restic/ManagedExportPolicy';
+import type { ExportDiagnostic } from './ExportDiagnostics';
 
 export const EXPORT_LIMITS = Object.freeze({
 	partBytes: 16 * 1024 ** 2,
@@ -284,6 +285,15 @@ export type ExportJob = {
 	capabilityBinding?: string;
 	ownershipNonce?: string;
 	publicationAttempted?: boolean;
+	/** Receipt of a successful creation response, NOT permission to delete. */
+	creationReceipts?: { key: string; acknowledged: boolean }[];
+	preflightFailure?: ExportDiagnostic;
+	cleanupFailure?: ExportDiagnostic;
+	lastCleanupFailure?: ExportDiagnostic;
+	cleanupState?: {
+		objects: 'unverified' | 'verified-absent';
+		multipart: 'unverified' | 'verified-absent';
+	};
 	ownedObjects?: { key: string; etag: string; bytes: number; sha256: string; created: string }[];
 	ownedUploads?: { key: string; uploadId: string }[];
 	capabilityProbe?: ExportJob;

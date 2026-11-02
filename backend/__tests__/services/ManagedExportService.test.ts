@@ -26,6 +26,11 @@ import {
 	exportCleanupDeadline,
 } from '../../src/utils/managedExport/ExportPolicy';
 import { assertExportIsolation } from '../../src/utils/managedExport/ExportIsolation';
+import {
+	ExportCleanupError,
+	ExportOperationError,
+	exportDiagnostic,
+} from '../../src/utils/managedExport/ExportDiagnostics';
 import type { ManagedExportSummary } from '../../src/utils/restic/ManagedExportPolicy';
 
 jest.mock('../../src/utils/logger', () => ({ planLogger: () => ({ info: jest.fn() }) }));
@@ -76,6 +81,11 @@ function harness() {
 		config = exportConfiguration(env())!;
 	const store = new ManagedExportStore(file);
 	const storage = {
+		inspectPreflight: jest.fn(async () => ({
+			readOnly: true,
+			ownershipAdopted: false,
+			observations: [],
+		})),
 		mode: jest.fn(async () => 'versioned'),
 		inventory: jest.fn(async () => ({ objects: 0, uploads: 0, exclusive: true })),
 		preflight: jest.fn(async () => {}),
@@ -241,6 +251,115 @@ describe('temporary export policy and durable admission', () => {
 	});
 });
 describe('durable independent export lifecycle', () => {
+	test('failed PUT and interrupted cleanup retain separate diagnostics, acknowledgement and reservation across SQLite restart', async () => {
+		const h = harness();
+		let entered = false;
+		h.storage.preflight.mockImplementation(
+			async (job?: ExportJob, _signal?: AbortSignal, update?: any) => {
+				const failure = exportDiagnostic(
+					new ExportOperationError(
+						'creation-response',
+						{ $metadata: { httpStatusCode: 200 } },
+						'missing-etag',
+						'object-mismatch',
+						'probe'
+					),
+					job!,
+					'preflight',
+					'write-once-creation'
+				);
+				failure.creationAcknowledged = true;
+				update({
+					integrityMode: 'hcp-write-once',
+					preflightFailure: failure,
+					creationReceipts: [{ key: job!.key + '.probe', acknowledged: true }],
+					probeFailure: {
+						capability: failure.capability,
+						category: failure.category,
+						httpStatus: failure.httpStatus,
+					},
+					reservedBytes: 32,
+				});
+				throw new ExportCleanupError(
+					exportDiagnostic(
+						new ExportOperationError('ownership-proof', undefined, 'ownership-proof-missing'),
+						job!,
+						'cleanup',
+						'cleanup'
+					)
+				);
+			}
+		);
+		h.storage.cleanup.mockImplementation(async (_job?: ExportJob, signal?: AbortSignal) => {
+			entered = true;
+			await new Promise<void>((_resolve, reject) =>
+				signal!.addEventListener(
+					'abort',
+					() =>
+						reject(
+							Object.assign(new Error('synthetic-private-provider-output'), { name: 'AbortError' })
+						),
+					{ once: true }
+				)
+			);
+		});
+		try {
+			const check = await h.service.preflight(owner);
+			await until(() => entered);
+			await h.service.shutdown();
+			const store = new ManagedExportStore(h.file);
+			const restarted = new ManagedExportService(
+				store,
+				h.recovery as any,
+				() => h.config,
+				async () => {},
+				() => h.storage as any
+			);
+			try {
+				const persisted = store.get(check.id)!;
+				expect(persisted).toMatchObject({
+					cleaned: false,
+					reservedBytes: 32,
+					preflightFailure: { detail: 'missing-etag' },
+					cleanupFailure: { detail: 'ownership-proof-missing' },
+					lastCleanupFailure: { providerCategory: 'aborted' },
+				});
+				expect(persisted.creationReceipts).toHaveLength(1);
+				const original = structuredClone(persisted.preflightFailure);
+				h.storage.cleanup.mockRejectedValueOnce(
+					new ExportOperationError('ListMultipartUploads', { $metadata: { httpStatusCode: 501 } })
+				);
+				await restarted.cancelPreflight(owner, check.id);
+				await until(() => store.get(check.id)?.lastCleanupFailure?.httpStatus === 501);
+				const status = await restarted.preflightStatus(owner, check.id);
+				expect(status).toMatchObject({
+					state: 'cancelled',
+					productionReadiness: 'NO-GO',
+					cleanupPending: true,
+					preflightFailure: original,
+					cleanupFailure: { detail: 'ownership-proof-missing' },
+					lastCleanupFailure: {
+						operation: 'ListMultipartUploads',
+						providerCategory: 'unsupported-api',
+					},
+				});
+				expect(JSON.stringify(status)).not.toMatch(
+					/synthetic-private|creationReceipts|ownershipNonce|\.tar/
+				);
+				h.storage.cleanup.mockResolvedValue(undefined);
+				await restarted.cancelPreflight(owner, check.id);
+				await until(() => store.get(check.id)?.cleaned === true);
+				expect(store.get(check.id)?.reservedBytes).toBe(0);
+				expect((await restarted.preflightStatus(owner, check.id)).preflightFailure).toEqual(
+					original
+				);
+			} finally {
+				await restarted.shutdown();
+			}
+		} finally {
+			await h.close();
+		}
+	});
 	test('an uncertain concurrent prefix inventory denies grants without destroying an independently verified ready archive', async () => {
 		const h = harness();
 		try {
@@ -792,6 +911,54 @@ describe('durable independent export lifecycle', () => {
 	});
 });
 describe('authenticated Range proxy and authorization boundaries', () => {
+	test('read-only diagnosis requires the exact job owner, terminal HCP preflight and unchanged destination without overrides or state mutation', async () => {
+		const h = harness(),
+			app = express();
+		app.use(express.json());
+		app.use(
+			'/api/managed-exports',
+			createManagedExportPreflightRouter(new ManagedExportController(h.service))
+		);
+		const cookie = `token=${jwt.sign({ user: 'fixture-admin' }, configService.config.SECRET!)}`;
+		const foreign = `token=${jwt.sign({ user: 'other-user' }, configService.config.SECRET!)}`;
+		const admitted = h.store.admit(owner, binding, h.config, 'preflight');
+		const job = h.store.update(admitted.id, {
+			state: 'failed',
+			integrityMode: 'hcp-write-once',
+			cleanupAttempts: 10,
+		});
+		const url = `/api/managed-exports/preflights/${job.id}/diagnostics`,
+			api = request(app);
+		try {
+			expect((await api.get(url)).status).toBe(401);
+			expect((await api.get(url).set('Cookie', foreign)).status).toBe(404);
+			expect((await api.get(url + '?key=foreign').set('Cookie', cookie)).status).toBe(400);
+			expect(h.storage.inspectPreflight).not.toHaveBeenCalled();
+			const response = await api.get(url).set('Cookie', cookie);
+			expect(response.status).toBe(200);
+			expect(response.headers['cache-control']).toContain('no-store');
+			expect(response.body.result).toMatchObject({
+				readOnly: true,
+				ownershipAdopted: false,
+				status: { productionReadiness: 'NO-GO', cleanupPending: true },
+			});
+			expect(h.store.get(job.id)).toEqual(job);
+			expect(h.storage.cleanup).not.toHaveBeenCalled();
+			expect(h.storage.preflight).not.toHaveBeenCalled();
+			expect(h.recovery.withVerifiedExport).not.toHaveBeenCalled();
+			expect(JSON.stringify(response.body)).not.toContain(job.key);
+			h.store.update(job.id, { state: 'validating' });
+			expect((await api.get(url).set('Cookie', cookie)).status).toBe(409);
+			h.store.update(job.id, { state: 'ready' });
+			expect((await api.get(url).set('Cookie', cookie)).status).toBe(409);
+			h.store.update(job.id, { state: 'failed' });
+			h.config.fingerprint = 'different-destination';
+			expect((await api.get(url).set('Cookie', cookie)).status).toBe(409);
+			expect(h.storage.inspectPreflight).toHaveBeenCalledTimes(1);
+		} finally {
+			await h.close();
+		}
+	});
 	test('operator endpoints require cookie ownership and refuse every destination override', async () => {
 		const h = harness(),
 			app = express();

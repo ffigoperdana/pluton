@@ -27,6 +27,14 @@ import {
 	type ExportJob,
 	type ExportCapability,
 } from './ExportPolicy';
+import {
+	ExportCleanupError,
+	ExportOperationError,
+	exportDiagnostic,
+	exportHttpStatus,
+	exportTarget,
+	type ExportOperation,
+} from './ExportDiagnostics';
 
 const status = (e: unknown) =>
 	(e as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
@@ -56,7 +64,7 @@ export class HcpWriteOnceStorage {
 			signal: AbortSignal
 		) => Promise<void>
 	) {}
-	private send(
+	private async send(
 		command:
 			| GetBucketVersioningCommand
 			| HeadObjectCommand
@@ -73,7 +81,24 @@ export class HcpWriteOnceStorage {
 			| DeleteObjectCommand,
 		signal: AbortSignal
 	): Promise<any> {
-		return this.client.send(command as HeadObjectCommand, { abortSignal: signal });
+		try {
+			return await this.client.send(command as HeadObjectCommand, { abortSignal: signal });
+		} catch (error) {
+			throw new ExportOperationError(
+				command.constructor.name.replace(/Command$/, '') as ExportOperation,
+				error,
+				'provider-error',
+				'storage-unavailable',
+				exportTarget((command.input as { Key?: string }).Key)
+			);
+		}
+	}
+	private receipt(job: ExportJob, key: string, acknowledged: boolean, update: Update) {
+		job.creationReceipts = [
+			...(job.creationReceipts || []).filter(r => r.key !== key),
+			{ key, acknowledged },
+		];
+		update({ creationReceipts: job.creationReceipts });
 	}
 	private matches(job: ExportJob, key: string, head: HeadObjectCommandOutput) {
 		const proof = job.ownedObjects?.find(p => p.key === key);
@@ -85,7 +110,9 @@ export class HcpWriteOnceStorage {
 			head.ServerSideEncryption === 'AES256' &&
 			head.ContentLength === proof.bytes &&
 			head.ETag === proof.etag &&
-			head.LastModified?.toISOString() === proof.created
+			head.LastModified instanceof Date &&
+			Number.isFinite(head.LastModified.getTime()) &&
+			head.LastModified.toISOString() === proof.created
 		);
 	}
 	async head(job: ExportJob, signal: AbortSignal, key = job.key) {
@@ -94,10 +121,24 @@ export class HcpWriteOnceStorage {
 			new HeadObjectCommand({ ...this.scope(job, key), IfMatch: proof?.etag }),
 			signal
 		).catch(e => {
-			if ([404, 412].includes(status(e) || 0)) throw new TemporaryExportError('object-mismatch');
+			if ([404, 412].includes(status(e) || 0))
+				throw new ExportOperationError(
+					'HeadObject',
+					e,
+					'provider-error',
+					'object-mismatch',
+					exportTarget(key)
+				);
 			throw e;
 		});
-		if (!this.matches(job, key, head)) throw new TemporaryExportError('object-mismatch');
+		if (!this.matches(job, key, head))
+			throw new ExportOperationError(
+				'HeadObject',
+				head,
+				'identity-mismatch',
+				'object-mismatch',
+				exportTarget(key)
+			);
 		return head as HeadObjectCommandOutput;
 	}
 	async get(job: ExportJob, signal: AbortSignal, range?: string, key = job.key) {
@@ -107,7 +148,14 @@ export class HcpWriteOnceStorage {
 			new GetObjectCommand({ ...this.scope(job, key), IfMatch: proof.etag, Range: range }),
 			signal
 		).catch(e => {
-			if ([404, 412].includes(status(e) || 0)) throw new TemporaryExportError('object-mismatch');
+			if ([404, 412].includes(status(e) || 0))
+				throw new ExportOperationError(
+					'GetObject',
+					e,
+					'provider-error',
+					'object-mismatch',
+					exportTarget(key)
+				);
 			throw e;
 		});
 		const match = range && /^bytes=(\d+)-(\d+)$/.exec(range);
@@ -124,7 +172,13 @@ export class HcpWriteOnceStorage {
 				: result.$metadata?.httpStatusCode !== 200)
 		) {
 			(result.Body as Readable)?.destroy();
-			throw new TemporaryExportError('object-mismatch');
+			throw new ExportOperationError(
+				'GetObject',
+				result,
+				'identity-mismatch',
+				'object-mismatch',
+				exportTarget(key)
+			);
 		}
 		return result;
 	}
@@ -144,12 +198,18 @@ export class HcpWriteOnceStorage {
 			(result.Body as Readable).destroy();
 		}
 		if (bytes !== proof.bytes || hash.digest('hex') !== proof.sha256)
-			throw new TemporaryExportError('object-mismatch');
+			throw new ExportOperationError(
+				'GetObject',
+				result,
+				'checksum-mismatch',
+				'object-mismatch',
+				exportTarget(key)
+			);
 	}
 	async record(
 		job: ExportJob,
 		key: string,
-		result: { ETag?: string; VersionId?: string },
+		result: { ETag?: string; VersionId?: string; $metadata?: { httpStatusCode?: number } },
 		bytes: number,
 		digest: string,
 		signal: AbortSignal,
@@ -157,22 +217,54 @@ export class HcpWriteOnceStorage {
 		verify = true
 	) {
 		// Never adopt an object from HEAD alone after a lost completion response.
-		if (!result.ETag || (result.VersionId && result.VersionId !== 'null'))
-			throw new TemporaryExportError('object-mismatch');
+		// Journal the acknowledgement BEFORE validation. This is diagnostic evidence
+		// only; only the independently checked complete proof below permits cleanup.
+		this.receipt(job, key, true, update);
+		if (
+			!result.ETag ||
+			exportHttpStatus(result) !== 200 ||
+			(result.VersionId && result.VersionId !== 'null')
+		)
+			throw new ExportOperationError(
+				'creation-response',
+				result,
+				!result.ETag
+					? 'missing-etag'
+					: exportHttpStatus(result) !== 200
+						? 'unexpected-creation-status'
+						: 'version-present',
+				'object-mismatch',
+				exportTarget(key)
+			);
 		const head = await this.send(
 			new HeadObjectCommand({ ...this.scope(job, key), IfMatch: result.ETag }),
 			signal
 		);
-		if (
-			head.ETag !== result.ETag ||
-			head.ContentLength !== bytes ||
-			!head.LastModified ||
-			(head.VersionId && head.VersionId !== 'null') ||
-			head.ServerSideEncryption !== 'AES256' ||
-			!this.owns(job, head) ||
-			head.Metadata?.['pluton-export-nonce'] !== job.ownershipNonce
-		)
-			throw new TemporaryExportError('object-mismatch');
+		const detail =
+			exportHttpStatus(head) !== 200
+				? 'unexpected-head-status'
+				: head.ETag !== result.ETag
+					? 'etag-mismatch'
+					: head.ContentLength !== bytes
+						? 'length-mismatch'
+						: !(head.LastModified instanceof Date) || !Number.isFinite(head.LastModified.getTime())
+							? 'missing-last-modified'
+							: head.VersionId && head.VersionId !== 'null'
+								? 'version-present'
+								: head.ServerSideEncryption !== 'AES256'
+									? 'sse-s3-unverified'
+									: !this.owns(job, head) ||
+										  head.Metadata?.['pluton-export-nonce'] !== job.ownershipNonce
+										? 'ownership-marker-mismatch'
+										: undefined;
+		if (detail)
+			throw new ExportOperationError(
+				'HeadObject',
+				head,
+				detail,
+				'object-mismatch',
+				exportTarget(key)
+			);
 		job.ownedObjects = [
 			...(job.ownedObjects || []).filter(p => p.key !== key),
 			{ key, etag: result.ETag, bytes, sha256: digest, created: head.LastModified.toISOString() },
@@ -262,13 +354,20 @@ export class HcpWriteOnceStorage {
 		return { objects, uploads, exclusive: true as const };
 	}
 	private async absent(job: ExportJob, key: string, signal: AbortSignal) {
+		let head: unknown;
 		try {
-			await this.send(new HeadObjectCommand(this.scope(job, key)), signal);
+			head = await this.send(new HeadObjectCommand(this.scope(job, key)), signal);
 		} catch (e) {
 			if (absent(e)) return;
 			throw e;
 		}
-		throw new TemporaryExportError('object-mismatch');
+		throw new ExportOperationError(
+			'HeadObject',
+			head,
+			'object-remains',
+			'object-mismatch',
+			exportTarget(key)
+		);
 	}
 	private async multipart(
 		job: ExportJob,
@@ -342,6 +441,7 @@ export class HcpWriteOnceStorage {
 		if (!proof) {
 			await this.absent(job, key, signal);
 			const data = crypto.randomBytes(32);
+			this.receipt(job, key, false, update);
 			const created = await this.send(
 				new PutObjectCommand({
 					...this.scope(job, key),
@@ -394,6 +494,7 @@ export class HcpWriteOnceStorage {
 			passed('https');
 			await this.absent(job, key, signal);
 			const params = this.scope(job, key);
+			this.receipt(job, key, false, update);
 			const initial = await this.send(
 				new PutObjectCommand({
 					...params,
@@ -584,31 +685,36 @@ export class HcpWriteOnceStorage {
 			update({ providerEvidence: job.providerEvidence });
 		} catch (e) {
 			failure = e;
-			job.probeFailure = { capability, category: 'unexpected-response', httpStatus: status(e) };
-			update({ probeFailure: job.probeFailure });
+			const operations: Partial<Record<ExportCapability, ExportOperation>> = {
+				'write-once-creation': 'PutObject',
+				'collision-rejection': 'PutObject',
+				'private-acl': 'GetObjectAcl',
+				'anonymous-denial': 'GetObject',
+				'conditional-range': 'GetObject',
+				'multipart-completion': 'CompleteMultipartUpload',
+				'concurrent-publication': 'CompleteMultipartUpload',
+				'object-enumeration': 'ListObjectsV2',
+				'ownership-cleanup': 'DeleteObject',
+			};
+			const diagnostic = exportDiagnostic(e, job, 'preflight', capability, operations[capability]);
+			job.preflightFailure ||= diagnostic;
+			job.probeFailure ||= {
+				capability,
+				category: diagnostic.category,
+				httpStatus: diagnostic.httpStatus,
+			};
+			update({ probeFailure: job.probeFailure, preflightFailure: job.preflightFailure });
 		}
-		try {
-			await this.cleanup(job, AbortSignal.timeout(30_000));
-			passed('ownership-cleanup');
-			passed('cleanup');
-			job.ownedObjects = [];
-			job.ownedUploads = [];
-			update({ ownedObjects: [], ownedUploads: [] });
-		} catch {
-			throw new ExportPreflightError('cleanup', 'cleanup-failed');
-		}
+		await this.cleanup(job, AbortSignal.timeout(30_000), update);
+		passed('ownership-cleanup');
+		passed('cleanup');
+		job.ownedObjects = [];
+		job.ownedUploads = [];
+		update({ ownedObjects: [], ownedUploads: [] });
 		if (failure) {
 			if (failure instanceof ExportPreflightError) throw failure;
-			const httpStatus = status(failure);
-			throw new ExportPreflightError(
-				capability,
-				httpStatus === 403
-					? 'access-denied'
-					: httpStatus === 501
-						? 'unsupported-api'
-						: 'unexpected-response',
-				httpStatus
-			);
+			const diagnostic = job.preflightFailure!;
+			throw new ExportPreflightError(capability, diagnostic.category, diagnostic.httpStatus);
 		}
 	}
 	private async unversioned(signal: AbortSignal) {
@@ -620,12 +726,158 @@ export class HcpWriteOnceStorage {
 				signal
 			);
 			if (['Enabled', 'Suspended'].includes(versioning.Status))
-				throw new TemporaryExportError('cleanup-pending');
+				throw new ExportOperationError(
+					'GetBucketVersioning',
+					versioning,
+					'versioning-changed',
+					'cleanup-pending'
+				);
+			return {
+				versioningInspection: 'disabled' as const,
+				httpStatus: exportHttpStatus(versioning),
+			};
 		} catch (e) {
 			if (status(e) !== 501) throw e;
+			return { versioningInspection: 'unsupported-api' as const, httpStatus: 501 };
 		}
 	}
-	async cleanup(job: ExportJob, signal: AbortSignal) {
+	/** Observations only. Never records/adopts ownership, reads bodies or repairs
+	 * state. Unknown/malformed replies remain explicit failures, never GO. */
+	async inspect(job: ExportJob, signal: AbortSignal) {
+		const observations: {
+			operation: ExportOperation;
+			target: 'namespace' | 'archive' | 'probe' | 'race' | 'put-race' | 'upload';
+			present?: boolean;
+			creationAcknowledged?: boolean;
+			durableOwnershipProof?: boolean;
+			metadataMatchesProof?: boolean;
+			sseS3Verified?: boolean;
+			etagPresent?: boolean;
+			lastModifiedPresent?: boolean;
+			contentLengthValid?: boolean;
+			ownershipMarkersMatch?: boolean;
+			versioningInspection?: 'disabled' | 'unsupported-api';
+			httpStatus?: number;
+			failure?: ReturnType<typeof exportDiagnostic>;
+		}[] = [];
+		try {
+			const result = await this.unversioned(signal);
+			observations.push({ operation: 'GetBucketVersioning', target: 'namespace', ...result });
+		} catch (e) {
+			observations.push({
+				operation: 'GetBucketVersioning',
+				target: 'namespace',
+				failure: exportDiagnostic(e, job, 'read-only', 'versioning'),
+			});
+		}
+		for (const [index, key] of writeOnceKeys(job).entries()) {
+			const observation: (typeof observations)[number] = {
+				operation: 'HeadObject',
+				target: (['archive', 'probe', 'race', 'put-race'] as const)[index],
+				creationAcknowledged:
+					job.creationReceipts?.some(r => r.key === key && r.acknowledged) === true,
+				durableOwnershipProof: job.ownedObjects?.some(p => p.key === key) === true,
+			};
+			try {
+				const head = await this.send(new HeadObjectCommand(this.scope(job, key)), signal);
+				observation.present = true;
+				observation.metadataMatchesProof = this.matches(job, key, head);
+				observation.sseS3Verified = head.ServerSideEncryption === 'AES256';
+				observation.httpStatus = exportHttpStatus(head);
+				observation.etagPresent = typeof head.ETag === 'string' && !!head.ETag;
+				observation.lastModifiedPresent =
+					head.LastModified instanceof Date && Number.isFinite(head.LastModified.getTime());
+				observation.contentLengthValid =
+					Number.isSafeInteger(head.ContentLength) && head.ContentLength >= 0;
+				observation.ownershipMarkersMatch =
+					this.owns(job, head) &&
+					!!job.ownershipNonce &&
+					head.Metadata?.['pluton-export-nonce'] === job.ownershipNonce;
+				if (exportHttpStatus(head) !== 200)
+					throw new ExportOperationError('HeadObject', head, 'unexpected-head-status');
+			} catch (e) {
+				if (absent(e)) observation.present = false;
+				else observation.failure = exportDiagnostic(e, job, 'read-only', 'ownership-cleanup');
+			}
+			observations.push(observation);
+		}
+		try {
+			const listing = await this.send(
+				new ListMultipartUploadsCommand({
+					Bucket: this.config.bucket,
+					Prefix: job.key,
+					MaxUploads: 100,
+				}),
+				signal
+			);
+			if (
+				listing.IsTruncated ||
+				listing.Uploads?.some(
+					(u: any) =>
+						writeOnceKeys(job).includes(u.Key) &&
+						!job.ownedUploads?.some(p => p.key === u.Key && p.uploadId === u.UploadId)
+				)
+			)
+				throw new ExportOperationError(
+					'ListMultipartUploads',
+					listing,
+					listing.IsTruncated ? 'listing-incomplete' : 'unknown-multipart'
+				);
+			observations.push({
+				operation: 'ListMultipartUploads',
+				target: 'namespace',
+				present: !!listing.Uploads?.some((u: any) => writeOnceKeys(job).includes(u.Key)),
+			});
+		} catch (e) {
+			observations.push({
+				operation: 'ListMultipartUploads',
+				target: 'namespace',
+				failure: exportDiagnostic(e, job, 'read-only', 'multipart-enumeration'),
+			});
+		}
+		for (const upload of (job.ownedUploads || []).slice(0, 8)) {
+			if (!writeOnceKeys(job).includes(upload.key)) continue;
+			try {
+				await this.send(
+					new ListPartsCommand({
+						...this.scope(job, upload.key),
+						UploadId: upload.uploadId,
+						MaxParts: 1,
+					}),
+					signal
+				);
+				observations.push({ operation: 'ListParts', target: 'upload', present: true });
+			} catch (e) {
+				observations.push({
+					operation: 'ListParts',
+					target: 'upload',
+					...(absent(e)
+						? { present: false }
+						: {
+								failure: exportDiagnostic(e, job, 'read-only', 'multipart-enumeration'),
+							}),
+				});
+			}
+		}
+		return { readOnly: true as const, ownershipAdopted: false as const, observations };
+	}
+	async cleanup(job: ExportJob, signal: AbortSignal, update: Update = () => {}) {
+		job.cleanupState = { objects: 'unverified', multipart: 'unverified' };
+		try {
+			await this.performCleanup(job, signal, update);
+		} catch (error) {
+			const diagnostic = exportDiagnostic(error, job, 'cleanup', 'cleanup');
+			job.cleanupFailure ||= diagnostic;
+			job.lastCleanupFailure = diagnostic;
+			update({
+				cleanupFailure: job.cleanupFailure,
+				lastCleanupFailure: diagnostic,
+				cleanupState: job.cleanupState,
+			});
+			throw new ExportCleanupError(diagnostic);
+		}
+	}
+	private async performCleanup(job: ExportJob, signal: AbortSignal, update: Update) {
 		await this.unversioned(signal);
 		const keys = writeOnceKeys(job);
 		const pending = await this.send(
@@ -644,7 +896,12 @@ export class HcpWriteOnceStorage {
 					!job.ownedUploads?.some(p => p.key === u.Key && p.uploadId === u.UploadId)
 			)
 		)
-			throw new TemporaryExportError('cleanup-pending');
+			throw new ExportOperationError(
+				'ListMultipartUploads',
+				pending,
+				pending.IsTruncated ? 'listing-incomplete' : 'unknown-multipart',
+				'cleanup-pending'
+			);
 		for (const upload of job.ownedUploads || []) {
 			if (!keys.includes(upload.key)) throw new TemporaryExportError('cleanup-pending');
 			try {
@@ -671,11 +928,19 @@ export class HcpWriteOnceStorage {
 				if (absent(e)) continue;
 				throw e;
 			}
-			throw new TemporaryExportError('cleanup-pending');
+			throw new ExportOperationError(
+				'ListParts',
+				undefined,
+				'multipart-remains',
+				'cleanup-pending'
+			);
 		}
+		job.cleanupState!.multipart = 'verified-absent';
+		update({ cleanupState: job.cleanupState });
 		for (const key of keys) {
+			let observed: unknown;
 			try {
-				await this.send(new HeadObjectCommand(this.scope(job, key)), signal);
+				observed = await this.send(new HeadObjectCommand(this.scope(job, key)), signal);
 			} catch (e) {
 				if (absent(e)) continue;
 				throw e;
@@ -683,7 +948,14 @@ export class HcpWriteOnceStorage {
 			// No durable successful response proof => no adoption, even with a
 			// matching public marker. A crash/lost response requires operator review.
 			const proof = job.ownedObjects?.find(p => p.key === key);
-			if (!proof || !job.ownershipNonce) throw new TemporaryExportError('cleanup-pending');
+			if (!proof || !job.ownershipNonce)
+				throw new ExportOperationError(
+					'ownership-proof',
+					observed,
+					'ownership-proof-missing',
+					'cleanup-pending',
+					exportTarget(key)
+				);
 			await this.readback(job, key, signal);
 			await this.head(job, signal, key); // detect change during checksum readback
 			await this.unversioned(signal);
@@ -704,8 +976,17 @@ export class HcpWriteOnceStorage {
 			}),
 			signal
 		);
-		if (remaining.IsTruncated || remaining.Uploads?.some((u: any) => keys.includes(u.Key)))
-			throw new TemporaryExportError('cleanup-pending');
+		if (remaining.IsTruncated || remaining.Uploads?.some((u: any) => keys.includes(u.Key))) {
+			job.cleanupState!.multipart = 'unverified';
+			throw new ExportOperationError(
+				'ListMultipartUploads',
+				remaining,
+				'multipart-remains',
+				'cleanup-pending'
+			);
+		}
 		await this.unversioned(signal);
+		job.cleanupState = { objects: 'verified-absent', multipart: 'verified-absent' };
+		update({ cleanupState: job.cleanupState });
 	}
 }
