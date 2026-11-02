@@ -1,0 +1,13 @@
+# Optional private keyring. Append only after reviewed, mount-preserving approval.
+# Existing data, CA, backup and replication mounts remain unchanged.
+services:
+  pluton:
+    environment:
+      MANAGED_EXPORT_KEYRING_FILE: /run/secrets/pluton-managed-export-keyring.json
+    volumes:
+      - type: bind
+        source: ${MANAGED_EXPORT_KEYRING_HOST_FILE:?Set an approved absolute private keyring path}
+        target: /run/secrets/pluton-managed-export-keyring.json
+        read_only: true
+        bind:
+          create_host_path: false

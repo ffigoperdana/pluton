@@ -1,6 +1,9 @@
 /** Protocol reference fixture, NOT an HCP implementation or production claim.
  * Negative tests deliberately violate each property required from the real API. */
 import crypto from 'crypto';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { Readable, Writable } from 'stream';
 import { pipeline } from 'stream/promises';
 import { CompleteMultipartUploadCommand } from '@aws-sdk/client-s3';
@@ -18,10 +21,25 @@ const fail = (status: number) =>
 	Object.assign(new Error('synthetic provider contents must stay private'), {
 		$metadata: { httpStatusCode: status },
 	});
-function fixture() {
+function fixture(encrypted = false) {
+	const root = encrypted ? fs.mkdtempSync(path.join(os.tmpdir(), 'pluton-hcp-aead-')) : undefined;
+	const keyring = root && path.join(root, 'keyring.json');
+	if (keyring)
+		fs.writeFileSync(
+			keyring,
+			JSON.stringify({
+				version: 1,
+				active: 'fixture-key',
+				keys: { 'fixture-key': crypto.randomBytes(32).toString('base64') },
+			}),
+			{ mode: 0o600 }
+		);
 	const config = exportConfiguration({
 		MANAGED_EXPORT_ENABLED: 'true',
 		MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE: 'true',
+		...(encrypted
+			? { MANAGED_EXPORT_MODE: 'application-encrypted-hcp', MANAGED_EXPORT_KEYRING_FILE: keyring }
+			: {}),
 		MANAGED_EXPORT_ENDPOINT: 'https://s3.example.internal',
 		MANAGED_EXPORT_BUCKET: 'example-backup',
 		MANAGED_EXPORT_ACCESS_KEY_ID: crypto.randomBytes(16).toString('hex'),
@@ -72,7 +90,7 @@ function fixture() {
 			ContentLength: body.length,
 			LastModified: new Date(1000 * ++clock),
 			Metadata: { ...input.Metadata },
-			ServerSideEncryption: 'AES256',
+			ServerSideEncryption: input.ServerSideEncryption,
 		});
 		return { ETag: etag, $metadata: { httpStatusCode: 200 } };
 	};
@@ -204,6 +222,10 @@ function fixture() {
 			fault = value;
 		},
 		store,
+		dispose: () => {
+			storage.close();
+			if (root) fs.rmSync(root, { recursive: true, force: true });
+		},
 	};
 }
 async function prepare(f: ReturnType<typeof fixture>) {
@@ -250,6 +272,131 @@ async function publish(f: ReturnType<typeof fixture>, bytes = 2048) {
 	return { data, archive };
 }
 describe('nonversioned write-once capability contract', () => {
+	test('explicit application encryption proves authenticated provider readback without any SSE evidence or plaintext archive storage', async () => {
+		const f = fixture(true);
+		try {
+			await f.storage.preflight(f.job, AbortSignal.timeout(5000), f.update);
+			expect(f.job.preflightChecks).toEqual(
+				expect.arrayContaining(['application-encryption', 'authenticated-readback', 'cleanup'])
+			);
+			expect(f.job.preflightChecks).not.toContain('sse-s3');
+			expect(f.job.providerEvidence?.mode).toBe('application-encrypted-hcp');
+			const id = crypto.randomUUID();
+			Object.assign(f.job, {
+				id,
+				key: `${f.config.prefix}/${id}.tar`,
+				kind: 'archive',
+				encryption: undefined,
+				ownedObjects: [],
+				ownedUploads: [],
+				creationReceipts: [],
+			});
+			const data = crypto.randomBytes(17 * 1024 ** 2);
+			f.job.summary = {
+				version: 1,
+				binding: {
+					backupId: f.job.binding.backupId,
+					repositoryId: f.job.binding.repositoryId,
+					snapshotId: f.job.binding.snapshotId,
+				},
+				mode: 'full',
+				includedEntries: 1,
+				excludedEntries: 0,
+				includedByType: { file: 1 },
+				excludedByType: {},
+				manifestSha256: 'a'.repeat(64),
+				archiveSha256: digest(data),
+				archiveBytes: data.length,
+			};
+			const archive = {
+				export: f.job.summary,
+				streamTo: (dest: Writable, signal: AbortSignal) =>
+					pipeline(Readable.from([data]), dest, { end: false, signal }),
+			} as any;
+			await f.storage.upload(f.job, archive, AbortSignal.timeout(5000), f.update);
+			await f.storage.verify(f.job, AbortSignal.timeout(5000));
+			const object = f.objects.get(f.job.key);
+			expect(object.ServerSideEncryption).toBeUndefined();
+			expect(object.body.length).toBeGreaterThan(data.length);
+			expect(object.body.includes(data.subarray(0, 256))).toBe(false);
+			expect(object.Metadata['archive-sha256']).toBeUndefined();
+			const result = await f.storage.get(f.job, AbortSignal.timeout(5000), 'bytes=4194300-4194310');
+			const chunks: Buffer[] = [];
+			for await (const b of result.Body as Readable) chunks.push(b);
+			expect(Buffer.concat(chunks).equals(data.subarray(4194300, 4194311))).toBe(true);
+			const restarted = structuredClone(f.job);
+			await f.storage.verify(restarted, AbortSignal.timeout(5000));
+			object.body[10] ^= 1;
+			await expect(f.storage.verify(restarted, AbortSignal.timeout(5000))).rejects.toThrow(
+				'object-mismatch'
+			);
+			await expect(
+				f.storage.cleanup(restarted, AbortSignal.timeout(5000), f.update)
+			).rejects.toThrow();
+			expect(f.objects.has(f.job.key)).toBe(true);
+			object.body[10] ^= 1; // Restore this disposable fixture for the independent successful cleanup check.
+			await expect(f.storage.authorize(restarted, 60)).rejects.toThrow();
+			await f.storage.cleanup(restarted, AbortSignal.timeout(5000), f.update);
+			expect(f.objects.size).toBe(0);
+			expect(f.uploads.size).toBe(0);
+		} finally {
+			f.dispose();
+		}
+	});
+	test.each([
+		'overwrite',
+		'ignored-if-match',
+		'embedded-error',
+		'lost-completion',
+		'part-and-abort-failure',
+		'retention',
+		'versioning-changed',
+	])('application encryption retains every provider safety gate: %s', async fault => {
+		const f = fixture(true);
+		f.fault(fault);
+		try {
+			const error = await f.storage
+				.preflight(f.job, AbortSignal.timeout(5000), f.update)
+				.catch(e => e);
+			expect(error).toHaveProperty('code', 'temporary-export-refused');
+			const phase: Record<string, string> = {
+				'overwrite': 'collision-rejection',
+				'ignored-if-match': 'conditional-range',
+				'embedded-error': 'multipart-completion',
+				'lost-completion': 'multipart-completion',
+				'part-and-abort-failure': 'multipart-completion',
+				'retention': 'ownership-cleanup',
+				'versioning-changed': 'versioning',
+			};
+			expect(f.job.preflightFailure?.capability || error.capability).toBe(phase[fault]);
+		} finally {
+			f.dispose();
+		}
+	});
+	test('application mode never adopts a historical matching-key probe without a durable ownership receipt/proof', async () => {
+		const f = fixture(true);
+		try {
+			f.job.integrityMode = 'hcp-write-once';
+			f.job.ownershipNonce = crypto.randomBytes(32).toString('hex');
+			f.store(
+				{
+					Key: f.job.key + '.probe',
+					Metadata: {
+						'pluton-export-job': f.job.id,
+						'pluton-export-binding': bindingDigest(f.job.binding),
+						'pluton-export-nonce': f.job.ownershipNonce,
+					},
+				},
+				crypto.randomBytes(32)
+			);
+			await expect(f.storage.inventory([f.job], AbortSignal.timeout(1000))).rejects.toThrow();
+			await expect(f.storage.cleanup(f.job, AbortSignal.timeout(1000))).rejects.toThrow();
+			expect(f.calls.some(c => /DeleteObject|AbortMultipart/.test(c.name))).toBe(false);
+			expect(f.objects.has(f.job.key + '.probe')).toBe(true);
+		} finally {
+			f.dispose();
+		}
+	});
 	test('incomplete multipart failure keeps exact durable upload ownership for safe retry after restart', async () => {
 		const f = fixture();
 		try {

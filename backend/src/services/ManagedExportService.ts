@@ -31,6 +31,12 @@ import {
 	exportDiagnostic,
 	publicExportDiagnostic,
 } from '../utils/managedExport/ExportDiagnostics';
+import {
+	applicationEncrypted,
+	encryptedBytes,
+	isWriteOnce,
+} from '../utils/managedExport/ExportEncryption';
+import { ExportKeyError } from '../utils/managedExport/ExportKeyring';
 
 /** One durable exporter per process. Credentials come only from the separate
  * server configuration; queued JSON never contains provider credentials or URLs. */
@@ -83,7 +89,10 @@ export class ManagedExportService {
 			(proof.expiresAt || 0) <= Date.now() ||
 			proof.capabilityBinding !== exportCapabilityBinding(c) ||
 			!proof.providerEvidence ||
-			!proof.preflightChecks?.includes('cleanup')
+			!proof.preflightChecks?.includes('cleanup') ||
+			(c.exportMode &&
+				(!proof.preflightChecks?.includes('application-encryption') ||
+					!proof.preflightChecks?.includes('authenticated-readback')))
 		)
 			throw new TemporaryExportError('security-capability-missing');
 		return proof;
@@ -142,7 +151,7 @@ export class ManagedExportService {
 			!['failed', 'cancelled', 'expired'].includes(job.state) ||
 			this.active?.id === id ||
 			this.cleanups.has(id) ||
-			job.integrityMode !== 'hcp-write-once'
+			!isWriteOnce(job.integrityMode)
 		)
 			throw new TemporaryExportError('security-capability-missing');
 		if (this.inspections >= 1) throw new TemporaryExportError('queue-full');
@@ -196,11 +205,11 @@ export class ManagedExportService {
 			provider: job.providerEvidence,
 			productionReadiness,
 			integrityMode: job.integrityMode || (job.versionId ? 'versioned' : undefined),
-			transport:
-				job.integrityMode === 'hcp-write-once'
-					? 'authenticated-proxy'
-					: 'versioned-presigned-and-proxy',
+			transport: isWriteOnce(job.integrityMode)
+				? 'authenticated-proxy'
+				: 'versioned-presigned-and-proxy',
 			state: job.state,
+			confidentiality: applicationEncrypted(job) ? 'application-encrypted' : 'provider-sse-s3',
 			mode: job.binding.mode,
 			snapshotId: job.binding.snapshotId,
 			createdAt: job.createdAt,
@@ -261,7 +270,7 @@ export class ManagedExportService {
 		if (
 			job.state !== 'ready' ||
 			!job.summary ||
-			!(job.identity?.mode === 'hcp-write-once' || job.versionId) ||
+			!(isWriteOnce(job.identity?.mode) || job.versionId) ||
 			!job.etag ||
 			(job.expiresAt || 0) <= Date.now()
 		)
@@ -296,6 +305,15 @@ export class ManagedExportService {
 				}
 			}
 			storage.close();
+			// Local key/manifest recovery problems do not prove object corruption.
+			// Preserve ready ciphertext and its journal for administrator recovery.
+			if (failure instanceof ExportKeyError)
+				throw new TemporaryExportError('encryption-key-unavailable');
+			if (
+				failure instanceof TemporaryExportError &&
+				['encryption-key-unavailable', 'encryption-metadata-invalid'].includes(failure.reason)
+			)
+				throw failure;
 			if (failure instanceof TemporaryExportError && failure.reason === 'expired') throw failure;
 			const mismatch =
 				!inventoryOnlyFailure &&
@@ -328,7 +346,7 @@ export class ManagedExportService {
 					Math.floor((job.expiresAt! - Date.now()) / 1000)
 				);
 				if (seconds < 1) throw new TemporaryExportError('expired');
-				const proxy = job.integrityMode === 'hcp-write-once';
+				const proxy = isWriteOnce(job.integrityMode);
 				const url = proxy
 					? `/api/backups/${encodeURIComponent(backupId)}/exports/${job.id}/content`
 					: await storage.authorize(job, seconds);
@@ -338,7 +356,7 @@ export class ManagedExportService {
 					expiresAt: Date.now() + seconds * 1000,
 					bytes: job.summary!.archiveBytes,
 					sha256: job.summary!.archiveSha256,
-					etag: job.etag,
+					etag: applicationEncrypted(job) ? `"sha256-${job.summary!.archiveSha256}"` : job.etag,
 					transport: proxy ? 'authenticated-proxy' : 'versioned-presigned',
 				};
 			} finally {
@@ -436,7 +454,7 @@ export class ManagedExportService {
 				(selection.status === 200 && hash.digest('hex') !== job.summary!.archiveSha256)
 			)
 				throw new TemporaryExportError('object-mismatch');
-			if (job.integrityMode === 'hcp-write-once') await storage.identity(job, signal);
+			if (isWriteOnce(job.integrityMode)) await storage.identity(job, signal);
 		} catch (error) {
 			if (error instanceof TemporaryExportError && error.reason === 'object-mismatch') {
 				const current = this.store.get(id);
@@ -629,7 +647,12 @@ export class ManagedExportService {
 					proof.binding.snapshotId !== job.binding.snapshotId
 				)
 					throw new TemporaryExportError('object-mismatch');
-				this.store.reserve(job.id, archive.export.archiveBytes);
+				this.store.reserve(
+					job.id,
+					applicationEncrypted(job)
+						? encryptedBytes(archive.export.archiveBytes)
+						: archive.export.archiveBytes
+				);
 				job = this.store.update(job.id, { state: 'exporting', summary: archive.export });
 				stage = 'upload';
 				await this.isolated(c);
@@ -665,15 +688,17 @@ export class ManagedExportService {
 				? 'interrupted'
 				: signal.aborted || job.state === 'cancelled'
 					? 'cancelled'
-					: error instanceof TemporaryExportError
-						? error.reason
-						: bounded.aborted
-							? 'interrupted'
-							: error instanceof ManagedExportError ||
-								  error instanceof ManagedRepositoryAccessError ||
-								  stage === 'archive-validation'
-								? 'archive-refused'
-								: 'storage-unavailable';
+					: error instanceof ExportKeyError
+						? 'encryption-key-unavailable'
+						: error instanceof TemporaryExportError
+							? error.reason
+							: bounded.aborted
+								? 'interrupted'
+								: error instanceof ManagedExportError ||
+									  error instanceof ManagedRepositoryAccessError ||
+									  stage === 'archive-validation'
+									? 'archive-refused'
+									: 'storage-unavailable';
 			this.store.update(job.id, {
 				state: reason === 'cancelled' ? 'cancelled' : 'failed',
 				...(error instanceof ExportCleanupError

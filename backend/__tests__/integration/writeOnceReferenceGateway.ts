@@ -85,6 +85,10 @@ export async function writeOnceReferenceGateway(
 							servername: upstream.hostname,
 						},
 						result => {
+							// Deliberately remove SSE evidence in the explicit encrypted lab.
+							// Backup/replica traffic outside the export prefix is untouched.
+							if (guarded && process.env.MANAGED_EXPORT_MODE === 'application-encrypted-hcp')
+								delete result.headers['x-amz-server-side-encryption'];
 							response.writeHead(result.statusCode!, result.headers);
 							result.on('error', reject);
 							response.on('error', reject);

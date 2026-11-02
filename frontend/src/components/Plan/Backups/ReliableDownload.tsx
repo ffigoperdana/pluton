@@ -104,6 +104,7 @@ export default function ReliableDownload({ backupId, mode, close }: { backupId: 
          </div>
          {visible?.failure && <p role="alert">{reliableFailure(visible.failure)}</p>}
          {visible?.cleanupPending && <p>Cleanup is pending. Its storage reservation remains counted until deletion is verified.</p>}
+         {visible?.confidentiality === 'application-encrypted' && <p>Temporary storage holds an encrypted archive. Downloading through Pluton returns the original TAR.</p>}
          {error && (
             <p role="alert" className={classes.error}>
                {error}

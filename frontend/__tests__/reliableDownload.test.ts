@@ -53,6 +53,20 @@ test('creation, polling and cancellation preserve content mode, identity and coo
       globalThis.fetch = before;
    }
 });
+test('application-encrypted responses retain original TAR proof and require authenticated proxy transport', async () => {
+   const before = fetch;
+   const value: any = { ...job(), integrityMode: 'application-encrypted-hcp', confidentiality: 'application-encrypted', transport: 'authenticated-proxy' };
+   globalThis.fetch = async () => Response.json({ success: true, result: value });
+   try {
+      const result = await reliableRequest('https://example.internal/api', 'backup-01', 'full', id);
+      assert.equal(result.totalBytes, 2048);
+      assert.equal(result.summary?.archiveSha256, 'c'.repeat(64));
+      value.transport = 'versioned-presigned-and-proxy';
+      await assert.rejects(reliableRequest('https://example.internal/api', 'backup-01', 'full', id));
+      value.transport = 'authenticated-proxy'; value.confidentiality = 'provider-sse-s3';
+      await assert.rejects(reliableRequest('https://example.internal/api', 'backup-01', 'full', id));
+   } finally { globalThis.fetch = before; }
+});
 for (const failure of [
    'mode',
    'snapshot',

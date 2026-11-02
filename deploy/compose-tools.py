@@ -203,6 +203,7 @@ def validate_config(path, ref, health_file, directory):
     for key in ("APP_URL", "APP_ALLOWED_ORIGINS", "AGENT_SERVER_URL", "ALLOW_INSECURE_AGENT_HTTP", "TRUST_PROXY"):
         require(key in environment, "supported-environment-setting-missing")
     validate_export_ca(config)
+    validate_export_keys(config)
     require(service.get("healthcheck", {}).get("test") == ["CMD", "node", "-e", probe_source(health_file)],
             "reviewed-get-healthcheck-required")
     validate_internal_mysql_worker(config)
@@ -218,6 +219,44 @@ def validate_config(path, ref, health_file, directory):
 
 
 EXPORT_CA_TARGET = "/run/secrets/pluton-managed-export-ca.pem"
+EXPORT_KEYRING_TARGET = "/run/secrets/pluton-managed-export-keyring.json"
+
+
+def validate_export_keys(config):
+    service = config["services"]["pluton"]
+    environment = service.get("environment", {})
+    mode = environment.get("MANAGED_EXPORT_MODE", "auto")
+    require(mode in ("auto", "application-encrypted-hcp"), "export-mode-invalid")
+    selected = [m for m in service.get("volumes", []) if m.get("target") == EXPORT_KEYRING_TARGET]
+    configured = environment.get("MANAGED_EXPORT_KEYRING_FILE", "")
+    if mode == "application-encrypted-hcp":
+        require(environment.get("MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE") == "true", "export-encryption-shared-mode-required")
+        require(configured == EXPORT_KEYRING_TARGET, "export-keyring-required")
+    if not selected and not configured:
+        return
+    require(len(selected) == 1 and configured == EXPORT_KEYRING_TARGET, "export-keyring-mount-required")
+    item = selected[0]
+    require(item.get("type") == "bind" and item.get("read_only") is True and
+            item.get("bind", {}).get("create_host_path", False) is False and
+            item.get("bind", {}).get("propagation", "rprivate") == "rprivate", "export-keyring-mount-unsafe")
+    source = Path(item.get("source", ""))
+    require(source.is_absolute() and source.resolve() == source, "export-keyring-path-unsafe")
+    info = source.lstat()
+    require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size <= 16 * 1024 and
+            info.st_uid in (0, 10001) and not info.st_mode & 0o037 and
+            ((info.st_uid == 10001 and info.st_mode & 0o400) or
+             (info.st_gid == 10001 and info.st_mode & 0o040)), "export-keyring-permissions-or-runtime-access")
+    # Only validate shape/length in memory. No key value or fingerprint is returned.
+    import base64
+    value = json.loads(source.read_text())
+    require(isinstance(value, dict) and set(value) == {"version", "active", "keys"} and type(value["version"]) is int and value["version"] == 1 and
+            isinstance(value["keys"], dict) and 1 <= len(value["keys"]) <= 16 and
+            isinstance(value["active"], str) and value["active"] in value["keys"], "export-keyring-invalid")
+    for name, encoded in value["keys"].items():
+        require(re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name) and isinstance(encoded, str) and
+                re.fullmatch(r"[A-Za-z0-9+/]{43}=", encoded) and
+                len(base64.b64decode(encoded, validate=True)) == 32 and
+                base64.b64encode(base64.b64decode(encoded, validate=True)).decode() == encoded, "export-keyring-invalid")
 
 
 def validate_export_ca(config):
@@ -268,13 +307,13 @@ def verify_export_environment(config_file, inspect_file, mode="strict"):
     container = check_container(config_file, inspect_file)
     actual = dict(item.split("=", 1) for item in container["Config"].get("Env", []) if "=" in item)
     for suffix in ("ENABLED", "ALLOW_SHARED_NAMESPACE", "ENDPOINT", "REGION", "BUCKET", "PREFIX", "ACCESS_KEY_ID",
-                   "SECRET_ACCESS_KEY", "SESSION_TOKEN", "CA_FILE", "TTL_SECONDS"):
+                   "SECRET_ACCESS_KEY", "SESSION_TOKEN", "CA_FILE", "TTL_SECONDS", "MODE", "KEYRING_FILE"):
         name = "MANAGED_EXPORT_" + suffix
         if mode == "legacy" and name not in expected and name not in actual:
             continue
         require(name in expected and name in actual and expected[name] == actual[name],
                 "export-environment-mismatch-" + name)
-    return "previous-runtime-export-environment-restored-no-values-emitted" if mode == "legacy" else "export-environment-matches-all-11-fields-no-values-emitted"
+    return "previous-runtime-export-environment-restored-no-values-emitted" if mode == "legacy" else "export-environment-matches-all-13-fields-no-values-emitted"
 
 
 def prepare_reapply(workspace):

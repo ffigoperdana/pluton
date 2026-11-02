@@ -35,6 +35,12 @@ import {
 	exportCapabilityBinding,
 } from './ExportPolicy';
 import { HcpWriteOnceStorage, writeOnceKeys } from './HcpWriteOnceStorage';
+import {
+	applicationEncrypted,
+	ExportCipher,
+	isWriteOnce,
+	storedExportBytes,
+} from './ExportEncryption';
 import type { ManagedArchiveDownload } from '../../services/RemoteRepositoryRecoveryService';
 import { planLogger } from '../logger';
 
@@ -170,7 +176,11 @@ export class S3ExportStorage {
 				new GetBucketVersioningCommand({ Bucket: this.config.bucket }),
 				{ abortSignal: signal }
 			);
-			if (response.Status === 'Enabled') return 'versioned' as const;
+			if (response.Status === 'Enabled') {
+				if (this.config.exportMode)
+					throw new ExportPreflightError('versioning', 'unexpected-response');
+				return 'versioned' as const;
+			}
 			// Suspended versioning can hide old versions and is not this contract.
 			if (response.Status === 'Suspended' || !this.config.allowSharedNamespace)
 				throw new ExportPreflightError('versioning', 'unexpected-response');
@@ -178,7 +188,7 @@ export class S3ExportStorage {
 			if (!this.config.allowSharedNamespace || (error as any)?.$metadata?.httpStatusCode !== 501)
 				throw error;
 		}
-		return 'hcp-write-once' as const;
+		return this.config.exportMode || ('hcp-write-once' as const);
 	}
 	private scope(job: ExportJob, key = job.key) {
 		if (
@@ -186,7 +196,7 @@ export class S3ExportStorage {
 			job.key !== `${this.config.prefix}/${job.id}.tar` ||
 			!/^[a-f0-9-]{36}$/.test(job.id) ||
 			!(
-				job.integrityMode === 'hcp-write-once' ? writeOnceKeys(job) : [job.key, job.key + '.probe']
+				isWriteOnce(job.integrityMode) ? writeOnceKeys(job) : [job.key, job.key + '.probe']
 			).includes(key)
 		)
 			throw new TemporaryExportError('binding-changed');
@@ -197,7 +207,15 @@ export class S3ExportStorage {
 			'pluton-export-job': job.id,
 			'pluton-export-binding': bindingDigest(job.binding),
 			...(job.ownershipNonce ? { 'pluton-export-nonce': job.ownershipNonce } : {}),
-			...(job.summary ? { 'archive-sha256': job.summary.archiveSha256 } : {}),
+			...(applicationEncrypted(job)
+				? {
+						'pluton-export-format': 'aead-v1',
+						'pluton-export-manifest': job.encryption?.mac || '',
+						'pluton-export-purpose': job.kind || 'archive',
+					}
+				: job.summary
+					? { 'archive-sha256': job.summary.archiveSha256 }
+					: {}),
 		};
 	}
 	private owns(job: ExportJob, head: { Metadata?: Record<string, string> }) {
@@ -220,9 +238,10 @@ export class S3ExportStorage {
 		update: (fields: Partial<ExportJob>) => void = () => {}
 	) {
 		try {
-			if ((await this.mode(signal)) === 'hcp-write-once') {
+			const mode = await this.mode(signal);
+			if (isWriteOnce(mode)) {
 				if (job.kind === 'preflight') return await this.writeOnce.preflight(job, signal, update);
-				job.integrityMode = 'hcp-write-once';
+				job.integrityMode = mode;
 				update({ integrityMode: job.integrityMode });
 				// Never reuse an archive key after a synthetic object. One bounded
 				// child probe is persisted before its first request, including all
@@ -236,6 +255,7 @@ export class S3ExportStorage {
 					key: `${this.config.prefix}/${id}.tar`,
 					capabilityProbe: undefined,
 					summary: undefined,
+					encryption: undefined,
 					identity: undefined,
 					publicationAttempted: undefined,
 					ownedObjects: undefined,
@@ -254,7 +274,7 @@ export class S3ExportStorage {
 					update({ capabilityProbe: probe });
 				});
 				probe.cleaned = true;
-				job.integrityMode = 'hcp-write-once';
+				job.integrityMode = mode;
 				job.ownershipNonce = crypto.randomBytes(32).toString('hex');
 				job.providerEvidence = probe.providerEvidence;
 				job.capabilityBinding = probe.capabilityBinding;
@@ -619,8 +639,7 @@ export class S3ExportStorage {
 	async inventory(jobs: ExportJob[], signal: AbortSignal) {
 		jobs = jobs.flatMap(j => [j, ...(j.capabilityProbe ? [j.capabilityProbe] : [])]);
 		try {
-			if ((await this.mode(signal)) === 'hcp-write-once')
-				return await this.writeOnce.inventory(jobs, signal);
+			if (isWriteOnce(await this.mode(signal))) return await this.writeOnce.inventory(jobs, signal);
 		} catch (error) {
 			this.capabilityFailure(error, 'destination-isolation');
 		}
@@ -846,15 +865,59 @@ export class S3ExportStorage {
 		signal: AbortSignal,
 		update: (fields: Partial<ExportJob>) => void
 	) {
+		if (!applicationEncrypted(job)) return this.uploadWire(job, archive, signal, update);
+		// An interrupted export is never re-encrypted with the old nonce schedule.
+		// Retry is a new admitted job with fresh independent key material.
+		if (job.encryption || job.publicationAttempted || job.identity)
+			throw new TemporaryExportError('object-mismatch');
+		const cipher = ExportCipher.create(
+			job,
+			this.config,
+			archive.export.archiveBytes,
+			archive.export.archiveSha256
+		);
+		job.encryption = cipher.value;
+		try {
+			update({ encryption: job.encryption });
+			const encrypted = cipher.archive(archive, sha => {
+				job.encryption!.ciphertextSha256 = sha;
+				update({ encryption: job.encryption });
+			});
+			const progress = (bytes: number) =>
+				bytes === cipher.value.manifest.ciphertextBytes
+					? archive.export.archiveBytes
+					: Math.floor(bytes / (cipher.value.manifest.chunkBytes + 16)) *
+						cipher.value.manifest.chunkBytes;
+			await this.uploadWire(job, encrypted, signal, fields =>
+				update({
+					...fields,
+					...(fields.processedBytes === undefined
+						? {}
+						: { processedBytes: progress(fields.processedBytes) }),
+					...(fields.uploadedBytes === undefined
+						? {}
+						: { uploadedBytes: progress(fields.uploadedBytes) }),
+				})
+			);
+		} finally {
+			cipher.close();
+		}
+	}
+	private async uploadWire(
+		job: ExportJob,
+		archive: ManagedArchiveDownload,
+		signal: AbortSignal,
+		update: (fields: Partial<ExportJob>) => void
+	) {
 		if (job.publicationAttempted || job.identity) throw new TemporaryExportError('object-mismatch');
 		if (
-			job.integrityMode === 'hcp-write-once' &&
+			isWriteOnce(job.integrityMode) &&
 			(!job.capabilityBinding || !job.providerEvidence?.writeOnce)
 		)
 			throw new TemporaryExportError('security-capability-missing');
-		if (job.integrityMode === 'hcp-write-once') {
+		if (isWriteOnce(job.integrityMode)) {
 			if (
-				(await this.mode(signal)) !== 'hcp-write-once' ||
+				(await this.mode(signal)) !== job.integrityMode ||
 				job.capabilityBinding !== exportCapabilityBinding(this.config)
 			)
 				throw new TemporaryExportError('security-capability-missing');
@@ -864,15 +927,15 @@ export class S3ExportStorage {
 		const created = await this.client.send(
 			new CreateMultipartUploadCommand({
 				...this.scope(job),
-				ServerSideEncryption: 'AES256',
-				ContentType: 'application/x-tar',
+				...(applicationEncrypted(job) ? {} : { ServerSideEncryption: 'AES256' as const }),
+				ContentType: applicationEncrypted(job) ? 'application/octet-stream' : 'application/x-tar',
 				Metadata: this.metadata(job),
 			}),
 			{ abortSignal: signal }
 		);
 		if (!created.UploadId) throw new TemporaryExportError('storage-unavailable');
 		job.uploadId = created.UploadId;
-		if (job.integrityMode === 'hcp-write-once')
+		if (isWriteOnce(job.integrityMode))
 			job.ownedUploads = [
 				...(job.ownedUploads || []),
 				{ key: job.key, uploadId: created.UploadId },
@@ -916,7 +979,11 @@ export class S3ExportStorage {
 				void (async () => {
 					let offset = 0;
 					processed += chunk.length;
-					if (processed > archive.export.archiveBytes || processed > EXPORT_LIMITS.maxObjectBytes)
+					if (
+						processed > archive.export.archiveBytes ||
+						processed >
+							(applicationEncrypted(job) ? storedExportBytes(job)! : EXPORT_LIMITS.maxObjectBytes)
+					)
 						throw new TemporaryExportError('quota-exceeded');
 					while (offset < chunk.length) {
 						const n = Math.min(buffer.length - used, chunk.length - offset);
@@ -943,8 +1010,8 @@ export class S3ExportStorage {
 			if (processed !== archive.export.archiveBytes || uploaded !== processed || !parts.length)
 				throw new TemporaryExportError('object-mismatch');
 			// Completion is the ONLY publication point; SDK detects embedded 200 errors.
-			if (job.integrityMode === 'hcp-write-once') {
-				if ((await this.mode(signal)) !== 'hcp-write-once')
+			if (isWriteOnce(job.integrityMode)) {
+				if ((await this.mode(signal)) !== job.integrityMode)
 					throw new TemporaryExportError('security-capability-missing');
 				await this.writeOnce.publicationGuard(job, signal, update);
 			}
@@ -955,11 +1022,11 @@ export class S3ExportStorage {
 					...this.scope(job),
 					UploadId: job.uploadId,
 					MultipartUpload: { Parts: parts },
-					...(job.integrityMode === 'hcp-write-once' ? {} : { IfNoneMatch: '*' }),
+					...(isWriteOnce(job.integrityMode) ? {} : { IfNoneMatch: '*' }),
 				}),
 				{ abortSignal: signal }
 			);
-			if (job.integrityMode === 'hcp-write-once') {
+			if (isWriteOnce(job.integrityMode)) {
 				await this.writeOnce.record(
 					job,
 					job.key,
@@ -972,7 +1039,7 @@ export class S3ExportStorage {
 				);
 				const proof = job.ownedObjects!.find(p => p.key === job.key)!;
 				job.identity = {
-					mode: 'hcp-write-once',
+					mode: applicationEncrypted(job) ? 'application-encrypted-hcp' : 'hcp-write-once',
 					key: job.key,
 					etag: proof.etag,
 					bytes: proof.bytes,
@@ -1027,7 +1094,11 @@ export class S3ExportStorage {
 		await this.assertPrivate(job.key, job.versionId!, signal);
 	}
 	async identity(job: ExportJob, signal: AbortSignal) {
-		if (job.integrityMode === 'hcp-write-once') return this.writeOnce.identity(job, signal);
+		if (applicationEncrypted(job)) {
+			const cipher = ExportCipher.open(job, this.config);
+			cipher.close();
+		}
+		if (isWriteOnce(job.integrityMode)) return this.writeOnce.identity(job, signal);
 		const head = await this.head(job, signal);
 		if (
 			!job.versionId ||
@@ -1044,14 +1115,52 @@ export class S3ExportStorage {
 		return head;
 	}
 	head(job: ExportJob, signal: AbortSignal) {
-		if (job.integrityMode === 'hcp-write-once') return this.writeOnce.head(job, signal);
+		if (isWriteOnce(job.integrityMode)) return this.writeOnce.head(job, signal);
 		return this.client.send(
 			new HeadObjectCommand({ ...this.scope(job), VersionId: job.versionId, IfMatch: job.etag }),
 			{ abortSignal: signal }
 		);
 	}
 	async get(job: ExportJob, signal: AbortSignal, range?: string) {
-		if (job.integrityMode === 'hcp-write-once') return this.writeOnce.get(job, signal, range);
+		if (applicationEncrypted(job)) {
+			const cipher = ExportCipher.open(job, this.config),
+				m = cipher.value.manifest;
+			try {
+				const match = range && /^bytes=(\d+)-(\d+)$/.exec(range);
+				if (range && !match) throw new TemporaryExportError('range-invalid');
+				const start = match ? Number(match[1]) : 0,
+					end = match ? Number(match[2]) : m.plaintextBytes - 1;
+				const selection = cipher.range(start, end);
+				const result = await this.writeOnce.get(
+					job,
+					signal,
+					`bytes=${selection.start}-${selection.end}`
+				);
+				async function* body() {
+					try {
+						yield* cipher.decrypt(result.Body as Readable, start, end, signal);
+					} finally {
+						cipher.close();
+					}
+				}
+				const Body = Readable.from(body(), { objectMode: false, highWaterMark: 64 * 1024 });
+				Body.once('close', () => {
+					(result.Body as Readable).destroy();
+					cipher.close();
+				});
+				return {
+					...result,
+					Body,
+					ContentLength: end - start + 1,
+					ContentRange: range ? `bytes ${start}-${end}/${m.plaintextBytes}` : undefined,
+					$metadata: { httpStatusCode: range ? 206 : 200 },
+				};
+			} catch (e) {
+				cipher.close();
+				throw e;
+			}
+		}
+		if (isWriteOnce(job.integrityMode)) return this.writeOnce.get(job, signal, range);
 		const result = await this.client.send(
 			new GetObjectCommand({
 				...this.scope(job),
@@ -1072,7 +1181,7 @@ export class S3ExportStorage {
 		return result;
 	}
 	async authorize(job: ExportJob, seconds: number) {
-		if (job.integrityMode === 'hcp-write-once')
+		if (isWriteOnce(job.integrityMode))
 			throw new TemporaryExportError('security-capability-missing');
 		return getSignedUrl(
 			this.client,
@@ -1087,7 +1196,7 @@ export class S3ExportStorage {
 		);
 	}
 	async inspectPreflight(job: ExportJob, signal: AbortSignal) {
-		if (job.kind !== 'preflight' || job.integrityMode !== 'hcp-write-once')
+		if (job.kind !== 'preflight' || !isWriteOnce(job.integrityMode))
 			throw new TemporaryExportError('security-capability-missing');
 		return this.writeOnce.inspect(job, signal);
 	}
@@ -1104,7 +1213,7 @@ export class S3ExportStorage {
 			job.capabilityProbe.cleaned = true;
 			update({ capabilityProbe: job.capabilityProbe });
 		}
-		if (job.integrityMode === 'hcp-write-once') return this.writeOnce.cleanup(job, signal, update);
+		if (isWriteOnce(job.integrityMode)) return this.writeOnce.cleanup(job, signal, update);
 		const params = this.scope(job);
 		const aborted = new Set<string>();
 		const abort = async (key: string, id: string) => {

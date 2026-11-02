@@ -137,4 +137,5 @@ mysql-worker-dist/
 /deploy/.bundle-*/
 /deploy/backups/
 __pycache__/
+*managed-export-keyring*.json
 *.pyc

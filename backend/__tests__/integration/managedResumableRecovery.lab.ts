@@ -866,7 +866,17 @@ try {
 		assert.equal(preflight.cleanupPending, false);
 		if (writeOnceReference) {
 			assert.equal(preflight.productionReadiness, 'GO');
-			assert.equal(preflight.provider.mode, 'hcp-write-once');
+			assert.equal(
+				preflight.provider.mode,
+				process.env.MANAGED_EXPORT_MODE === 'application-encrypted-hcp'
+					? 'application-encrypted-hcp'
+					: 'hcp-write-once'
+			);
+			if (process.env.MANAGED_EXPORT_MODE === 'application-encrypted-hcp') {
+				assert(preflight.preflightChecks.includes('application-encryption'));
+				assert(preflight.preflightChecks.includes('authenticated-readback'));
+				assert(!preflight.preflightChecks.includes('sse-s3'));
+			}
 			assert.equal(preflight.provider.cleanup, 'exclusive-prefix-bounded');
 			assert.equal(preflight.provider.versioning, 'disabled-or-unavailable');
 			assert(!preflight.preflightChecks.includes('versioning'));
@@ -1302,6 +1312,13 @@ try {
 		events = await fs.readFile('/sys/fs/cgroup/memory.events', 'utf8');
 	assert.match(events, /^oom_kill 0$/m);
 	results.cgroupPeakBytes = cgroupPeak;
+	const memory = cpuCounters(await fs.readFile('/sys/fs/cgroup/memory.stat', 'utf8'));
+	results.cgroupAnonymousBytes = memory.anon;
+	results.cgroupFileCacheBytes = memory.file;
+	results.cgroupKernelBytes = memory.kernel;
+	results.cgroupCurrentBytes = Number(
+		(await fs.readFile('/sys/fs/cgroup/memory.current', 'utf8')).trim()
+	);
 	results.oomEvents = Number(/^oom (\d+)$/m.exec(events)?.[1]);
 	results.oomKills = Number(/^oom_kill (\d+)$/m.exec(events)?.[1]);
 	assert.equal(results.oomEvents, 0);
@@ -1323,6 +1340,7 @@ try {
 	results.provider = writeOnceReference
 		? 'local protocol reference gateway + native MinIO; NOT HCP certification'
 		: 'local MinIO only';
+	results.applicationEncrypted = process.env.MANAGED_EXPORT_MODE === 'application-encrypted-hcp';
 	results.s3DownloadMiBPerSecond = +(
 		job.totalBytes /
 		1024 ** 2 /

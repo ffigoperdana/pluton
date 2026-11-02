@@ -6,6 +6,8 @@ import { AppError } from '../AppError';
 import { httpsS3Endpoint } from '../storageSecurity';
 import type { ManagedExportMode, ManagedExportSummary } from '../restic/ManagedExportPolicy';
 import type { ExportDiagnostic } from './ExportDiagnostics';
+import type { ExportEncryption } from './ExportEncryption';
+import { ExportKeyring } from './ExportKeyring';
 
 export const EXPORT_LIMITS = Object.freeze({
 	partBytes: 16 * 1024 ** 2,
@@ -32,7 +34,9 @@ export type ExportFailure =
 	| 'cleanup-pending'
 	| 'expired'
 	| 'range-invalid'
-	| 'binding-changed';
+	| 'binding-changed'
+	| 'encryption-key-unavailable'
+	| 'encryption-metadata-invalid';
 export class TemporaryExportError extends AppError {
 	readonly code = 'temporary-export-refused';
 	constructor(readonly reason: ExportFailure) {
@@ -54,6 +58,8 @@ export type ExportCapability =
 	| 'destination-isolation'
 	| 'versioning'
 	| 'sse-s3'
+	| 'application-encryption'
+	| 'authenticated-readback'
 	| 'private-acl'
 	| 'anonymous-denial'
 	| 'immutable-version'
@@ -89,6 +95,9 @@ export class ExportPreflightError extends TemporaryExportError {
 	}
 }
 export type ExportConfig = {
+	exportMode?: 'application-encrypted-hcp';
+	keyringFile?: string;
+	keyringBinding?: string;
 	allowSharedNamespace?: boolean;
 	endpoint: string;
 	region: string;
@@ -129,11 +138,31 @@ export function exportConfiguration(
 	try {
 		const c = parsed.data;
 		if (
+			env.MANAGED_EXPORT_MODE &&
+			!['auto', 'application-encrypted-hcp'].includes(env.MANAGED_EXPORT_MODE)
+		)
+			throw new Error();
+		const exportMode =
+			env.MANAGED_EXPORT_MODE === 'application-encrypted-hcp'
+				? ('application-encrypted-hcp' as const)
+				: undefined;
+		const keyringFile = env.MANAGED_EXPORT_KEYRING_FILE || undefined;
+		let keyringBinding: string | undefined;
+		if (exportMode || keyringFile) {
+			const ring = new ExportKeyring(keyringFile);
+			try {
+				keyringBinding = ring.fingerprint();
+			} finally {
+				ring.close();
+			}
+		}
+		if (
 			env.MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE &&
 			!['true', 'false'].includes(env.MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE)
 		)
 			throw new Error();
 		const allowSharedNamespace = env.MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE === 'true';
+		if (exportMode && !allowSharedNamespace) throw new Error();
 		if (allowSharedNamespace && c.prefix !== 'pluton-temporary-exports') throw new Error();
 		c.endpoint = httpsS3Endpoint(c.endpoint).origin;
 		// This client uses path-style bucket addressing. A bucket-qualified host
@@ -171,7 +200,7 @@ export function exportConfiguration(
 				])
 			)
 			.digest('hex');
-		return { ...c, ca, fingerprint, allowSharedNamespace };
+		return { ...c, ca, fingerprint, allowSharedNamespace, exportMode, keyringFile, keyringBinding };
 	} catch {
 		throw new TemporaryExportError('configuration-invalid');
 	}
@@ -193,6 +222,8 @@ export function exportConfigurationStatus() {
 			sessionTokenConfigured: !!c?.sessionToken,
 			privateCaConfigured: !!c?.ca,
 			sharedNamespaceEnabled: !!c?.allowSharedNamespace,
+			exportMode: c?.exportMode || 'auto',
+			keyringConfigured: !!c?.keyringBinding,
 			ttlSeconds: c?.ttlSeconds,
 			destinationFingerprint: c?.fingerprint,
 		};
@@ -208,11 +239,11 @@ export type ExportBinding = {
 	snapshotId: string;
 	mode: ManagedExportMode;
 };
-export type ExportIntegrityMode = 'versioned' | 'hcp-write-once';
+export type ExportIntegrityMode = 'versioned' | 'hcp-write-once' | 'application-encrypted-hcp';
 export type ExportIdentity =
 	| { mode: 'versioned'; versionId: string; etag: string }
 	| {
-			mode: 'hcp-write-once';
+			mode: 'hcp-write-once' | 'application-encrypted-hcp';
 			key: string;
 			etag: string;
 			bytes: number;
@@ -237,7 +268,7 @@ export const EXPORT_CAPABILITY_REVISION = 'write-once-v1';
 /** Nonversioned cleanup re-reads the complete object. Give healthy streaming a
  * size-based bound (1 MiB/s plus one minute), not a metadata-only 60s deadline. */
 export const exportCleanupDeadline = (job: ExportJob) =>
-	job.integrityMode === 'hcp-write-once'
+	job.integrityMode === 'hcp-write-once' || job.integrityMode === 'application-encrypted-hcp'
 		? Math.min(
 				EXPORT_LIMITS.deadlineMs,
 				60_000 +
@@ -264,6 +295,7 @@ export const exportCapabilityBinding = (c: ExportConfig) =>
 				c.accessKeyId,
 				c.secretAccessKey,
 				c.sessionToken || '',
+				...(c.exportMode ? [c.exportMode, c.keyringBinding] : []),
 			])
 		)
 		.digest('hex');
@@ -278,6 +310,7 @@ export type ExportState =
 	| 'cancelled'
 	| 'expired';
 export type ExportJob = {
+	encryption?: ExportEncryption;
 	kind?: 'archive' | 'preflight' | 'inventory';
 	integrityMode?: ExportIntegrityMode;
 	identity?: ExportIdentity;
