@@ -18,7 +18,9 @@ import {
 	PutBucketVersioningCommand,
 	PutObjectCommand,
 	GetObjectCommand,
+	HeadObjectCommand,
 	ListMultipartUploadsCommand,
+	ListObjectsV2Command,
 	ListObjectVersionsCommand,
 	PutBucketPolicyCommand,
 	DeleteBucketPolicyCommand,
@@ -98,6 +100,7 @@ const alternateReplicaCredential = {
 	secretAccessKey: crypto.randomBytes(32).toString('hex'),
 };
 let replicaBefore: unknown;
+let structuralMarker: { etag?: string; modified?: string } | undefined;
 async function replicaManifest() {
 	const manifest: any[] = [];
 	for (let index = 0; index < replicaCount; index++) {
@@ -329,7 +332,15 @@ async function clean() {
 			new ListObjectVersionsCommand({ Bucket: config.bucket, Prefix: config.prefix })
 		);
 	assert.equal(parts.Uploads?.length || 0, 0);
-	assert.equal(objects.Versions?.length || 0, 0);
+	assert.equal(parts.IsTruncated, false);
+	assert.equal(objects.IsTruncated, false);
+	if (structuralMarker) {
+		assert.equal(objects.Versions?.length, 1);
+		assert.equal(objects.Versions[0].Key, config.prefix + '/');
+		assert.equal(objects.Versions[0].Size, 0);
+		assert.equal(objects.Versions[0].ETag, structuralMarker.etag);
+		assert.equal(objects.Versions[0].LastModified?.toISOString(), structuralMarker.modified);
+	} else assert.equal(objects.Versions?.length || 0, 0);
 	assert.equal(objects.DeleteMarkers?.length || 0, 0);
 }
 async function sha(file: string) {
@@ -509,6 +520,38 @@ try {
 				VersioningConfiguration: { Status: 'Enabled' },
 			})
 		);
+	if (writeOnceReference) {
+		await admin.send(
+			new PutObjectCommand({
+				Bucket: config.bucket,
+				Key: config.prefix + '/',
+				Body: Buffer.alloc(0),
+			})
+		);
+		const marker = await admin.send(
+			new HeadObjectCommand({ Bucket: config.bucket, Key: config.prefix + '/' })
+		);
+		assert.equal(marker.ContentLength, 0);
+		assert(marker.ETag && marker.LastModified);
+		const listing = await admin.send(
+			new ListObjectsV2Command({ Bucket: config.bucket, Prefix: config.prefix + '/' })
+		);
+		const listed = listing.Contents?.find(o => o.Key === config.prefix + '/');
+		console.log(
+			JSON.stringify({
+				event: 'marker_protocol_observation',
+				listZero: listed?.Size === 0,
+				headZero: marker.ContentLength === 0,
+				etagMatches: marker.ETag === listed?.ETag,
+				timeExact: marker.LastModified.getTime() === listed?.LastModified?.getTime(),
+				timeSameSecond:
+					Math.floor(marker.LastModified.getTime() / 1000) ===
+					Math.floor((listed?.LastModified?.getTime() || 0) / 1000),
+			})
+		);
+		assert(listed?.LastModified);
+		structuralMarker = { etag: marker.ETag, modified: listed.LastModified.toISOString() };
+	}
 	process.env.SSL_CERT_FILE = process.env.MANAGED_EXPORT_CA_FILE;
 	const mcUrl = new URL(config.endpoint);
 	mcUrl.username = process.env.FIXTURE_ADMIN_ACCESS!;
@@ -833,8 +876,21 @@ try {
 					.result;
 				return ['ready', 'failed'].includes(inventory.state);
 			});
+			console.log(
+				JSON.stringify({
+					event: 'marker_inventory_observation',
+					state: inventory.state,
+					markerVerified: inventory.inventory?.directoryMarker === 'verified-empty',
+					failure: inventory.preflightFailure,
+				})
+			);
 			assert.equal(inventory.state, 'ready');
-			assert.deepEqual(inventory.inventory, { objects: 0, uploads: 0, exclusive: true });
+			assert.deepEqual(inventory.inventory, {
+				objects: 0,
+				uploads: 0,
+				exclusive: true,
+				...(structuralMarker ? { directoryMarker: 'verified-empty' } : {}),
+			});
 			assert.equal((await stats()).archiveReads, 0);
 			await clean();
 			results.readOnlyInventory = 'PASS';
@@ -1277,6 +1333,26 @@ try {
 		await cancel(active);
 		await clean();
 		results.cancelQueueAndRestartCleanup = 'PASS';
+	}
+	if (structuralMarker) {
+		stage('post-cleanup-marker-inventory');
+		await clean();
+		const url = base.replace('/api/backups', '/api/managed-exports') + '/inventory-checks';
+		const accepted = await json(await fetch(url, { method: 'POST', headers, body: '{}' }));
+		let inventory: any;
+		await until(async () => {
+			inventory = (await json(await fetch(url + '/' + accepted.result.id, { headers }))).result;
+			return ['ready', 'failed'].includes(inventory.state);
+		});
+		assert.equal(inventory.state, 'ready');
+		assert.deepEqual(inventory.inventory, {
+			objects: 0,
+			uploads: 0,
+			exclusive: true,
+			directoryMarker: 'verified-empty',
+		});
+		results.structuralMarkerPreserved = 'PASS';
+		results.postCleanupInventory = 'PASS';
 	}
 	const sentinelRead = await admin.send(
 		new GetObjectCommand({ Bucket: config.bucket, Key: 'ownership-sentinel' })

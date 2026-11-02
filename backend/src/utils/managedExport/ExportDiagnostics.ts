@@ -41,6 +41,10 @@ const details = [
 	'unknown-multipart',
 	'multipart-remains',
 	'listing-incomplete',
+	'directory-marker-nonzero',
+	'directory-marker-unverified',
+	'foreign-object',
+	'listing-invalid',
 	'versioning-changed',
 	'unexpected-head-status',
 	'object-remains',
@@ -172,6 +176,26 @@ export class ExportCleanupError extends ExportPreflightError {
 	constructor(readonly diagnostic: ExportDiagnostic) {
 		super('cleanup', 'cleanup-failed', diagnostic.httpStatus);
 		this.message = 'Reliable Download unavailable (cleanup-pending).';
+	}
+}
+/** Inventory is read-only: these diagnostics confer neither ownership nor cleanup permission. */
+export class ExportInventoryError extends ExportPreflightError {
+	readonly diagnostic: ExportDiagnostic;
+	constructor(error: unknown) {
+		const diagnostic = exportDiagnostic(
+			error,
+			{} as ExportJob,
+			'read-only',
+			'destination-isolation'
+		);
+		super('destination-isolation', diagnostic.category, diagnostic.httpStatus);
+		this.diagnostic = {
+			...diagnostic,
+			creationAcknowledged: false,
+			durableOwnershipProof: false,
+			objectCleanupPending: false,
+			multipartCleanupPending: false,
+		};
 	}
 }
 export function exportDiagnostic(
