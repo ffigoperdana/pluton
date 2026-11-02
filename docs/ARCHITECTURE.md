@@ -254,6 +254,12 @@ and copying frontend assets). Backend build cleans `backend/dist/` and
 
 ## Managed snapshot browsing
 
+Optional application-encrypted Reliable Download uses a dedicated read-only
+keyring, authenticated chunk framing and plaintext Range mapping. See the
+[format and rollout runbook](APPLICATION_ENCRYPTED_HCP.md) and
+[validation matrix](APPLICATION_ENCRYPTED_HCP_VALIDATION.md). Existing versioned
+and SSE-S3 write-once modes, backups and replication retain their contracts.
+
 Managed remote snapshot browsing uses a private bounded SQLite metadata cache,
 streamed Restic 0.19.1 NDJSON validation, and authenticated server pagination.
 Downloads and recovery consume complete verified manifests without whole-list

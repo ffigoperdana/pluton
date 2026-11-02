@@ -11,6 +11,7 @@ import {
 	type ExportConfig,
 	type ExportJob,
 } from '../utils/managedExport/ExportPolicy';
+import { encryptedBytes } from '../utils/managedExport/ExportEncryption';
 
 /** Private durable METADATA only. No archive, credential, presigned URL or SQL content. */
 export class ManagedExportStore {
@@ -134,7 +135,10 @@ export class ManagedExportStore {
 		if (
 			!Number.isSafeInteger(bytes) ||
 			bytes < 1024 ||
-			bytes > EXPORT_LIMITS.maxObjectBytes ||
+			bytes >
+				(this.get(id)?.integrityMode === 'application-encrypted-hcp'
+					? encryptedBytes(EXPORT_LIMITS.maxObjectBytes)
+					: EXPORT_LIMITS.maxObjectBytes) ||
 			this.all()
 				.filter(j => j.id !== id && !j.cleaned)
 				.reduce((n, j) => n + j.reservedBytes, 0) +

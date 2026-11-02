@@ -35,6 +35,13 @@ import {
 	exportTarget,
 	type ExportOperation,
 } from './ExportDiagnostics';
+import {
+	applicationEncrypted,
+	ExportCipher,
+	isWriteOnce,
+	storedExportBytes,
+	storedExportSha,
+} from './ExportEncryption';
 
 const status = (e: unknown) =>
 	(e as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
@@ -64,6 +71,9 @@ export class HcpWriteOnceStorage {
 			signal: AbortSignal
 		) => Promise<void>
 	) {}
+	private sse(job: ExportJob): { ServerSideEncryption?: 'AES256' } {
+		return applicationEncrypted(job) ? {} : { ServerSideEncryption: 'AES256' };
+	}
 	private async send(
 		command:
 			| GetBucketVersioningCommand
@@ -107,7 +117,7 @@ export class HcpWriteOnceStorage {
 			(!head.VersionId || head.VersionId === 'null') &&
 			this.owns(job, head) &&
 			head.Metadata?.['pluton-export-nonce'] === job.ownershipNonce &&
-			head.ServerSideEncryption === 'AES256' &&
+			(applicationEncrypted(job) || head.ServerSideEncryption === 'AES256') &&
 			head.ContentLength === proof.bytes &&
 			head.ETag === proof.etag &&
 			head.LastModified instanceof Date &&
@@ -251,7 +261,7 @@ export class HcpWriteOnceStorage {
 							? 'missing-last-modified'
 							: head.VersionId && head.VersionId !== 'null'
 								? 'version-present'
-								: head.ServerSideEncryption !== 'AES256'
+								: !applicationEncrypted(job) && head.ServerSideEncryption !== 'AES256'
 									? 'sse-s3-unverified'
 									: !this.owns(job, head) ||
 										  head.Metadata?.['pluton-export-nonce'] !== job.ownershipNonce
@@ -275,18 +285,24 @@ export class HcpWriteOnceStorage {
 	async identity(job: ExportJob, signal: AbortSignal) {
 		const identity = job.identity;
 		if (
-			identity?.mode !== 'hcp-write-once' ||
+			!identity ||
+			identity.mode === 'versioned' ||
+			identity.mode !== job.integrityMode ||
 			identity.key !== job.key ||
 			identity.binding !== bindingDigest(job.binding) ||
-			identity.bytes !== job.summary?.archiveBytes ||
-			identity.sha256 !== job.summary?.archiveSha256 ||
+			identity.bytes !== storedExportBytes(job) ||
+			identity.sha256 !== storedExportSha(job) ||
 			identity.etag !== job.etag ||
 			identity.capability !== job.capabilityBinding
 		)
 			throw new TemporaryExportError('object-mismatch');
 		const head = await this.head(job, signal);
 		if (
-			head.Metadata?.['archive-sha256'] !== identity.sha256 ||
+			(applicationEncrypted(job)
+				? head.Metadata?.['pluton-export-manifest'] !== job.encryption?.mac ||
+					head.Metadata?.['pluton-export-format'] !== 'aead-v1' ||
+					head.Metadata?.['pluton-export-purpose'] !== 'archive'
+				: head.Metadata?.['archive-sha256'] !== identity.sha256) ||
 			head.LastModified?.toISOString() !== identity.created
 		)
 			throw new TemporaryExportError('object-mismatch');
@@ -310,7 +326,7 @@ export class HcpWriteOnceStorage {
 			);
 			for (const object of listing.Contents || []) {
 				const job = known.find(j => writeOnceKeys(j).includes(object.Key || ''));
-				if (!job || job.integrityMode !== 'hcp-write-once')
+				if (!job || !isWriteOnce(job.integrityMode))
 					throw new ExportPreflightError('destination-isolation', 'unexpected-response');
 				await this.head(job, signal, object.Key);
 				objects++;
@@ -380,7 +396,7 @@ export class HcpWriteOnceStorage {
 		const created = await this.send(
 			new CreateMultipartUploadCommand({
 				...params,
-				ServerSideEncryption: 'AES256',
+				...this.sse(job),
 				Metadata: this.metadata(job),
 			}),
 			signal
@@ -447,7 +463,7 @@ export class HcpWriteOnceStorage {
 					...this.scope(job, key),
 					Body: data,
 					ContentLength: data.length,
-					ServerSideEncryption: 'AES256',
+					...this.sse(job),
 					Metadata: this.metadata(job),
 				}),
 				signal
@@ -462,7 +478,7 @@ export class HcpWriteOnceStorage {
 					...this.scope(job, key),
 					Body: other,
 					ContentLength: other.length,
-					ServerSideEncryption: 'AES256',
+					...this.sse(job),
 					Metadata: this.metadata(job),
 				}),
 				signal
@@ -478,7 +494,7 @@ export class HcpWriteOnceStorage {
 			job.preflightChecks = [...new Set([...(job.preflightChecks || []), step])];
 			update({ preflightChecks: job.preflightChecks });
 		};
-		job.integrityMode = 'hcp-write-once';
+		job.integrityMode = this.config.exportMode || 'hcp-write-once';
 		job.ownershipNonce ||= crypto.randomBytes(32).toString('hex');
 		job.capabilityBinding = exportCapabilityBinding(this.config);
 		update({
@@ -486,27 +502,64 @@ export class HcpWriteOnceStorage {
 			ownershipNonce: job.ownershipNonce,
 			capabilityBinding: job.capabilityBinding,
 		});
-		const data = crypto.randomBytes(32),
+		let data = crypto.randomBytes(32);
+		const original = data,
 			other = crypto.randomBytes(32),
 			key = job.key + '.probe';
 		let failure: unknown;
 		try {
 			passed('https');
+			if (applicationEncrypted(job)) {
+				capability = 'application-encryption';
+				const cipher = ExportCipher.create(job, this.config, original.length, sha(original));
+				try {
+					job.encryption = cipher.value;
+					update({ encryption: job.encryption });
+					data = cipher.seal(0, original);
+				} finally {
+					cipher.close();
+				}
+			}
 			await this.absent(job, key, signal);
 			const params = this.scope(job, key);
+			capability = 'write-once-creation';
 			this.receipt(job, key, false, update);
 			const initial = await this.send(
 				new PutObjectCommand({
 					...params,
 					Body: data,
 					ContentLength: data.length,
-					ServerSideEncryption: 'AES256',
+					...this.sse(job),
 					Metadata: this.metadata(job),
 				}),
 				signal
 			);
 			await this.record(job, key, initial, data.length, sha(data), signal, update);
-			passed('sse-s3');
+			if (applicationEncrypted(job)) {
+				capability = 'authenticated-readback';
+				const cipher = ExportCipher.open(job, this.config);
+				let object: any;
+				try {
+					object = await this.get(job, signal, undefined, key);
+					let received = 0;
+					for await (const bytes of cipher.decrypt(
+						object.Body as Readable,
+						0,
+						original.length - 1,
+						signal
+					)) {
+						if (!bytes.equals(original.subarray(received, received + bytes.length)))
+							throw new TemporaryExportError('object-mismatch');
+						received += bytes.length;
+					}
+					if (received !== original.length) throw new TemporaryExportError('object-mismatch');
+				} finally {
+					cipher.close();
+					(object?.Body as Readable)?.destroy();
+				}
+				passed('application-encryption');
+				passed('authenticated-readback');
+			} else passed('sse-s3');
 			capability = 'collision-rejection';
 			await this.rejected(() =>
 				this.send(
@@ -514,7 +567,7 @@ export class HcpWriteOnceStorage {
 						...params,
 						Body: other,
 						ContentLength: other.length,
-						ServerSideEncryption: 'AES256',
+						...this.sse(job),
 						Metadata: this.metadata(job),
 					}),
 					signal
@@ -606,7 +659,7 @@ export class HcpWriteOnceStorage {
 								...this.scope(job, raceKey),
 								Body: tail,
 								ContentLength: tail.length,
-								ServerSideEncryption: 'AES256',
+								...this.sse(job),
 								Metadata: this.metadata(job),
 							}),
 							signal
@@ -640,7 +693,7 @@ export class HcpWriteOnceStorage {
 							...this.scope(job),
 							Body: other,
 							ContentLength: other.length,
-							ServerSideEncryption: 'AES256',
+							...this.sse(job),
 							Metadata: this.metadata(job),
 						}),
 						signal
@@ -672,7 +725,7 @@ export class HcpWriteOnceStorage {
 			if (!conditional && !this.config.allowSharedNamespace)
 				throw new TemporaryExportError('security-capability-missing');
 			job.providerEvidence = {
-				mode: 'hcp-write-once',
+				mode: job.integrityMode!,
 				versioning: 'disabled-or-unavailable',
 				writeOnce: true,
 				collisionStatus: 409,
@@ -695,6 +748,8 @@ export class HcpWriteOnceStorage {
 				'concurrent-publication': 'CompleteMultipartUpload',
 				'object-enumeration': 'ListObjectsV2',
 				'ownership-cleanup': 'DeleteObject',
+				'application-encryption': 'creation-response',
+				'authenticated-readback': 'GetObject',
 			};
 			const diagnostic = exportDiagnostic(e, job, 'preflight', capability, operations[capability]);
 			job.preflightFailure ||= diagnostic;

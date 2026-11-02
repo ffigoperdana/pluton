@@ -15,13 +15,16 @@ export type ReliableJob = {
    summary?: VerifiedExport;
    failure?: string;
    cleanupPending: boolean;
-   integrityMode?: 'versioned' | 'hcp-write-once';
+   integrityMode?: 'versioned' | 'hcp-write-once' | 'application-encrypted-hcp';
+   confidentiality?: 'application-encrypted' | 'provider-sse-s3';
    transport?: 'versioned-presigned-and-proxy' | 'authenticated-proxy';
 };
 export const reliableActive = (job: ReliableJob) => ['queued', 'validating', 'exporting', 'uploading', 'verifying'].includes(job.state);
 const reasons: Record<string, string> = {
    'not-configured': 'Reliable Download needs a separate private export destination configured by the administrator.',
    'configuration-invalid': 'The export destination configuration needs administrator attention.',
+   'encryption-key-unavailable': 'The export encryption keyring needs administrator attention. Existing backup data is unchanged.',
+   'encryption-metadata-invalid': 'Export encryption metadata could not be verified. Administrator recovery is required.',
    'destination-not-isolated': 'The export destination must be separate from backup repositories and replication.',
    'security-capability-missing': 'An administrator must complete a successful destination preflight for privacy, encryption, publication and resume before exporting.',
    'storage-unavailable': 'Temporary storage is unavailable.',
@@ -92,6 +95,8 @@ export async function reliableRequest(
       !['queued', 'validating', 'exporting', 'uploading', 'verifying', 'ready', 'failed', 'cancelled', 'expired'].includes(j.state) ||
       !['createdAt', 'elapsedMs', 'processedBytes', 'uploadedBytes', 'averageBytesPerSecond'].every((k) => Number.isSafeInteger(j[k]) && j[k] >= 0) ||
       typeof j.cleanupPending !== 'boolean' ||
+      (j.integrityMode === 'application-encrypted-hcp' &&
+         (j.transport !== 'authenticated-proxy' || j.confidentiality !== 'application-encrypted')) ||
       (j.totalBytes !== undefined &&
          (!Number.isSafeInteger(j.totalBytes) ||
             j.totalBytes < 1024 ||

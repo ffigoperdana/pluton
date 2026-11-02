@@ -230,6 +230,8 @@ export function publicExportDiagnostic(d?: ExportDiagnostic): ExportDiagnostic |
 			'destination-isolation',
 			'versioning',
 			'sse-s3',
+			'application-encryption',
+			'authenticated-readback',
 			'private-acl',
 			'anonymous-denial',
 			'immutable-version',

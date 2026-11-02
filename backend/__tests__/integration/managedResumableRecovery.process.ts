@@ -203,7 +203,9 @@ process.on('message', async (message: any) => {
 					(storage.client as any).send = async (command: any, options: any) => {
 						if (
 							command.constructor.name === 'CreateMultipartUploadCommand' &&
-							command.input.Metadata?.['archive-sha256']
+							(command.input.Metadata?.['archive-sha256'] ||
+								(command.input.Metadata?.['pluton-export-format'] === 'aead-v1' &&
+									command.input.Metadata?.['pluton-export-purpose'] === 'archive'))
 						) {
 							const result = await send(command, options);
 							if (result.UploadId) archiveUploads.add(result.UploadId);

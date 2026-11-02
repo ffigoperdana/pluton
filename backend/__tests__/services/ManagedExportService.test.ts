@@ -31,6 +31,7 @@ import {
 	ExportOperationError,
 	exportDiagnostic,
 } from '../../src/utils/managedExport/ExportDiagnostics';
+import { ExportKeyError } from '../../src/utils/managedExport/ExportKeyring';
 import type { ManagedExportSummary } from '../../src/utils/restic/ManagedExportPolicy';
 
 jest.mock('../../src/utils/logger', () => ({ planLogger: () => ({ info: jest.fn() }) }));
@@ -251,6 +252,88 @@ describe('temporary export policy and durable admission', () => {
 	});
 });
 describe('durable independent export lifecycle', () => {
+	test('application-encrypted downloads expose original TAR proof only, preserve owner checks, Range and full-response If-Range semantics', async () => {
+		const h = harness();
+		try {
+			const value = await h.service.admit(owner, binding.backupId, 'full');
+			await until(() => h.store.get(value.id)?.state === 'ready');
+			h.store.update(value.id, {
+				integrityMode: 'application-encrypted-hcp',
+				identity: {
+					mode: 'application-encrypted-hcp',
+					key: h.store.get(value.id)!.key,
+					bytes: 2064,
+					sha256: 'a'.repeat(64),
+					binding: 'a'.repeat(64),
+					etag: '"ciphertext"',
+					created: new Date(1000).toISOString(),
+					capability: 'a'.repeat(64),
+				},
+				encryption: { envelope: { keyId: 'private-slot' } } as any,
+			});
+			const status = await h.service.status(owner, binding.backupId, value.id);
+			expect(status).toMatchObject({
+				transport: 'authenticated-proxy',
+				confidentiality: 'application-encrypted',
+				totalBytes: data.length,
+			});
+			expect(JSON.stringify(status).includes('private-slot')).toBe(false);
+			const grant = await h.service.authorize(owner, binding.backupId, value.id);
+			expect(grant).toMatchObject({
+				url: `/api/backups/${binding.backupId}/exports/${value.id}/content`,
+				bytes: data.length,
+				sha256: summary.archiveSha256,
+				etag: `"sha256-${summary.archiveSha256}"`,
+			});
+			expect(h.storage.authorize).not.toHaveBeenCalled();
+			await expect(h.service.authorize('other-owner', binding.backupId, value.id)).rejects.toThrow(
+				'Export not found'
+			);
+			for (const reason of ['encryption-key-unavailable', 'encryption-metadata-invalid'] as const) {
+				h.storage.identity.mockRejectedValueOnce(new TemporaryExportError(reason));
+				await expect(h.service.authorize(owner, binding.backupId, value.id)).rejects.toThrow(
+					reason
+				);
+				expect(h.store.get(value.id)?.state).toBe('ready');
+				expect(h.storage.cleanup).not.toHaveBeenCalled();
+			}
+			h.storage.identity.mockRejectedValueOnce(new ExportKeyError());
+			await expect(h.service.authorize(owner, binding.backupId, value.id)).rejects.toThrow(
+				'encryption-key-unavailable'
+			);
+			expect(h.store.get(value.id)?.state).toBe('ready');
+			for (const [ifRange, expectedStatus, expected] of [
+				[grant.etag, 206, data.subarray(100, 200)],
+				['"stale"', 200, data],
+			] as const) {
+				const chunks: Buffer[] = [];
+				let headers: any;
+				await h.service.content(
+					owner,
+					binding.backupId,
+					value.id,
+					'bytes=100-199',
+					ifRange,
+					false,
+					new Writable({
+						write(chunk, _e, done) {
+							chunks.push(Buffer.from(chunk));
+							done();
+						},
+					}),
+					new AbortController().signal,
+					value => {
+						headers = value;
+					}
+				);
+				expect(headers.status).toBe(expectedStatus);
+				expect(headers.length).toBe(expected.length);
+				expect(Buffer.concat(chunks).equals(expected)).toBe(true);
+			}
+		} finally {
+			await h.close();
+		}
+	});
 	test('failed PUT and interrupted cleanup retain separate diagnostics, acknowledgement and reservation across SQLite restart', async () => {
 		const h = harness();
 		let entered = false;

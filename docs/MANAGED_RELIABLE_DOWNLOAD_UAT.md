@@ -1,5 +1,12 @@
 # Reliable Download: controlled production UAT
 
+The explicit `application-encrypted-hcp` mode replaces SSE evidence with authenticated
+application encryption while preserving all provider isolation/integrity/cleanup
+gates. See the [dedicated format/keyring/rollout runbook](APPLICATION_ENCRYPTED_HCP.md)
+and [validation matrix](APPLICATION_ENCRYPTED_HCP_VALIDATION.md). The procedures
+below describe the existing default modes. Historical cleanup-pending objects
+are never adopted by selecting the new mode.
+
 This is an operator procedure, not an automatic deployment. Reliable Download is
 disabled in both committed environment examples and the production Compose base.
 PR #54 delivered the export service; this follow-up wires deployment and adds a
@@ -29,9 +36,9 @@ credentials. All other installations keep strict bucket/credential separation.
 - [ ] Install the reviewed host bundle and new image with export disabled. Preserve
   `.env`, local overlays, database, export-job metadata and existing data mounts.
 - [ ] If needed, complete the explicit public-CA file mount procedure below.
-- [ ] Set the eleven settings below privately and explicitly enable the feature;
+- [ ] Set the thirteen settings below privately and explicitly enable the feature;
   recreate only the application using the approved deployment procedure.
-- [ ] Private comparison of effective Compose and running container reports all eleven
+- [ ] Private comparison of effective Compose and running container reports all thirteen
   environment fields equal; authenticated application configuration is valid.
 - [ ] Standalone preflight reports `productionReadiness:GO`, the observed provider
   mode, every applicable capability and no cleanup pending.
@@ -51,6 +58,8 @@ callers. Do not change repository, replication, Restic, Agent or backup settings
 | Container setting | Operator value / default |
 | --- | --- |
 | `MANAGED_EXPORT_ENABLED` | `false`; set **exactly `true`** only for approved UAT |
+| `MANAGED_EXPORT_MODE` | `auto`; explicit application encryption uses its dedicated runbook |
+| `MANAGED_EXPORT_KEYRING_FILE` | Empty by default; fixed private mounted keyring in application-encrypted mode |
 | `MANAGED_EXPORT_ALLOW_SHARED_NAMESPACE` | `false`; exact `true` enables the reviewed shared-prefix contract below |
 | `MANAGED_EXPORT_ENDPOINT` | Approved `https://` S3 API origin, no embedded credentials/path/query |
 | `MANAGED_EXPORT_REGION` | Provider's actual signing region; default `us-east-1` |
@@ -219,7 +228,7 @@ Do not put private keys or credential values in commands, reports or Git.
    Review all repository scopes and the exclusive-prefix assumption privately.
 3. Drain active work; recreate only the app using the approved image, same `/data`
    volume, encryption keys, security restrictions and overlays. No Agent changes.
-4. Verify health and the private eleven-field environment comparison below.
+4. Verify health and the private thirteen-field environment comparison below.
    Enabled valid configuration starts without a network probe or backup read.
 5. Run inventory, then capability preflight using an authenticated operator session.
    Until a fresh GO exists for the exact configured destination **and credentials**,
@@ -457,7 +466,7 @@ its export SQLite files, and the main database containing the new reservations.
 
 After application recreation, compare protected effective Compose JSON with a
 protected container inspection using `compose-tools.py export-environment` below.
-Require `export-environment-matches-all-11-fields-no-values-emitted`, plus the
+Require `export-environment-matches-all-13-fields-no-values-emitted`, plus the
 authenticated configuration endpoint reporting `sharedNamespaceEnabled:true`.
 No values, credential hashes or signed URLs are logged by those checks.
 
@@ -606,7 +615,7 @@ prerequisite; never claim application prefix checks revoke the shared key's righ
    overlays, encryption keys and Agent. Complete CA approval if needed. Set the
    explicit shared flag/configuration privately, then enable export in the approved
    maintenance window and recreate only the app using its approved digest.
-4. Require health, the eleven-field private configuration comparison, valid process
+4. Require health, the thirteen-field private configuration comparison, valid process
    flags, read-only inventory, then all applicable preflight gates plus confirmed cleanup.
    Any missing check, timeout, failed capability, unknown prefix object or cleanup
    uncertainty is **NO-GO**. Keep Standard Download available and make no real export.
@@ -721,8 +730,8 @@ files, then run:
 python3 /opt/pluton/compose-tools.py export-environment "$work/effective.json" "$work/inspect.json"
 ```
 
-Require `export-environment-matches-all-11-fields-no-values-emitted`. The tool
-compares all eleven settings, including credentials and token, in memory; it reports
+Require `export-environment-matches-all-13-fields-no-values-emitted`. The tool
+compares all thirteen settings, including credentials and token, in memory; it reports
 only a fixed success or the mismatching variable's **name**. It checks the actual
 container identity/user/mount set too. Never run `docker inspect`, `docker compose
 config` or `env` to the terminal as a substitute.
@@ -968,7 +977,7 @@ canonical S3 identity helpers, transactional Plan/Storage/Backup/Settings/replic
 store guards, the storage service's durable edit journal, inventory/preflight
 service/controller/router and exact version/upload proofs in `S3ExportStorage`.
 Compose, both environment examples, private environment comparison and tests
-forward/check eleven runtime settings. The new main-database tables are local
+forward/check thirteen runtime settings. The new main-database tables are local
 ownership metadata; export jobs retain their prior private SQLite location and
 backward-compatible JSON. Inventory intent is saved atomically at admission so
 a hard restart cannot mistake a read-only inventory for an object-cleanup job.

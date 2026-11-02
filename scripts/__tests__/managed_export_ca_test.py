@@ -90,14 +90,14 @@ class ExportCaTests(unittest.TestCase):
     def test_actual_environment_comparison_never_emits_private_values(self):
         environment = self.config["services"]["pluton"]["environment"]
         for name in ("ENABLED", "ALLOW_SHARED_NAMESPACE", "ENDPOINT", "REGION", "BUCKET", "PREFIX", "ACCESS_KEY_ID",
-                     "SECRET_ACCESS_KEY", "SESSION_TOKEN", "CA_FILE", "TTL_SECONDS"):
+                     "SECRET_ACCESS_KEY", "SESSION_TOKEN", "CA_FILE", "TTL_SECONDS", "MODE", "KEYRING_FILE"):
             environment["MANAGED_EXPORT_" + name] = "synthetic-private-value"
         environment["MANAGED_EXPORT_CA_FILE"] = policy.EXPORT_CA_TARGET
         config = self.write("effective.json", json.dumps(self.config))
         expected = policy.mounts(self.config)
         container = {"Config": {"User": "10001:10001", "Labels": {"com.docker.compose.service": "pluton", "com.docker.compose.project": "disposable-app"}, "Env": [key + "=" + value for key, value in environment.items()]}, "Mounts": [{"Type": m["type"], "Name": m["source"], "Source": m["source"], "Destination": m["target"], "RW": not m["read_only"], "Propagation": m["propagation"]} for m in expected]}
         inspect = self.write("inspect.json", json.dumps([container]))
-        self.assertEqual(policy.verify_export_environment(config, inspect), "export-environment-matches-all-11-fields-no-values-emitted")
+        self.assertEqual(policy.verify_export_environment(config, inspect), "export-environment-matches-all-13-fields-no-values-emitted")
         container["Config"]["Env"].remove("MANAGED_EXPORT_SECRET_ACCESS_KEY=synthetic-private-value")
         inspect.write_text(json.dumps([container]))
         with self.assertRaisesRegex(policy.Refused, "export-environment-mismatch-MANAGED_EXPORT_SECRET_ACCESS_KEY"):
