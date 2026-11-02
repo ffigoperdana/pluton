@@ -177,13 +177,22 @@ function fixture(encrypted = false) {
 		}
 		if (name === 'ListObjectsV2Command')
 			return {
+				$metadata: { httpStatusCode: 200 },
+				IsTruncated: false,
 				Contents: [...objects]
 					.filter(([key]) => key.startsWith(p.Prefix))
-					.map(([Key]) => ({ Key })),
+					.map(([Key, object]) => ({
+						Key,
+						Size: object.ContentLength,
+						ETag: object.ETag,
+						LastModified: object.LastModified,
+					})),
 			};
 		if (name === 'ListMultipartUploadsCommand') {
 			if (fault === 'multipart-list-incompatible') throw fail(501);
 			return {
+				$metadata: { httpStatusCode: 200 },
+				IsTruncated: false,
 				Uploads: [...uploads]
 					.filter(([, u]) => u.Key.startsWith(p.Prefix))
 					.map(([UploadId, u]) => ({ Key: u.Key, UploadId })),
@@ -272,9 +281,42 @@ async function publish(f: ReturnType<typeof fixture>, bytes = 2048) {
 	return { data, archive };
 }
 describe('nonversioned write-once capability contract', () => {
+	test('marker compatibility cannot exempt a managed object with changed ownership or binding', async () => {
+		const f = fixture();
+		try {
+			await publish(f);
+			f.store({ Key: f.config.prefix + '/' }, Buffer.alloc(0));
+			expect(await f.storage.inventory([f.job], AbortSignal.timeout(5000))).toMatchObject({
+				objects: 2,
+				directoryMarker: 'verified-empty',
+			});
+			const restarted = structuredClone(f.job);
+			restarted.ownershipNonce = 'changed';
+			await expect(
+				f.storage.inventory([restarted], AbortSignal.timeout(5000))
+			).rejects.toMatchObject({
+				capability: 'destination-isolation',
+				diagnostic: { detail: 'identity-mismatch' },
+			});
+			restarted.destination = 'changed';
+			await expect(
+				f.storage.inventory([restarted], AbortSignal.timeout(5000))
+			).rejects.toMatchObject({ diagnostic: { detail: 'foreign-object' } });
+		} finally {
+			f.dispose();
+		}
+	});
 	test('explicit application encryption proves authenticated provider readback without any SSE evidence or plaintext archive storage', async () => {
 		const f = fixture(true);
 		try {
+			const marker = f.config.prefix + '/';
+			f.store({ Key: marker }, Buffer.alloc(0));
+			expect(await f.storage.inventory([], AbortSignal.timeout(5000))).toEqual({
+				objects: 0,
+				uploads: 0,
+				exclusive: true,
+				directoryMarker: 'verified-empty',
+			});
 			await f.storage.preflight(f.job, AbortSignal.timeout(5000), f.update);
 			expect(f.job.preflightChecks).toEqual(
 				expect.arrayContaining(['application-encryption', 'authenticated-readback', 'cleanup'])
@@ -337,7 +379,16 @@ describe('nonversioned write-once capability contract', () => {
 			object.body[10] ^= 1; // Restore this disposable fixture for the independent successful cleanup check.
 			await expect(f.storage.authorize(restarted, 60)).rejects.toThrow();
 			await f.storage.cleanup(restarted, AbortSignal.timeout(5000), f.update);
-			expect(f.objects.size).toBe(0);
+			expect([...f.objects.keys()]).toEqual([marker]);
+			expect(f.job.ownedObjects?.some(p => p.key === marker)).toBe(false);
+			expect(f.calls.filter(c => c.Key === marker).every(c => c.name === 'HeadObjectCommand')).toBe(
+				true
+			);
+			expect(await f.storage.inventory([restarted], AbortSignal.timeout(5000))).toMatchObject({
+				objects: 0,
+				uploads: 0,
+				directoryMarker: 'verified-empty',
+			});
 			expect(f.uploads.size).toBe(0);
 		} finally {
 			f.dispose();

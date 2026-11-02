@@ -28,6 +28,7 @@ import { AppError } from '../utils/AppError';
 import { planLogger } from '../utils/logger';
 import {
 	ExportCleanupError,
+	ExportInventoryError,
 	exportDiagnostic,
 	publicExportDiagnostic,
 } from '../utils/managedExport/ExportDiagnostics';
@@ -701,6 +702,9 @@ export class ManagedExportService {
 									: 'storage-unavailable';
 			this.store.update(job.id, {
 				state: reason === 'cancelled' ? 'cancelled' : 'failed',
+				...(error instanceof ExportInventoryError
+					? { preflightFailure: job.preflightFailure || error.diagnostic }
+					: {}),
 				...(error instanceof ExportCleanupError
 					? {
 							cleanupFailure: job.cleanupFailure || error.diagnostic,
@@ -721,6 +725,15 @@ export class ManagedExportService {
 							: undefined,
 			});
 			if (original.kind !== 'inventory') await this.cleanup(this.store.get(job.id)!);
+			if (error instanceof ExportInventoryError) {
+				const diagnostic = publicExportDiagnostic(error.diagnostic)!;
+				this.safeLog({
+					...diagnostic,
+					httpStatus: diagnostic.httpStatus || 0,
+					jobId: job.id,
+					success: false,
+				});
+			}
 			this.safeLog({ stage: 'failed', phase: stage, reason, jobId: job.id });
 		} finally {
 			storage?.close();

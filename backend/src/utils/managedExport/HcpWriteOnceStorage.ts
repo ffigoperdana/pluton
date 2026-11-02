@@ -17,6 +17,7 @@ import {
 	DeleteObjectCommand,
 	type CompletedPart,
 	type HeadObjectCommandOutput,
+	type _Object,
 } from '@aws-sdk/client-s3';
 import {
 	TemporaryExportError,
@@ -309,12 +310,93 @@ export class HcpWriteOnceStorage {
 		await this.privacy(job.key, undefined, signal);
 		return head;
 	}
+	/** Only the exact structural root can be exempted. Pin HEAD to the listed
+	 * identity and require independent, consistent zero-byte evidence. No job,
+	 * ownership receipt, body read or mutation is involved. */
+	private async directoryMarker(object: _Object, signal: AbortSignal, listing: unknown) {
+		if (object.Size !== 0)
+			throw new ExportOperationError(
+				'ListObjectsV2',
+				listing,
+				typeof object.Size === 'number' && object.Size > 0
+					? 'directory-marker-nonzero'
+					: 'directory-marker-unverified',
+				'object-mismatch',
+				'namespace'
+			);
+		if (
+			typeof object.ETag !== 'string' ||
+			!/^"[^"\r\n]{1,1022}"$/.test(object.ETag) ||
+			!(object.LastModified instanceof Date) ||
+			!Number.isFinite(object.LastModified.getTime())
+		)
+			throw new ExportOperationError(
+				'ListObjectsV2',
+				listing,
+				'directory-marker-unverified',
+				'object-mismatch',
+				'namespace'
+			);
+		const head = await this.send(
+			new HeadObjectCommand({
+				Bucket: this.config.bucket,
+				Key: this.config.prefix + '/',
+				IfMatch: object.ETag,
+			}),
+			signal
+		).catch(error => {
+			throw new ExportOperationError(
+				'HeadObject',
+				error,
+				'provider-error',
+				'storage-unavailable',
+				'namespace'
+			);
+		});
+		if (
+			exportHttpStatus(head) !== 200 ||
+			head.ContentLength !== 0 ||
+			head.ContentRange !== undefined ||
+			head.ETag !== object.ETag ||
+			head.DeleteMarker ||
+			(head.VersionId && head.VersionId !== 'null') ||
+			!(head.LastModified instanceof Date) ||
+			!Number.isFinite(head.LastModified.getTime()) ||
+			// HTTP Last-Modified has second precision; LIST XML can include fractions.
+			Math.floor(head.LastModified.getTime() / 1000) !==
+				Math.floor(object.LastModified.getTime() / 1000)
+		)
+			throw new ExportOperationError(
+				'HeadObject',
+				head,
+				typeof head.ContentLength === 'number' && head.ContentLength > 0
+					? 'directory-marker-nonzero'
+					: 'directory-marker-unverified',
+				'object-mismatch',
+				'namespace'
+			);
+	}
 	async inventory(jobs: ExportJob[], signal: AbortSignal, prefix = this.config.prefix + '/') {
 		const known = jobs.filter(j => !j.cleaned && j.destination === this.config.fingerprint);
+		let directoryMarker: 'verified-empty' | undefined;
+		const seenKeys = new Set<string>(),
+			tokens = new Set<string>();
+		const listingError = (
+			operation: 'ListObjectsV2' | 'ListMultipartUploads',
+			listing: unknown,
+			detail: 'listing-invalid' | 'listing-incomplete' | 'foreign-object' | 'unknown-multipart'
+		) => new ExportOperationError(operation, listing, detail, 'object-mismatch', 'namespace');
+		const validToken = (value: unknown): value is string =>
+			typeof value === 'string' &&
+			value.length > 0 &&
+			value.length <= 2048 &&
+			value.trim() === value &&
+			Array.from(value).every(char => char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127);
 		let objects = 0,
 			uploads = 0,
 			token: string | undefined;
 		for (let page = 0; page < 8; page++) {
+			signal.throwIfAborted();
 			const listing = await this.send(
 				new ListObjectsV2Command({
 					Bucket: this.config.bucket,
@@ -324,20 +406,55 @@ export class HcpWriteOnceStorage {
 				}),
 				signal
 			);
+			if (
+				exportHttpStatus(listing) !== 200 ||
+				typeof listing.IsTruncated !== 'boolean' ||
+				(listing.Contents !== undefined && !Array.isArray(listing.Contents)) ||
+				(listing.CommonPrefixes !== undefined &&
+					(!Array.isArray(listing.CommonPrefixes) || listing.CommonPrefixes.length)) ||
+				(listing.Prefix !== undefined && listing.Prefix !== prefix) ||
+				(listing.Contents?.length || 0) > 100 ||
+				(listing.KeyCount !== undefined && listing.KeyCount !== (listing.Contents?.length || 0))
+			)
+				throw listingError('ListObjectsV2', listing, 'listing-invalid');
 			for (const object of listing.Contents || []) {
+				if (
+					!object ||
+					typeof object.Key !== 'string' ||
+					!object.Key.startsWith(prefix) ||
+					seenKeys.has(object.Key)
+				)
+					throw listingError('ListObjectsV2', listing, 'listing-invalid');
+				seenKeys.add(object.Key);
+				if (object.Key === this.config.prefix + '/' && prefix === this.config.prefix + '/') {
+					await this.directoryMarker(object, signal, listing);
+					directoryMarker = 'verified-empty';
+					continue;
+				}
 				const job = known.find(j => writeOnceKeys(j).includes(object.Key || ''));
 				if (!job || !isWriteOnce(job.integrityMode))
-					throw new ExportPreflightError('destination-isolation', 'unexpected-response');
+					throw listingError('ListObjectsV2', listing, 'foreign-object');
 				await this.head(job, signal, object.Key);
 				objects++;
 			}
-			if (!listing.IsTruncated) break;
-			if (page === 7 || !listing.NextContinuationToken || token === listing.NextContinuationToken)
-				throw new ExportPreflightError('destination-isolation', 'unexpected-response');
+			if (!listing.IsTruncated) {
+				if (listing.NextContinuationToken)
+					throw listingError('ListObjectsV2', listing, 'listing-incomplete');
+				break;
+			}
+			if (
+				page === 7 ||
+				!validToken(listing.NextContinuationToken) ||
+				tokens.has(listing.NextContinuationToken)
+			)
+				throw listingError('ListObjectsV2', listing, 'listing-incomplete');
 			token = listing.NextContinuationToken;
+			tokens.add(token!);
 		}
 		let keyMarker: string | undefined, uploadMarker: string | undefined;
+		const uploadTokens = new Set<string>();
 		for (let page = 0; page < 8; page++) {
+			signal.throwIfAborted();
 			const listing = await this.send(
 				new ListMultipartUploadsCommand({
 					Bucket: this.config.bucket,
@@ -348,26 +465,57 @@ export class HcpWriteOnceStorage {
 				}),
 				signal
 			);
+			if (
+				exportHttpStatus(listing) !== 200 ||
+				typeof listing.IsTruncated !== 'boolean' ||
+				(listing.Uploads !== undefined && !Array.isArray(listing.Uploads)) ||
+				(listing.CommonPrefixes !== undefined &&
+					(!Array.isArray(listing.CommonPrefixes) || listing.CommonPrefixes.length)) ||
+				(listing.Uploads?.length || 0) > 100 ||
+				(listing.Prefix !== undefined && listing.Prefix !== prefix)
+			)
+				throw listingError('ListMultipartUploads', listing, 'listing-invalid');
 			for (const upload of listing.Uploads || []) {
 				if (
-					!known.some(j =>
-						j.ownedUploads?.some(u => u.key === upload.Key && u.uploadId === upload.UploadId)
+					!upload ||
+					typeof upload.Key !== 'string' ||
+					!upload.Key.startsWith(prefix) ||
+					!validToken(upload.UploadId) ||
+					!known.some(
+						j =>
+							isWriteOnce(j.integrityMode) &&
+							writeOnceKeys(j).includes(upload.Key) &&
+							j.ownedUploads?.some(u => u.key === upload.Key && u.uploadId === upload.UploadId)
 					)
 				)
-					throw new ExportPreflightError('destination-isolation', 'unexpected-response');
+					throw listingError('ListMultipartUploads', listing, 'unknown-multipart');
 				uploads++;
 			}
-			if (!listing.IsTruncated) break;
+			if (!listing.IsTruncated) {
+				if (listing.NextKeyMarker || listing.NextUploadIdMarker)
+					throw listingError('ListMultipartUploads', listing, 'listing-incomplete');
+				break;
+			}
+			const next = JSON.stringify([listing.NextKeyMarker, listing.NextUploadIdMarker]);
 			if (
 				page === 7 ||
-				!listing.NextKeyMarker ||
-				(listing.NextKeyMarker === keyMarker && listing.NextUploadIdMarker === uploadMarker)
+				!validToken(listing.NextKeyMarker) ||
+				!listing.NextKeyMarker.startsWith(prefix) ||
+				!validToken(listing.NextUploadIdMarker) ||
+				uploadTokens.has(next)
 			)
-				throw new ExportPreflightError('destination-isolation', 'unexpected-response');
+				throw listingError('ListMultipartUploads', listing, 'listing-incomplete');
+			uploadTokens.add(next);
 			keyMarker = listing.NextKeyMarker;
 			uploadMarker = listing.NextUploadIdMarker;
 		}
-		return { objects, uploads, exclusive: true as const };
+		signal.throwIfAborted();
+		return {
+			objects,
+			uploads,
+			exclusive: true as const,
+			...(directoryMarker ? { directoryMarker } : {}),
+		};
 	}
 	private async absent(job: ExportJob, key: string, signal: AbortSignal) {
 		let head: unknown;

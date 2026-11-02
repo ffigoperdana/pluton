@@ -331,7 +331,13 @@ export type ExportJob = {
 	ownedUploads?: { key: string; uploadId: string }[];
 	capabilityProbe?: ExportJob;
 	ownedVersions?: { key: string; versionId: string; etag?: string; bytes: number }[];
-	inventory?: { objects: number; uploads: number; exclusive: true };
+	inventory?: {
+		objects: number;
+		uploads: number;
+		exclusive: true;
+		/** Verified structural object, never an owned export or cleanup target. */
+		directoryMarker?: 'verified-empty';
+	};
 	id: string;
 	owner: string;
 	binding: ExportBinding;

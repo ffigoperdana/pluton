@@ -28,6 +28,7 @@ import {
 import { assertExportIsolation } from '../../src/utils/managedExport/ExportIsolation';
 import {
 	ExportCleanupError,
+	ExportInventoryError,
 	ExportOperationError,
 	exportDiagnostic,
 } from '../../src/utils/managedExport/ExportDiagnostics';
@@ -635,6 +636,64 @@ describe('durable independent export lifecycle', () => {
 			expect(h.storage.cleanup).not.toHaveBeenCalled();
 			expect(h.storage.preflight).not.toHaveBeenCalled();
 			expect(h.recovery.withVerifiedExport).not.toHaveBeenCalled();
+		} finally {
+			await h.close();
+		}
+	});
+	test('read-only marker diagnostics survive restart, preserve owner boundaries and never authorize cleanup', async () => {
+		const h = harness();
+		try {
+			h.storage.inventory.mockRejectedValueOnce(
+				new ExportInventoryError(
+					new ExportOperationError(
+						'HeadObject',
+						{ $metadata: { httpStatusCode: 200 } },
+						'directory-marker-unverified',
+						'object-mismatch',
+						'namespace'
+					)
+				)
+			);
+			const value = await h.service.preflight(owner, true);
+			await until(() => h.store.get(value.id)?.state === 'failed');
+			const before = await h.service.preflightStatus(owner, value.id);
+			expect(before).toMatchObject({
+				cleanupPending: false,
+				failureCapability: 'destination-isolation',
+				preflightFailure: {
+					stage: 'read-only',
+					detail: 'directory-marker-unverified',
+					httpStatus: 200,
+					creationAcknowledged: false,
+					durableOwnershipProof: false,
+					objectCleanupPending: false,
+					multipartCleanupPending: false,
+				},
+			});
+			await h.service.shutdown();
+			const store = new ManagedExportStore(h.file);
+			const restarted = new ManagedExportService(
+				store,
+				h.recovery as any,
+				() => h.config,
+				async () => {},
+				() => h.storage as any
+			);
+			try {
+				await restarted.recoverInterrupted();
+				expect((await restarted.preflightStatus(owner, value.id)).preflightFailure).toEqual(
+					before.preflightFailure
+				);
+				await expect(restarted.preflightStatus('other-user', value.id)).rejects.toMatchObject({
+					statusCode: 404,
+				});
+				await restarted.cancelPreflight(owner, value.id);
+				expect(h.storage.cleanup).not.toHaveBeenCalled();
+				expect(h.storage.upload).not.toHaveBeenCalled();
+				expect(h.recovery.withVerifiedExport).not.toHaveBeenCalled();
+			} finally {
+				await restarted.shutdown();
+			}
 		} finally {
 			await h.close();
 		}

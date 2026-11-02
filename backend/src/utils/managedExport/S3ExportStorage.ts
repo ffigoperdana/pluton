@@ -35,6 +35,7 @@ import {
 	exportCapabilityBinding,
 } from './ExportPolicy';
 import { HcpWriteOnceStorage, writeOnceKeys } from './HcpWriteOnceStorage';
+import { ExportInventoryError, ExportOperationError } from './ExportDiagnostics';
 import {
 	applicationEncrypted,
 	ExportCipher,
@@ -641,6 +642,7 @@ export class S3ExportStorage {
 		try {
 			if (isWriteOnce(await this.mode(signal))) return await this.writeOnce.inventory(jobs, signal);
 		} catch (error) {
+			if (error instanceof ExportOperationError) throw new ExportInventoryError(error);
 			this.capabilityFailure(error, 'destination-isolation');
 		}
 		const known = new Map(

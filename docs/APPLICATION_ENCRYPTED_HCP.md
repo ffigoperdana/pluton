@@ -15,6 +15,8 @@ isolation, write-once/collision races, multipart publication, conditional Range,
 ownership, enumeration, checksum readback and verified cleanup remain mandatory.
 
 See [validation and rollout status](APPLICATION_ENCRYPTED_HCP_VALIDATION.md).
+For an existing installation with an HCP root directory marker, follow the
+[strict marker policy and controlled UAT](HCP_DIRECTORY_MARKER_UAT.md).
 Local reference-provider tests are not production HCP certification. Independent
 security/format review and an operator-run destination preflight remain rollout
 gates. No production endpoint or credentials were accessed during implementation.
