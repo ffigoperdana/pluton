@@ -302,8 +302,8 @@ export class ExportCipher {
 		original: ManagedArchiveDownload,
 		completed: (sha: string) => void
 	): ManagedArchiveDownload {
-		const self = this,
-			m = this.value.manifest;
+		const seal = (index: number, plain: Buffer) => this.seal(index, plain);
+		const m = this.value.manifest;
 		const summary = {
 			...original.export,
 			archiveBytes: m.ciphertextBytes,
@@ -334,7 +334,7 @@ export class ExportCipher {
 								offset += n;
 								used += n;
 								if (used === buffer.length) {
-									const frame = self.seal(index++, buffer);
+									const frame = seal(index++, buffer);
 									ciphertext.update(frame);
 									yield frame;
 									used = 0;
@@ -344,7 +344,7 @@ export class ExportCipher {
 						if (bytes !== m.plaintextBytes || plaintext.digest('hex') !== m.plaintextSha256)
 							throw fail();
 						if (used) {
-							const frame = self.seal(index++, buffer.subarray(0, used));
+							const frame = seal(index++, buffer.subarray(0, used));
 							ciphertext.update(frame);
 							yield frame;
 						}
