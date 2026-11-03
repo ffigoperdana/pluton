@@ -1,3 +1,4 @@
+import { checkedCompletion } from './ExportCompletion';
 import crypto from 'crypto';
 import { Readable } from 'stream';
 import {
@@ -107,7 +108,8 @@ export class HcpWriteOnceStorage {
 			const failure = new ExportOperationError(
 				command.constructor.name.replace(/Command$/, '') as ExportOperation,
 				error,
-				'provider-error',
+				// Preserve our inspector's detail while stripping all SDK attachments.
+				error instanceof ExportOperationError ? error.detail : 'provider-error',
 				'storage-unavailable',
 				exportTarget((command.input as { Key?: string }).Key)
 			);
@@ -613,38 +615,37 @@ export class HcpWriteOnceStorage {
 			UploadId: upload.id,
 			MultipartUpload: { Parts: upload.parts },
 		});
-		let wireHttpStatus: number | undefined;
-		// Observe the numeric status BEFORE the pinned SDK's embedded-200-error
-		// middleware rewrites it. Never inspect/copy a body, header or signature.
-		command.middlewareStack.addRelativeTo(
-			(next: (args: any) => Promise<any>) => async (args: any) => {
-				const result = await next(args);
-				wireHttpStatus = exportHttpStatus({
-					$metadata: { httpStatusCode: (result.response as { statusCode?: number })?.statusCode },
-				});
-				return result;
-			},
-			{
-				relation: 'after',
-				toMiddleware: 'throw200ExceptionsMiddleware',
-				name: 'exportCompletionWireStatus',
-			}
-		);
-		return this.send(command, signal)
-			.then(result => ({ ...result, exportWireHttpStatus: wireHttpStatus }))
-			.catch(error => {
-				if (error instanceof ExportOperationError) {
-					error.wireHttpStatus = wireHttpStatus;
-					if (
-						wireHttpStatus === 200 &&
-						error.responseKind === 'provider-error' &&
-						!['network', 'deadline', 'aborted'].includes(error.providerCategory)
-					)
-						error.responseKind = 'embedded-error';
-				}
-				throw error;
-			});
+		return this.completeUpload(command, signal);
 	}
+	/** Shared by disposable preflight and encrypted archive publication. */
+	async completeUpload(
+		command: CompleteMultipartUploadCommand,
+		signal: AbortSignal,
+		archive = false
+	) {
+		const result = await checkedCompletion(command, signal, () => this.send(command, signal));
+		// Races journal all resolved responses (including invalid schemas) before
+		// deciding. Archive publication must reject the same invalid schemas before
+		// record() can create an ownership proof. Never recover identity from HEAD.
+		if (
+			archive &&
+			!publicationValidation(result, this.config.bucket, command.input.Key!, true).valid
+		) {
+			const error = new ExportOperationError(
+				'CompleteMultipartUpload',
+				result,
+				'identity-mismatch',
+				'object-mismatch',
+				exportTarget(command.input.Key)
+			);
+			error.responseKind = 'invalid-response';
+			error.completionShape = result.exportCompletionShape;
+			error.wireHttpStatus = result.exportWireHttpStatus;
+			throw error;
+		}
+		return result;
+	}
+
 	private saveRace(
 		job: ExportJob,
 		race: ExportPublicationRace,
@@ -742,6 +743,7 @@ export class HcpWriteOnceStorage {
 					httpStatus: exportHttpStatus(error),
 					wireHttpStatus: error instanceof ExportOperationError ? error.wireHttpStatus : undefined,
 					response: error instanceof ExportOperationError ? error.responseKind : 'transport-error',
+					completion: error instanceof ExportOperationError ? error.completionShape : undefined,
 					failure: {
 						...exportDiagnostic(
 							error,
@@ -764,6 +766,7 @@ export class HcpWriteOnceStorage {
 				outcome: 'acknowledged',
 				httpStatus: exportHttpStatus(result),
 				wireHttpStatus: i < 2 ? result.exportWireHttpStatus : undefined,
+				completion: i < 2 ? result.exportCompletionShape : undefined,
 				etag: validResponse ? result.ETag : undefined,
 				validResponse,
 				validation: validation.checks,

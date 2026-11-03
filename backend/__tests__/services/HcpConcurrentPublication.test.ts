@@ -189,15 +189,27 @@ describe('real SDK concurrent multipart publication and safe durable cleanup', (
 				if (fault === 'second-embedded-whitespace') {
 					expect(report.operations[1]).toMatchObject({
 						httpStatus: 200,
-						response: 'invalid-response',
-						acknowledged: true,
-						validation: { entityTagPresent: false, bucketPresent: false, keyPresent: false },
+						response: 'embedded-error',
+						acknowledged: false,
+						httpAcknowledged: true,
+						providerCode: 'InvalidPart',
+						completion: {
+							body: 'complete',
+							xml: 'error',
+							xmlParser: 'accepted',
+							sdkParser: 'not-run',
+						},
 					});
 				} else {
 					expect(report.operations[1]).toMatchObject({
 						httpStatus: 200,
 						wireHttpStatus: 200,
-						response: 'sdk-parsing-error',
+						response: 'body-invalid',
+						completion: {
+							body: 'complete',
+							xmlParser: fault === 'second-malformed' ? 'rejected' : 'accepted',
+							sdkParser: 'not-run',
+						},
 						acknowledged: false,
 						validationEvidence: 'not-evaluated',
 					});
@@ -210,6 +222,53 @@ describe('real SDK concurrent multipart publication and safe durable cleanup', (
 			}
 		}
 	);
+	test('body evidence survives SQLite reopen; repeated cleanup never adopts an ambiguous object', async () => {
+		const f = hcpPublicationProtocol('second-embedded-whitespace', true),
+			j = journal(f);
+		let reopened: ManagedExportStore | undefined;
+		try {
+			await expect(f.storage.preflight(f.job, signal(), j.update)).rejects.toThrow();
+			const before = publicExportPublications(j.store.get(f.job.id)!);
+			expect(before[0]).toMatchObject({
+				httpAcknowledgements: 2,
+				acknowledgedResponses: 1,
+				validSuccessResponses: 1,
+				ambiguityRemaining: true,
+				objectProof: false,
+			});
+			j.store.close();
+			reopened = new ManagedExportStore(j.file);
+			expect(publicExportPublications(reopened.get(f.job.id)!)).toEqual(before);
+			for (let n = 0; n < 2; n++) {
+				const saved = reopened.get(f.job.id)!;
+				const report = publicExportPublications(saved)[0];
+				expect(report.operations.map(a => a.completion)).toEqual(
+					before[0].operations.map(a => a.completion)
+				);
+				expect(report).toMatchObject({
+					ambiguityRemaining: true,
+					objectProof: false,
+					validSuccessResponses: 1,
+				});
+				await expect(
+					f.storage.cleanup(saved, signal(), fields => reopened!.update(saved.id, fields))
+				).rejects.toThrow();
+				expect(f.objects.has(saved.key + '.probe-race')).toBe(true);
+				expect(
+					reopened.get(saved.id)?.ownedObjects?.some(p => p.key === saved.key + '.probe-race')
+				).toBe(false);
+			}
+			expect(
+				f.calls.some(
+					c => c.method === 'DELETE' && !c.query.uploadId && c.key.endsWith('.probe-race')
+				)
+			).toBe(false);
+		} finally {
+			reopened?.close();
+			if (!reopened) j.store.close();
+			f.close();
+		}
+	});
 	test.each([false, true])(
 		'one winner and 409 losers, full readback, marker preservation: encrypted=%s',
 		async encrypted => {
@@ -291,7 +350,7 @@ describe('real SDK concurrent multipart publication and safe durable cleanup', (
 				expect(saved.creationReceipts?.some(r => r.key === key && r.acknowledged)).toBe(true);
 				expect(report.operations[0]).toMatchObject({ acknowledged: true, durableReceipt: true });
 				expect(report.operations[1].httpStatus).toBe(
-					fault === 'embedded-error' ? 503 : Number(fault.slice(11))
+					fault === 'embedded-error' ? 200 : Number(fault.slice(11))
 				);
 			}
 			if (fault === 'embedded-error')
@@ -481,6 +540,14 @@ describe('real SDK concurrent multipart publication and safe durable cleanup', (
 				try {
 					const job = store.all()[0],
 						key = job.key + '.probe-race';
+					if (phase !== 'before-receipt') {
+						expect(publicExportPublications(job)[0].operations[0].completion).toMatchObject({
+							body: 'complete',
+							xml: 'result',
+							xmlParser: 'accepted',
+							sdkParser: 'resolved',
+						});
+					}
 					const cleanup = f.storage.cleanup(job, signal(), fields => store.update(job.id, fields));
 					if (phase === 'settled') {
 						await cleanup;

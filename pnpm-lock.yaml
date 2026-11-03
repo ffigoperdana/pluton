@@ -130,6 +130,9 @@ importers:
       qrcode:
         specifier: ^1.5.4
         version: 1.5.4
+      saxes:
+        specifier: 6.0.0
+        version: 6.0.0
       systeminformation:
         specifier: ^5.31.0
         version: 5.31.0

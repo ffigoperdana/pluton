@@ -1,3 +1,4 @@
+import { publicCompletionShape, type CompletionShape } from './ExportCompletionShape';
 import { bindingDigest, type ExportJob } from './ExportPolicy';
 import { exportTarget, publicExportDiagnostic, type ExportDiagnostic } from './ExportDiagnostics';
 
@@ -7,7 +8,8 @@ export type PublicationResponse =
 	| 'provider-error'
 	| 'embedded-error'
 	| 'sdk-parsing-error'
-	| 'transport-error';
+	| 'transport-error'
+	| 'body-invalid';
 export type PublicationValidation = {
 	status200: boolean;
 	entityTagPresent: boolean;
@@ -78,6 +80,7 @@ export type ExportPublicationAttempt = {
 	uploadId?: string;
 	outcome: 'pending' | 'acknowledged' | 'rejected';
 	response?: PublicationResponse;
+	completion?: CompletionShape;
 	etag?: string;
 	validResponse?: boolean;
 	/** Observation only; never used to reconstruct or relax ownership proof. */
@@ -174,6 +177,9 @@ export function publicExportPublications(job: ExportJob) {
 		.slice(0, 2)
 		.map(race => ({
 			target: exportTarget(race.key),
+			httpAcknowledgements: race.attempts.filter(
+				a => a.wireHttpStatus === 200 || a.httpStatus === 200
+			).length,
 			acknowledgedResponses: race.attempts.filter(a => a.outcome === 'acknowledged').length,
 			validSuccessResponses: race.attempts.filter(
 				a => a.outcome === 'acknowledged' && a.validResponse === true
@@ -204,9 +210,12 @@ export function publicExportPublications(job: ExportJob) {
 					'embedded-error',
 					'sdk-parsing-error',
 					'transport-error',
+					'body-invalid',
 				].includes(a.response || '')
 					? a.response
 					: 'pending',
+				httpAcknowledged: a.wireHttpStatus === 200 || a.httpStatus === 200,
+				completion: publicCompletionShape(a.completion),
 				acknowledged: a.outcome === 'acknowledged',
 				validationEvidence: publicValidation(a.validation)
 					? ('recorded' as const)
