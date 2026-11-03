@@ -4,6 +4,7 @@ Reliable Download remains **NO-GO until the actual destination proves every
 required capability and cleanup completes**. This change neither certifies HCP
 nor adopts or deletes an existing historical object. No production resources
 were accessed during development. Keep the existing incident job and audit trail.
+For dual HTTP 200 results, see the [schema diagnostics and operator gates](HCP_HTTP200_COMPLETION_DIAGNOSTICS.md).
 
 ## Findings and evidence boundaries
 

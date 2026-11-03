@@ -8,6 +8,68 @@ export type PublicationResponse =
 	| 'embedded-error'
 	| 'sdk-parsing-error'
 	| 'transport-error';
+export type PublicationValidation = {
+	status200: boolean;
+	entityTagPresent: boolean;
+	entityTagQuoted: boolean;
+	versionAbsentOrNull: boolean;
+	objectIdentityRequired: boolean;
+	bucketPresent: boolean;
+	bucketMatches: boolean;
+	keyPresent: boolean;
+	keyMatches: boolean;
+};
+/** Evaluate the existing admission rules without normalizing provider values.
+ * Persist only booleans: even malformed or foreign response fields stay private. */
+export function publicationValidation(
+	result: {
+		$metadata?: { httpStatusCode?: number };
+		ETag?: string;
+		VersionId?: string;
+		Bucket?: string;
+		Key?: string;
+	},
+	bucket: string,
+	key: string,
+	multipart: boolean
+) {
+	const checks: PublicationValidation = {
+		status200: result.$metadata?.httpStatusCode === 200,
+		entityTagPresent: typeof result.ETag === 'string' && result.ETag.length > 0,
+		entityTagQuoted: typeof result.ETag === 'string' && /^"[^"\r\n]{1,1022}"$/.test(result.ETag),
+		versionAbsentOrNull: !result.VersionId || result.VersionId === 'null',
+		objectIdentityRequired: multipart,
+		bucketPresent: typeof result.Bucket === 'string' && result.Bucket.length > 0,
+		bucketMatches: result.Bucket === bucket,
+		keyPresent: typeof result.Key === 'string' && result.Key.length > 0,
+		keyMatches: result.Key === key,
+	};
+	return {
+		checks,
+		valid:
+			checks.status200 &&
+			checks.entityTagQuoted &&
+			checks.versionAbsentOrNull &&
+			(!multipart || (checks.bucketMatches && checks.keyMatches)),
+	};
+}
+const validationFields = [
+	'status200',
+	'entityTagPresent',
+	'entityTagQuoted',
+	'versionAbsentOrNull',
+	'objectIdentityRequired',
+	'bucketPresent',
+	'bucketMatches',
+	'keyPresent',
+	'keyMatches',
+] as const;
+function publicValidation(value?: PublicationValidation): PublicationValidation | undefined {
+	if (!value || !validationFields.every(field => typeof value[field] === 'boolean')) return;
+	return Object.fromEntries(
+		validationFields.map(field => [field, value[field]])
+	) as PublicationValidation;
+}
 export type ExportPublicationAttempt = {
 	competitor: 'multipart-a' | 'multipart-b' | 'put';
 	operation: 'CompleteMultipartUpload' | 'PutObject';
@@ -18,6 +80,8 @@ export type ExportPublicationAttempt = {
 	response?: PublicationResponse;
 	etag?: string;
 	validResponse?: boolean;
+	/** Observation only; never used to reconstruct or relax ownership proof. */
+	validation?: PublicationValidation;
 	httpStatus?: number;
 	wireHttpStatus?: number;
 	failure?: ExportDiagnostic;
@@ -110,6 +174,11 @@ export function publicExportPublications(job: ExportJob) {
 		.slice(0, 2)
 		.map(race => ({
 			target: exportTarget(race.key),
+			acknowledgedResponses: race.attempts.filter(a => a.outcome === 'acknowledged').length,
+			validSuccessResponses: race.attempts.filter(
+				a => a.outcome === 'acknowledged' && a.validResponse === true
+			).length,
+			multipleAcknowledgements: race.attempts.filter(a => a.outcome === 'acknowledged').length > 1,
 			multipleSuccesses:
 				race.attempts.filter(a => a.outcome === 'acknowledged' && a.validResponse === true).length >
 				1,
@@ -139,6 +208,12 @@ export function publicExportPublications(job: ExportJob) {
 					? a.response
 					: 'pending',
 				acknowledged: a.outcome === 'acknowledged',
+				validationEvidence: publicValidation(a.validation)
+					? ('recorded' as const)
+					: a.outcome === 'rejected' || a.outcome === 'pending'
+						? ('not-evaluated' as const)
+						: ('not-recorded' as const),
+				validation: publicValidation(a.validation),
 				durableReceipt: ['acknowledged', 'rejected'].includes(a.outcome),
 				providerCategory: publicExportDiagnostic(a.failure)?.providerCategory,
 				providerCode: publicExportDiagnostic(a.failure)?.providerCode,

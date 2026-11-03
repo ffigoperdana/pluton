@@ -49,6 +49,7 @@ const details = [
 	'unexpected-head-status',
 	'object-remains',
 	'race-multiple-successes',
+	'race-multiple-acknowledgements',
 	'race-ambiguous',
 	'race-response-invalid',
 	'race-journal-failed',

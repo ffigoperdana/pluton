@@ -8,7 +8,11 @@ import { Readable } from 'stream';
 import { S3ExportStorage } from '../../src/utils/managedExport/S3ExportStorage';
 import { exportConfiguration, type ExportJob } from '../../src/utils/managedExport/ExportPolicy';
 
-export function hcpPublicationProtocol(fault = '', encrypted = false) {
+export function hcpPublicationProtocol(
+	fault = '',
+	encrypted = false,
+	routing: 'same-node' | 'different-nodes' = 'same-node'
+) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pluton-publication-'));
 	const keyring = path.join(root, 'keyring.json');
 	if (encrypted)
@@ -73,6 +77,8 @@ export function hcpPublicationProtocol(fault = '', encrypted = false) {
 		{ key: string; metadata: Record<string, string>; sse?: string; parts: Map<number, Buffer> }
 	>();
 	const calls: { method: string; key: string; query: Record<string, string> }[] = [];
+	const commits: { key: string; route: string; sha256: string }[] = [];
+	const completionRoutes: string[] = [];
 	let raceCompletions = 0,
 		clock = 0;
 	const putCommitted = Promise.withResolvers<void>();
@@ -167,10 +173,67 @@ export function hcpPublicationProtocol(fault = '', encrypted = false) {
 					return error(400, 'InvalidRequest');
 				const racing = key.endsWith('.probe-race') || key.endsWith('.probe-put-race');
 				const index = racing ? ++raceCompletions : 0;
+				const route =
+					racing && routing === 'different-nodes' && index % 2 === 0 ? 'node-b' : 'node-a';
+				if (racing) completionRoutes.push(route);
 				if (racing && index === 2 && fault.startsWith('competitor-'))
 					return error(Number(fault.slice(11)), 'OperationAborted');
 				if (racing && index === 2 && fault === 'embedded-error') return error(200, 'InvalidPart');
-				if (object && !(racing && fault === 'two-successes')) {
+				if (racing && index === 2 && fault === 'second-embedded-whitespace')
+					return reply(
+						200,
+						'<Error><Code>InvalidPart</Code><Message>private-provider-body</Message></Error> \r\n'
+					);
+				if (racing && index === 2 && fault === 'second-malformed')
+					return reply(200, '<CompleteMultipartUploadResult><ETag>');
+				if (racing && index === 2 && fault === 'second-body-reset') {
+					return {
+						response: {
+							statusCode: 200,
+							headers: { 'content-type': 'application/xml' },
+							body: new Readable({
+								read() {
+									this.destroy(
+										Object.assign(new Error('private-body-error'), { code: 'ECONNRESET' })
+									);
+								},
+							}),
+						},
+					};
+				}
+				if (racing && index === 2 && fault === 'second-duplicate-etag')
+					return reply(
+						200,
+						`<CompleteMultipartUploadResult><Bucket>${config.bucket}</Bucket><Key>${xml(key)}</Key><ETag>&quot;first&quot;</ETag><ETag>&quot;second&quot;</ETag></CompleteMultipartUploadResult>`
+					);
+				if (
+					racing &&
+					index === 2 &&
+					(fault.startsWith('second-') || fault === 'schema-only-success')
+				) {
+					// This synthetic reply does not commit the second payload. It models
+					// an invalid response after a different request already committed.
+					const body =
+						`<CompleteMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2020-09-01/">` +
+						(fault === 'second-missing-bucket'
+							? ''
+							: `<Bucket>${fault === 'second-wrong-bucket' ? 'foreign-bucket' : config.bucket}</Bucket>`) +
+						(fault === 'second-missing-key'
+							? ''
+							: `<Key>${fault === 'second-wrong-key' ? 'foreign-key' : xml(key)}</Key>`) +
+						(fault === 'second-missing-etag'
+							? ''
+							: `<ETag>${fault === 'second-unquoted-etag' ? 'unquoted-tag' : xml(object!.etag)}</ETag>`) +
+						'</CompleteMultipartUploadResult>';
+					return reply(
+						200,
+						body,
+						fault === 'second-version' ? { 'x-amz-version-id': 'foreign-version' } : {}
+					);
+				}
+				const nodeLocalOverwrite =
+					racing && fault === 'node-local-overwrite' && routing === 'different-nodes';
+				if (object && !(racing && fault === 'two-successes') && !nodeLocalOverwrite) {
 					if (racing && fault === 'inconsistent-conflict') object.body[0] ^= 1;
 					return error(409, 'OperationAborted');
 				}
@@ -179,6 +242,7 @@ export function hcpPublicationProtocol(fault = '', encrypted = false) {
 				);
 				const body = Buffer.concat(numbers.map(n => upload.parts.get(n)!));
 				const created = store(key, body, upload.metadata, upload.sse);
+				if (racing) commits.push({ key, route, sha256: digest(body) });
 				uploads.delete(q.uploadId);
 				if (racing && fault === 'lost-ack')
 					throw Object.assign(new Error('private-provider-body'), { code: 'ECONNRESET' });
@@ -258,6 +322,8 @@ export function hcpPublicationProtocol(fault = '', encrypted = false) {
 		objects,
 		uploads,
 		calls,
+		commits,
+		completionRoutes,
 		store,
 		setFault: (value: string) => {
 			fault = value;
