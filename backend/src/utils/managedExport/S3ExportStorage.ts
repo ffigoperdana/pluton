@@ -1019,15 +1019,15 @@ export class S3ExportStorage {
 			}
 			job.publicationAttempted = true;
 			update({ publicationAttempted: true });
-			const result = await this.client.send(
-				new CompleteMultipartUploadCommand({
-					...this.scope(job),
-					UploadId: job.uploadId,
-					MultipartUpload: { Parts: parts },
-					...(isWriteOnce(job.integrityMode) ? {} : { IfNoneMatch: '*' }),
-				}),
-				{ abortSignal: signal }
-			);
+			const command = new CompleteMultipartUploadCommand({
+				...this.scope(job),
+				UploadId: job.uploadId,
+				MultipartUpload: { Parts: parts },
+				...(isWriteOnce(job.integrityMode) ? {} : { IfNoneMatch: '*' }),
+			});
+			const result = isWriteOnce(job.integrityMode)
+				? await this.writeOnce.completeUpload(command, signal, true)
+				: await this.client.send(command, { abortSignal: signal });
 			if (isWriteOnce(job.integrityMode)) {
 				await this.writeOnce.record(
 					job,

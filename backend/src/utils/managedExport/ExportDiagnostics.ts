@@ -1,3 +1,4 @@
+import { publicCompletionShape, type CompletionShape } from './ExportCompletionShape';
 import {
 	ExportPreflightError,
 	TemporaryExportError,
@@ -53,6 +54,7 @@ const details = [
 	'race-ambiguous',
 	'race-response-invalid',
 	'race-journal-failed',
+	'completion-body-invalid',
 ] as const;
 type Detail = (typeof details)[number];
 const providers = [
@@ -79,6 +81,8 @@ const providerCodes = [
 	'InvalidRequest',
 	'InvalidArgument',
 	'InvalidPart',
+	'EntityTooSmall',
+	'PreconditionFailed',
 	'InvalidPartOrder',
 	'NoSuchUpload',
 	'InvalidObjectState',
@@ -107,6 +111,7 @@ export const exportTarget = (key?: string): Target =>
 					? 'probe'
 					: 'archive';
 export type ExportDiagnostic = {
+	completion?: CompletionShape;
 	stage: 'preflight' | 'cleanup' | 'read-only';
 	capability: ExportCapability;
 	operation: ExportOperation;
@@ -162,7 +167,14 @@ function provider(error: unknown): Provider {
 }
 export class ExportOperationError extends TemporaryExportError {
 	wireHttpStatus?: number;
-	responseKind?: 'embedded-error' | 'sdk-parsing-error' | 'provider-error' | 'transport-error';
+	completionShape?: CompletionShape;
+	responseKind?:
+		| 'invalid-response'
+		| 'embedded-error'
+		| 'sdk-parsing-error'
+		| 'provider-error'
+		| 'transport-error'
+		| 'body-invalid';
 	readonly $metadata: { httpStatusCode?: number };
 	readonly providerCategory: Provider;
 	readonly providerCode: ProviderCode;
@@ -249,6 +261,10 @@ export function exportDiagnostic(
 		providerCategory: p,
 		providerCode: error instanceof ExportOperationError ? error.providerCode : providerCode(error),
 		detail: error instanceof ExportOperationError ? error.detail : 'provider-error',
+		completion:
+			error instanceof ExportOperationError
+				? publicCompletionShape(error.completionShape)
+				: undefined,
 		httpStatus: exportHttpStatus(error),
 		creationAcknowledged:
 			!!key && !!job.creationReceipts?.some(r => r.key === key && r.acknowledged),
@@ -309,6 +325,7 @@ export function publicExportDiagnostic(d?: ExportDiagnostic): ExportDiagnostic |
 		providerCategory: providers.includes(d.providerCategory) ? d.providerCategory : 'service-error',
 		providerCode: providerCodes.includes(d.providerCode) ? d.providerCode : 'unrecognized',
 		detail: details.includes(d.detail) ? d.detail : 'provider-error',
+		completion: publicCompletionShape(d.completion),
 		httpStatus: exportHttpStatus({ $metadata: { httpStatusCode: d.httpStatus } }),
 		creationAcknowledged: d.creationAcknowledged === true,
 		durableOwnershipProof: d.durableOwnershipProof === true,

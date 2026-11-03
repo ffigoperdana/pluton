@@ -1,5 +1,9 @@
 # HCP dual HTTP 200 completion: diagnosis and operator gates
 
+For the subsequent body-verification change, proven SDK reproduction and current
+operator gates, see [completion body verification](HCP_COMPLETION_BODY_VERIFICATION.md).
+The record below describes PR #60's earlier status-only middleware.
+
 The incident remains **NO-GO, cleanup pending**. Do not run another production
 preflight, adopt the race object or delete it automatically. This patch adds
 precise response evidence and corrects diagnostic classification. It does not
