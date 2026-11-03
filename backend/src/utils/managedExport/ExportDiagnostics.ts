@@ -48,6 +48,10 @@ const details = [
 	'versioning-changed',
 	'unexpected-head-status',
 	'object-remains',
+	'race-multiple-successes',
+	'race-ambiguous',
+	'race-response-invalid',
+	'race-journal-failed',
 ] as const;
 type Detail = (typeof details)[number];
 const providers = [
@@ -156,6 +160,8 @@ function provider(error: unknown): Provider {
 	return 'service-error';
 }
 export class ExportOperationError extends TemporaryExportError {
+	wireHttpStatus?: number;
+	responseKind?: 'embedded-error' | 'sdk-parsing-error' | 'provider-error' | 'transport-error';
 	readonly $metadata: { httpStatusCode?: number };
 	readonly providerCategory: Provider;
 	readonly providerCode: ProviderCode;
@@ -170,6 +176,15 @@ export class ExportOperationError extends TemporaryExportError {
 		this.$metadata = { httpStatusCode: exportHttpStatus(error) };
 		this.providerCategory = detail === 'provider-error' ? provider(error) : 'invalid-response';
 		this.providerCode = detail === 'provider-error' ? providerCode(error) : 'unrecognized';
+		const name = (error as { name?: string })?.name;
+		this.responseKind =
+			error instanceof ExportOperationError
+				? error.responseKind
+				: ['SyntaxError', 'DeserializationError', 'TypeError'].includes(name || '')
+					? 'sdk-parsing-error'
+					: this.$metadata.httpStatusCode
+						? 'provider-error'
+						: 'transport-error';
 	}
 }
 export class ExportCleanupError extends ExportPreflightError {
@@ -234,10 +249,9 @@ export function exportDiagnostic(
 		providerCode: error instanceof ExportOperationError ? error.providerCode : providerCode(error),
 		detail: error instanceof ExportOperationError ? error.detail : 'provider-error',
 		httpStatus: exportHttpStatus(error),
-		creationAcknowledged: !!job.creationReceipts?.some(
-			r => (!key || r.key === key) && r.acknowledged
-		),
-		durableOwnershipProof: !!job.ownedObjects?.some(p => !key || p.key === key),
+		creationAcknowledged:
+			!!key && !!job.creationReceipts?.some(r => r.key === key && r.acknowledged),
+		durableOwnershipProof: !!key && !!job.ownedObjects?.some(p => p.key === key),
 		objectCleanupPending: job.cleanupState?.objects !== 'verified-absent',
 		multipartCleanupPending: job.cleanupState?.multipart !== 'verified-absent',
 	};

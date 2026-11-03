@@ -103,7 +103,12 @@ Example for a successful PUT with incomplete response metadata:
 Pending means verification is incomplete, not proof that bytes exist. The
 preflight snapshot can show multipart pending before cleanup has checked it.
 For an object-specific target the acknowledgement/proof flags refer to that
-target; namespace/unknown diagnostics summarize available job evidence.
+target. Newly generated namespace/unknown diagnostics do not borrow acknowledgement or ownership
+from another object; both flags are false when no exact target is identified.
+Previously persisted context flags are retained as historical observations,
+never interpreted as proof for a different target.
+New concurrent requests have separate bounded `publications` diagnostics; see
+[concurrent-publication recovery](HCP_CONCURRENT_PUBLICATION_RECOVERY.md).
 
 ## Read-only procedure for an existing failed preflight
 

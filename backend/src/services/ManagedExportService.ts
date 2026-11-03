@@ -38,6 +38,7 @@ import {
 	isWriteOnce,
 } from '../utils/managedExport/ExportEncryption';
 import { ExportKeyError } from '../utils/managedExport/ExportKeyring';
+import { publicExportPublications } from '../utils/managedExport/ExportPublication';
 
 /** One durable exporter per process. Credentials come only from the separate
  * server configuration; queued JSON never contains provider credentials or URLs. */
@@ -204,6 +205,7 @@ export class ManagedExportService {
 			kind: job.kind || 'archive',
 			inventory: job.inventory,
 			provider: job.providerEvidence,
+			publications: publicExportPublications(job.capabilityProbe || job),
 			productionReadiness,
 			integrityMode: job.integrityMode || (job.versionId ? 'versioned' : undefined),
 			transport: isWriteOnce(job.integrityMode)
