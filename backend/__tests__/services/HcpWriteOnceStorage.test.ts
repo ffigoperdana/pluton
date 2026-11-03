@@ -19,6 +19,7 @@ jest.mock('../../src/utils/logger', () => ({ planLogger: () => ({ info: jest.fn(
 const digest = (b: Buffer) => crypto.createHash('sha256').update(b).digest('hex');
 const fail = (status: number) =>
 	Object.assign(new Error('synthetic provider contents must stay private'), {
+		...(status === 409 ? { name: 'OperationAborted' } : {}),
 		$metadata: { httpStatusCode: status },
 	});
 function fixture(encrypted = false) {

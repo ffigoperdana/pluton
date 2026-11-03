@@ -49,6 +49,7 @@ import {
 	publicationVerdict,
 	publicationValidation,
 	publicationWinner,
+	publicationCandidate,
 	publicExportPublications,
 	type ExportPublicationAttempt,
 	type ExportPublicationRace,
@@ -692,6 +693,7 @@ export class HcpWriteOnceStorage {
 			job,
 			{
 				key,
+				protocol: applicationEncrypted(job) ? 'hcp-final-error-v1' : undefined,
 				binding: bindingDigest(job.binding),
 				destination: job.destination,
 				nonce: job.ownershipNonce!,
@@ -712,7 +714,7 @@ export class HcpWriteOnceStorage {
 					{
 						...current,
 						attempts: next,
-						state: journalFailed ? 'ambiguous' : publicationVerdict(next),
+						state: journalFailed ? 'ambiguous' : publicationVerdict(next, current.protocol),
 					},
 					update,
 					fields.outcome === 'acknowledged'
@@ -744,6 +746,10 @@ export class HcpWriteOnceStorage {
 					wireHttpStatus: error instanceof ExportOperationError ? error.wireHttpStatus : undefined,
 					response: error instanceof ExportOperationError ? error.responseKind : 'transport-error',
 					completion: error instanceof ExportOperationError ? error.completionShape : undefined,
+					requestAttempts:
+						error instanceof ExportOperationError && error.requestAttempts
+							? error.requestAttempts
+							: undefined,
 					failure: {
 						...exportDiagnostic(
 							error,
@@ -767,6 +773,9 @@ export class HcpWriteOnceStorage {
 				httpStatus: exportHttpStatus(result),
 				wireHttpStatus: i < 2 ? result.exportWireHttpStatus : undefined,
 				completion: i < 2 ? result.exportCompletionShape : undefined,
+				requestAttempts:
+					(i < 2 ? result.exportCompletionShape?.requestAttempts : result.$metadata?.attempts) ||
+					undefined,
 				etag: validResponse ? result.ETag : undefined,
 				validResponse,
 				validation: validation.checks,
@@ -786,8 +795,8 @@ export class HcpWriteOnceStorage {
 				exportTarget(key)
 			);
 		}
-		const winner = publicationWinner(job, race);
-		if (!winner) {
+		const candidate = publicationCandidate(job, race);
+		if (!candidate) {
 			const multiple =
 				race.attempts.filter(a => a.outcome === 'acknowledged' && a.validResponse === true).length >
 				1;
@@ -807,6 +816,11 @@ export class HcpWriteOnceStorage {
 				exportTarget(key)
 			);
 		}
+		if (race.protocol === 'hcp-final-error-v1')
+			await this.settleRaceUploads(job, race, signal, update);
+		const settled = job.publicationRaces!.find(r => r.key === key)!;
+		const winner = publicationWinner(job, settled);
+		if (!winner) throw new TemporaryExportError('object-mismatch');
 		await this.record(
 			job,
 			key,
@@ -816,7 +830,96 @@ export class HcpWriteOnceStorage {
 			signal,
 			update
 		);
-		this.saveRace(job, { ...race, state: 'verified' }, update);
+		this.saveRace(job, { ...settled, state: 'verified' }, update);
+	}
+	/** Abort only journal-owned losing uploads. A completion ACK does not prove
+	 * that no competing upload remains. Verify absence before any object proof. */
+	private async settleRaceUploads(
+		job: ExportJob,
+		race: ExportPublicationRace,
+		signal: AbortSignal,
+		update: Update
+	) {
+		for (const attempt of race.attempts.filter(a => a.operation === 'CompleteMultipartUpload')) {
+			if (
+				!attempt.uploadId ||
+				!job.ownedUploads?.some(u => u.key === race.key && u.uploadId === attempt.uploadId)
+			)
+				throw new TemporaryExportError('cleanup-pending');
+			let abortAcknowledged = false;
+			if (attempt.outcome === 'rejected') {
+				try {
+					await this.send(
+						new AbortMultipartUploadCommand({
+							...this.scope(job, race.key),
+							UploadId: attempt.uploadId,
+						}),
+						signal
+					);
+					abortAcknowledged = true;
+				} catch (error) {
+					if (!absent(error)) throw error;
+				}
+			}
+			try {
+				await this.send(
+					new ListPartsCommand({
+						...this.scope(job, race.key),
+						UploadId: attempt.uploadId,
+						MaxParts: 1,
+					}),
+					signal
+				);
+			} catch (error) {
+				if (!absent(error)) throw error;
+				const current = job.publicationRaces!.find(r => r.key === race.key)!;
+				this.saveRace(
+					job,
+					{
+						...current,
+						attempts: current.attempts.map(a =>
+							a.uploadId === attempt.uploadId ? { ...a, uploadAbsent: true, abortAcknowledged } : a
+						),
+					},
+					update
+				);
+				continue;
+			}
+			throw new ExportOperationError(
+				'ListParts',
+				{},
+				'multipart-remains',
+				'cleanup-pending',
+				exportTarget(race.key)
+			);
+		}
+		await this.assertRaceUploadsAbsent(job, race, signal);
+	}
+	private async assertRaceUploadsAbsent(
+		job: ExportJob,
+		race: ExportPublicationRace,
+		signal: AbortSignal
+	) {
+		const pending = await this.send(
+			new ListMultipartUploadsCommand({
+				Bucket: this.config.bucket,
+				Prefix: race.key,
+				MaxUploads: 100,
+			}),
+			signal
+		);
+		const complete =
+			exportHttpStatus(pending) === 200 &&
+			pending.IsTruncated === false &&
+			(pending.Uploads === undefined || Array.isArray(pending.Uploads));
+		if (!complete || pending.Uploads?.length)
+			throw new ExportOperationError(
+				'ListMultipartUploads',
+				pending,
+				!complete ? 'listing-incomplete' : 'multipart-remains',
+				'cleanup-pending',
+				exportTarget(race.key)
+			);
 	}
 	private async rejected(operation: () => Promise<unknown>) {
 		try {
@@ -1358,6 +1461,11 @@ export class HcpWriteOnceStorage {
 				'cleanup-pending'
 			);
 		}
+		// Restart reconciliation repeats provider absence checks; persisted flags
+		// alone cannot rule out a still-visible or unknown competing upload.
+		for (const race of job.publicationRaces || [])
+			if (race.protocol === 'hcp-final-error-v1' && publicationCandidate(job, race))
+				await this.assertRaceUploadsAbsent(job, race, signal);
 		job.cleanupState!.multipart = 'verified-absent';
 		update({ cleanupState: job.cleanupState });
 		for (const key of keys) {

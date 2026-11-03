@@ -89,7 +89,8 @@ const gateway = writeOnceReference
 			initialConfig.endpoint,
 			initialConfig.ca!,
 			initialConfig.bucket,
-			initialConfig.prefix
+			initialConfig.prefix,
+			initialConfig.exportMode === 'application-encrypted-hcp'
 		)
 	: undefined;
 if (gateway) process.env.MANAGED_EXPORT_ENDPOINT = gateway.endpoint;
@@ -1417,6 +1418,11 @@ try {
 		? 'local protocol reference gateway + native MinIO; NOT HCP certification'
 		: 'local MinIO only';
 	results.applicationEncrypted = process.env.MANAGED_EXPORT_MODE === 'application-encrypted-hcp';
+	if (gateway && results.applicationEncrypted) {
+		assert(gateway.observations().embeddedConflicts > 0);
+		results.nativeEmbeddedConflictResponses = gateway.observations().embeddedConflicts;
+		results.semanticConcurrentPublication = 'PASS';
+	}
 	results.s3DownloadMiBPerSecond = +(
 		job.totalBytes /
 		1024 ** 2 /

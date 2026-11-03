@@ -87,11 +87,14 @@ export type ExportPublicationAttempt = {
 	validation?: PublicationValidation;
 	httpStatus?: number;
 	wireHttpStatus?: number;
+	requestAttempts?: number;
 	failure?: ExportDiagnostic;
 	uploadAbsent?: boolean;
 	abortAcknowledged?: boolean;
 };
 export type ExportPublicationRace = {
+	/** Written with fresh intent only; never inferred for historical races. */
+	protocol?: 'hcp-final-error-v1';
 	key: string;
 	binding: string;
 	destination: string;
@@ -99,26 +102,82 @@ export type ExportPublicationRace = {
 	state: 'pending' | 'single-winner' | 'ambiguous' | 'verified';
 	attempts: ExportPublicationAttempt[];
 };
-/** A non-409 failure is not proof that the competitor did not commit. */
-export function publicationVerdict(attempts: ExportPublicationAttempt[]) {
+function finalConflict(a: ExportPublicationAttempt) {
+	const c = a.completion;
+	return (
+		a.operation === 'CompleteMultipartUpload' &&
+		a.outcome === 'rejected' &&
+		a.validResponse !== true &&
+		a.etag === undefined &&
+		a.failure?.operation === 'CompleteMultipartUpload' &&
+		a.httpStatus === 200 &&
+		a.wireHttpStatus === 200 &&
+		a.response === 'embedded-error' &&
+		a.failure?.providerCode === 'OperationAborted' &&
+		c?.body === 'complete' &&
+		c.xml === 'error' &&
+		c.xmlParser === 'accepted' &&
+		c.sdkParser === 'not-run' &&
+		['none', 's3', 'hcp'].includes(c.namespace) &&
+		!c.entityTagPresent &&
+		!c.bucketPresent &&
+		!c.keyPresent &&
+		c.identityUnique &&
+		c.operationAbortedVerified === true &&
+		c.requestAttempts === 1 &&
+		c.replayBlocked === false
+	);
+}
+/** A verified final OperationAborted is a rejected request, never an ACK.
+ * Only fresh protocol receipts qualify. Other 200 errors remain ambiguous. */
+export function publicationVerdict(
+	attempts: ExportPublicationAttempt[],
+	protocol?: ExportPublicationRace['protocol']
+) {
 	if (attempts.some(a => a.outcome === 'pending')) return 'pending' as const;
+	if (
+		attempts.some(
+			a =>
+				a.completion?.replayBlocked || (a.requestAttempts !== undefined && a.requestAttempts !== 1)
+		)
+	)
+		return 'ambiguous' as const;
 	const winners = attempts.filter(a => a.outcome === 'acknowledged');
+	const semantic = protocol === 'hcp-final-error-v1' && attempts.some(finalConflict);
+	const winnerBody = winners[0]?.completion;
 	return winners.length === 1 &&
 		winners[0].validResponse === true &&
+		(!semantic || attempts.every(a => a.requestAttempts === 1)) &&
+		(!semantic ||
+			winners[0].operation === 'PutObject' ||
+			(winnerBody?.body === 'complete' &&
+				winnerBody.xml === 'result' &&
+				winnerBody.xmlParser === 'accepted' &&
+				winnerBody.sdkParser === 'resolved' &&
+				winnerBody.entityTagPresent &&
+				winnerBody.bucketPresent &&
+				winnerBody.keyPresent &&
+				winnerBody.identityUnique)) &&
 		attempts.every(
 			a =>
 				a === winners[0] ||
-				(a.outcome === 'rejected' && a.httpStatus === 409 && a.response === 'provider-error')
+				(a.outcome === 'rejected' &&
+					a.httpStatus === 409 &&
+					a.response === 'provider-error' &&
+					(a.wireHttpStatus === undefined || a.wireHttpStatus === 409) &&
+					(protocol !== 'hcp-final-error-v1' || a.failure?.providerCode === 'OperationAborted')) ||
+				(semantic && finalConflict(a))
 		)
 		? ('single-winner' as const)
 		: ('ambiguous' as const);
 }
 /** Validate complete new-format intent/receipts before crash recovery can use them.
  * HEAD/key/hash alone, pending operations and all legacy jobs remain insufficient. */
-function settledWinner(job: ExportJob, race: ExportPublicationRace) {
+export function publicationCandidate(job: ExportJob, race: ExportPublicationRace) {
 	const put = race.key === job.key + '.probe-put-race';
 	if (
 		(!put && race.key !== job.key + '.probe-race') ||
+		(race.protocol === 'hcp-final-error-v1' && job.integrityMode !== 'application-encrypted-hcp') ||
 		!['single-winner', 'verified'].includes(race.state) ||
 		race.binding !== bindingDigest(job.binding) ||
 		race.destination !== job.destination ||
@@ -134,10 +193,29 @@ function settledWinner(job: ExportJob, race: ExportPublicationRace) {
 				a.bytes > 1024 ||
 				!/^[a-f0-9]{64}$/.test(a.sha256)
 		) ||
-		publicationVerdict(race.attempts) !== 'single-winner'
+		publicationVerdict(race.attempts, race.protocol) !== 'single-winner'
 	)
 		return;
 	const winner = race.attempts.find(a => a.outcome === 'acknowledged')!;
+	if (race.protocol === 'hcp-final-error-v1') {
+		const v = publicValidation(winner.validation);
+		const ids = race.attempts
+			.filter(a => a.operation === 'CompleteMultipartUpload')
+			.map(a => a.uploadId);
+		if (
+			!v ||
+			!v.status200 ||
+			!v.entityTagPresent ||
+			!v.entityTagQuoted ||
+			!v.versionAbsentOrNull ||
+			v.objectIdentityRequired !== (winner.operation === 'CompleteMultipartUpload') ||
+			(v.objectIdentityRequired &&
+				(!v.bucketPresent || !v.bucketMatches || !v.keyPresent || !v.keyMatches)) ||
+			ids.some(id => !id) ||
+			new Set(ids).size !== 2
+		)
+			return;
+	}
 	if (
 		winner.httpStatus !== 200 ||
 		winner.response !== 'success' ||
@@ -147,6 +225,14 @@ function settledWinner(job: ExportJob, race: ExportPublicationRace) {
 	)
 		return;
 	return winner;
+}
+function settledWinner(job: ExportJob, race: ExportPublicationRace) {
+	if (
+		race.protocol === 'hcp-final-error-v1' &&
+		race.attempts.some(a => a.operation === 'CompleteMultipartUpload' && a.uploadAbsent !== true)
+	)
+		return;
+	return publicationCandidate(job, race);
 }
 export function publicationWinner(job: ExportJob, race: ExportPublicationRace) {
 	// Historical diagnostics can outlive cleanup, but recovery additionally
@@ -176,6 +262,7 @@ export function publicExportPublications(job: ExportJob) {
 		)
 		.slice(0, 2)
 		.map(race => ({
+			protocol: race.protocol === 'hcp-final-error-v1' ? 'hcp-final-error-v1' : 'legacy',
 			target: exportTarget(race.key),
 			httpAcknowledgements: race.attempts.filter(
 				a => a.wireHttpStatus === 200 || a.httpStatus === 200
@@ -203,6 +290,12 @@ export function publicExportPublications(job: ExportJob) {
 				operation: a.operation === 'PutObject' ? 'PutObject' : 'CompleteMultipartUpload',
 				httpStatus: safeStatus(a.httpStatus),
 				wireHttpStatus: safeStatus(a.wireHttpStatus),
+				requestAttempts:
+					Number.isInteger(a.requestAttempts) &&
+					a.requestAttempts! >= 1 &&
+					a.requestAttempts! <= 100
+						? a.requestAttempts
+						: undefined,
 				response: [
 					'success',
 					'invalid-response',

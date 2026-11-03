@@ -10,7 +10,8 @@ export async function writeOnceReferenceGateway(
 	endpoint: string,
 	ca: Buffer,
 	bucket: string,
-	prefix: string
+	prefix: string,
+	semanticConflicts = false
 ) {
 	const upstream = new URL(endpoint);
 	if (
@@ -33,6 +34,7 @@ export async function writeOnceReferenceGateway(
 		}),
 	});
 	const locks = new Set<string>();
+	let embeddedConflicts = 0;
 	const gateway = https.createServer(
 		{ cert: ca, key: await fs.readFile('/lab/tls/private.key') },
 		async (request, response) => {
@@ -47,9 +49,19 @@ export async function writeOnceReferenceGateway(
 			let locked = false;
 			const error = (status: number) => {
 				request.resume();
-				response.writeHead(status, { 'Content-Type': 'application/xml', 'Connection': 'close' });
+				const embedded =
+					semanticConflicts &&
+					status === 409 &&
+					request.method === 'POST' &&
+					url.searchParams.has('uploadId') &&
+					(key.endsWith('.probe-race') || key.endsWith('.probe-put-race'));
+				if (embedded) embeddedConflicts++;
+				response.writeHead(embedded ? 200 : status, {
+					'Content-Type': 'application/xml',
+					'Connection': 'close',
+				});
 				response.end(
-					'<Error><Code>OperationAborted</Code><Message>Disposable reference collision</Message></Error>'
+					'<Error><Code>OperationAborted</Code><Message>Disposable reference collision</Message></Error> \r\n'
 				);
 			};
 			try {
@@ -111,6 +123,7 @@ export async function writeOnceReferenceGateway(
 	await new Promise<void>(resolve => gateway.listen(0, '127.0.0.1', resolve));
 	const address = gateway.address() as { port: number };
 	return {
+		observations: () => ({ embeddedConflicts }),
 		endpoint: `https://127.0.0.1:${address.port}`,
 		close: async () => {
 			admin.destroy();

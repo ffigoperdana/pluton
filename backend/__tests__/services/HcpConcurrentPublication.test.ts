@@ -1,9 +1,14 @@
 import fs from 'fs';
 import path from 'path';
+import { Readable } from 'stream';
 import { spawnSync } from 'child_process';
 import { hcpPublicationProtocol } from '../fixtures/hcpPublicationProtocol';
 import { ManagedExportStore } from '../../src/stores/ManagedExportStore';
-import { publicExportPublications } from '../../src/utils/managedExport/ExportPublication';
+import {
+	publicExportPublications,
+	publicationVerdict,
+	publicationCandidate,
+} from '../../src/utils/managedExport/ExportPublication';
 import type { ExportJob } from '../../src/utils/managedExport/ExportPolicy';
 
 jest.mock('../../src/utils/logger', () => ({ planLogger: () => ({ info: jest.fn() }) }));
@@ -22,6 +27,265 @@ function journal(f: ReturnType<typeof hcpPublicationProtocol>) {
 	};
 }
 describe('real SDK concurrent multipart publication and safe durable cleanup', () => {
+	test('semantic rejection requires every fresh evidence field; historical or inconsistent receipts remain blocked', async () => {
+		const f = hcpPublicationProtocol('operation-aborted-a', true),
+			j = journal(f);
+		try {
+			await f.storage.preflight(f.job, signal(), j.update);
+			const saved = j.store.get(f.job.id)!,
+				race = saved.publicationRaces![0];
+			expect(publicationCandidate(saved, race)).toBeDefined();
+			const mutations: ((r: typeof race) => void)[] = [
+				r => {
+					r.protocol = undefined;
+				},
+				r => {
+					r.attempts[0].requestAttempts = undefined;
+				},
+				r => {
+					r.attempts[1].requestAttempts = 2;
+				},
+				r => {
+					r.attempts[0].completion!.operationAbortedVerified = undefined;
+				},
+				r => {
+					r.attempts[0].completion!.replayBlocked = true;
+				},
+				r => {
+					r.attempts[0].completion!.requestAttempts = 0;
+				},
+				r => {
+					r.attempts[0].completion!.body = 'incomplete';
+				},
+				r => {
+					r.attempts[0].completion!.namespace = 'unsupported';
+				},
+				r => {
+					r.attempts[0].completion!.sdkParser = 'resolved';
+				},
+				r => {
+					r.attempts[0].completion!.keyPresent = true;
+				},
+				r => {
+					r.attempts[0].failure!.providerCode = 'InternalError';
+				},
+				r => {
+					r.attempts[0].failure!.providerCode = 'unrecognized';
+				},
+				r => {
+					r.attempts[0].httpStatus = r.attempts[0].wireHttpStatus = 409;
+					r.attempts[0].response = 'provider-error';
+					r.attempts[0].failure!.providerCode = 'unrecognized';
+				},
+				r => {
+					r.attempts[0].operation = 'PutObject';
+				},
+				r => {
+					r.attempts[0].httpStatus = 409;
+				},
+				r => {
+					r.attempts[1].validResponse = false;
+				},
+				r => {
+					r.attempts[0].outcome = 'acknowledged';
+					r.attempts[0].validResponse = true;
+				},
+			];
+			for (const mutate of mutations) {
+				const copy = structuredClone(race);
+				mutate(copy);
+				expect(publicationVerdict(copy.attempts, copy.protocol)).toBe('ambiguous');
+			}
+			for (const field of [
+				'bucketMatches',
+				'keyMatches',
+				'versionAbsentOrNull',
+				'entityTagQuoted',
+			] as const) {
+				const copy = structuredClone(race);
+				copy.attempts[1].validation![field] = false;
+				expect(publicationCandidate(saved, copy)).toBeUndefined();
+			}
+			const duplicate = structuredClone(race);
+			duplicate.attempts[1].uploadId = duplicate.attempts[0].uploadId;
+			expect(publicationCandidate(saved, duplicate)).toBeUndefined();
+			expect(publicationCandidate({ ...saved, creationReceipts: [] }, race)).toBeUndefined();
+			expect(
+				publicationCandidate({ ...saved, integrityMode: 'hcp-write-once' }, race)
+			).toBeUndefined();
+			expect(f.objects.size).toBe(0);
+		} finally {
+			j.store.close();
+			f.close();
+		}
+	});
+	test('complete OperationAborted body and one valid winner require readback and resolved uploads', async () => {
+		const f = hcpPublicationProtocol('operation-aborted-a', true),
+			j = journal(f);
+		try {
+			await f.storage.preflight(f.job, signal(), j.update);
+			expect(publicExportPublications(j.store.get(f.job.id)!)[0]).toMatchObject({
+				acknowledgedResponses: 1,
+				validSuccessResponses: 1,
+				ambiguityRemaining: false,
+				operations: [
+					{
+						response: 'embedded-error',
+						httpStatus: 200,
+						providerCode: 'OperationAborted',
+						completion: {
+							body: 'complete',
+							xml: 'error',
+							xmlParser: 'accepted',
+							sdkParser: 'not-run',
+						},
+					},
+					{ response: 'success', acknowledged: true },
+				],
+			});
+			expect(f.job.preflightChecks).toContain('concurrent-publication');
+			expect(f.job.preflightChecks).toContain('cleanup');
+			expect(f.objects.size).toBe(0);
+			expect(f.uploads.size).toBe(0);
+		} finally {
+			j.store.close();
+			f.close();
+		}
+	});
+	test('a final OperationAborted loser is never an ACK, in either arrival order', async () => {
+		const f = hcpPublicationProtocol('operation-aborted-b', true),
+			j = journal(f);
+		try {
+			await f.storage.preflight(f.job, signal(), j.update);
+			const report = publicExportPublications(j.store.get(f.job.id)!)[0];
+			expect(report).toMatchObject({
+				protocol: 'hcp-final-error-v1',
+				acknowledgedResponses: 1,
+				validSuccessResponses: 1,
+				ambiguityRemaining: false,
+			});
+			expect(report.operations[1]).toMatchObject({
+				acknowledged: false,
+				response: 'embedded-error',
+				providerCode: 'OperationAborted',
+				uploadAbsent: true,
+				requestAttempts: 1,
+			});
+			expect(f.objects.size).toBe(0);
+			expect(f.uploads.size).toBe(0);
+		} finally {
+			j.store.close();
+			f.close();
+		}
+	});
+	test.each(['InternalError', 'SlowDown', 'private-unknown-code'])(
+		'other complete HTTP 200 errors remain ambiguous: %s',
+		async code => {
+			const f = hcpPublicationProtocol('race-error-' + code, true),
+				j = journal(f);
+			try {
+				await expect(f.storage.preflight(f.job, signal(), j.update)).rejects.toThrow();
+				expect(publicExportPublications(j.store.get(f.job.id)!)[0]).toMatchObject({
+					ambiguityRemaining: true,
+					objectProof: false,
+					acknowledgedResponses: 1,
+					validSuccessResponses: 1,
+				});
+				expect(f.objects.has(f.job.key + '.probe-race')).toBe(true);
+			} finally {
+				j.store.close();
+				f.close();
+			}
+		}
+	);
+	test.each([
+		'unknown-upload',
+		'abort-failure',
+		'parts-remain',
+		'listing-incomplete',
+		'listing-206',
+		'metadata-mismatch',
+		'hash-mismatch',
+		'missing-receipt',
+		'legacy',
+	])('final error never bypasses proof or multipart boundaries: %s', async fault => {
+		const f = hcpPublicationProtocol('operation-aborted-a', true),
+			j = journal(f);
+		const original = f.storage.client.config.requestHandler.handle;
+		let corrupted = false;
+		f.storage.client.config.requestHandler.handle = async (request: any, options: any) => {
+			const race = request.path.endsWith('.probe-race');
+			if (
+				request.query?.prefix?.endsWith('.probe-race') &&
+				['listing-incomplete', 'listing-206'].includes(fault)
+			)
+				return {
+					response: {
+						statusCode: fault === 'listing-206' ? 206 : 200,
+						headers: {},
+						body: Readable.from([
+							fault === 'listing-206'
+								? '<ListMultipartUploadsResult><IsTruncated>false</IsTruncated></ListMultipartUploadsResult>'
+								: '<ListMultipartUploadsResult/>',
+						]),
+					},
+				};
+			if (
+				race &&
+				request.method === 'DELETE' &&
+				request.query.uploadId &&
+				fault === 'abort-failure'
+			)
+				throw Object.assign(new Error('private'), {
+					name: 'AccessDenied',
+					$metadata: { httpStatusCode: 403 },
+				});
+			if (race && request.method === 'GET' && request.query.uploadId && fault === 'parts-remain')
+				return {
+					response: { statusCode: 200, headers: {}, body: Readable.from(['<ListPartsResult/>']) },
+				};
+			if (race && request.method === 'HEAD' && f.objects.has(f.job.key + '.probe-race')) {
+				const object = f.objects.get(f.job.key + '.probe-race')!;
+				if (fault === 'metadata-mismatch')
+					object.metadata['pluton-export-nonce'] = 'private-foreign';
+				if (fault === 'hash-mismatch' && !corrupted) {
+					object.body[0] ^= 1;
+					corrupted = true;
+				}
+			}
+			return original(request, options);
+		};
+		try {
+			await expect(
+				f.storage.preflight(f.job, signal(), fields => {
+					if (fields.publicationRaces?.[0]?.state === 'single-winner') {
+						if (fault === 'unknown-upload')
+							f.uploads.set('unknown-upload', {
+								key: f.job.key + '.probe-race',
+								metadata: {},
+								parts: new Map(),
+							});
+						if (fault === 'missing-receipt') fields.creationReceipts?.splice(0);
+						if (fault === 'legacy') fields.publicationRaces[0].protocol = undefined;
+					}
+					j.update(fields);
+				})
+			).rejects.toThrow();
+			const saved = j.store.get(f.job.id)!,
+				key = saved.key + '.probe-race';
+			expect(saved.ownedObjects?.some(p => p.key === key)).toBe(false);
+			expect(f.objects.has(key)).toBe(true);
+			await expect(f.storage.cleanup(saved, signal(), j.update)).rejects.toThrow();
+			expect(f.objects.has(key)).toBe(true);
+			expect(f.calls.some(c => c.method === 'DELETE' && c.key === key && !c.query.uploadId)).toBe(
+				false
+			);
+			if (fault === 'unknown-upload') expect(f.uploads.has('unknown-upload')).toBe(true);
+		} finally {
+			j.store.close();
+			f.close();
+		}
+	});
 	test('HTTP 200 headers followed by body connection reset are transport failure, not embedded XML evidence', async () => {
 		const f = hcpPublicationProtocol('second-body-reset', true),
 			j = journal(f);
@@ -494,79 +758,87 @@ describe('real SDK concurrent multipart publication and safe durable cleanup', (
 			f.close();
 		}
 	});
-	test.each(['before-receipt', 'after-receipt', 'settled'])(
-		'SIGKILL crash, reopen SQLite and bounded reconciliation: %s',
-		async phase => {
-			const f = hcpPublicationProtocol(),
-				file = path.join(f.root, 'journal', 'jobs.sqlite'),
-				provider = path.join(f.root, 'provider.json');
-			try {
-				const result = spawnSync(
-					process.execPath,
-					[
-						'--import',
-						'tsx',
-						path.join(__dirname, '../fixtures/hcpPublicationCrash.process.ts'),
-						file,
-						provider,
-						phase,
-					],
-					{
-						cwd: process.cwd(),
-						env: process.env,
-						encoding: 'utf8',
-						timeout: 20_000,
-						maxBuffer: 1024 * 1024,
-					}
-				);
-				expect(result.error?.code).not.toBe('ETIMEDOUT');
-				expect(result.signal === 'SIGKILL' || (result.status !== null && result.status !== 0)).toBe(
-					true
-				);
-				expect(fs.existsSync(provider)).toBe(true);
-				const snapshot = JSON.parse(fs.readFileSync(provider, 'utf8'));
-				for (const [key, object] of snapshot.objects)
-					f.objects.set(key, {
-						...object,
-						body: Buffer.from(object.body, 'base64'),
-						modified: new Date(object.modified),
-					});
-				for (const [id, upload] of snapshot.uploads)
-					f.uploads.set(id, {
-						...upload,
-						parts: new Map(upload.parts.map(([n, data]: any) => [n, Buffer.from(data, 'base64')])),
-					});
-				const store = new ManagedExportStore(file);
-				try {
-					const job = store.all()[0],
-						key = job.key + '.probe-race';
-					if (phase !== 'before-receipt') {
-						expect(publicExportPublications(job)[0].operations[0].completion).toMatchObject({
-							body: 'complete',
-							xml: 'result',
-							xmlParser: 'accepted',
-							sdkParser: 'resolved',
-						});
-					}
-					const cleanup = f.storage.cleanup(job, signal(), fields => store.update(job.id, fields));
-					if (phase === 'settled') {
-						await cleanup;
-						expect(f.objects.size).toBe(0);
-					} else {
-						await expect(cleanup).rejects.toThrow();
-						expect(f.objects.has(key)).toBe(true);
-					}
-					expect(f.uploads.size).toBe(0);
-					if (phase === 'before-receipt')
-						expect(
-							store.get(job.id)?.creationReceipts?.some(r => r.key === key && r.acknowledged)
-						).toBe(false);
-				} finally {
-					store.close();
+	test.each([
+		'before-receipt',
+		'after-receipt',
+		'settled',
+		'semantic-before-receipt',
+		'semantic-after-receipt',
+		'semantic-settled',
+	])('SIGKILL crash, reopen SQLite and bounded reconciliation: %s', async phase => {
+		const semantic = phase.startsWith('semantic-');
+		const f = hcpPublicationProtocol('', semantic),
+			file = path.join(f.root, 'journal', 'jobs.sqlite'),
+			provider = path.join(f.root, 'provider.json');
+		try {
+			const result = spawnSync(
+				process.execPath,
+				[
+					'--import',
+					'tsx',
+					path.join(__dirname, '../fixtures/hcpPublicationCrash.process.ts'),
+					file,
+					provider,
+					phase,
+					...(semantic ? [path.join(f.root, 'keyring.json')] : []),
+				],
+				{
+					cwd: process.cwd(),
+					env: process.env,
+					encoding: 'utf8',
+					timeout: 20_000,
+					maxBuffer: 1024 * 1024,
 				}
+			);
+			expect(result.error?.code).not.toBe('ETIMEDOUT');
+			expect(result.signal === 'SIGKILL' || (result.status !== null && result.status !== 0)).toBe(
+				true
+			);
+			expect(fs.existsSync(provider)).toBe(true);
+			const snapshot = JSON.parse(fs.readFileSync(provider, 'utf8'));
+			for (const [key, object] of snapshot.objects)
+				f.objects.set(key, {
+					...object,
+					body: Buffer.from(object.body, 'base64'),
+					modified: new Date(object.modified),
+				});
+			for (const [id, upload] of snapshot.uploads)
+				f.uploads.set(id, {
+					...upload,
+					parts: new Map(upload.parts.map(([n, data]: any) => [n, Buffer.from(data, 'base64')])),
+				});
+			const store = new ManagedExportStore(file);
+			try {
+				const job = store.all()[0],
+					key = job.key + '.probe-race';
+				if (!phase.endsWith('before-receipt')) {
+					expect(
+						publicExportPublications(job)[0].operations.find(a => a.acknowledged)?.completion
+					).toMatchObject({
+						body: 'complete',
+						xml: 'result',
+						xmlParser: 'accepted',
+						sdkParser: 'resolved',
+					});
+				}
+				const cleanup = f.storage.cleanup(job, signal(), fields => store.update(job.id, fields));
+				if (phase.endsWith('settled')) {
+					await cleanup;
+					expect(f.objects.size).toBe(0);
+				} else {
+					await expect(cleanup).rejects.toThrow();
+					expect(f.objects.has(key)).toBe(true);
+				}
+				expect(f.uploads.size).toBe(0);
+				if (phase.endsWith('before-receipt'))
+					expect(
+						store.get(job.id)?.creationReceipts?.some(r => r.key === key && r.acknowledged)
+					).toBe(false);
 			} finally {
-				f.close();
+				store.close();
 			}
+		} finally {
+			f.close();
 		}
-	);
+	});
 });
