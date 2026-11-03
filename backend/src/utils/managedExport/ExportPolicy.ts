@@ -6,6 +6,7 @@ import { AppError } from '../AppError';
 import { httpsS3Endpoint } from '../storageSecurity';
 import type { ManagedExportMode, ManagedExportSummary } from '../restic/ManagedExportPolicy';
 import type { ExportDiagnostic } from './ExportDiagnostics';
+import type { ExportPublicationRace } from './ExportPublication';
 import type { ExportEncryption } from './ExportEncryption';
 import { ExportKeyring } from './ExportKeyring';
 
@@ -320,6 +321,8 @@ export type ExportJob = {
 	publicationAttempted?: boolean;
 	/** Receipt of a successful creation response, NOT permission to delete. */
 	creationReceipts?: { key: string; acknowledged: boolean }[];
+	/** Private, bounded per-request receipts. Never inferred for historical jobs. */
+	publicationRaces?: ExportPublicationRace[];
 	preflightFailure?: ExportDiagnostic;
 	cleanupFailure?: ExportDiagnostic;
 	lastCleanupFailure?: ExportDiagnostic;

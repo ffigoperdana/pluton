@@ -173,7 +173,7 @@ function fixture(encrypted = false) {
 			);
 			uploads.delete(p.UploadId);
 			if (fault === 'lost-completion') throw fail(503);
-			return result;
+			return { ...result, Bucket: p.Bucket, Key: p.Key };
 		}
 		if (name === 'ListObjectsV2Command')
 			return {

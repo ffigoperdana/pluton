@@ -43,6 +43,13 @@ import {
 	storedExportBytes,
 	storedExportSha,
 } from './ExportEncryption';
+import {
+	publicationVerdict,
+	publicationWinner,
+	publicExportPublications,
+	type ExportPublicationAttempt,
+	type ExportPublicationRace,
+} from './ExportPublication';
 
 const status = (e: unknown) =>
 	(e as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
@@ -105,11 +112,12 @@ export class HcpWriteOnceStorage {
 		}
 	}
 	private receipt(job: ExportJob, key: string, acknowledged: boolean, update: Update) {
-		job.creationReceipts = [
+		const creationReceipts = [
 			...(job.creationReceipts || []).filter(r => r.key !== key),
 			{ key, acknowledged },
 		];
-		update({ creationReceipts: job.creationReceipts });
+		update({ creationReceipts });
+		job.creationReceipts = creationReceipts;
 	}
 	private matches(job: ExportJob, key: string, head: HeadObjectCommandOutput) {
 		const proof = job.ownedObjects?.find(p => p.key === key);
@@ -276,12 +284,15 @@ export class HcpWriteOnceStorage {
 				'object-mismatch',
 				exportTarget(key)
 			);
-		job.ownedObjects = [
+		const ownedObjects = [
 			...(job.ownedObjects || []).filter(p => p.key !== key),
 			{ key, etag: result.ETag, bytes, sha256: digest, created: head.LastModified.toISOString() },
 		];
-		update({ ownedObjects: job.ownedObjects });
-		if (verify) await this.readback(job, key, signal);
+		// Validate the complete candidate before publishing a cleanup proof. A
+		// failed journal callback must not leave a newly minted volatile proof.
+		if (verify) await this.readback({ ...job, ownedObjects }, key, signal);
+		update({ ownedObjects });
+		job.ownedObjects = ownedObjects;
 	}
 	async identity(job: ExportJob, signal: AbortSignal) {
 		const identity = job.identity;
@@ -577,14 +588,202 @@ export class HcpWriteOnceStorage {
 	) {
 		// Deliberately NO AWS conditional header: the provider's namespace policy
 		// must reject collisions even when those headers are ignored/unsupported.
-		return this.send(
-			new CompleteMultipartUploadCommand({
-				...upload.params,
-				UploadId: upload.id,
-				MultipartUpload: { Parts: upload.parts },
-			}),
-			signal
+		const command = new CompleteMultipartUploadCommand({
+			...upload.params,
+			UploadId: upload.id,
+			MultipartUpload: { Parts: upload.parts },
+		});
+		let wireHttpStatus: number | undefined;
+		// Observe the numeric status BEFORE the pinned SDK's embedded-200-error
+		// middleware rewrites it. Never inspect/copy a body, header or signature.
+		command.middlewareStack.addRelativeTo(
+			(next: (args: any) => Promise<any>) => async (args: any) => {
+				const result = await next(args);
+				wireHttpStatus = exportHttpStatus({
+					$metadata: { httpStatusCode: (result.response as { statusCode?: number })?.statusCode },
+				});
+				return result;
+			},
+			{
+				relation: 'after',
+				toMiddleware: 'throw200ExceptionsMiddleware',
+				name: 'exportCompletionWireStatus',
+			}
 		);
+		return this.send(command, signal).catch(error => {
+			if (error instanceof ExportOperationError) {
+				error.wireHttpStatus = wireHttpStatus;
+				if (wireHttpStatus === 200 && error.responseKind !== 'sdk-parsing-error')
+					error.responseKind = 'embedded-error';
+			}
+			throw error;
+		});
+	}
+	private saveRace(
+		job: ExportJob,
+		race: ExportPublicationRace,
+		update: Update,
+		acknowledged = false
+	) {
+		const publicationRaces = [
+			...(job.publicationRaces || []).filter(r => r.key !== race.key),
+			race,
+		];
+		if (publicationRaces.length > 2) throw new TemporaryExportError('quota-exceeded');
+		const creationReceipts = acknowledged
+			? [
+					...(job.creationReceipts || []).filter(r => r.key !== race.key),
+					{ key: race.key, acknowledged: true },
+				]
+			: job.creationReceipts;
+		update({ publicationRaces, creationReceipts }); // synchronous SQLite FULL commit
+		job.publicationRaces = publicationRaces;
+		job.creationReceipts = creationReceipts;
+	}
+	private async publicationRace(
+		job: ExportJob,
+		signal: AbortSignal,
+		update: Update,
+		bodies: Buffer[],
+		includePut: boolean
+	) {
+		const key = job.key + (includePut ? '.probe-put-race' : '.probe-race');
+		await this.absent(job, key, signal);
+		const a = await this.multipart(job, key, [bodies[0]], signal, update);
+		const b = await this.multipart(job, key, [bodies[1]], signal, update);
+		const attempts: ExportPublicationAttempt[] = bodies
+			.slice(0, includePut ? 3 : 2)
+			.map((body, i) => ({
+				competitor: (['multipart-a', 'multipart-b', 'put'] as const)[i],
+				operation: i === 2 ? 'PutObject' : 'CompleteMultipartUpload',
+				bytes: body.length,
+				sha256: sha(body),
+				uploadId: i < 2 ? [a.id, b.id][i] : undefined,
+				outcome: 'pending',
+			}));
+		this.saveRace(
+			job,
+			{
+				key,
+				binding: bindingDigest(job.binding),
+				destination: job.destination,
+				nonce: job.ownershipNonce!,
+				state: 'pending',
+				attempts,
+			},
+			update
+		);
+		let journalFailed = false;
+		const settle = (i: number, fields: Partial<ExportPublicationAttempt>) => {
+			const current = job.publicationRaces!.find(r => r.key === key)!;
+			const next = current.attempts.map((attempt, index) =>
+				index === i ? { ...attempt, ...fields } : attempt
+			);
+			try {
+				this.saveRace(
+					job,
+					{
+						...current,
+						attempts: next,
+						state: journalFailed ? 'ambiguous' : publicationVerdict(next),
+					},
+					update,
+					fields.outcome === 'acknowledged'
+				);
+			} catch (error) {
+				journalFailed = true;
+				throw error;
+			}
+		};
+		const execute = async (i: number) => {
+			let result: any;
+			try {
+				result = await (i < 2
+					? this.complete([a, b][i], signal)
+					: this.send(
+							new PutObjectCommand({
+								...this.scope(job, key),
+								Body: bodies[i],
+								ContentLength: bodies[i].length,
+								...this.sse(job),
+								Metadata: this.metadata(job),
+							}),
+							signal
+						));
+			} catch (error) {
+				settle(i, {
+					outcome: 'rejected',
+					httpStatus: exportHttpStatus(error),
+					wireHttpStatus: error instanceof ExportOperationError ? error.wireHttpStatus : undefined,
+					response: error instanceof ExportOperationError ? error.responseKind : 'transport-error',
+					failure: {
+						...exportDiagnostic(
+							error,
+							job,
+							'preflight',
+							'concurrent-publication',
+							attempts[i].operation
+						),
+						creationAcknowledged: false,
+						durableOwnershipProof: false,
+					},
+				});
+				return;
+			}
+			const validResponse =
+				exportHttpStatus(result) === 200 &&
+				typeof result.ETag === 'string' &&
+				/^"[^"\r\n]{1,1022}"$/.test(result.ETag) &&
+				(!result.VersionId || result.VersionId === 'null') &&
+				(i === 2 || (result.Bucket === this.config.bucket && result.Key === key));
+			// Receipt first, even when another competitor later fails or this reply
+			// lacks required metadata. A receipt alone never authorizes deletion.
+			settle(i, {
+				outcome: 'acknowledged',
+				httpStatus: exportHttpStatus(result),
+				etag: validResponse ? result.ETag : undefined,
+				validResponse,
+				response: validResponse ? 'success' : 'invalid-response',
+			});
+		};
+		await Promise.allSettled(attempts.map((_, i) => execute(i)));
+		const race = job.publicationRaces!.find(r => r.key === key)!;
+		if (journalFailed) {
+			// Do not use any in-memory proof after uncertain persistence.
+			race.state = 'ambiguous';
+			throw new ExportOperationError(
+				'ownership-proof',
+				{},
+				'race-journal-failed',
+				'object-mismatch',
+				exportTarget(key)
+			);
+		}
+		const winner = publicationWinner(job, race);
+		if (!winner) {
+			const multiple = race.attempts.filter(a => a.outcome === 'acknowledged').length > 1;
+			throw new ExportOperationError(
+				'CompleteMultipartUpload',
+				{},
+				multiple
+					? 'race-multiple-successes'
+					: race.attempts.some(a => a.response === 'invalid-response')
+						? 'race-response-invalid'
+						: 'race-ambiguous',
+				'object-mismatch',
+				exportTarget(key)
+			);
+		}
+		await this.record(
+			job,
+			key,
+			{ ETag: winner.etag, $metadata: { httpStatusCode: winner.httpStatus } },
+			winner.bytes,
+			winner.sha256,
+			signal,
+			update
+		);
+		this.saveRace(job, { ...race, state: 'verified' }, update);
 	}
 	private async rejected(operation: () => Promise<unknown>) {
 		try {
@@ -793,44 +992,9 @@ export class HcpWriteOnceStorage {
 			passed('full-readback');
 			capability = 'concurrent-publication';
 			for (const includePut of [false, true]) {
-				const raceKey = job.key + (includePut ? '.probe-put-race' : '.probe-race');
-				await this.absent(job, raceKey, signal);
-				const a = await this.multipart(job, raceKey, [data], signal, update);
-				const b = await this.multipart(job, raceKey, [other], signal, update);
 				// Prove MP/MP on its own: a normal PUT winning a three-way race
 				// must not conceal a broken concurrent multipart publication path.
-				const requests = [this.complete(a, signal), this.complete(b, signal)];
-				if (includePut)
-					requests.push(
-						this.send(
-							new PutObjectCommand({
-								...this.scope(job, raceKey),
-								Body: tail,
-								ContentLength: tail.length,
-								...this.sse(job),
-								Metadata: this.metadata(job),
-							}),
-							signal
-						)
-					);
-				const results = await Promise.allSettled(requests);
-				const winners = results.flatMap((r, i) => (r.status === 'fulfilled' ? [i] : []));
-				if (
-					winners.length !== 1 ||
-					results.some(r => r.status === 'rejected' && status(r.reason) !== 409)
-				)
-					throw new TemporaryExportError('security-capability-missing');
-				const win = winners[0],
-					bytes = [data, other, tail][win];
-				await this.record(
-					job,
-					raceKey,
-					(results[win] as PromiseFulfilledResult<any>).value,
-					bytes.length,
-					sha(bytes),
-					signal,
-					update
-				);
+				await this.publicationRace(job, signal, update, [data, other, tail], includePut);
 			}
 			// Normal PUT also races a completion against an already committed key.
 			await Promise.all([
@@ -1062,7 +1226,12 @@ export class HcpWriteOnceStorage {
 				});
 			}
 		}
-		return { readOnly: true as const, ownershipAdopted: false as const, observations };
+		return {
+			readOnly: true as const,
+			ownershipAdopted: false as const,
+			observations,
+			publications: publicExportPublications(job),
+		};
 	}
 	async cleanup(job: ExportJob, signal: AbortSignal, update: Update = () => {}) {
 		job.cleanupState = { objects: 'unverified', multipart: 'unverified' };
@@ -1107,6 +1276,7 @@ export class HcpWriteOnceStorage {
 			);
 		for (const upload of job.ownedUploads || []) {
 			if (!keys.includes(upload.key)) throw new TemporaryExportError('cleanup-pending');
+			let abortAcknowledged = false;
 			try {
 				await this.send(
 					new AbortMultipartUploadCommand({
@@ -1115,6 +1285,7 @@ export class HcpWriteOnceStorage {
 					}),
 					signal
 				);
+				abortAcknowledged = true;
 			} catch (e) {
 				if (!absent(e)) throw e;
 			}
@@ -1128,7 +1299,23 @@ export class HcpWriteOnceStorage {
 					signal
 				);
 			} catch (e) {
-				if (absent(e)) continue;
+				if (absent(e)) {
+					const race = job.publicationRaces?.find(r => r.key === upload.key);
+					if (race)
+						this.saveRace(
+							job,
+							{
+								...race,
+								attempts: race.attempts.map(a =>
+									a.uploadId === upload.uploadId
+										? { ...a, uploadAbsent: true, abortAcknowledged }
+										: a
+								),
+							},
+							update
+						);
+					continue;
+				}
 				throw e;
 			}
 			throw new ExportOperationError(
@@ -1151,7 +1338,34 @@ export class HcpWriteOnceStorage {
 			// No durable successful response proof => no adoption, even with a
 			// matching public marker. A crash/lost response requires operator review.
 			const proof = job.ownedObjects?.find(p => p.key === key);
-			if (!proof || !job.ownershipNonce)
+			const race = job.publicationRaces?.find(r => r.key === key);
+			if (race) {
+				const winner = publicationWinner(job, race);
+				if (!winner)
+					throw new ExportOperationError(
+						'ownership-proof',
+						observed,
+						'race-ambiguous',
+						'cleanup-pending',
+						exportTarget(key)
+					);
+				if (!proof) {
+					// Only new, durably settled receipts can complete their interrupted
+					// independent verification. This never manufactures legacy evidence.
+					await this.record(
+						job,
+						key,
+						{ ETag: winner.etag, $metadata: { httpStatusCode: winner.httpStatus } },
+						winner.bytes,
+						winner.sha256,
+						signal,
+						update
+					);
+					this.saveRace(job, { ...race, state: 'verified' }, update);
+				}
+			}
+			const verifiedProof = job.ownedObjects?.find(p => p.key === key);
+			if (!verifiedProof || !job.ownershipNonce)
 				throw new ExportOperationError(
 					'ownership-proof',
 					observed,
@@ -1165,7 +1379,9 @@ export class HcpWriteOnceStorage {
 			await this.send(
 				new DeleteObjectCommand({
 					...this.scope(job, key),
-					...(job.providerEvidence?.cleanup === 'conditional-etag' ? { IfMatch: proof.etag } : {}),
+					...(job.providerEvidence?.cleanup === 'conditional-etag'
+						? { IfMatch: verifiedProof.etag }
+						: {}),
 				}),
 				signal
 			);
