@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { Readable } from 'stream';
 import {
 	S3Client,
+	S3ServiceException,
 	GetBucketVersioningCommand,
 	PutObjectCommand,
 	HeadObjectCommand,
@@ -45,6 +46,7 @@ import {
 } from './ExportEncryption';
 import {
 	publicationVerdict,
+	publicationValidation,
 	publicationWinner,
 	publicExportPublications,
 	type ExportPublicationAttempt,
@@ -102,13 +104,31 @@ export class HcpWriteOnceStorage {
 		try {
 			return await this.client.send(command as HeadObjectCommand, { abortSignal: signal });
 		} catch (error) {
-			throw new ExportOperationError(
+			const failure = new ExportOperationError(
 				command.constructor.name.replace(/Command$/, '') as ExportOperation,
 				error,
 				'provider-error',
 				'storage-unavailable',
 				exportTarget((command.input as { Key?: string }).Key)
 			);
+			if (
+				command instanceof CompleteMultipartUploadCommand &&
+				['network', 'deadline', 'aborted'].includes(failure.providerCategory)
+			)
+				failure.responseKind = 'transport-error';
+			if (
+				command instanceof CompleteMultipartUploadCommand &&
+				error &&
+				typeof error === 'object' &&
+				Object.prototype.hasOwnProperty.call(error, '$response') &&
+				!(error instanceof S3ServiceException) &&
+				failure.providerCategory === 'service-error'
+			) {
+				// The pinned Smithy deserializer attaches $response to parsing
+				// failures too. Check its presence only; never retain/read its contents.
+				failure.responseKind = 'sdk-parsing-error';
+			}
+			throw failure;
 		}
 	}
 	private receipt(job: ExportJob, key: string, acknowledged: boolean, update: Update) {
@@ -610,14 +630,20 @@ export class HcpWriteOnceStorage {
 				name: 'exportCompletionWireStatus',
 			}
 		);
-		return this.send(command, signal).catch(error => {
-			if (error instanceof ExportOperationError) {
-				error.wireHttpStatus = wireHttpStatus;
-				if (wireHttpStatus === 200 && error.responseKind !== 'sdk-parsing-error')
-					error.responseKind = 'embedded-error';
-			}
-			throw error;
-		});
+		return this.send(command, signal)
+			.then(result => ({ ...result, exportWireHttpStatus: wireHttpStatus }))
+			.catch(error => {
+				if (error instanceof ExportOperationError) {
+					error.wireHttpStatus = wireHttpStatus;
+					if (
+						wireHttpStatus === 200 &&
+						error.responseKind === 'provider-error' &&
+						!['network', 'deadline', 'aborted'].includes(error.providerCategory)
+					)
+						error.responseKind = 'embedded-error';
+				}
+				throw error;
+			});
 	}
 	private saveRace(
 		job: ExportJob,
@@ -730,19 +756,17 @@ export class HcpWriteOnceStorage {
 				});
 				return;
 			}
-			const validResponse =
-				exportHttpStatus(result) === 200 &&
-				typeof result.ETag === 'string' &&
-				/^"[^"\r\n]{1,1022}"$/.test(result.ETag) &&
-				(!result.VersionId || result.VersionId === 'null') &&
-				(i === 2 || (result.Bucket === this.config.bucket && result.Key === key));
+			const validation = publicationValidation(result, this.config.bucket, key, i < 2);
+			const validResponse = validation.valid;
 			// Receipt first, even when another competitor later fails or this reply
 			// lacks required metadata. A receipt alone never authorizes deletion.
 			settle(i, {
 				outcome: 'acknowledged',
 				httpStatus: exportHttpStatus(result),
+				wireHttpStatus: i < 2 ? result.exportWireHttpStatus : undefined,
 				etag: validResponse ? result.ETag : undefined,
 				validResponse,
+				validation: validation.checks,
 				response: validResponse ? 'success' : 'invalid-response',
 			});
 		};
@@ -761,15 +785,21 @@ export class HcpWriteOnceStorage {
 		}
 		const winner = publicationWinner(job, race);
 		if (!winner) {
-			const multiple = race.attempts.filter(a => a.outcome === 'acknowledged').length > 1;
+			const multiple =
+				race.attempts.filter(a => a.outcome === 'acknowledged' && a.validResponse === true).length >
+				1;
+			const multipleAcknowledgements =
+				race.attempts.filter(a => a.outcome === 'acknowledged').length > 1;
 			throw new ExportOperationError(
 				'CompleteMultipartUpload',
 				{},
 				multiple
 					? 'race-multiple-successes'
-					: race.attempts.some(a => a.response === 'invalid-response')
-						? 'race-response-invalid'
-						: 'race-ambiguous',
+					: multipleAcknowledgements
+						? 'race-multiple-acknowledgements'
+						: race.attempts.some(a => a.response === 'invalid-response')
+							? 'race-response-invalid'
+							: 'race-ambiguous',
 				'object-mismatch',
 				exportTarget(key)
 			);

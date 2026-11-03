@@ -22,6 +22,194 @@ function journal(f: ReturnType<typeof hcpPublicationProtocol>) {
 	};
 }
 describe('real SDK concurrent multipart publication and safe durable cleanup', () => {
+	test('HTTP 200 headers followed by body connection reset are transport failure, not embedded XML evidence', async () => {
+		const f = hcpPublicationProtocol('second-body-reset', true),
+			j = journal(f);
+		try {
+			await expect(f.storage.preflight(f.job, signal(), j.update)).rejects.toThrow();
+			const report = publicExportPublications(j.store.get(f.job.id)!)[0];
+			expect(report.operations[1]).toMatchObject({
+				wireHttpStatus: 200,
+				response: 'transport-error',
+				providerCategory: 'network',
+				acknowledged: false,
+			});
+			expect(report).toMatchObject({ ambiguityRemaining: true, objectProof: false });
+			expect(f.objects.has(f.job.key + '.probe-race')).toBe(true);
+		} finally {
+			j.store.close();
+			f.close();
+		}
+	});
+	test.each([
+		['second-missing-etag', { entityTagPresent: false, entityTagQuoted: false }],
+		['second-unquoted-etag', { entityTagPresent: true, entityTagQuoted: false }],
+		['second-missing-bucket', { bucketPresent: false, bucketMatches: false }],
+		['second-wrong-bucket', { bucketPresent: true, bucketMatches: false }],
+		['second-missing-key', { keyPresent: false, keyMatches: false }],
+		['second-wrong-key', { keyPresent: true, keyMatches: false }],
+		['second-version', { versionAbsentOrNull: false }],
+	])(
+		'one valid 200 and one invalid 200 identifies exact schema failure without inferring a second commit: %s',
+		async (fault, failed) => {
+			const f = hcpPublicationProtocol(fault as string, true),
+				j = journal(f);
+			try {
+				await expect(f.storage.preflight(f.job, signal(), j.update)).rejects.toThrow();
+				const saved = j.store.get(f.job.id)!,
+					report = publicExportPublications(saved)[0];
+				expect(saved.preflightFailure).toMatchObject({
+					detail: 'race-multiple-acknowledgements',
+					target: 'race',
+				});
+				expect(report).toMatchObject({
+					acknowledgedResponses: 2,
+					validSuccessResponses: 1,
+					multipleAcknowledgements: true,
+					multipleSuccesses: false,
+					ambiguityRemaining: true,
+					objectProof: false,
+					proofVerified: false,
+				});
+				expect(report.operations[0]).toMatchObject({
+					httpStatus: 200,
+					wireHttpStatus: 200,
+					response: 'success',
+					validationEvidence: 'recorded',
+					validation: {
+						status200: true,
+						entityTagPresent: true,
+						entityTagQuoted: true,
+						versionAbsentOrNull: true,
+						objectIdentityRequired: true,
+						bucketPresent: true,
+						bucketMatches: true,
+						keyPresent: true,
+						keyMatches: true,
+					},
+				});
+				expect(report.operations[1]).toMatchObject({
+					httpStatus: 200,
+					wireHttpStatus: 200,
+					response: 'invalid-response',
+					acknowledged: true,
+					durableReceipt: true,
+					validationEvidence: 'recorded',
+					validation: { status200: true, ...(failed as object) },
+				});
+				const key = f.job.key + '.probe-race';
+				expect(f.commits.filter(c => c.key === key)).toHaveLength(1); // independent provider fixture evidence, not application inference
+				expect(saved.ownedObjects?.some(p => p.key === key)).toBe(false);
+				expect(f.objects.has(key)).toBe(true);
+				expect(f.uploads.size).toBe(0);
+				const before = JSON.stringify(j.store.get(saved.id));
+				const diagnosis = await f.storage.inspectPreflight(saved, signal());
+				expect(diagnosis.publications).toEqual(publicExportPublications(saved));
+				expect(JSON.stringify(j.store.get(saved.id))).toBe(before);
+				expect(JSON.stringify(report)).not.toMatch(
+					/private-|foreign-|\.tar|nonce|uploadId|example.internal|authorization/i
+				);
+				await expect(
+					f.storage.cleanup(structuredClone(saved), signal(), j.update)
+				).rejects.toThrow();
+				expect(f.objects.has(key)).toBe(true);
+			} finally {
+				j.store.close();
+				f.close();
+			}
+		}
+	);
+	test('two schema-valid responses do not establish two independently observed commits', async () => {
+		const f = hcpPublicationProtocol('schema-only-success', true),
+			j = journal(f);
+		try {
+			await expect(f.storage.preflight(f.job, signal(), j.update)).rejects.toThrow();
+			const report = publicExportPublications(j.store.get(f.job.id)!)[0];
+			expect(report).toMatchObject({
+				acknowledgedResponses: 2,
+				validSuccessResponses: 2,
+				multipleSuccesses: true,
+				ambiguityRemaining: true,
+				objectProof: false,
+			});
+			expect(f.job.preflightFailure?.detail).toBe('race-multiple-successes');
+			expect(f.commits.filter(c => c.key === f.job.key + '.probe-race')).toHaveLength(1);
+			expect(f.objects.has(f.job.key + '.probe-race')).toBe(true);
+		} finally {
+			j.store.close();
+			f.close();
+		}
+	});
+	test.each(['same-node', 'different-nodes'] as const)(
+		'global write-once model retains exact guarantees under simulated routing: %s',
+		async routing => {
+			const f = hcpPublicationProtocol('', true, routing),
+				j = journal(f);
+			try {
+				await f.storage.preflight(f.job, signal(), j.update);
+				expect(new Set(f.completionRoutes).size).toBe(routing === 'same-node' ? 1 : 2);
+				expect(f.objects.size).toBe(0);
+				expect(f.uploads.size).toBe(0);
+			} finally {
+				j.store.close();
+				f.close();
+			}
+		}
+	);
+	test('a node-local collision model may pass one route but concurrent different-node overwrite remains blocked', async () => {
+		const f = hcpPublicationProtocol('node-local-overwrite', true, 'different-nodes'),
+			j = journal(f);
+		try {
+			await expect(f.storage.preflight(f.job, signal(), j.update)).rejects.toThrow();
+			const commits = f.commits.filter(c => c.key === f.job.key + '.probe-race');
+			expect(new Set(commits.map(c => c.route)).size).toBe(2);
+			expect(new Set(commits.map(c => c.sha256)).size).toBe(2);
+			expect(f.job.preflightFailure?.detail).toBe('race-multiple-successes');
+			expect(publicExportPublications(j.store.get(f.job.id)!)[0]).toMatchObject({
+				multipleSuccesses: true,
+				objectProof: false,
+			});
+			expect(f.objects.has(f.job.key + '.probe-race')).toBe(true);
+		} finally {
+			j.store.close();
+			f.close();
+		}
+	});
+	test.each(['second-embedded-whitespace', 'second-malformed', 'second-duplicate-etag'])(
+		'real SDK XML formatting remains fail-closed, not normalized to a conflict: %s',
+		async fault => {
+			const f = hcpPublicationProtocol(fault, true),
+				j = journal(f);
+			try {
+				await expect(f.storage.preflight(f.job, signal(), j.update)).rejects.toThrow();
+				const report = publicExportPublications(j.store.get(f.job.id)!)[0];
+				expect(report).toMatchObject({ ambiguityRemaining: true, objectProof: false });
+				expect(report.operations[1].response).not.toBe('success');
+				expect(report.operations[1].httpStatus).not.toBe(409);
+				if (fault === 'second-embedded-whitespace') {
+					expect(report.operations[1]).toMatchObject({
+						httpStatus: 200,
+						response: 'invalid-response',
+						acknowledged: true,
+						validation: { entityTagPresent: false, bucketPresent: false, keyPresent: false },
+					});
+				} else {
+					expect(report.operations[1]).toMatchObject({
+						httpStatus: 200,
+						wireHttpStatus: 200,
+						response: 'sdk-parsing-error',
+						acknowledged: false,
+						validationEvidence: 'not-evaluated',
+					});
+				}
+				expect(f.job.preflightChecks).not.toContain('concurrent-publication');
+				expect(f.objects.has(f.job.key + '.probe-race')).toBe(true);
+			} finally {
+				j.store.close();
+				f.close();
+			}
+		}
+	);
 	test.each([false, true])(
 		'one winner and 409 losers, full readback, marker preservation: encrypted=%s',
 		async encrypted => {
