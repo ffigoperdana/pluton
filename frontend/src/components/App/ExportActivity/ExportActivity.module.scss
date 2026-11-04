@@ -1,0 +1,49 @@
+.floating {
+   position: fixed;
+   right: max(16px, env(safe-area-inset-right));
+   bottom: max(16px, env(safe-area-inset-bottom));
+   z-index: 90;
+   button {
+      padding: 10px 14px;
+      border: 1px solid var(--line-color, #777);
+      border-radius: 24px;
+      background: var(--content-background-color, Canvas);
+      color: var(--content-text-color, CanvasText);
+      box-shadow: 0 2px 8px #0002;
+   }
+   button:focus-visible {
+      outline: 2px solid currentColor;
+      outline-offset: 3px;
+   }
+}
+.list {
+   list-style: none;
+   padding: 0;
+   li {
+      margin-block: 8px;
+   }
+   button {
+      width: 100%;
+      text-align: left;
+      padding: 12px;
+      overflow-wrap: anywhere;
+   }
+   span,
+   strong {
+      display: block;
+      margin-block: 4px;
+   }
+}
+@media (max-width: 640px) {
+   .floating {
+      bottom: max(72px, env(safe-area-inset-bottom));
+      right: 12px;
+   }
+}
+@media (prefers-reduced-motion: reduce) {
+   .floating,
+   .list {
+      animation: none;
+      transition: none;
+   }
+}

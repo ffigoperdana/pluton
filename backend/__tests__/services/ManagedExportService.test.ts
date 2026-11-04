@@ -253,6 +253,218 @@ describe('temporary export policy and durable admission', () => {
 	});
 });
 describe('durable independent export lifecycle', () => {
+	test('discovery survives reopening the private journal and never invokes the namespace reservation callback', async () => {
+		const h = harness();
+		const record = h.store.admit(owner, binding, h.config);
+		h.store.update(record.id, { state: 'cancelled', cleaned: false, cleanupAttempts: 10 });
+		await h.service.shutdown();
+		const reopened = new ManagedExportStore(h.file);
+		const isolation = jest.fn(async () => {
+			throw new Error('readiness must not reserve a namespace');
+		});
+		const storage = jest.fn(() => {
+			throw new Error('GET must not connect to a provider');
+		});
+		const service = new ManagedExportService(
+			reopened,
+			h.recovery as any,
+			() => h.config,
+			isolation,
+			storage
+		);
+		try {
+			expect((await service.activity(owner)).jobs[0].job).toMatchObject({
+				id: record.id,
+				state: 'cancelled',
+				cleanupPending: true,
+			});
+			expect((await service.activity('foreign-owner')).jobs).toEqual([]);
+			expect(isolation).not.toHaveBeenCalled();
+			expect(storage).not.toHaveBeenCalled();
+			expect(h.recovery.exportBindingFor).not.toHaveBeenCalled();
+			expect(reopened.get(record.id)?.cleanupAttempts).toBe(10);
+		} finally {
+			await service.shutdown();
+			await h.close();
+		}
+	});
+	test('encrypted shared configuration is not a GO: exact 409 admission, read-only readiness, expiry and supersession', async () => {
+		const h = harness();
+		Object.assign(h.config, {
+			allowSharedNamespace: true,
+			exportMode: 'application-encrypted-hcp',
+			keyringBinding: 'synthetic-keyring-binding',
+		});
+		const app = express();
+		app.use(express.json());
+		const controller = new ManagedExportController(h.service);
+		app.use('/api/managed-exports', createManagedExportPreflightRouter(controller));
+		app.use('/api/backups', createManagedExportRouter(controller));
+		const cookie = 'token=' + jwt.sign({ user: 'fixture-admin' }, configService.config.SECRET!);
+		// Admission contract only; actual encrypted provider work is covered by
+		// the native integration/security suites, never by a GET diagnosis.
+		jest.spyOn(h.service as any, 'schedule').mockImplementation(() => {});
+		try {
+			const before = h.store.all();
+			const readiness = await request(app)
+				.get('/api/managed-exports/readiness')
+				.set('Cookie', cookie);
+			expect(readiness.body.result).toMatchObject({
+				configured: true,
+				sharedNamespaceEnabled: true,
+				exportMode: 'application-encrypted-hcp',
+				keyringConfigured: true,
+				preflight: 'NO-GO',
+				reason: 'preflight-required',
+				admissionAllowed: false,
+			});
+			const denied = await request(app)
+				.post('/api/backups/backup-01/exports')
+				.set('Cookie', cookie)
+				.send({ mode: 'full' });
+			expect(denied.status).toBe(409);
+			expect(denied.body.reason).toBe('security-capability-missing');
+			expect(h.store.all()).toEqual(before);
+			expect(h.storage.preflight).not.toHaveBeenCalled();
+			expect(h.storage.inventory).not.toHaveBeenCalled();
+			expect(h.recovery.exportBindingFor).not.toHaveBeenCalled();
+			const proof = h.store.admit(
+				owner,
+				{ ...binding, backupId: 'preflight-fixture' },
+				h.config,
+				'preflight'
+			);
+			h.store.update(proof.id, {
+				state: 'ready',
+				cleaned: true,
+				expiresAt: Date.now() + 60000,
+				capabilityBinding: exportCapabilityBinding(h.config),
+				preflightChecks: ['cleanup', 'application-encryption', 'authenticated-readback'],
+				providerEvidence: { mode: 'application-encrypted-hcp', writeOnce: true } as any,
+			});
+			expect(await h.service.readiness(owner)).toMatchObject({
+				preflight: 'GO',
+				admissionAllowed: true,
+			});
+			expect((await h.service.readiness('other-owner')).latest).toBeUndefined();
+			const first = await request(app)
+				.post('/api/backups/backup-01/exports')
+				.set('Cookie', cookie)
+				.send({ mode: 'full' });
+			const duplicate = await request(app)
+				.post('/api/backups/backup-01/exports')
+				.set('Cookie', cookie)
+				.send({ mode: 'full' });
+			expect(first.status).toBe(202);
+			expect(duplicate.body.result.id).toBe(first.body.result.id);
+			expect((await h.service.activity(owner)).jobs).toHaveLength(1);
+			h.store.update(proof.id, { expiresAt: Date.now() - 1 });
+			expect(await h.service.readiness(owner)).toMatchObject({
+				reason: 'preflight-expired',
+				admissionAllowed: false,
+			});
+			h.store.update(proof.id, { state: 'expired' });
+			expect(await h.service.readiness(owner)).toMatchObject({
+				reason: 'preflight-expired',
+				admissionAllowed: false,
+			});
+			h.store.update(proof.id, { state: 'ready', expiresAt: Date.now() + 60000 });
+			const failed = h.store.admit(
+				owner,
+				{ ...binding, backupId: 'preflight-new' },
+				h.config,
+				'preflight'
+			);
+			h.store.update(failed.id, {
+				state: 'failed',
+				createdAt: proof.createdAt + 1,
+				cleaned: false,
+				failureCategory: 'unsupported-api',
+				failureHttpStatus: 501,
+			});
+			expect(await h.service.readiness(owner)).toMatchObject({
+				reason: 'preflight-superseded',
+				cleanupPending: true,
+				admissionAllowed: false,
+			});
+			expect((await h.service.readiness(owner)).latest?.failureSummary).toEqual({
+				category: 'unsupported-api',
+				httpStatus: 501,
+			});
+			await expect(h.service.admit(owner, binding.backupId, 'full')).rejects.toThrow(
+				'security-capability-missing'
+			);
+			h.config.secretAccessKey = crypto.randomBytes(24).toString('hex');
+			h.store.update(failed.id, { capabilityBinding: 'old-binding' });
+			expect(await h.service.readiness(owner)).toMatchObject({
+				reason: 'destination-mismatch',
+				admissionAllowed: false,
+			});
+			expect(h.storage.preflight).not.toHaveBeenCalled();
+			expect(h.storage.cleanup).not.toHaveBeenCalled();
+			expect(JSON.stringify(readiness.body)).not.toContain(h.config.endpoint);
+			expect(JSON.stringify(readiness.body)).not.toContain(h.config.secretAccessKey);
+		} finally {
+			await h.close();
+		}
+	});
+	test('GET rediscovery is durable and owner-scoped, including cancelled cleanup and historical bindings; no provider/source work', async () => {
+		const h = harness();
+		const app = express();
+		app.use(express.json());
+		app.use(
+			'/api/managed-exports',
+			createManagedExportPreflightRouter(new ManagedExportController(h.service))
+		);
+		const cookie = (user: string, expiresIn = 120) =>
+			'token=' + jwt.sign({ user }, configService.config.SECRET!, { expiresIn });
+		try {
+			const a = h.store.admit(owner, binding, h.config);
+			h.store.update(a.id, { state: 'cancelled', cleaned: false });
+			const otherOwner = crypto.createHash('sha256').update('other-user').digest('hex');
+			const b = h.store.admit(otherOwner, { ...binding, mode: 'regular-files' }, h.config);
+			const before = h.store.all();
+			for (const route of ['activity', 'readiness']) {
+				expect((await request(app).get('/api/managed-exports/' + route)).status).toBe(401);
+				expect(
+					(
+						await request(app)
+							.get('/api/managed-exports/' + route)
+							.set('Cookie', cookie('fixture-admin', -1))
+					).status
+				).toBe(401);
+				expect(
+					(
+						await request(app)
+							.get('/api/managed-exports/' + route + '?owner=other-user')
+							.set('Cookie', cookie('fixture-admin'))
+					).status
+				).toBe(400);
+			}
+			for (let i = 0; i < 3; i++) {
+				const result = await request(app)
+					.get('/api/managed-exports/activity')
+					.set('Cookie', cookie('fixture-admin'));
+				expect(result.headers['cache-control']).toContain('no-store');
+				expect(result.body.result.jobs).toHaveLength(1);
+				expect(result.body.result.jobs[0]).toMatchObject({
+					backupId: binding.backupId,
+					job: { id: a.id, mode: 'full', cleanupPending: true },
+				});
+				expect(JSON.stringify(result.body)).not.toContain(b.id);
+				expect(JSON.stringify(result.body)).not.toContain(a.key);
+				expect(JSON.stringify(result.body)).not.toContain(h.config.secretAccessKey);
+			}
+			expect((await h.service.activity(otherOwner)).jobs.map(j => j.job.id)).toEqual([b.id]);
+			expect(h.store.all()).toEqual(before);
+			expect(h.recovery.exportBindingFor).not.toHaveBeenCalled();
+			expect(h.storage.preflight).not.toHaveBeenCalled();
+			expect(h.storage.inventory).not.toHaveBeenCalled();
+			expect(h.storage.cleanup).not.toHaveBeenCalled();
+		} finally {
+			await h.close();
+		}
+	});
 	test('performance remains additive, durable and owner-bound; untrusted diagnostic fields are never exposed', async () => {
 		const h = harness();
 		try {

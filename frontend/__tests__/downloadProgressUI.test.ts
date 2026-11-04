@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { activityEntry, activityFetch } from './downloadActivityFixture.mjs';
 import fs from 'node:fs';
 import { downloadBytes, downloadDuration, downloadStep, uploadPercent } from '../src/utils/downloadProgress.ts';
 
@@ -11,7 +11,7 @@ const React = require('react'),
    { act } = React,
    { JSDOM } = require('jsdom');
 const bundle = await backendRequire('esbuild').build({
-   entryPoints: [fileURLToPath(new URL('../src/components/Plan/Backups/DownloadPreparation.tsx', import.meta.url))],
+   stdin: activityEntry,
    bundle: true,
    platform: 'node',
    format: 'cjs',
@@ -74,15 +74,22 @@ const ready = (backupId: string) => ({
       archiveBytes: 120 * 1024 ** 2,
    },
 });
-async function harness(t: any, backupId: string, fetcher: typeof fetch) {
+async function harness(t: any, backupId: string, fetcher: typeof fetch, raw = false) {
    const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.internal/' });
-   const keys = ['window', 'document', 'HTMLElement', 'Node', 'IS_REACT_ACT_ENVIRONMENT', 'fetch'];
+   const keys = ['window', 'document', 'HTMLElement', 'Node', 'IS_REACT_ACT_ENVIRONMENT', 'fetch', 'BroadcastChannel'];
    const previous = keys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
    for (const key of keys)
       Object.defineProperty(globalThis, key, {
          configurable: true,
          writable: true,
-         value: key === 'fetch' ? fetcher : key === 'IS_REACT_ACT_ENVIRONMENT' ? true : dom.window[key as keyof typeof dom.window],
+         value:
+            key === 'fetch'
+               ? raw
+                  ? fetcher
+                  : activityFetch(fetcher, backupId)
+               : key === 'IS_REACT_ACT_ENVIRONMENT'
+                 ? true
+                 : dom.window[key as keyof typeof dom.window],
       });
    t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 100000 });
    const root = require('react-dom/client').createRoot(dom.window.document.getElementById('root'));
@@ -116,7 +123,10 @@ async function harness(t: any, backupId: string, fetcher: typeof fetch) {
       }
    });
    await render();
-   return { render, tick, find, click, reliable, text, document: dom.window.document };
+   const navigate = async () => {
+      await act(async () => root.render(React.createElement(Panel, { backupId, panelOpen: false })));
+   };
+   return { render, navigate, tick, find, click, reliable, text, document: dom.window.document };
 }
 function standard() {
    return response({
@@ -167,6 +177,7 @@ test('slow polling retains DOM/progress and controls, never overlaps, reconnects
       return response({ ...base(), state: 'cancelled', cleanupPending: calls === 4 });
    });
    await ui.reliable();
+   await ui.click('Prepare Reliable Download');
    const panel = ui.document.querySelector('section[aria-label="Reliable Download progress"]');
    const progress = ui.document.querySelector('progress');
    const cancel = ui.find('Cancel export…');
@@ -195,6 +206,7 @@ test('slow polling retains DOM/progress and controls, never overlaps, reconnects
    await act(async () => resolveRead!(response(ready('backup-poll'))));
    assert(!ui.text().includes('Download Verified TAR'));
    await ui.tick(5000);
+   await ui.tick(2000);
    assert.match(ui.text(), /Export cancelled/);
    assert.equal(posts, 1);
 });
@@ -209,13 +221,14 @@ test('reopening recovers job with GET; indeterminate preparation, verification a
       return response(value);
    });
    await ui.reliable();
+   await ui.click('Prepare Reliable Download');
    assert.equal(ui.document.querySelector('progress')?.hasAttribute('value'), false);
    assert.match(ui.text(), /You may close this window/);
    await ui.click('Close');
    await ui.tick(10000);
-   assert.deepEqual(methods, ['POST']);
-   await ui.render();
    assert.deepEqual(methods, ['POST', 'GET']);
+   await ui.render();
+   assert.deepEqual(methods, ['POST', 'GET', 'GET']);
    value = { ...base(), uploadedBytes: base().totalBytes, performance: { phase: 'publication', lastProgressAgeMs: 60000 } };
    await ui.tick(2000);
    assert.match(ui.text(), /Verifying complete archive/);
@@ -230,7 +243,9 @@ test('reopening recovers job with GET; indeterminate preparation, verification a
    assert.equal(ui.document.querySelector('progress')?.getAttribute('value'), '100');
    const link = ui.document.querySelector('a[href$="/link"]');
    unavailable = true;
+   await act(async () => ui.document.defaultView!.dispatchEvent(new ui.document.defaultView!.Event('focus')));
    await ui.tick(5000);
+   assert.match(ui.text(), /reconnecting/);
    assert.equal(ui.document.querySelector('a[href$="/link"]'), link);
    assert(!ui.find('Get or renew resume link').disabled);
    assert.equal(methods.filter((m) => m === 'POST').length, 1);
@@ -260,10 +275,11 @@ test('failed cancellation keeps confirmation and job; double submit and unmount 
       return response(base());
    });
    await ui.reliable();
+   await ui.click('Prepare Reliable Download');
    await ui.click('Cancel export…');
    await ui.click('Confirm cancellation and cleanup');
    assert(ui.find('Confirm cancellation and cleanup'));
-   assert.match(ui.text(), /Cancellation was not confirmed/);
+   assert.match(ui.text(), /Connection interrupted or status request timed out/);
    assert.match(ui.text(), /Uploaded: 12 MiB/);
    fail = false;
    const button = ui.find('Confirm cancellation and cleanup');
@@ -303,7 +319,7 @@ test('bounded status timeout retries only after abort; known progress and job id
       );
    });
    await ui.reliable();
-   await ui.tick(2000);
+   await ui.click('Prepare Reliable Download');
    await ui.tick(29999);
    assert.equal(gets, 1);
    assert.equal(aborted, 0);
@@ -315,4 +331,91 @@ test('bounded status timeout retries only after abort; known progress and job id
    assert.equal(gets, 2);
    assert.equal(posts, 1);
    assert(!ui.text().includes('timed out'));
+});
+test('configured encrypted shared destination without GO has actionable NO-GO, no running bar, no admission or provider probes', async (t) => {
+   const calls: { url: string; method: string }[] = [];
+   const ui = await harness(
+      t,
+      'backup-nogo',
+      async (url, options) => {
+         calls.push({ url: String(url), method: options?.method || 'GET' });
+         if (String(url).endsWith('/activity'))
+            return response({
+               jobs: [],
+               readiness: {
+                  configured: true,
+                  sharedNamespaceEnabled: true,
+                  keyringConfigured: true,
+                  exportMode: 'application-encrypted-hcp',
+                  preflight: 'NO-GO',
+                  admissionAllowed: false,
+                  reason: 'preflight-required',
+               },
+            });
+         return standard();
+      },
+      true,
+   );
+   await ui.reliable();
+   assert.match(ui.text(), /Static configuration: configured/);
+   assert.match(ui.text(), /Capability preflight: NO-GO/);
+   assert.match(ui.text(), /No export has been created/);
+   assert(!ui.text().includes('reconnecting'));
+   assert.equal(ui.document.querySelector('progress'), null);
+   assert(!ui.text().includes('Elapsed: 0s'));
+   assert(!ui.find('Prepare Reliable Download'));
+   const before = calls.length;
+   await ui.tick(120000);
+   assert.equal(calls.length, before);
+   await ui.click('Check readiness and existing jobs');
+   assert(calls.filter((c) => c.url.endsWith('/activity')).length >= 2);
+   assert(!calls.some((c) => /\/exports$|\/preflights|\/inventory-checks/.test(c.url) && c.method === 'POST'));
+});
+test('app tracker survives route modal unmount, discovers multiple modes, and opens only server-verified job details', async (t) => {
+   let reads = 0;
+   const jobs = [
+      { backupId: 'backup-tracker', planId: 'plan-01', job: base() },
+      {
+         backupId: 'backup-second',
+         planId: 'plan-02',
+         job: { ...base(), id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', mode: 'regular-files', state: 'cancelled', cleanupPending: true },
+      },
+   ];
+   const ui = await harness(
+      t,
+      'backup-tracker',
+      async (url, options) => {
+         if (String(url).endsWith('/activity')) {
+            reads++;
+            assert.equal(options?.method || 'GET', 'GET');
+            return response({ jobs, readiness: { configured: true, admissionAllowed: true, preflight: 'GO', reason: 'ready' } });
+         }
+         assert(!String(url).includes('/exports'));
+         return standard();
+      },
+      true,
+   );
+   await ui.reliable();
+   await ui.navigate();
+   assert.equal(ui.document.querySelector('section[aria-label="Reliable Download progress"]'), null);
+   assert(ui.find('Exports · 2 active'));
+   const before = reads;
+   await ui.tick(2000);
+   assert(reads > before);
+   await ui.click('Exports · 2 active');
+   assert.match(ui.text(), /Browser file transfers are separate/);
+   assert.match(ui.text(), /Cleanup pending/);
+   const detail = [...ui.document.querySelectorAll('li button')].find((button) =>
+      button.textContent?.includes('backup-tracker'),
+   ) as HTMLButtonElement;
+   assert(detail);
+   await act(async () => detail.click());
+   assert.match(ui.text(), /Uploaded: 12 MiB/);
+   assert.match(ui.text(), /Your export is running on the server/);
+   // Re-login invalidates the old owner's state even while its details are open.
+   jobs.splice(0);
+   await act(async () => ui.document.defaultView!.dispatchEvent(new ui.document.defaultView!.Event('pluton-export-session')));
+   assert.equal(ui.document.querySelector('section[aria-label="Reliable Download progress"]'), null);
+   assert(!ui.text().includes('Backup backup-tracker'));
+   assert.match(ui.text(), /No admitted exports found/);
 });

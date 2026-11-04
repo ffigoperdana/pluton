@@ -1,14 +1,15 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { API_URL } from '../../../utils/constants';
 import type { DownloadMode } from '../../../utils/downloadPreparation';
-import { reliableRequest, reliableAuthorization, reliableActive, reliableFailure, type ReliableJob } from '../../../utils/reliableDownload';
+import { reliableAuthorization, reliableActive, reliableFailure } from '../../../utils/reliableDownload';
 import { downloadBytes, downloadDuration, downloadStep, uploadPercent } from '../../../utils/downloadProgress';
-import { useDownloadJob } from '../../../hooks/useDownloadJob';
+import { useExportActivity } from '../../../hooks/useExportActivity';
+import { activityKey, readinessMessages } from '../../../utils/exportActivity';
+import { downloadFailure } from '../../../utils/downloadFailure';
 import ActionModal from '../../common/ActionModal/ActionModal';
 import classes from '../../common/ActionModal/ActionModal.module.scss';
 import styles from './DownloadPreparation.module.scss';
 
-const interval = (job: ReliableJob) => (job.cleanupPending || job.state === 'ready' ? 5000 : reliableActive(job) ? 2000 : false);
 const steps = [
    'Validating / indexing snapshot',
    'Preparing archive',
@@ -27,17 +28,42 @@ export default function ReliableDownload({backupId,
    initialId?: string;
    onStatus?: (id: string | undefined, locked: boolean) => void;
 }) {
-   const request = useCallback(
-      (id: string | undefined, cancel: boolean, signal: AbortSignal) => reliableRequest(API_URL, backupId, mode, id, cancel, signal),
-      [backupId, mode],
+   const activity = useExportActivity();
+   const { manager, readiness, loaded } = activity;
+   const key = activityKey(backupId, mode);
+   const [selectedId, setSelectedId] = useState(initialId);
+   const job = manager.find(backupId, mode, selectedId);
+   const error = activity.error;
+   const [authorizationError, setAuthorizationError] = useState('');
+   const actionError = activity.denials[key]?.message || authorizationError;
+   const [authorizing, setAuthorizing] = useState(false);
+   const authorizationController = useRef<AbortController>();
+   useEffect(
+      () => () => {
+         authorizationController.current?.abort();
+      },
+      [],
    );
-   const { job, error, actionError, busy, observedAt, refresh, cancel, restart, perform } = useDownloadJob(request, interval, true, initialId);
+   const busy = activity.pending.includes(key) || authorizing;
+   const refresh = () => {
+      void manager.refresh();
+   };
+   const restart = async () => {
+      await manager.admit(backupId, mode);
+      const admitted = manager.find(backupId, mode);
+      if (admitted && (reliableActive(admitted) || admitted.state === 'ready')) setSelectedId(admitted.id);
+   };
+   const cancel = async () => {
+      if (!job) return false;
+      await manager.cancel(backupId, mode, job.id);
+      return !manager.snapshot().denials[key];
+   };
    const [confirm, setConfirm] = useState(false);
    const [clock, setClock] = useState(() => Date.now());
    const [authorization, setAuthorization] = useState<{ url: string; expiresAt: number; transport?: string }>();
    const active = !!job && reliableActive(job);
    const jobId = job?.id;
-   const optionsLocked = busy || (!job && !error) || active || !!job?.cleanupPending;
+   const optionsLocked = busy || (!loaded && !error) || active || !!job?.cleanupPending;
    useEffect(() => {
       onStatus?.(jobId, optionsLocked);
    }, [onStatus, jobId, optionsLocked]);
@@ -48,12 +74,14 @@ export default function ReliableDownload({backupId,
    }, [active]);
    const percent = uploadPercent(job);
    const step = downloadStep(job);
-   const elapsed = (job?.elapsedMs || 0) + (active ? Math.max(0, clock - observedAt) : 0);
+   const elapsed = (job?.elapsedMs || 0) + (active ? Math.max(0, clock - activity.observedAt) : 0);
    const stalled = job?.state === 'uploading' && step === 2 && !error && (job.performance?.lastProgressAgeMs || 0) >= 30000;
    const status = job?.cleanupPending
       ? 'Cleanup pending'
       : error
-        ? 'Waiting for connection — reconnecting'
+        ? error.transient
+           ? 'Waiting for connection — reconnecting'
+           : 'Status check needs attention'
         : stalled
           ? 'Upload stalled — no recent progress reported'
           : job?.state === 'failed'
@@ -73,12 +101,83 @@ export default function ReliableDownload({backupId,
                         : 'Requesting reliable export…';
    const prefix = job ? API_URL + '/backups/' + encodeURIComponent(backupId) + '/exports/' + encodeURIComponent(job.id) : '';
    const authorize = async () => {
-      if (!job?.summary) return;
-      const value = await perform((signal) =>
-         reliableAuthorization(API_URL, backupId, job.id, job.summary!.archiveSha256, job.summary!.archiveBytes, signal),
-      );
-      if (value) setAuthorization(value);
+      if (!job?.summary || authorizationController.current) return;
+      const stop = new AbortController();
+      authorizationController.current = stop;
+      setAuthorizing(true);
+      setAuthorizationError('');
+      try {
+         const value = await reliableAuthorization(API_URL, backupId, job.id, job.summary.archiveSha256, job.summary.archiveBytes, stop.signal);
+         if (!stop.signal.aborted) setAuthorization(value);
+      } catch (failure) {
+         if (!stop.signal.aborted) setAuthorizationError(downloadFailure(failure).message);
+      } finally {
+         if (!stop.signal.aborted) {
+            authorizationController.current = undefined;
+            setAuthorizing(false);
+         }
+      }
    };
+   if (!job)
+      return (
+         <section aria-label="Reliable Download readiness">
+            <p>
+               Reliable Download prepares an encrypted temporary archive in HCP. The file becomes available after upload and integrity verification.
+            </p>
+            <p role="status">
+               {!loaded && !error
+                  ? 'Checking admitted exports and readiness…'
+                  : 'No admitted export is selected. No export is running in this panel.'}
+            </p>
+            {readiness && (
+               <>
+                  <p>
+                     Static configuration: {readiness.configured ? 'configured' : 'not verified'} · Capability preflight: {readiness.preflight}
+                  </p>
+                  <p>{readinessMessages[readiness.reason]}</p>
+                  {readiness.cleanupPending && (
+                     <p>Historical preflight cleanup remains pending. Use the ownership-safe diagnostic procedure before another probe.</p>
+                  )}
+                  <p>
+                     Operator recovery: review read-only readiness and recorded preflight diagnostics first. Inventory and disposable capability
+                     preflight require an explicit operator action. Opening or refreshing this panel runs neither.
+                  </p>
+                  {readiness.latest && (
+                     <div>
+                        <p>
+                           Recorded preflight: <code>{readiness.latest.id}</code> · {readiness.latest.state}
+                        </p>
+                        {(['preflightFailure', 'cleanupFailure'] as const).map((key) => {
+                           const detail = readiness.latest?.[key];
+                           return (
+                              detail && (
+                                 <p key={key}>
+                                    {key === 'preflightFailure' ? 'Preflight failure' : 'Cleanup failure'}: {detail.operation} · {detail.category} ·{' '}
+                                    {detail.providerCategory} · HTTP {detail.httpStatus ?? 'unavailable'}
+                                 </p>
+                              )
+                           );
+                        })}
+                     </div>
+                  )}
+               </>
+            )}
+            {(error || actionError) && <p role="alert">{actionError || error?.message}</p>}
+            <div className={classes.actions}>
+               <button type="button" onClick={close}>
+                  Close
+               </button>
+               <button type="button" disabled={busy || activity.checking} onClick={refresh}>
+                  Check readiness and existing jobs
+               </button>
+               {loaded && readiness?.admissionAllowed && !error && (
+                  <button type="button" disabled={busy} onClick={restart}>
+                     Prepare Reliable Download
+                  </button>
+               )}
+            </div>
+         </section>
+      );
    return (
       <section aria-label="Reliable Download progress" className={styles.progressPanel}>
          <p>
@@ -133,9 +232,9 @@ export default function ReliableDownload({backupId,
             {actionError && !confirm && <p role="alert">{actionError}</p>}
             {error && (
                <>
-                  <span>{error} Last confirmed progress is retained.</span>{' '}
+                  <span>{error.message} Last confirmed progress is retained.</span>{' '}
                   <button type="button" disabled={busy} onClick={refresh}>
-                     Reconnect now
+                     {error.transient ? 'Reconnect now' : 'Check access again'}
                   </button>
                </>
             )}
@@ -193,7 +292,7 @@ export default function ReliableDownload({backupId,
             {job && !active && !job.cleanupPending && job.state !== 'ready' && (
                <button
                   type="button"
-                  disabled={busy}
+                  disabled={busy || !readiness?.admissionAllowed || !!error}
                   onClick={() => {
                      setAuthorization(undefined);
                      restart();

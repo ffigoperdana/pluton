@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { activityEntry, activityFetch } from './downloadActivityFixture.mjs';
 import { preparationRequest } from '../src/utils/downloadPreparation.ts';
 const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const job = (state = 'indexing') => ({
@@ -138,7 +138,7 @@ const React = require('react'),
    { act } = React,
    { JSDOM } = require('jsdom');
 const result = await backendRequire('esbuild').build({
-   entryPoints: [fileURLToPath(new URL('../src/components/Plan/Backups/DownloadPreparation.tsx', import.meta.url))],
+   stdin: activityEntry,
    bundle: true,
    platform: 'node',
    format: 'cjs',
@@ -190,7 +190,8 @@ test('delivery methods remain separate: durable export progress, verified readin
       window: dom.window,
       document: dom.window.document,
       IS_REACT_ACT_ENVIRONMENT: true,
-      fetch: async (url: string, init: RequestInit) => {
+      BroadcastChannel: undefined,
+      fetch: activityFetch(async (url: string, init: RequestInit) => {
          calls.push({ url, method: init.method! });
          if (url.includes('/exports')) {
             if (proxy) return new Response('<html>private-provider</html>', { status: 504, headers: { 'Content-Type': 'text/html' } });
@@ -202,7 +203,7 @@ test('delivery methods remain separate: durable export progress, verified readin
             return Response.json({ success: true, result: value }, { status: init.method === 'POST' ? 202 : 200 });
          }
          return Response.json({ success: true, result: init.method === 'POST' ? { preparation: job('queued') } : job('cancelled') });
-      },
+      }),
    })) {
       saved.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
       Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
@@ -219,6 +220,8 @@ test('delivery methods remain separate: durable export progress, verified readin
       await flush();
       const delivery = dom.window.document.querySelectorAll<HTMLInputElement>('input[name="delivery-method"]');
       await act(async () => delivery[1].click());
+      await flush();
+      await act(async () => [...dom.window.document.querySelectorAll('button')].find((b) => b.textContent === 'Prepare Reliable Download')!.click());
       await flush();
       assert.match(dom.window.document.body.textContent!, /Queued/);
       assert.equal(calls.filter((c) => c.method === 'DELETE' && !c.url.includes('/exports')).length, 0);
@@ -239,6 +242,7 @@ test('delivery methods remain separate: durable export progress, verified readin
       assert.match(dom.window.document.body.textContent!, /Browser Resume/);
       assert(!/laptop download finished/i.test(dom.window.document.body.textContent!));
       proxy = true;
+      await act(async () => dom.window.dispatchEvent(new dom.window.Event('focus')));
       await act(async () => context.mock.timers.tick(5000));
       await flush();
       assert.match(dom.window.document.body.textContent!, /HTTP 504/);
@@ -269,14 +273,15 @@ test('actual panel follows queued/indexing/validating/ready, separates native tr
       window: dom.window,
       document: dom.window.document,
       IS_REACT_ACT_ENVIRONMENT: true,
-      fetch: async (_url: string, init: RequestInit) => {
+      BroadcastChannel: undefined,
+      fetch: activityFetch(async (_url: string, init: RequestInit) => {
          calls.push(init.method!);
          if (proxyError) return new Response('<html>private</html>', { status: 524, headers: { 'Content-Type': 'text/html' } });
          return Response.json(
             { success: true, result: init.method === 'POST' ? { preparation: job(state) } : job(state) },
             { status: init.method === 'POST' ? 202 : 200 },
          );
-      },
+      }),
    })) {
       saved.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
       Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
@@ -333,7 +338,8 @@ test('actual panel requires confirmed cancellation before switching active full 
       window: dom.window,
       document: dom.window.document,
       IS_REACT_ACT_ENVIRONMENT: true,
-      fetch: async (url: string, init: RequestInit) => {
+      BroadcastChannel: undefined,
+      fetch: activityFetch(async (url: string, init: RequestInit) => {
          const mode = new URL(url).searchParams.get('exportMode') || 'full';
          calls.push({ method: init.method!, mode });
          if (init.method === 'DELETE') state = 'cancelled';
@@ -343,7 +349,7 @@ test('actual panel requires confirmed cancellation before switching active full 
             { success: true, result: init.method === 'POST' ? { preparation: value } : value },
             { status: init.method === 'POST' ? 202 : 200 },
          );
-      },
+      }),
    })) {
       saved.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
       Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });

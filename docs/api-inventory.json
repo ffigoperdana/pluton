@@ -2106,6 +2106,31 @@
   {
     "feature": "managedExportPreflight",
     "method": "GET",
+    "route": "/api/managed-exports/activity",
+    "handler": "ManagedExportController.activity",
+    "services": [
+      "service.activity"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/services/ManagedExportService.test.ts"
+    ],
+    "source": "backend/src/controllers/ManagedExportController.ts",
+    "routeSource": "backend/src/routes/managedExportPreflight.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "managedExportPreflight",
+    "method": "GET",
     "route": "/api/managed-exports/configuration",
     "handler": "ManagedExportController.configuration",
     "services": [],
@@ -2299,6 +2324,31 @@
     "request": [
       "params.preflightId"
     ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/services/ManagedExportService.test.ts"
+    ],
+    "source": "backend/src/controllers/ManagedExportController.ts",
+    "routeSource": "backend/src/routes/managedExportPreflight.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "managedExportPreflight",
+    "method": "GET",
+    "route": "/api/managed-exports/readiness",
+    "handler": "ManagedExportController.readiness",
+    "services": [
+      "service.readiness"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [],
     "requestSchemas": [],
     "response": "handwritten controller JSON; no common versioned output schema",
     "pagination": "no common pagination contract; see implementation",

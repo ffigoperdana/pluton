@@ -17,6 +17,8 @@ import Icon from './components/common/Icon/Icon';
 import DocumentationRedirect from './docs/DocumentationRedirect';
 import DatabaseRestores from './routes/DatabaseRestores/DatabaseRestores';
 import Mcp from './routes/Mcp/Mcp';
+import { ExportActivityProvider } from './context/ExportActivityContext';
+import ExportActivity from './components/App/ExportActivity/ExportActivity';
 
 function PublicRoute({ children }: { children: React.ReactNode }) {
    const { data: authData, isLoading: authLoading } = useAuth();
@@ -60,10 +62,11 @@ function ProtectedLayout() {
    }
 
    return (
-      <>
+      <ExportActivityProvider>
          <App />
+         <ExportActivity />
          <Footer version={authData?.appVersion || ''} revision={(window as any).plutonRevision} />
-      </>
+      </ExportActivityProvider>
    );
 }
 
