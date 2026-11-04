@@ -1,5 +1,9 @@
 # HCP multipart completion body verification
 
+For the subsequent verified final-error verdict, fresh-receipt safeguards and
+current handoff, see [semantic concurrent publication](HCP_SEMANTIC_CONCURRENT_PUBLICATION.md).
+The investigation below records PR #61's earlier conservative verdict.
+
 The reported destination remains **NO-GO**. This change resolves a reproducible
 SDK response-classification defect and adds safe evidence for a later authorized
 investigation. It does not establish which body HCP returned, certify concurrent

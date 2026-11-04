@@ -24,7 +24,10 @@ function parse(body: Buffer, shape: CompletionShape): string | undefined {
 		elements = 0,
 		root = '',
 		rootNamespace = '',
-		code = '';
+		code = '',
+		codeCount = 0,
+		codeScalar = true,
+		mixedResult = false;
 	const fields: Record<string, number> = { ETag: 0, Bucket: 0, Key: 0 };
 	let field = '',
 		text = '';
@@ -43,7 +46,20 @@ function parse(body: Buffer, shape: CompletionShape): string | undefined {
 		}
 		if (depth > 1 && root === 'CompleteMultipartUploadResult' && tag.local === 'Error')
 			throw new Error('invalid completion XML');
+		if (
+			depth > 1 &&
+			(Object.hasOwn(fields, tag.local) || tag.local === 'CompleteMultipartUploadResult')
+		)
+			mixedResult = true;
 		if (depth === 2) {
+			if (tag.local === 'Code') {
+				codeCount++;
+				if (
+					tag.uri !== rootNamespace ||
+					Object.values(tag.attributes).some(a => a.uri !== 'http://www.w3.org/2000/xmlns/')
+				)
+					codeScalar = false;
+			}
 			if (Object.hasOwn(fields, tag.local) && tag.uri !== rootNamespace)
 				throw new Error('invalid completion XML');
 			field = tag.uri === rootNamespace ? tag.local : '';
@@ -80,6 +96,13 @@ function parse(body: Buffer, shape: CompletionShape): string | undefined {
 		shape.bucketPresent = fields.Bucket > 0;
 		shape.keyPresent = fields.Key > 0;
 		shape.identityUnique = Object.values(fields).every(n => n <= 1);
+		shape.operationAbortedVerified =
+			shape.xml === 'error' &&
+			shape.namespace !== 'unsupported' &&
+			codeCount === 1 &&
+			codeScalar &&
+			code === 'OperationAborted' &&
+			!mixedResult;
 		return code;
 	} catch {
 		shape.xmlParser = 'rejected';
@@ -89,16 +112,33 @@ function parse(body: Buffer, shape: CompletionShape): string | undefined {
 
 /** Observe the wire BEFORE S3's throw200ExceptionsMiddleware (which rewrites
  * some 200 Error bodies to 503). A complete XML Error remains a wire-200 error,
- * never a proven collision. No raw body or provider message escapes this scope. */
+ * never a publication success. Only a precise final error can carry semantic
+ * rejection evidence; the race separately verifies its context and ownership. */
 export async function checkedCompletion(
 	command: CompleteMultipartUploadCommand,
 	signal: AbortSignal,
 	send: () => Promise<any>
 ) {
 	let wireHttpStatus: number | undefined;
-	let shape: CompletionShape | undefined;
+	let shape: CompletionShape = initialShape();
+	let requestAttempts = 0,
+		replayBlocked = false;
 	command.middlewareStack.addRelativeTo(
 		(next: (args: any) => Promise<any>) => async (args: any) => {
+			// This deserialize middleware runs inside the SDK retry middleware.
+			// Block a second dispatch even if an SDK configuration regresses later.
+			if (requestAttempts) {
+				replayBlocked = true;
+				if (shape.body === 'complete') shape.sdkParser = 'rejected';
+				const error = new ExportOperationError(
+					'CompleteMultipartUpload',
+					{},
+					'completion-replay-blocked'
+				);
+				error.responseKind = 'body-invalid';
+				throw error;
+			}
+			requestAttempts++;
 			const result = await next(args);
 			const response = result.response;
 			wireHttpStatus = exportHttpStatus({ $metadata: { httpStatusCode: response?.statusCode } });
@@ -177,7 +217,9 @@ export async function checkedCompletion(
 	);
 	try {
 		const result = await send();
-		if (shape) shape.sdkParser = 'resolved';
+		shape.sdkParser = 'resolved';
+		shape.requestAttempts = requestAttempts;
+		shape.replayBlocked = replayBlocked;
 		return { ...result, exportWireHttpStatus: wireHttpStatus, exportCompletionShape: shape };
 	} catch (error) {
 		const safe =
@@ -207,6 +249,9 @@ export async function checkedCompletion(
 		)
 			shape.sdkParser = 'rejected';
 		safe.wireHttpStatus = wireHttpStatus;
+		shape.requestAttempts = requestAttempts;
+		shape.replayBlocked = replayBlocked;
+		safe.requestAttempts = requestAttempts;
 		safe.completionShape = shape;
 		throw safe;
 	}

@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { Readable } from 'stream';
+import { createRequire } from 'module';
 import { S3Client, CompleteMultipartUploadCommand } from '@aws-sdk/client-s3';
 import {
 	checkedCompletion,
@@ -294,4 +295,59 @@ test('public diagnostic shape is an exact enum/boolean projection and old eviden
 	expect(publicCompletionShape({ ...safe, raw: 'private-body' } as any)).toEqual(safe);
 	for (const field of Object.keys(safe))
 		expect(publicCompletionShape({ ...safe, [field]: 'private-body' } as any)).toBeUndefined();
+});
+test.each([
+	['<Error><Code>OperationAborted</Code></Error>', true],
+	['<Error><Code>OperationAborted</Code><Code>OperationAborted</Code></Error>', false],
+	['<Error><Code>InternalError</Code><Code>OperationAborted</Code></Error>', false],
+	['<Error><Code xmlns="https://example.invalid/">OperationAborted</Code></Error>', false],
+	['<Error><Code value="private">OperationAborted</Code></Error>', false],
+	['<Error><Code> OperationAborted </Code></Error>', false],
+	['<Error><Code>OperationAborted</Code><Key>private</Key></Error>', false],
+	['<Error><Code>OperationAborted</Code><CompleteMultipartUploadResult/></Error>', false],
+	['<Error xmlns="https://example.invalid/"><Code>OperationAborted</Code></Error>', false],
+] as const)(
+	'only an unequivocal final error carries semantic rejection evidence: %#',
+	async (body, verified) => {
+		await expect(fixture(body).run()).rejects.toMatchObject({
+			responseKind: 'embedded-error',
+			completionShape: {
+				operationAbortedVerified: verified,
+				requestAttempts: 1,
+				replayBlocked: false,
+			},
+		});
+	}
+);
+test('SDK retry middleware cannot dispatch a duplicate completion even if a retry strategy regresses', async () => {
+	const f = fixture('<Error><Code>ServiceUnavailable</Code></Error>', {}, 503);
+	// Controlled zero-delay strategy exercised through the real SDK retry plugin.
+	// Production retains maxAttempts:1. The second next() must stop before HTTP.
+	f.client.config.retryStrategy = async () => ({
+		mode: 'standard',
+		retry: async (next: any, args: any) => {
+			try {
+				return await next(args);
+			} catch {
+				return next(args);
+			}
+		},
+	});
+	await expect(f.run()).rejects.toMatchObject({
+		detail: 'completion-replay-blocked',
+		completionShape: { requestAttempts: 1, replayBlocked: true },
+	});
+	expect(f.handle).toHaveBeenCalledTimes(1);
+});
+test('the pinned SDK standard V2 retry strategy is stopped before a second wire attempt', async () => {
+	const sdkRequire = createRequire(require.resolve('@aws-sdk/client-s3'));
+	const { ConfiguredRetryStrategy } = sdkRequire('@smithy/core/retry');
+	const f = fixture('<Error><Code>ServiceUnavailable</Code></Error>', {}, 503);
+	f.client.config.maxAttempts = async () => 3;
+	f.client.config.retryStrategy = async () => new ConfiguredRetryStrategy(3, () => 0);
+	await expect(f.run()).rejects.toMatchObject({
+		detail: 'completion-replay-blocked',
+		completionShape: { requestAttempts: 1, replayBlocked: true },
+	});
+	expect(f.handle).toHaveBeenCalledTimes(1);
 });

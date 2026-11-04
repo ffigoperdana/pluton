@@ -11,11 +11,13 @@ import { exportConfiguration, type ExportJob } from '../../src/utils/managedExpo
 export function hcpPublicationProtocol(
 	fault = '',
 	encrypted = false,
-	routing: 'same-node' | 'different-nodes' = 'same-node'
+	routing: 'same-node' | 'different-nodes' = 'same-node',
+	keyringSeed?: string
 ) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pluton-publication-'));
 	const keyring = path.join(root, 'keyring.json');
-	if (encrypted)
+	if (encrypted && keyringSeed) fs.copyFileSync(keyringSeed, keyring);
+	else if (encrypted)
 		fs.writeFileSync(
 			keyring,
 			JSON.stringify({
@@ -176,6 +178,12 @@ export function hcpPublicationProtocol(
 				const route =
 					racing && routing === 'different-nodes' && index % 2 === 0 ? 'node-b' : 'node-a';
 				if (racing) completionRoutes.push(route);
+				if (racing && index === 1 && fault === 'operation-aborted-a')
+					return error(200, 'OperationAborted');
+				if (racing && index === 2 && fault === 'operation-aborted-b')
+					return error(200, 'OperationAborted');
+				if (racing && index === 2 && fault.startsWith('race-error-'))
+					return error(200, fault.slice('race-error-'.length));
 				if (racing && index === 2 && fault.startsWith('competitor-'))
 					return error(Number(fault.slice(11)), 'OperationAborted');
 				if (racing && index === 2 && fault === 'embedded-error') return error(200, 'InvalidPart');

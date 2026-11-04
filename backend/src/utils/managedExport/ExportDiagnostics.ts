@@ -55,6 +55,7 @@ const details = [
 	'race-response-invalid',
 	'race-journal-failed',
 	'completion-body-invalid',
+	'completion-replay-blocked',
 ] as const;
 type Detail = (typeof details)[number];
 const providers = [
@@ -166,6 +167,7 @@ function provider(error: unknown): Provider {
 	return 'service-error';
 }
 export class ExportOperationError extends TemporaryExportError {
+	requestAttempts?: number;
 	wireHttpStatus?: number;
 	completionShape?: CompletionShape;
 	responseKind?:
@@ -187,6 +189,12 @@ export class ExportOperationError extends TemporaryExportError {
 	) {
 		super(reason);
 		this.$metadata = { httpStatusCode: exportHttpStatus(error) };
+		const attempts =
+			error instanceof ExportOperationError
+				? error.requestAttempts
+				: (error as { $metadata?: { attempts?: number } })?.$metadata?.attempts;
+		if (Number.isInteger(attempts) && attempts! >= 1 && attempts! <= 100)
+			this.requestAttempts = attempts;
 		this.providerCategory = detail === 'provider-error' ? provider(error) : 'invalid-response';
 		this.providerCode = detail === 'provider-error' ? providerCode(error) : 'unrecognized';
 		const name = (error as { name?: string })?.name;
