@@ -14,7 +14,6 @@ import {
 	exportFileName,
 	type ExportConfig,
 	type ExportJob,
-	exportCapabilityBinding,
 	exportCleanupDeadline,
 } from '../utils/managedExport/ExportPolicy';
 import {
@@ -38,6 +37,7 @@ import {
 	isWriteOnce,
 } from '../utils/managedExport/ExportEncryption';
 import { ExportKeyError } from '../utils/managedExport/ExportKeyring';
+import { exportProofValid, exportReadiness } from '../utils/managedExport/ExportReadiness';
 import { publicExportPublications } from '../utils/managedExport/ExportPublication';
 import {
 	publicExportPerformance,
@@ -88,20 +88,106 @@ export class ManagedExportService {
 			.all()
 			.filter(j => j.kind === 'preflight' && j.destination === c.fingerprint)
 			.at(-1);
-		if (
-			!proof ||
-			proof.state !== 'ready' ||
-			!proof.cleaned ||
-			(proof.expiresAt || 0) <= Date.now() ||
-			proof.capabilityBinding !== exportCapabilityBinding(c) ||
-			!proof.providerEvidence ||
-			!proof.preflightChecks?.includes('cleanup') ||
-			(c.exportMode &&
-				(!proof.preflightChecks?.includes('application-encryption') ||
-					!proof.preflightChecks?.includes('authenticated-readback')))
-		)
-			throw new TemporaryExportError('security-capability-missing');
-		return proof;
+		if (!exportProofValid(proof, c)) throw new TemporaryExportError('security-capability-missing');
+		return proof!;
+	}
+	/** Local configuration/journal reads only: opening a UI never probes HCP. */
+	async readiness(owner: string) {
+		try {
+			const c = this.config();
+			// The existing admission isolation callback reserves a local namespace.
+			// A GET must never invoke it. This reports stored proof; admission still
+			// rechecks/reserves isolation before any source or provider operation.
+			const jobs = this.store.all();
+			const readiness = exportReadiness(jobs, c, owner);
+			const own = readiness.latest
+				? jobs.find(j => j.id === readiness.latest!.id && j.owner === owner)
+				: undefined;
+			return {
+				configured: true,
+				sharedNamespaceEnabled: c.allowSharedNamespace,
+				exportMode: c.exportMode || 'auto',
+				keyringConfigured: !!c.keyringBinding,
+				isolation: 'rechecked-at-admission' as const,
+				...readiness,
+				latest: readiness.latest
+					? {
+							...readiness.latest,
+							preflightFailure: publicExportDiagnostic(own?.preflightFailure),
+							cleanupFailure: publicExportDiagnostic(
+								own?.lastCleanupFailure || own?.cleanupFailure
+							),
+							// Older journals may have capability failure fields without a
+							// detailed operation receipt. Do not invent the missing receipt.
+							failureSummary:
+								own?.failureCategory &&
+								[
+									'tls-validation',
+									'access-denied',
+									'unsupported-api',
+									'unexpected-response',
+									'network-or-deadline',
+									'cleanup-failed',
+								].includes(own.failureCategory)
+									? {
+											category: own.failureCategory,
+											httpStatus:
+												Number.isInteger(own.failureHttpStatus) &&
+												own.failureHttpStatus! >= 100 &&
+												own.failureHttpStatus! <= 599
+													? own.failureHttpStatus
+													: undefined,
+										}
+									: undefined,
+						}
+					: undefined,
+			};
+		} catch (error) {
+			return {
+				configured: false,
+				admissionAllowed: false,
+				preflight: 'NO-GO' as const,
+				reason: error instanceof TemporaryExportError ? error.reason : 'configuration-invalid',
+			};
+		}
+	}
+	/** The bounded durable journal is the authority, including after logout/restart.
+	 * Detail/download/cancellation endpoints retain their full binding checks. */
+	async activity(owner: string) {
+		const jobs = this.store
+			.all()
+			.filter(j => j.owner === owner && (!j.kind || j.kind === 'archive'));
+		return {
+			readiness: await this.readiness(owner),
+			jobs: jobs.map(job => {
+				const p = this.public(job);
+				return {
+					backupId: job.binding.backupId,
+					planId: job.binding.planId,
+					job: {
+						id: p.id,
+						state: p.state,
+						mode: p.mode,
+						snapshotId: p.snapshotId,
+						createdAt: p.createdAt,
+						elapsedMs: p.elapsedMs,
+						processedBytes: p.processedBytes,
+						uploadedBytes: p.uploadedBytes,
+						totalBytes: p.totalBytes,
+						averageBytesPerSecond: p.averageBytesPerSecond,
+						expiresAt: p.expiresAt,
+						integrity: p.integrity,
+						summary: p.summary,
+						failure: p.failure,
+						cleanupPending: p.cleanupPending,
+						performance: p.performance,
+						integrityMode: p.integrityMode,
+						confidentiality: p.confidentiality,
+						transport: p.transport,
+					},
+				};
+			}),
+		};
 	}
 	async admit(owner: string, backupId: string, mode: ManagedExportMode) {
 		if (this.stopped || this.workerFault) throw new TemporaryExportError('interrupted');

@@ -1,4 +1,5 @@
 import type { DownloadMode, VerifiedExport } from './downloadPreparation';
+import { responseFailure, DownloadFailure } from './downloadFailure.ts';
 export type ReliableJob = {
    id: string;
    state: 'queued' | 'validating' | 'exporting' | 'uploading' | 'verifying' | 'ready' | 'failed' | 'cancelled' | 'expired';
@@ -42,11 +43,12 @@ const reasons: Record<string, string> = {'not-configured': 'Reliable Download ne
    'cleanup-pending': 'Storage cleanup needs administrator attention.',
    expired: 'The export expired. Prepare a new export.',
    'binding-changed': 'The backup or destination binding changed. Prepare a new export.',};
-export const reliableFailure = (reason?: string) => reasons[reason || ''] || 'Reliable Download is unavailable. Retry to reconnect.';
-async function json(response: Response, signal?: AbortSignal) {
+export const reliableFailure = (reason?: string) =>
+   reasons[reason || ''] || 'Reliable Download is unavailable. Review server readiness and diagnostics.';
+export async function exportJson(response: Response, signal?: AbortSignal, maxBytes = 64 * 1024) {
    if (response.redirected || !/application\/json/i.test(response.headers.get('Content-Type') || '')) {
       await response.body?.cancel();
-      throw new Error(`Download service unavailable (HTTP ${response.status}). Retry to reconnect.`);
+      throw responseFailure(response);
    }
    const reader = response.body?.getReader();
    let value = '',
@@ -58,14 +60,23 @@ async function json(response: Response, signal?: AbortSignal) {
          const part = await reader.read();
          if (part.done) break;
          bytes += part.value.byteLength;
-         if (bytes > 64 * 1024) throw new Error();
+         if (bytes > maxBytes) throw new Error();
          value += decoder.decode(part.value, { stream: true });
       }
       value += decoder.decode();
-      return JSON.parse(value);
-   } catch {
+      const body = JSON.parse(value);
+      if (!body || typeof body !== 'object') throw new Error('Invalid response.');
+      if (!response.ok || body.success !== true) {
+         const reason = typeof body.reason === 'string' && Object.prototype.hasOwnProperty.call(reasons, body.reason) ? body.reason : undefined;
+         throw responseFailure(response, reason, reason ? reliableFailure(reason) : undefined);
+      }
+      return body;
+   } catch (error) {
       if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
-      throw new Error('Download status was incomplete or invalid. Retry to reconnect.');
+      if (error instanceof DownloadFailure) throw error;
+      if (error instanceof TypeError && response.ok)
+         throw new DownloadFailure('The status response connection was interrupted.', 'transport', true, response.status);
+      throw responseFailure(response);
    } finally {
       await reader?.cancel().catch(() => undefined);
       reader?.releaseLock();
@@ -85,9 +96,11 @@ export async function reliableRequest(
       headers: { 'Content-Type': 'application/json' },
       body: id ? undefined : JSON.stringify({ mode }),
       signal,});
-   const body = await json(response, signal);
-   if (!response.ok || body.success !== true) throw new Error(reliableFailure(body.reason));
-   const j = body.result;
+   const body = await exportJson(response, signal);
+   return validateReliableJob(body.result, backupId, mode, id);
+}
+export function validateReliableJob(value: unknown, backupId: string, mode: DownloadMode, id?: string): ReliableJob {
+   const j = value as ReliableJob;
    if (
       !j ||
       !/^[a-f0-9-]{36}$/.test(j.id) ||
@@ -95,7 +108,9 @@ export async function reliableRequest(
       j.mode !== mode ||
       !/^[a-f0-9]{64}$/.test(j.snapshotId) ||
       !['queued', 'validating', 'exporting', 'uploading', 'verifying', 'ready', 'failed', 'cancelled', 'expired'].includes(j.state) ||
-      !['createdAt', 'elapsedMs', 'processedBytes', 'uploadedBytes', 'averageBytesPerSecond'].every((k) => Number.isSafeInteger(j[k]) && j[k] >= 0) ||
+      !(['createdAt', 'elapsedMs', 'processedBytes', 'uploadedBytes', 'averageBytesPerSecond'] as const).every(
+         (k) => Number.isSafeInteger(j[k]) && j[k] >= 0,
+      ) ||
       typeof j.cleanupPending !== 'boolean' ||
       (j.integrityMode === 'application-encrypted-hcp' && (j.transport !== 'authenticated-proxy' || j.confidentiality !== 'application-encrypted')) ||
       (j.totalBytes !== undefined &&
@@ -105,7 +120,7 @@ export async function reliableRequest(
             j.uploadedBytes > j.totalBytes ||
             j.processedBytes > j.totalBytes))
    )
-      throw new Error('Export identity or progress was invalid.');
+      throw new DownloadFailure('Export identity or progress was invalid.', 'protocol', false);
    if (j.state === 'ready') {
       const p = j.summary;
       const counts = (c: unknown, allowed: string[], total: number) =>
@@ -127,26 +142,28 @@ export async function reliableRequest(
          p.archiveBytes !== j.totalBytes ||
          p.archiveBytes % 512 ||
          j.uploadedBytes !== p.archiveBytes ||
-         !['archiveSha256', 'manifestSha256'].every((k) => /^[a-f0-9]{64}$/.test(p[k])) ||
+         !(['archiveSha256', 'manifestSha256'] as const).every((k) => /^[a-f0-9]{64}$/.test(p[k])) ||
          ![p.includedEntries, p.excludedEntries].every((n) => Number.isSafeInteger(n) && n >= 0 && n <= 500000) ||
          !counts(p.includedByType, mode === 'full' ? ['file', 'dir', 'symlink'] : ['file', 'dir'], p.includedEntries) ||
          !counts(p.excludedByType, mode === 'full' ? [] : ['symlink', 'dev', 'chardev', 'fifo', 'socket'], p.excludedEntries)
       )
-         throw new Error('Export verification was invalid.');
+         throw new DownloadFailure('Export verification was invalid.', 'protocol', false);
    }
    // Optional diagnostics are never proof. Drop malformed/unknown fields independently.
    const telemetry = j.performance;
    j.performance =
       telemetry && typeof telemetry === 'object'
-         ? {phase: ['indexing', 'archive-validation', 'upload', 'publication', 'verification'].includes(telemetry.phase)
+         ? {phase: ['indexing', 'archive-validation', 'upload', 'publication', 'verification'].includes(telemetry.phase || '')
                  ? telemetry.phase
                  : undefined,
               indexedEntries:
-                 Number.isSafeInteger(telemetry.indexedEntries) && telemetry.indexedEntries >= 0 && telemetry.indexedEntries <= 500000
+                 Number.isSafeInteger(telemetry.indexedEntries) && Number(telemetry.indexedEntries) >= 0 && Number(telemetry.indexedEntries) <= 500000
                     ? telemetry.indexedEntries
                     : undefined,
               lastProgressAgeMs:
-                 Number.isSafeInteger(telemetry.lastProgressAgeMs) && telemetry.lastProgressAgeMs >= 0 && telemetry.lastProgressAgeMs <= 7 * 86400000
+                 Number.isSafeInteger(telemetry.lastProgressAgeMs) &&
+                 Number(telemetry.lastProgressAgeMs) >= 0 &&
+                 Number(telemetry.lastProgressAgeMs) <= 7 * 86400000
                     ? telemetry.lastProgressAgeMs
                     : undefined,}
          : undefined;
@@ -159,8 +176,7 @@ export async function reliableAuthorization(api: string, backupId: string, id: s
       redirect: 'error',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',});
-   const body = await json(response, signal);
-   if (!response.ok || body.success !== true) throw new Error(reliableFailure(body.reason));
+   const body = await exportJson(response, signal);
    const a = body.result;
    let url: URL;
    const proxy = a.transport === 'authenticated-proxy';

@@ -1,6 +1,7 @@
 import { API_URL } from '../utils/constants';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
+import { exportSessionChanged } from '../utils/exportSession';
 
 interface LoginCredentials {
    username: string;
@@ -70,6 +71,7 @@ export function useLogin() {
    return useMutation({
       mutationFn: loginUser,
       onSuccess: (res) => {
+         exportSessionChanged();
          queryClient.resetQueries({ queryKey: ['auth'] });
          if (res.totpRequired) {
             navigate('/login/verify-otp');
@@ -99,6 +101,7 @@ export function useLogout() {
    return useMutation({
       mutationFn: logoutUser,
       onSuccess: () => {
+         exportSessionChanged();
          queryClient.removeQueries({ queryKey: ['auth'] });
          navigate('/login');
       },

@@ -4,6 +4,8 @@ import { ManagedExportController } from '../controllers/ManagedExportController'
 export function createManagedExportPreflightRouter(controller: ManagedExportController): Router {
 	const router = Router();
 	router.get('/configuration', auth, controller.configuration.bind(controller));
+	router.get('/readiness', auth, controller.readiness.bind(controller));
+	router.get('/activity', auth, controller.activity.bind(controller));
 	router.post('/inventory-checks', auth, controller.inventory.bind(controller));
 	router.get('/inventory-checks/:preflightId', auth, controller.preflightStatus.bind(controller));
 	router.delete(

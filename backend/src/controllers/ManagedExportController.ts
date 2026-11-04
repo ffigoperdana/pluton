@@ -50,6 +50,22 @@ export class ManagedExportController {
 			this.failure(error, res);
 		}
 	}
+	async readiness(req: Request, res: Response) {
+		try {
+			const owner = this.operator(req, res);
+			res.json({ success: true, result: await this.service.readiness(owner) });
+		} catch (error) {
+			this.failure(error, res);
+		}
+	}
+	async activity(req: Request, res: Response) {
+		try {
+			const owner = this.operator(req, res);
+			res.json({ success: true, result: await this.service.activity(owner) });
+		} catch (error) {
+			this.failure(error, res);
+		}
+	}
 	async preflight(req: Request, res: Response) {
 		try {
 			const owner = this.operator(req, res);

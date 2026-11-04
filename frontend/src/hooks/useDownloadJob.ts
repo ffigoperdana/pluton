@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { DownloadFailure } from '../utils/downloadFailure';
 
 /** One request at a time. Background reads never toggle action controls or discard evidence. */
 export function useDownloadJob<T extends { id: string }>(
@@ -60,7 +61,8 @@ export function useDownloadJob<T extends { id: string }>(
             if (stop.signal.aborted) return;
             setError(attempt.signal.aborted ? 'Status request timed out.' : failure instanceof Error ? failure.message : 'Status unavailable.');
             const retryAt = Number((failure as { retryAt?: number })?.retryAt) || 0;
-            schedule(Math.max(Math.min(30000, 2000 * 2 ** Math.min(failures++, 4)), retryAt - Date.now()));
+            if (!(failure instanceof DownloadFailure) || failure.transient)
+               schedule(Math.max(Math.min(30000, 2000 * 2 ** Math.min(failures++, 4)), retryAt - Date.now()));
          } finally {
             clearTimeout(deadline);
             stop.signal.removeEventListener('abort', abort);
