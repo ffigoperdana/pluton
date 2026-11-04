@@ -581,6 +581,7 @@ export class ManagedExportService {
 			this.safeLog({
 				...diagnostic,
 				completion: diagnostic.completion ? JSON.stringify(diagnostic.completion) : 'not-recorded',
+				request: diagnostic.request ? JSON.stringify(diagnostic.request) : 'not-recorded',
 				httpStatus: diagnostic.httpStatus || 0,
 				stage: 'cleanup',
 				success: false,
@@ -735,6 +736,7 @@ export class ManagedExportService {
 					completion: diagnostic.completion
 						? JSON.stringify(diagnostic.completion)
 						: 'not-recorded',
+					request: diagnostic.request ? JSON.stringify(diagnostic.request) : 'not-recorded',
 					httpStatus: diagnostic.httpStatus || 0,
 					jobId: job.id,
 					success: false,

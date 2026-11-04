@@ -8,6 +8,40 @@ import { publicExportPublications } from '../../src/utils/managedExport/ExportPu
 import type { PublicationValidation } from '../../src/utils/managedExport/ExportPublication';
 
 describe('bounded export diagnostics', () => {
+	test('request timing projection rejects arbitrary values and never copies private fields', () => {
+		const error = new ExportOperationError('GetBucketVersioning', {
+			name: 'TimeoutError',
+			code: 'ECONNRESET',
+		});
+		error.request = {
+			phase: 'private-phase',
+			elapsedMs: Infinity,
+			attempts: -1,
+			abortedAtStart: 'private-value',
+			abortReason: 'private-reason',
+			transportCode: 'private-code',
+			headersMs: -1,
+			httpStatus: 999,
+			bodyComplete: 'private-body',
+			credentials: 'private-secret',
+		} as any;
+		const result = publicExportDiagnostic(
+			exportDiagnostic(error, {} as ExportJob, 'cleanup', 'cleanup')
+		)!;
+		expect(result.providerCategory).toBe('network');
+		expect(result.request).toEqual({
+			phase: 'sdk',
+			elapsedMs: 0,
+			attempts: 0,
+			abortedAtStart: false,
+			abortReason: 'none',
+			transportCode: 'other',
+			headersMs: undefined,
+			httpStatus: undefined,
+			bodyComplete: false,
+		});
+		expect(JSON.stringify(result)).not.toContain('private-');
+	});
 	test('schema evidence projects only complete boolean allowlist fields and never copies provider values', () => {
 		const validation = {
 			status200: true,

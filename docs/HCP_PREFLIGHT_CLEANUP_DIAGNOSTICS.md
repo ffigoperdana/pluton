@@ -9,8 +9,10 @@ disposable protocol fixtures; actual destination compatibility remains unproven.
 ## Confirmed implementation findings
 
 `S3ExportStorage.mode()` selects a **candidate** write-once contract only for the
-already permitted shared-namespace configuration when versioning is disabled or
-inspection returns HTTP 501. All existing collision, encryption, identity,
+already permitted shared-namespace configuration when a complete, valid versioning
+response proves the disabled state. HTTP 501 now fails this mandatory check; see
+[versioning verification and deadline diagnostics](HCP_CLEANUP_VERSIONING_DIAGNOSTICS.md).
+All existing collision, encryption, identity,
 privacy, readback, multipart, range and cleanup gates still have to pass.
 
 `HcpWriteOnceStorage.preflight()` first journals a private nonce, checks absence
@@ -201,8 +203,8 @@ Administrator investigation may be required for missing ETag/user metadata or
 timestamps, unobservable/unsupported AES256 evidence, retention/delete denial,
 HTTP 405/501 multipart APIs, credentials or signature rejection, proxy-stripped
 headers, TLS chain validation, or versioning state changes. HTTP 501 versioning
-inspection alone remains the existing write-once **candidate** behavior; enabling
-or suspending versioning blocks nonversioned cleanup. A provider that cannot
+inspection remains unverified and blocks cleanup; enabling or suspending versioning
+also blocks nonversioned cleanup. A provider that cannot
 prove encryption, publication isolation, exact identity, privacy, enumeration
 and cleanup must remain NO-GO. No check may be disabled to force compatibility.
 

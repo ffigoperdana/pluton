@@ -547,11 +547,20 @@ describe('nonversioned write-once capability contract', () => {
 			}
 		}
 	);
-	test('501 versioning inspection remains a candidate requiring all write-once gates', async () => {
+	test('501 cannot admit probe writes or satisfy mandatory cleanup versioning verification', async () => {
 		const f = fixture();
 		f.fault('versioning-unavailable');
+		f.job.integrityMode = 'hcp-write-once';
 		try {
-			await prepare(f);
+			await expect(f.storage.mode(AbortSignal.timeout(5000))).rejects.toThrow();
+			await expect(f.storage.cleanup(f.job, AbortSignal.timeout(5000), f.update)).rejects.toThrow();
+			expect(f.job.lastCleanupFailure).toMatchObject({
+				operation: 'GetBucketVersioning',
+				httpStatus: 501,
+				providerCategory: 'unsupported-api',
+			});
+			expect(f.job.preflightChecks || []).not.toContain('cleanup');
+			expect(f.calls.every(c => c.name === 'GetBucketVersioningCommand')).toBe(true);
 		} finally {
 			f.storage.close();
 		}

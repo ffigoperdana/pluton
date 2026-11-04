@@ -35,7 +35,7 @@ import {
 	exportCapabilityBinding,
 } from './ExportPolicy';
 import { HcpWriteOnceStorage, writeOnceKeys } from './HcpWriteOnceStorage';
-import { ExportInventoryError, ExportOperationError } from './ExportDiagnostics';
+import { ExportInventoryError, ExportOperationError, exportDiagnostic } from './ExportDiagnostics';
 import {
 	applicationEncrypted,
 	ExportCipher,
@@ -44,6 +44,7 @@ import {
 } from './ExportEncryption';
 import type { ManagedArchiveDownload } from '../../services/RemoteRepositoryRecoveryService';
 import { planLogger } from '../logger';
+import { checkedVersioning } from './ExportVersioning';
 
 const missing = (e: unknown) =>
 	(e as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode === 404;
@@ -172,23 +173,19 @@ export class S3ExportStorage {
 		);
 	}
 	async mode(signal: AbortSignal) {
-		try {
-			const response = await this.client.send(
-				new GetBucketVersioningCommand({ Bucket: this.config.bucket }),
-				{ abortSignal: signal }
-			);
-			if (response.Status === 'Enabled') {
-				if (this.config.exportMode)
-					throw new ExportPreflightError('versioning', 'unexpected-response');
-				return 'versioned' as const;
-			}
-			// Suspended versioning can hide old versions and is not this contract.
-			if (response.Status === 'Suspended' || !this.config.allowSharedNamespace)
+		const command = new GetBucketVersioningCommand({ Bucket: this.config.bucket });
+		const response = await checkedVersioning(command, signal, () =>
+			this.client.send(command, { abortSignal: signal })
+		);
+		if (response.Status === 'Enabled') {
+			if (this.config.exportMode)
 				throw new ExportPreflightError('versioning', 'unexpected-response');
-		} catch (error) {
-			if (!this.config.allowSharedNamespace || (error as any)?.$metadata?.httpStatusCode !== 501)
-				throw error;
+			return 'versioned' as const;
 		}
+		// Suspended/unknown state can hide old versions. An SDK error (including
+		// 501) cannot satisfy the mandatory verification or admit new probe writes.
+		if (response.Status !== undefined || !this.config.allowSharedNamespace)
+			throw new ExportPreflightError('versioning', 'unexpected-response');
 		return this.config.exportMode || ('hcp-write-once' as const);
 	}
 	private scope(job: ExportJob, key = job.key) {
@@ -609,6 +606,14 @@ export class S3ExportStorage {
 		}
 	}
 	private capabilityFailure(error: unknown, capability: ExportCapability): never {
+		if (error instanceof ExportOperationError) {
+			const diagnostic = exportDiagnostic(error, {} as ExportJob, 'preflight', capability);
+			throw new ExportPreflightError(
+				diagnostic.category === 'tls-validation' ? 'https' : capability,
+				diagnostic.category,
+				diagnostic.httpStatus
+			);
+		}
 		if (error instanceof ExportPreflightError) throw error;
 		const e = error as { code?: string; name?: string; $metadata?: { httpStatusCode?: number } };
 		const status = e.$metadata?.httpStatusCode;

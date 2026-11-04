@@ -1,4 +1,5 @@
 import { publicCompletionShape, type CompletionShape } from './ExportCompletionShape';
+import { publicExportRequest, type ExportRequestDiagnostic } from './ExportRequestDiagnostics';
 import {
 	ExportPreflightError,
 	TemporaryExportError,
@@ -47,6 +48,7 @@ const details = [
 	'foreign-object',
 	'listing-invalid',
 	'versioning-changed',
+	'versioning-response-invalid',
 	'unexpected-head-status',
 	'object-remains',
 	'race-multiple-successes',
@@ -112,6 +114,7 @@ export const exportTarget = (key?: string): Target =>
 					? 'probe'
 					: 'archive';
 export type ExportDiagnostic = {
+	request?: ExportRequestDiagnostic;
 	completion?: CompletionShape;
 	stage: 'preflight' | 'cleanup' | 'read-only';
 	capability: ExportCapability;
@@ -149,14 +152,16 @@ function provider(error: unknown): Provider {
 		)
 	)
 		return 'tls-validation';
-	if (names.includes('TimeoutError') || names.includes('ETIMEDOUT')) return 'deadline';
-	if (names.includes('AbortError')) return 'aborted';
+	// Smithy names ECONNRESET/EPIPE TimeoutError too. Preserve the concrete
+	// transport code rather than claiming a deadline actually expired.
 	if (
 		names.some(n =>
 			['ECONNRESET', 'EPIPE', 'ENOTFOUND', 'ECONNREFUSED', 'EAI_AGAIN'].includes(n || '')
 		)
 	)
 		return 'network';
+	if (names.includes('TimeoutError') || names.includes('ETIMEDOUT')) return 'deadline';
+	if (names.includes('AbortError')) return 'aborted';
 	const status = exportHttpStatus(error);
 	if (status === 401 || status === 403) return 'access-denied';
 	if (status === 405 || status === 501) return 'unsupported-api';
@@ -167,6 +172,7 @@ function provider(error: unknown): Provider {
 	return 'service-error';
 }
 export class ExportOperationError extends TemporaryExportError {
+	request?: ExportRequestDiagnostic;
 	requestAttempts?: number;
 	wireHttpStatus?: number;
 	completionShape?: CompletionShape;
@@ -188,6 +194,7 @@ export class ExportOperationError extends TemporaryExportError {
 		readonly target: Target = 'unknown'
 	) {
 		super(reason);
+		if (error instanceof ExportOperationError) this.request = publicExportRequest(error.request);
 		this.$metadata = { httpStatusCode: exportHttpStatus(error) };
 		const attempts =
 			error instanceof ExportOperationError
@@ -253,6 +260,7 @@ export function exportDiagnostic(
 	const key = target in suffix ? job.key + suffix[target as keyof typeof suffix] : undefined;
 	return {
 		stage,
+		request: error instanceof ExportOperationError ? publicExportRequest(error.request) : undefined,
 		capability,
 		target,
 		operation: error instanceof ExportOperationError ? error.operation : operation,
@@ -286,6 +294,7 @@ export function publicExportDiagnostic(d?: ExportDiagnostic): ExportDiagnostic |
 	if (!d) return;
 	return {
 		stage: ['preflight', 'cleanup', 'read-only'].includes(d.stage) ? d.stage : 'cleanup',
+		request: publicExportRequest(d.request),
 		capability: d.stage === 'preflight' ? 'write-once-creation' : 'cleanup',
 		// Capability is replaced below only when it is a known policy value.
 		...([

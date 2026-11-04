@@ -472,6 +472,45 @@ describe('durable independent export lifecycle', () => {
 			await h.close();
 		}
 	});
+	test('cancelling a preflight gives cleanup a fresh signal and concurrent retries share one cleanup', async () => {
+		const h = harness();
+		let workSignal: AbortSignal | undefined, cleanupSignal: AbortSignal | undefined;
+		const release = Promise.withResolvers<void>();
+		h.storage.preflight.mockImplementation(async (_job?: ExportJob, signal?: AbortSignal) => {
+			workSignal = signal;
+			await new Promise<void>((_resolve, reject) =>
+				signal!.addEventListener('abort', () => reject(new Error('synthetic cancellation')), {
+					once: true,
+				})
+			);
+		});
+		h.storage.cleanup.mockImplementation(async (_job?: ExportJob, signal?: AbortSignal) => {
+			cleanupSignal = signal;
+			await release.promise;
+		});
+		try {
+			const job = await h.service.preflight(owner);
+			await until(() => !!workSignal);
+			await h.service.cancelPreflight(owner, job.id);
+			await until(() => !!cleanupSignal);
+			expect(workSignal!.aborted).toBe(true);
+			expect(cleanupSignal!.aborted).toBe(false);
+			expect(cleanupSignal).not.toBe(workSignal);
+			await h.service.cancelPreflight(owner, job.id);
+			await immediate();
+			expect(h.storage.cleanup).toHaveBeenCalledTimes(1);
+			release.resolve();
+			await until(() => h.store.get(job.id)!.cleaned);
+			expect(await h.service.preflightStatus(owner, job.id)).toMatchObject({
+				state: 'cancelled',
+				cleanupPending: false,
+				productionReadiness: 'NO-GO',
+			});
+		} finally {
+			release.resolve();
+			await h.close();
+		}
+	});
 	test('size-bounded write-once cleanup aborts at shutdown and retains uncertain metadata for restart', async () => {
 		const h = harness();
 		try {
