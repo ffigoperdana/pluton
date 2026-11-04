@@ -123,6 +123,7 @@ describe('bounded multipart publication', () => {
 	test('one fixed part buffer, sequential requests, MD5, exact byte count and conditional publication', async () => {
 		const f = fixture(40 * 1024 ** 2 + 512);
 		const parts: { bytes: number; body: ArrayBufferLike }[] = [];
+		const timings: Record<string, unknown> = {};
 		let active = 0,
 			maxActive = 0,
 			completed = false;
@@ -155,9 +156,10 @@ describe('bounded multipart publication', () => {
 			}
 		});
 		try {
-			await f.storage.upload(f.job, f.archive, new AbortController().signal, fields =>
-				Object.assign(f.job, fields)
-			);
+			await f.storage.upload(f.job, f.archive, new AbortController().signal, fields => {
+				Object.assign(timings, fields.performance);
+				Object.assign(f.job, fields);
+			});
 			expect(parts.map(p => p.bytes)).toEqual([
 				EXPORT_LIMITS.partBytes,
 				EXPORT_LIMITS.partBytes,
@@ -168,6 +170,11 @@ describe('bounded multipart publication', () => {
 			expect(completed).toBe(true);
 			expect(f.job.uploadedBytes).toBe(f.job.summary!.archiveBytes);
 			expect(f.job.versionId).toBe('immutable-version');
+			expect(timings.uploadedWireBytes).toBe(f.job.summary!.archiveBytes);
+			expect(timings.uploadRequestMs).toEqual(expect.any(Number));
+			expect(timings.destinationWaitMs).toEqual(expect.any(Number));
+			expect(timings.multipartCompletionMs).toEqual(expect.any(Number));
+			expect(JSON.stringify(timings)).not.toMatch(/multipart-etag|immutable-version/);
 		} finally {
 			f.storage.close();
 		}

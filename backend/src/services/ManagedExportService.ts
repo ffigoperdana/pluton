@@ -39,6 +39,10 @@ import {
 } from '../utils/managedExport/ExportEncryption';
 import { ExportKeyError } from '../utils/managedExport/ExportKeyring';
 import { publicExportPublications } from '../utils/managedExport/ExportPublication';
+import {
+	publicExportPerformance,
+	type ExportPerformance,
+} from '../utils/managedExport/ExportPerformance';
 
 /** One durable exporter per process. Credentials come only from the separate
  * server configuration; queued JSON never contains provider credentials or URLs. */
@@ -218,6 +222,10 @@ export class ManagedExportService {
 			createdAt: job.createdAt,
 			elapsedMs: elapsed,
 			processedBytes: job.processedBytes,
+			performance: publicExportPerformance(
+				job.performance,
+				activeExport(job.state) ? Date.now() : job.updatedAt
+			),
 			uploadedBytes: job.uploadedBytes,
 			totalBytes: job.summary?.archiveBytes,
 			averageBytesPerSecond: job.uploadStartedAt
@@ -641,36 +649,61 @@ export class ManagedExportService {
 			}
 			stage = 'archive-validation';
 			await this.isolated(c);
-			await this.recovery.withVerifiedExport(job.binding, bounded, async archive => {
-				bounded.throwIfAborted();
-				const proof = archive.export;
-				if (
-					!proof ||
-					proof.mode !== job.binding.mode ||
-					proof.binding.backupId !== job.binding.backupId ||
-					proof.binding.repositoryId !== job.binding.repositoryId ||
-					proof.binding.snapshotId !== job.binding.snapshotId
-				)
-					throw new TemporaryExportError('object-mismatch');
-				this.store.reserve(
-					job.id,
-					applicationEncrypted(job)
-						? encryptedBytes(archive.export.archiveBytes)
-						: archive.export.archiveBytes
-				);
-				job = this.store.update(job.id, { state: 'exporting', summary: archive.export });
-				stage = 'upload';
-				await this.isolated(c);
-				if (c.allowSharedNamespace) await storage!.inventory(this.store.all(), bounded);
-				await storage!.upload(job, archive, bounded, fields => {
-					const latest = this.store.get(job.id)!;
-					if (latest.state === 'cancelled') throw new TemporaryExportError('cancelled');
-					this.store.update(job.id, fields);
-				});
-				job = this.store.get(job.id)!;
-				stage = 'object-verification';
-				await storage!.verify(job, bounded);
-			});
+			const report = (value: Partial<ExportPerformance>) => {
+				try {
+					const latest = this.store.get(job.id);
+					if (latest && activeExport(latest.state))
+						this.store.update(job.id, { performance: { ...latest.performance, ...value } });
+				} catch {
+					/* Optional telemetry never grants access or changes security decisions. */
+				}
+			};
+			await this.recovery.withVerifiedExport(
+				job.binding,
+				bounded,
+				async archive => {
+					bounded.throwIfAborted();
+					const proof = archive.export;
+					if (
+						!proof ||
+						proof.mode !== job.binding.mode ||
+						proof.binding.backupId !== job.binding.backupId ||
+						proof.binding.repositoryId !== job.binding.repositoryId ||
+						proof.binding.snapshotId !== job.binding.snapshotId
+					)
+						throw new TemporaryExportError('object-mismatch');
+					this.store.reserve(
+						job.id,
+						applicationEncrypted(job)
+							? encryptedBytes(archive.export.archiveBytes)
+							: archive.export.archiveBytes
+					);
+					job = this.store.update(job.id, { state: 'exporting', summary: archive.export });
+					stage = 'upload';
+					await this.isolated(c);
+					if (c.allowSharedNamespace) await storage!.inventory(this.store.all(), bounded);
+					await storage!.upload(job, archive, bounded, fields => {
+						const latest = this.store.get(job.id)!;
+						if (latest.state === 'cancelled') throw new TemporaryExportError('cancelled');
+						this.store.update(job.id, {
+							...fields,
+							...(fields.performance
+								? { performance: { ...latest.performance, ...fields.performance } }
+								: {}),
+						});
+					});
+					job = this.store.get(job.id)!;
+					stage = 'object-verification';
+					report({ phase: 'verification' });
+					const verifying = performance.now();
+					try {
+						await storage!.verify(job, bounded);
+					} finally {
+						report({ verificationMs: performance.now() - verifying });
+					}
+				},
+				report
+			);
 			bounded.throwIfAborted();
 			stage = 'binding-validation';
 			await this.isolated(c);
@@ -687,6 +720,11 @@ export class ManagedExportService {
 				throw new TemporaryExportError('cancelled');
 			this.store.update(job.id, { state: 'ready', expiresAt: Date.now() + c.ttlSeconds * 1000 });
 			this.safeLog({ stage: 'verified', bytes: job.summary!.archiveBytes, success: true });
+			this.safeLog({
+				event: 'managed_export_performance',
+				stage: 'verified',
+				...publicExportPerformance(this.store.get(job.id)?.performance),
+			});
 		} catch (error) {
 			const job = this.store.get(original.id)!;
 			const reason = this.stopped

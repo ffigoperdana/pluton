@@ -3,6 +3,7 @@ import { once } from 'events';
 import { Transform, Writable } from 'stream';
 import { finished, pipeline } from 'stream/promises';
 import tar from 'tar-stream';
+import { exportStreamTiming, type ExportPerformance } from '../managedExport/ExportPerformance';
 import { managedSnapshotPath } from '../managedSnapshotPath';
 import type { ManagedRepositorySession } from './ManagedSftpRepositorySession';
 import type { ManagedSnapshotIndex } from './ManagedSnapshotIndex';
@@ -422,17 +423,20 @@ async function runManagedExport(
 	proof: ManagedExportProof,
 	destination: Writable,
 	signal: AbortSignal,
-	compare = true
+	compare = true,
+	observe?: (value: Partial<ExportPerformance>) => void
 ): Promise<ManagedExportSummary> {
 	index.assertExportEntries(proof.mode);
 	if (compare && !proof.summary) throw new ManagedExportError('export-proof-missing');
 	if (!compare) proof.reset();
 	const pack = tar.pack();
+	const timing = exportStreamTiming(observe);
 	const hash = crypto.createHash('sha256');
 	let bytes = 0;
 	const meter = new Transform({
 		transform(chunk, _encoding, done) {
 			bytes += chunk.length;
+			timing.tarBytes(chunk.length);
 			if (!Number.isSafeInteger(bytes)) {
 				done(new ManagedExportError('tar-invalid'));
 				return;
@@ -445,8 +449,12 @@ async function runManagedExport(
 	let validationFailure: unknown;
 	const input = new Writable({
 		write(chunk, _encoding, done) {
+			timing.sourceWrite();
 			reader.consume(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)).then(
-				() => done(),
+				() => {
+					timing.sourceReady();
+					done();
+				},
 				error => {
 					validationFailure = error;
 					done(error);
@@ -485,6 +493,7 @@ async function runManagedExport(
 		await output.catch(() => undefined);
 		throw validationFailure || error;
 	} finally {
+		timing.finish();
 		reader.close();
 	}
 }
@@ -516,7 +525,8 @@ export function streamManagedExport(
 	session: ManagedRepositorySession,
 	proof: ManagedExportProof,
 	destination: Writable,
-	signal: AbortSignal
+	signal: AbortSignal,
+	observe?: (value: Partial<ExportPerformance>) => void
 ): Promise<ManagedExportSummary> {
-	return runManagedExport(index, session, proof, destination, signal, true);
+	return runManagedExport(index, session, proof, destination, signal, true, observe);
 }
