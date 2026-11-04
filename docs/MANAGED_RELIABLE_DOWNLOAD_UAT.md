@@ -114,10 +114,12 @@ optimization ON, Deletion Allowed/Enterprise retention unchanged, and the existi
 
 There are two independently tested modes. A versioning API result `Enabled` selects
 `versioned`, preserving exact VersionId, conditional 412 publication, version-bound
-Range/presigned requests and version-specific cleanup. Missing/disabled versioning
-or HTTP 501 selects a **candidate** `hcp-write-once` mode only when shared namespace
-opt-in is explicit. Suspended versioning, access denial, TLS failures and ambiguous
-responses are refused. A candidate is never permission to read real backup data.
+Range/presigned requests and version-specific cleanup. An absent Status in a complete,
+valid VersioningConfiguration selects a **candidate** `hcp-write-once` mode only when
+shared namespace opt-in is explicit. HTTP 501, suspended versioning, access denial,
+TLS failures and ambiguous responses are refused. An absent/malformed response is
+not disabled versioning. A candidate is never permission to read real backup data.
+See [versioning verification and deadline diagnostics](HCP_CLEANUP_VERSIONING_DIAGNOSTICS.md).
 
 ### Evidence and provider limits
 
@@ -820,8 +822,8 @@ it never reports `versioning` as PASS when versioning is unavailable.
 Safe failures report a capability plus `tls-validation`, `access-denied`,
 `unsupported-api`, `unexpected-response`, `network-or-deadline` or `cleanup-failed`,
 and an HTTP status when available. No raw provider response, endpoint, environment
-values, credentials or signed URL is exposed. Versioning HTTP 501 can enter only
-the explicit candidate write-once contract; it is not GO. A rejected certificate reports
+values, credentials or signed URL is exposed. Versioning HTTP 501 fails the
+mandatory verification and remains NO-GO. A rejected certificate reports
 `https / tls-validation`. Cleanup failure takes precedence and retains metadata
 for reconciliation. Some providers express unsupported APIs as 400; the exact
 failing capability and safe status remain visible. Storage operators must inspect

@@ -1,4 +1,5 @@
 import { checkedCompletion } from './ExportCompletion';
+import { checkedVersioning } from './ExportVersioning';
 import crypto from 'crypto';
 import { Readable } from 'stream';
 import {
@@ -104,6 +105,10 @@ export class HcpWriteOnceStorage {
 		signal: AbortSignal
 	): Promise<any> {
 		try {
+			if (command instanceof GetBucketVersioningCommand)
+				return await checkedVersioning(command, signal, () =>
+					this.client.send(command, { abortSignal: signal })
+				);
 			return await this.client.send(command as HeadObjectCommand, { abortSignal: signal });
 		} catch (error) {
 			const failure = new ExportOperationError(
@@ -1221,28 +1226,28 @@ export class HcpWriteOnceStorage {
 		}
 	}
 	private async unversioned(signal: AbortSignal) {
-		// Enabling/suspending versioning after publication changes DELETE into a
-		// marker operation. Never mark an archive cleaned while hidden bytes remain.
-		try {
-			const versioning = await this.send(
-				new GetBucketVersioningCommand({ Bucket: this.config.bucket }),
-				signal
-			);
-			if (['Enabled', 'Suspended'].includes(versioning.Status))
-				throw new ExportOperationError(
+		// A versioning error is not evidence that DELETE cannot hide old bytes.
+		// Require the complete response, including on retries of historical jobs.
+		const versioning = await this.send(
+			new GetBucketVersioningCommand({ Bucket: this.config.bucket }),
+			signal
+		);
+		if (versioning.Status !== undefined)
+			throw Object.assign(
+				new ExportOperationError(
 					'GetBucketVersioning',
 					versioning,
 					'versioning-changed',
-					'cleanup-pending'
-				);
-			return {
-				versioningInspection: 'disabled' as const,
-				httpStatus: exportHttpStatus(versioning),
-			};
-		} catch (e) {
-			if (status(e) !== 501) throw e;
-			return { versioningInspection: 'unsupported-api' as const, httpStatus: 501 };
-		}
+					'cleanup-pending',
+					'namespace'
+				),
+				{ request: versioning.exportRequest }
+			);
+		return {
+			versioningInspection: 'disabled' as const,
+			httpStatus: exportHttpStatus(versioning),
+			request: versioning.exportRequest,
+		};
 	}
 	/** Observations only. Never records/adopts ownership, reads bodies or repairs
 	 * state. Unknown/malformed replies remain explicit failures, never GO. */
