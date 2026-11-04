@@ -253,6 +253,38 @@ describe('temporary export policy and durable admission', () => {
 	});
 });
 describe('durable independent export lifecycle', () => {
+	test('performance remains additive, durable and owner-bound; untrusted diagnostic fields are never exposed', async () => {
+		const h = harness();
+		try {
+			const value = await h.service.admit(owner, binding.backupId, 'full');
+			await until(() => h.store.get(value.id)?.state === 'ready');
+			h.store.update(value.id, {
+				performance: {
+					phase: 'verification',
+					indexingMs: 12,
+					archiveValidationMs: 30,
+					streamBytes: 2048,
+					streamMs: 1000,
+					privateKey: 'captured-private-content',
+				} as any,
+			});
+			const status = await h.service.status(owner, binding.backupId, value.id);
+			expect(status.performance).toMatchObject({
+				phase: 'verification',
+				indexingMs: 12,
+				archiveValidationMs: 30,
+				streamBytesPerSecond: 2048,
+			});
+			expect(JSON.stringify(status)).not.toContain('captured-private-content');
+			expect(h.store.get(value.id)?.performance?.indexingMs).toBe(12);
+			await expect(h.service.status('other-owner', binding.backupId, value.id)).rejects.toThrow(
+				'Export not found'
+			);
+			expect(status.integrity).toBe('verified');
+		} finally {
+			await h.close();
+		}
+	});
 	test('application-encrypted downloads expose original TAR proof only, preserve owner checks, Range and full-response If-Range semantics', async () => {
 		const h = harness();
 		try {

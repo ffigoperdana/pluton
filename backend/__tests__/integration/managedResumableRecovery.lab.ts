@@ -1162,6 +1162,30 @@ try {
 	results.indexAllocation = initialStats.sourceIndex;
 	results.archiveReads = initialStats.archiveReads;
 	results.pipelineTimingsMs = initialStats.timings;
+	// Public diagnostics must be bounded numbers and may not replace any proof.
+	results.exportPerformance = job.performance;
+	for (const key of [
+		'indexingMs',
+		'archiveValidationMs',
+		'firstTarByteMs',
+		'streamMs',
+		'sourceWaitMs',
+		'destinationWaitMs',
+		'uploadRequestMs',
+		'multipartCompletionMs',
+		'verificationMs',
+	]) {
+		assert(
+			Number.isFinite(job.performance?.[key]) && job.performance[key] >= 0,
+			'Missing safe export timing: ' + key
+		);
+	}
+	assert.equal(job.performance.streamBytes, job.totalBytes);
+	assert(job.performance.uploadedWireBytes >= job.totalBytes);
+	assert.equal(
+		job.performance.indexedEntries,
+		job.summary.includedEntries + job.summary.excludedEntries
+	);
 	results.storageReadConnectionRetries = initialStats.storageDiagnostics.reduce(
 		(n: number, s: any) => n + s.readConnectionRetries,
 		0

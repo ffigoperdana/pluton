@@ -47,6 +47,7 @@ import {
 import type { RecoveryStage } from '../types/recoveryTests';
 import { ManagedDownloadPreparation } from './ManagedDownloadPreparation';
 import { prepareManagedExport, streamManagedExport } from '../utils/restic/ManagedTarExport';
+import type { ExportPerformance } from '../utils/managedExport/ExportPerformance';
 import {
 	managedExportMode,
 	ManagedExportError,
@@ -724,7 +725,8 @@ export class RemoteRepositoryRecoveryService {
 	async withVerifiedExport<T>(
 		binding: ExportBinding,
 		signal: AbortSignal,
-		consume: (archive: ManagedArchiveDownload) => Promise<T>
+		consume: (archive: ManagedArchiveDownload) => Promise<T>,
+		observe?: (value: Partial<ExportPerformance>) => void
 	): Promise<T> {
 		if (
 			bindingDigest(await this.exportBindingFor(binding.backupId, binding.mode)) !==
@@ -742,9 +744,24 @@ export class RemoteRepositoryRecoveryService {
 		// Each invocation belongs to an explicitly admitted POST. Match Standard
 		// Download's retry semantics without retrying an archive in the background.
 		await this.indexes.retry(this.indexKey(context));
+		const started = performance.now();
+		const report = (value: Partial<ExportPerformance>) => {
+			try {
+				observe?.(value);
+			} catch {
+				/* Diagnostics only. */
+			}
+		};
+		report({ phase: 'indexing' });
 		return this.withIndex(
 			context,
 			async index => {
+				report({
+					phase: 'archive-validation',
+					indexingMs: performance.now() - started,
+					indexedEntries: index.count,
+				});
+				const validating = performance.now();
 				index.assertExportEntries(binding.mode);
 				const proof = index.exportProof(this.exportBinding(context), binding.mode);
 				const summary = await this.sessions.withSession(
@@ -756,6 +773,7 @@ export class RemoteRepositoryRecoveryService {
 					signal
 				);
 				await this.assertCurrentContext(context);
+				report({ archiveValidationMs: performance.now() - validating });
 				return consume({
 					fileName: `backup-${binding.backupId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80)}${binding.mode === 'regular-files' ? '-regular-files' : ''}.tar`,
 					export: summary,
@@ -767,7 +785,14 @@ export class RemoteRepositoryRecoveryService {
 								await this.assertCurrentContext(context);
 								transferSignal.throwIfAborted();
 								ready();
-								await streamManagedExport(index, session, proof, destination, transferSignal);
+								await streamManagedExport(
+									index,
+									session,
+									proof,
+									destination,
+									transferSignal,
+									report
+								);
 							},
 							transferSignal
 						);

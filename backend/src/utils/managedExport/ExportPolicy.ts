@@ -9,6 +9,7 @@ import type { ExportDiagnostic } from './ExportDiagnostics';
 import type { ExportPublicationRace } from './ExportPublication';
 import type { ExportEncryption } from './ExportEncryption';
 import { ExportKeyring } from './ExportKeyring';
+import type { ExportPerformance } from './ExportPerformance';
 
 export const EXPORT_LIMITS = Object.freeze({
 	partBytes: 16 * 1024 ** 2,
@@ -311,6 +312,7 @@ export type ExportState =
 	| 'cancelled'
 	| 'expired';
 export type ExportJob = {
+	performance?: ExportPerformance;
 	encryption?: ExportEncryption;
 	kind?: 'archive' | 'preflight' | 'inventory';
 	integrityMode?: ExportIntegrityMode;

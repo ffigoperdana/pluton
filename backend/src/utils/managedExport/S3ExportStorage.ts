@@ -958,27 +958,43 @@ export class S3ExportStorage {
 		let used = 0,
 			processed = 0,
 			uploaded = 0,
-			lastUpdate = 0;
+			lastUpdate = 0,
+			uploadRequestMs = 0,
+			destinationWaitMs = 0;
+		const timingFields: NonNullable<ExportJob['performance']> = {};
+		const report = (fields: NonNullable<ExportJob['performance']>) => {
+			Object.assign(timingFields, fields);
+		};
+		const progressUpdate = (fields: Partial<ExportJob>) =>
+			update({ ...fields, performance: { ...timingFields } });
+		report({ phase: 'upload', lastProgressAt: Date.now() });
 		const part = async () => {
 			if (!used) return;
 			signal.throwIfAborted();
 			const body = buffer.subarray(0, used);
-			const result = await this.client.send(
-				new UploadPartCommand({
-					...this.scope(job),
-					UploadId: job.uploadId,
-					PartNumber: parts.length + 1,
-					ContentLength: used,
-					ContentMD5: crypto.createHash('md5').update(body).digest('base64'),
-					Body: body,
-				}),
-				{ abortSignal: signal }
-			);
+			const started = performance.now();
+			const result = await this.client
+				.send(
+					new UploadPartCommand({
+						...this.scope(job),
+						UploadId: job.uploadId,
+						PartNumber: parts.length + 1,
+						ContentLength: used,
+						ContentMD5: crypto.createHash('md5').update(body).digest('base64'),
+						Body: body,
+					}),
+					{ abortSignal: signal }
+				)
+				.finally(() => {
+					uploadRequestMs += performance.now() - started;
+					report({ uploadRequestMs });
+				});
 			if (!result.ETag) throw new TemporaryExportError('storage-unavailable');
 			parts.push({ PartNumber: parts.length + 1, ETag: result.ETag });
 			uploaded += used;
+			report({ uploadedWireBytes: uploaded, lastProgressAt: Date.now() });
 			used = 0;
-			update({ uploadedBytes: uploaded, processedBytes: processed });
+			progressUpdate({ uploadedBytes: uploaded, processedBytes: processed });
 		};
 		const output = new Writable({
 			highWaterMark: 64 * 1024,
@@ -997,10 +1013,19 @@ export class S3ExportStorage {
 						chunk.copy(buffer, used, offset, offset + n);
 						used += n;
 						offset += n;
-						if (used === buffer.length) await part();
+						if (used === buffer.length) {
+							const blocked = performance.now();
+							try {
+								await part();
+							} finally {
+								destinationWaitMs += performance.now() - blocked;
+								report({ destinationWaitMs });
+							}
+						}
 					}
 					if (Date.now() - lastUpdate > 1000) {
-						update({ processedBytes: processed });
+						report({ lastProgressAt: Date.now() });
+						progressUpdate({ processedBytes: processed });
 						lastUpdate = Date.now();
 					}
 				})().then(() => done(), done);
@@ -1023,16 +1048,20 @@ export class S3ExportStorage {
 				await this.writeOnce.publicationGuard(job, signal, update);
 			}
 			job.publicationAttempted = true;
-			update({ publicationAttempted: true });
+			report({ phase: 'publication' });
+			progressUpdate({ publicationAttempted: true });
 			const command = new CompleteMultipartUploadCommand({
 				...this.scope(job),
 				UploadId: job.uploadId,
 				MultipartUpload: { Parts: parts },
 				...(isWriteOnce(job.integrityMode) ? {} : { IfNoneMatch: '*' }),
 			});
+			report({ phase: 'publication' });
+			const completing = performance.now();
 			const result = isWriteOnce(job.integrityMode)
 				? await this.writeOnce.completeUpload(command, signal, true)
 				: await this.client.send(command, { abortSignal: signal });
+			report({ multipartCompletionMs: performance.now() - completing });
 			if (isWriteOnce(job.integrityMode)) {
 				await this.writeOnce.record(
 					job,
@@ -1056,7 +1085,7 @@ export class S3ExportStorage {
 					capability: job.capabilityBinding!,
 				};
 				job.etag = proof.etag;
-				update({
+				progressUpdate({
 					identity: job.identity,
 					etag: job.etag,
 					uploadId: undefined,
@@ -1069,7 +1098,7 @@ export class S3ExportStorage {
 				throw new TemporaryExportError('security-capability-missing');
 			job.versionId = result.VersionId;
 			job.etag = result.ETag;
-			update({
+			progressUpdate({
 				identity: { mode: 'versioned', versionId: result.VersionId, etag: result.ETag },
 				versionId: result.VersionId,
 				etag: result.ETag,
@@ -1080,6 +1109,12 @@ export class S3ExportStorage {
 		} catch (error) {
 			output.destroy();
 			throw error;
+		} finally {
+			try {
+				update({ performance: { ...timingFields } });
+			} catch {
+				/* Diagnostics cannot mask stream failure. */
+			}
 		}
 	}
 	async verify(job: ExportJob, signal: AbortSignal) {

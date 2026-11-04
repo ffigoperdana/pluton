@@ -1,151 +1,182 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { API_URL } from '../../../utils/constants';
 import type { DownloadMode } from '../../../utils/downloadPreparation';
 import { reliableRequest, reliableAuthorization, reliableActive, reliableFailure, type ReliableJob } from '../../../utils/reliableDownload';
+import { downloadBytes, downloadDuration, downloadStep, uploadPercent } from '../../../utils/downloadProgress';
+import { useDownloadJob } from '../../../hooks/useDownloadJob';
+import ActionModal from '../../common/ActionModal/ActionModal';
 import classes from '../../common/ActionModal/ActionModal.module.scss';
+import styles from './DownloadPreparation.module.scss';
 
-const labels: Record<ReliableJob['state'], string> = {
-   queued: 'Queued',
-   validating: 'Indexing and validating the exact snapshot archive',
-   exporting: 'Starting export',
-   uploading: 'Uploading verified archive stream',
-   verifying: 'Verifying complete temporary object',
-   ready: 'Verified export ready',
-   failed: 'Export failed',
-   cancelled: 'Export cancelled',
-   expired: 'Export expired',
-};
-const bytes = (n: number) => (n / 1024 ** 2).toLocaleString(undefined, { maximumFractionDigits: 1 }) + ' MiB';
-export default function ReliableDownload({ backupId, mode, close }: { backupId: string; mode: DownloadMode; close: () => void }) {
-   const [job, setJob] = useState<ReliableJob>(),
-      [error, setError] = useState(''),
-      [retry, setRetry] = useState(0),
-      [busy, setBusy] = useState(false),
-      [authorization, setAuthorization] = useState<{ url: string; expiresAt: number; transport?: string }>();
-   const current = useRef(job),
-      controller = useRef<AbortController>();
-   current.current = job;
+const interval = (job: ReliableJob) => (job.cleanupPending || job.state === 'ready' ? 5000 : reliableActive(job) ? 2000 : false);
+const steps = [
+   'Validating / indexing snapshot',
+   'Preparing archive',
+   'Encrypting / uploading to temporary storage',
+   'Integrity verification',
+   'Ready to download',
+];
+export default function ReliableDownload({backupId,
+   mode,
+   close,
+   initialId,
+   onStatus,}: {
+   backupId: string;
+   mode: DownloadMode;
+   close: () => void;
+   initialId?: string;
+   onStatus?: (id: string | undefined, locked: boolean) => void;
+}) {
+   const request = useCallback(
+      (id: string | undefined, cancel: boolean, signal: AbortSignal) => reliableRequest(API_URL, backupId, mode, id, cancel, signal),
+      [backupId, mode],
+   );
+   const { job, error, actionError, busy, observedAt, refresh, cancel, restart, perform } = useDownloadJob(request, interval, true, initialId);
+   const [confirm, setConfirm] = useState(false);
+   const [clock, setClock] = useState(() => Date.now());
+   const [authorization, setAuthorization] = useState<{ url: string; expiresAt: number; transport?: string }>();
+   const active = !!job && reliableActive(job);
+   const jobId = job?.id;
+   const optionsLocked = busy || (!job && !error) || active || !!job?.cleanupPending;
    useEffect(() => {
-      const stop = new AbortController();
-      controller.current = stop;
-      let timer: ReturnType<typeof setTimeout>;
-      let id =
-         current.current?.mode === mode &&
-         current.current.state !== 'failed' &&
-         current.current.state !== 'expired' &&
-         current.current.state !== 'cancelled'
-            ? current.current.id
-            : undefined;
-      setJob(undefined);
-      setAuthorization(undefined);
-      setError('');
-      const poll = async () => {
-         setBusy(true);
-         try {
-            const next = await reliableRequest(API_URL, backupId, mode, id, false, stop.signal);
-            if (stop.signal.aborted) return;
-            id = next.id;
-            setJob(next);
-            setError('');
-            if (reliableActive(next) || next.state === 'ready') timer = setTimeout(poll, next.state === 'ready' ? 5000 : 2000);
-         } catch (e) {
-            if (!stop.signal.aborted) setError(e instanceof Error ? e.message : 'Export status unavailable.');
-         } finally {
-            if (!stop.signal.aborted) setBusy(false);
-         }
-      };
-      void poll();
-      return () => {
-         stop.abort();
-         clearTimeout(timer);
-      };
-   }, [backupId, mode, retry]);
-   const visible = job?.mode === mode ? job : undefined;
-   const cancel = async () => {
-      if (!visible) return;
-      controller.current?.abort();
-      setBusy(true);
-      setAuthorization(undefined);
-      try {
-         setJob(await reliableRequest(API_URL, backupId, mode, visible.id, true));
-         setError('');
-      } catch (e) {
-         setError(e instanceof Error ? e.message : 'Cancellation was not confirmed.');
-      } finally {
-         setBusy(false);
-      }
-   };
+      onStatus?.(jobId, optionsLocked);
+   }, [onStatus, jobId, optionsLocked]);
+   useEffect(() => {
+      if (!active) return;
+      const timer = setInterval(() => setClock(Date.now()), 1000);
+      return () => clearInterval(timer);
+   }, [active]);
+   const percent = uploadPercent(job);
+   const step = downloadStep(job);
+   const elapsed = (job?.elapsedMs || 0) + (active ? Math.max(0, clock - observedAt) : 0);
+   const stalled = job?.state === 'uploading' && step === 2 && !error && (job.performance?.lastProgressAgeMs || 0) >= 30000;
+   const status = job?.cleanupPending
+      ? 'Cleanup pending'
+      : error
+        ? 'Waiting for connection — reconnecting'
+        : stalled
+          ? 'Upload stalled — no recent progress reported'
+          : job?.state === 'failed'
+            ? 'Export failed'
+            : job?.state === 'cancelled'
+              ? 'Export cancelled'
+              : job?.state === 'expired'
+                ? 'Export expired'
+                : job?.state === 'ready'
+                  ? 'Completed — integrity verified'
+                  : step === 3
+                    ? 'Verifying complete archive'
+                    : job?.state === 'queued'
+                      ? 'Queued — waiting for server'
+                      : job
+                        ? 'Working normally'
+                        : 'Requesting reliable export…';
+   const prefix = job ? API_URL + '/backups/' + encodeURIComponent(backupId) + '/exports/' + encodeURIComponent(job.id) : '';
    const authorize = async () => {
-      if (!visible?.summary) return;
-      setBusy(true);
-      try {
-         setAuthorization(await reliableAuthorization(API_URL, backupId, visible.id, visible.summary.archiveSha256, visible.summary.archiveBytes));
-         setError('');
-      } catch (e) {
-         setError(e instanceof Error ? e.message : 'Authorization was not confirmed.');
-      } finally {
-         setBusy(false);
-      }
+      if (!job?.summary) return;
+      const value = await perform((signal) =>
+         reliableAuthorization(API_URL, backupId, job.id, job.summary!.archiveSha256, job.summary!.archiveBytes, signal),
+      );
+      if (value) setAuthorization(value);
    };
-   const prefix = visible ? `${API_URL}/backups/${encodeURIComponent(backupId)}/exports/${encodeURIComponent(visible.id)}` : '';
    return (
-      <div>
-         <p>Creates a private temporary archive independently of backup replication. Closing this panel leaves the export running.</p>
-         <div role="status" aria-live="polite">
-            <p>{visible ? labels[visible.state] : 'Requesting reliable export…'}</p>
-            {visible && (
-               <p>
-                  Processed: {bytes(visible.processedBytes)} · Uploaded: {bytes(visible.uploadedBytes)}
-                  {visible.totalBytes ? ` / ${bytes(visible.totalBytes)} (${Math.floor((visible.uploadedBytes * 100) / visible.totalBytes)}%)` : ''}
-                  <br />
-                  Elapsed: {Math.floor(visible.elapsedMs / 1000)}s · Average upload: {bytes(visible.averageBytesPerSecond)}/s
-               </p>
-            )}
+      <section aria-label="Reliable Download progress" className={styles.progressPanel}>
+         <p>
+            {job?.confidentiality === 'provider-sse-s3'
+               ? 'Reliable Download prepares a private temporary archive with storage encryption. The file becomes available after upload and integrity verification.'
+               : 'Reliable Download prepares an encrypted temporary archive in HCP. This may take additional time. The file becomes available after upload and integrity verification.'}
+         </p>
+         <ol className={styles.steps} aria-label="Export stages">
+            {steps.map((label, index) => (
+               <li key={label} aria-current={step === index ? 'step' : undefined} data-complete={index < step}>
+                  {index === 2 && job?.confidentiality === 'provider-sse-s3' ? 'Uploading to encrypted temporary storage' : label}
+               </li>
+            ))}
+         </ol>
+         <p role="status" aria-live="polite" className={styles.connection}>
+            {status}
+         </p>
+         <div className={styles.progressDetails}>
+            <progress aria-label="Archive uploaded; integrity verification follows" max={100} value={percent} />
+            <p>
+               {percent === undefined ? 'Preparing — total archive size is not yet available.' : 'Upload: ' + percent + '%'}
+               {job?.state === 'verifying' && ' — upload received; final verification is still running.'}
+            </p>
+            <p>
+               Processed: {downloadBytes(job?.processedBytes || 0)} · Uploaded: {downloadBytes(job?.uploadedBytes || 0)}
+               {job?.totalBytes ? ' / ' + downloadBytes(job.totalBytes) : ''}
+            </p>
+            <p>
+               Elapsed: {downloadDuration(elapsed)} · Average upload:{' '}
+               {job?.averageBytesPerSecond ? downloadBytes(job.averageBytesPerSecond) + '/s' : 'Waiting for data'}
+            </p>
+            <p>
+               {job?.performance?.indexedEntries !== undefined
+                  ? 'Indexed entries: ' + job.performance.indexedEntries.toLocaleString()
+                  : 'Indexing and validation use an indeterminate indicator.'}
+            </p>
          </div>
-         {visible?.failure && <p role="alert">{reliableFailure(visible.failure)}</p>}
-         {visible?.cleanupPending && <p>Cleanup is pending. Its storage reservation remains counted until deletion is verified.</p>}
-         {visible?.confidentiality === 'application-encrypted' && <p>Temporary storage holds an encrypted archive. Downloading through Pluton returns the original TAR.</p>}
-         {error && (
-            <p role="alert" className={classes.error}>
-               {error}
+         {active && (
+            <p>
+               Your export is running on the server. You may close this window and return later. Do not select Cancel unless you want to stop and
+               clean up this export.
             </p>
          )}
-         {visible?.state === 'ready' && visible.summary && !error && (
-            <div>
-               <p>
-                  Integrity: complete object size and SHA-256 verified. Included: {visible.summary.includedEntries.toLocaleString()} · Excluded:{' '}
-                  {visible.summary.excludedEntries.toLocaleString()}.
-               </p>
-               <p>Expires: {new Date(visible.expiresAt!).toLocaleString()}</p>
-               <p>
-                  SHA-256: <code style={{ overflowWrap: 'anywhere' }}>{visible.summary.archiveSha256}</code>
-               </p>
-               <a href={`${prefix}/link`} referrerPolicy="no-referrer">
-                  {visible.transport === 'authenticated-proxy' ? 'Download verified TAR through Pluton' : 'Download TAR from temporary storage'}
+         {job?.failure && <p role="alert">{reliableFailure(job.failure)}</p>}
+         {job?.cleanupPending && (
+            <p>Cleanup is pending. Its storage reservation remains counted until deletion is verified. Status checks continue automatically.</p>
+         )}
+         {job?.confidentiality === 'application-encrypted' && (
+            <p>Temporary storage holds an encrypted archive. Downloading through Pluton returns the original TAR.</p>
+         )}
+         <div className={styles.connection}>
+            {actionError && !confirm && <p role="alert">{actionError}</p>}
+            {error && (
+               <>
+                  <span>{error} Last confirmed progress is retained.</span>{' '}
+                  <button type="button" disabled={busy} onClick={refresh}>
+                     Reconnect now
+                  </button>
+               </>
+            )}
+         </div>
+         {job?.state === 'ready' && job.summary && (
+            <div className={styles.ready}>
+               <a className={styles.primaryDownload} href={prefix + '/link'} referrerPolicy="no-referrer">
+                  Download Verified TAR
                </a>
+               <p>Size: {downloadBytes(job.summary.archiveBytes)} · Integrity: complete object size and SHA-256 verified.</p>
                <p>
-                  <a href={`${prefix}/content`} download>
-                     Download through Pluton
-                  </a>
+                  Included: {job.summary.includedEntries.toLocaleString()} · Excluded: {job.summary.excludedEntries.toLocaleString()}.
+               </p>
+               <p>Expires: {new Date(job.expiresAt!).toLocaleString()}</p>
+               <p>
+                  SHA-256: <code style={{ overflowWrap: 'anywhere' }}>{job.summary.archiveSha256}</code>
                </p>
                <p>
-                  Your browser reports client transfer progress. Browser Resume depends on the browser and authorization expiry; it is not guaranteed.
-                  A resume link can be renewed for the same immutable object until export expiry.
+                  Your browser reports transfer progress. Browser Resume depends on browser support and authorization expiry. Renewing a resume link
+                  identifies the same immutable object until export expiry.
                </p>
-               {visible.transport === 'authenticated-proxy' && <p>Resuming requires an authenticated Pluton session. The server checks object identity on every Range request. Verify the final file size and SHA-256 after download.</p>}
+               {job.transport === 'authenticated-proxy' && (
+                  <p>
+                     Resuming requires an authenticated Pluton session. The server checks object identity on every Range request. Verify the final
+                     file size and SHA-256 after download.
+                  </p>
+               )}
                <button type="button" disabled={busy} onClick={() => void authorize()}>
                   Get or renew resume link
                </button>
                {authorization && (
                   <div>
                      <p>
-                        {authorization.transport === 'authenticated-proxy' ? 'This link requires your authenticated Pluton session; it is not a public storage link.' : `Private bearer link expires: ${new Date(authorization.expiresAt).toLocaleString()}. Keep it out of logs and shared messages.`}
+                        {authorization.transport === 'authenticated-proxy'
+                           ? 'This link requires your authenticated Pluton session.'
+                           : 'Private bearer link expires: ' +
+                             new Date(authorization.expiresAt).toLocaleString() +
+                             '. Keep it out of logs and shared messages.'}
                      </p>
                      <input aria-label="Private resume link" readOnly value={authorization.url} onFocus={(event) => event.currentTarget.select()} />
-                     <p>
-                        Use a resume-capable client with this link, then compare the completed archive SHA-256 above. A renewed link identifies the
-                        same object.
-                     </p>
+                     <p>Use a resume-capable client, then compare the completed archive SHA-256 above.</p>
                   </div>
                )}
             </div>
@@ -154,17 +185,40 @@ export default function ReliableDownload({ backupId, mode, close }: { backupId: 
             <button type="button" onClick={close}>
                Close
             </button>
-            {visible && (reliableActive(visible) || visible.state === 'ready' || visible.cleanupPending) && (
-               <button type="button" disabled={busy} onClick={() => void cancel()}>
-                  Cancel export and delete temporary data
+            {job && (active || job.state === 'ready' || job.cleanupPending) && (
+               <button type="button" className={classes.dangerBtn} disabled={busy} onClick={() => setConfirm(true)}>
+                  {job.cleanupPending ? 'Retry cleanup…' : 'Cancel export…'}
                </button>
             )}
-            {(error || !visible || ['failed', 'expired', 'cancelled'].includes(visible.state)) && (
-               <button type="button" disabled={busy} onClick={() => setRetry((n) => n + 1)}>
-                  Retry reliable export
+            {job && !active && !job.cleanupPending && job.state !== 'ready' && (
+               <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                     setAuthorization(undefined);
+                     restart();
+                  }}
+               >
+                  Prepare new export
                </button>
             )}
          </div>
-      </div>
+         {confirm && (
+            <ActionModal
+               title={job?.cleanupPending ? 'Retry temporary export cleanup?' : 'Cancel this export?'}
+               closeModal={() => setConfirm(false)}
+               errorMessage={actionError}
+               message="This stops this export and requests deletion of its temporary data. Cleanup may remain pending until ownership and deletion are verified. Existing backups remain unchanged."
+               primaryAction={{type: 'danger',
+                  title: 'Confirm cancellation and cleanup',
+                  isPending: busy,
+                  action: async () => {
+                     setAuthorization(undefined);
+                     if (await cancel()) setConfirm(false);
+                  },}}
+               secondaryAction={{ title: 'Keep export', action: () => setConfirm(false) }}
+            />
+         )}
+      </section>
    );
 }

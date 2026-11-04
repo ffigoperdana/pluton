@@ -15,18 +15,23 @@ export type ReliableJob = {
    summary?: VerifiedExport;
    failure?: string;
    cleanupPending: boolean;
+   performance?: {
+      phase?: 'indexing' | 'archive-validation' | 'upload' | 'publication' | 'verification';
+      indexedEntries?: number;
+      lastProgressAgeMs?: number;
+   };
    integrityMode?: 'versioned' | 'hcp-write-once' | 'application-encrypted-hcp';
    confidentiality?: 'application-encrypted' | 'provider-sse-s3';
    transport?: 'versioned-presigned-and-proxy' | 'authenticated-proxy';
 };
 export const reliableActive = (job: ReliableJob) => ['queued', 'validating', 'exporting', 'uploading', 'verifying'].includes(job.state);
-const reasons: Record<string, string> = {
-   'not-configured': 'Reliable Download needs a separate private export destination configured by the administrator.',
+const reasons: Record<string, string> = {'not-configured': 'Reliable Download needs a separate private export destination configured by the administrator.',
    'configuration-invalid': 'The export destination configuration needs administrator attention.',
    'encryption-key-unavailable': 'The export encryption keyring needs administrator attention. Existing backup data is unchanged.',
    'encryption-metadata-invalid': 'Export encryption metadata could not be verified. Administrator recovery is required.',
    'destination-not-isolated': 'The export destination must be separate from backup repositories and replication.',
-   'security-capability-missing': 'An administrator must complete a successful destination preflight for privacy, encryption, publication and resume before exporting.',
+   'security-capability-missing':
+      'An administrator must complete a successful destination preflight for privacy, encryption, publication and resume before exporting.',
    'storage-unavailable': 'Temporary storage is unavailable.',
    'archive-refused': 'The snapshot archive could not be verified.',
    'object-mismatch': 'Object integrity or identity verification failed.',
@@ -36,8 +41,7 @@ const reasons: Record<string, string> = {
    interrupted: 'The server restarted or the export deadline was reached. Retry creates a new verified export.',
    'cleanup-pending': 'Storage cleanup needs administrator attention.',
    expired: 'The export expired. Prepare a new export.',
-   'binding-changed': 'The backup or destination binding changed. Prepare a new export.',
-};
+   'binding-changed': 'The backup or destination binding changed. Prepare a new export.',};
 export const reliableFailure = (reason?: string) => reasons[reason || ''] || 'Reliable Download is unavailable. Retry to reconnect.';
 async function json(response: Response, signal?: AbortSignal) {
    if (response.redirected || !/application\/json/i.test(response.headers.get('Content-Type') || '')) {
@@ -75,14 +79,12 @@ export async function reliableRequest(
    cancel = false,
    signal?: AbortSignal,
 ): Promise<ReliableJob> {
-   const response = await fetch(`${api}/backups/${encodeURIComponent(backupId)}/exports${id ? `/${encodeURIComponent(id)}` : ''}`, {
-      method: cancel ? 'DELETE' : id ? 'GET' : 'POST',
+   const response = await fetch(`${api}/backups/${encodeURIComponent(backupId)}/exports${id ? `/${encodeURIComponent(id)}` : ''}`, {method: cancel ? 'DELETE' : id ? 'GET' : 'POST',
       credentials: 'include',
       redirect: 'error',
       headers: { 'Content-Type': 'application/json' },
       body: id ? undefined : JSON.stringify({ mode }),
-      signal,
-   });
+      signal,});
    const body = await json(response, signal);
    if (!response.ok || body.success !== true) throw new Error(reliableFailure(body.reason));
    const j = body.result;
@@ -95,8 +97,7 @@ export async function reliableRequest(
       !['queued', 'validating', 'exporting', 'uploading', 'verifying', 'ready', 'failed', 'cancelled', 'expired'].includes(j.state) ||
       !['createdAt', 'elapsedMs', 'processedBytes', 'uploadedBytes', 'averageBytesPerSecond'].every((k) => Number.isSafeInteger(j[k]) && j[k] >= 0) ||
       typeof j.cleanupPending !== 'boolean' ||
-      (j.integrityMode === 'application-encrypted-hcp' &&
-         (j.transport !== 'authenticated-proxy' || j.confidentiality !== 'application-encrypted')) ||
+      (j.integrityMode === 'application-encrypted-hcp' && (j.transport !== 'authenticated-proxy' || j.confidentiality !== 'application-encrypted')) ||
       (j.totalBytes !== undefined &&
          (!Number.isSafeInteger(j.totalBytes) ||
             j.totalBytes < 1024 ||
@@ -133,17 +134,32 @@ export async function reliableRequest(
       )
          throw new Error('Export verification was invalid.');
    }
+   // Optional diagnostics are never proof. Drop malformed/unknown fields independently.
+   const telemetry = j.performance;
+   j.performance =
+      telemetry && typeof telemetry === 'object'
+         ? {phase: ['indexing', 'archive-validation', 'upload', 'publication', 'verification'].includes(telemetry.phase)
+                 ? telemetry.phase
+                 : undefined,
+              indexedEntries:
+                 Number.isSafeInteger(telemetry.indexedEntries) && telemetry.indexedEntries >= 0 && telemetry.indexedEntries <= 500000
+                    ? telemetry.indexedEntries
+                    : undefined,
+              lastProgressAgeMs:
+                 Number.isSafeInteger(telemetry.lastProgressAgeMs) && telemetry.lastProgressAgeMs >= 0 && telemetry.lastProgressAgeMs <= 7 * 86400000
+                    ? telemetry.lastProgressAgeMs
+                    : undefined,}
+         : undefined;
    return j;
 }
-export async function reliableAuthorization(api: string, backupId: string, id: string, sha256: string, bytes: number) {
-   const response = await fetch(`${api}/backups/${encodeURIComponent(backupId)}/exports/${encodeURIComponent(id)}/authorization`, {
-      method: 'POST',
+export async function reliableAuthorization(api: string, backupId: string, id: string, sha256: string, bytes: number, signal?: AbortSignal) {
+   const response = await fetch(`${api}/backups/${encodeURIComponent(backupId)}/exports/${encodeURIComponent(id)}/authorization`, {method: 'POST',
+      signal,
       credentials: 'include',
       redirect: 'error',
       headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-   });
-   const body = await json(response);
+      body: '{}',});
+   const body = await json(response, signal);
    if (!response.ok || body.success !== true) throw new Error(reliableFailure(body.reason));
    const a = body.result;
    let url: URL;
@@ -151,7 +167,10 @@ export async function reliableAuthorization(api: string, backupId: string, id: s
    try {
       url = proxy ? new URL(a.url, new URL(api, globalThis.location?.origin)) : new URL(a.url);
       if (proxy) {
-         const expected = new URL(`${api}/backups/${encodeURIComponent(backupId)}/exports/${encodeURIComponent(id)}/content`, globalThis.location?.origin);
+         const expected = new URL(
+            `${api}/backups/${encodeURIComponent(backupId)}/exports/${encodeURIComponent(id)}/content`,
+            globalThis.location?.origin,
+         );
          if (url.href !== expected.href) throw new Error();
       }
    } catch {
@@ -168,5 +187,5 @@ export async function reliableAuthorization(api: string, backupId: string, id: s
       a.expiresAt > Date.now() + 301000
    )
       throw new Error('Download authorization was invalid.');
-   return { url: url.href, expiresAt: a.expiresAt as number, transport: proxy ? 'authenticated-proxy' as const : 'versioned-presigned' as const };
+   return { url: url.href, expiresAt: a.expiresAt as number, transport: proxy ? ('authenticated-proxy' as const) : ('versioned-presigned' as const) };
 }

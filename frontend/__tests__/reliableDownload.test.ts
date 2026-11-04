@@ -30,6 +30,31 @@ const job = () => ({
       archiveBytes: 2048,
    },
 });
+test('optional telemetry rejects invalid counters and unknown fields without discarding valid job evidence', async () => {
+   const before = fetch;
+   globalThis.fetch = async () =>
+      Response.json({
+         success: true,
+         result: {
+            ...job(),
+            performance: {
+               phase: 'captured-provider-content',
+               indexedEntries: -1,
+               lastProgressAgeMs: 'private',
+               privateKey: 'secret',
+            },
+         },
+      });
+   try {
+      const result = await reliableRequest('https://example.internal/api', 'backup-01', 'full', id);
+      assert.equal(result.state, 'ready');
+      assert.equal(result.performance?.indexedEntries, undefined);
+      assert(!JSON.stringify(result.performance).includes('private'));
+      assert(!JSON.stringify(result.performance).includes('captured'));
+   } finally {
+      globalThis.fetch = before;
+   }
+});
 test('creation, polling and cancellation preserve content mode, identity and cookie authentication', async () => {
    const before = fetch,
       calls: { url: string; options?: RequestInit }[] = [];
@@ -55,7 +80,12 @@ test('creation, polling and cancellation preserve content mode, identity and coo
 });
 test('application-encrypted responses retain original TAR proof and require authenticated proxy transport', async () => {
    const before = fetch;
-   const value: any = { ...job(), integrityMode: 'application-encrypted-hcp', confidentiality: 'application-encrypted', transport: 'authenticated-proxy' };
+   const value: any = {
+      ...job(),
+      integrityMode: 'application-encrypted-hcp',
+      confidentiality: 'application-encrypted',
+      transport: 'authenticated-proxy',
+   };
    globalThis.fetch = async () => Response.json({ success: true, result: value });
    try {
       const result = await reliableRequest('https://example.internal/api', 'backup-01', 'full', id);
@@ -63,9 +93,12 @@ test('application-encrypted responses retain original TAR proof and require auth
       assert.equal(result.summary?.archiveSha256, 'c'.repeat(64));
       value.transport = 'versioned-presigned-and-proxy';
       await assert.rejects(reliableRequest('https://example.internal/api', 'backup-01', 'full', id));
-      value.transport = 'authenticated-proxy'; value.confidentiality = 'provider-sse-s3';
+      value.transport = 'authenticated-proxy';
+      value.confidentiality = 'provider-sse-s3';
       await assert.rejects(reliableRequest('https://example.internal/api', 'backup-01', 'full', id));
-   } finally { globalThis.fetch = before; }
+   } finally {
+      globalThis.fetch = before;
+   }
 });
 for (const failure of [
    'mode',
@@ -177,13 +210,24 @@ test('short HTTPS authorization is bound to verified size and SHA; renewal prese
 test('nonversioned authorization permits only the exact authenticated same-origin proxy', async () => {
    const before = fetch;
    let url = `/api/backups/backup-01/exports/${id}/content`;
-   globalThis.fetch = async () => Response.json({ success: true, result: { transport: 'authenticated-proxy', url, expiresAt: Date.now() + 60000, bytes: 2048, sha256: 'c'.repeat(64) } });
+   globalThis.fetch = async () =>
+      Response.json({
+         success: true,
+         result: { transport: 'authenticated-proxy', url, expiresAt: Date.now() + 60000, bytes: 2048, sha256: 'c'.repeat(64) },
+      });
    try {
       const grant = await reliableAuthorization('https://example.internal/api', 'backup-01', id, 'c'.repeat(64), 2048);
       assert.equal(grant.url, `https://example.internal${url}`);
       assert.equal(grant.transport, 'authenticated-proxy');
-      for (url of ['https://foreign.example/content', '//foreign.example/content', '/api/backups/foreign/exports/' + id + '/content', `/api/backups/backup-01/exports/${id}/content?override=yes`]) {
+      for (url of [
+         'https://foreign.example/content',
+         '//foreign.example/content',
+         '/api/backups/foreign/exports/' + id + '/content',
+         `/api/backups/backup-01/exports/${id}/content?override=yes`,
+      ]) {
          await assert.rejects(reliableAuthorization('https://example.internal/api', 'backup-01', id, 'c'.repeat(64), 2048));
       }
-   } finally { globalThis.fetch = before; }
+   } finally {
+      globalThis.fetch = before;
+   }
 });

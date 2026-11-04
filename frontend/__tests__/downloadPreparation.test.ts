@@ -164,7 +164,7 @@ const result = await backendRequire('esbuild').build({
 });
 const module = { exports: {} as any };
 new Function('require', 'module', 'exports', result.outputFiles[0].text)(require, module, module.exports);
-test('delivery methods remain separate: durable export progress, verified readiness and stale-link hiding', async (context) => {
+test('delivery methods remain separate: durable export progress, verified readiness and retained evidence during reconnect', async (context) => {
    const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.internal' }),
       saved = new Map<string, PropertyDescriptor | undefined>(),
       calls: { url: string; method: string }[] = [];
@@ -221,7 +221,7 @@ test('delivery methods remain separate: durable export progress, verified readin
       await act(async () => delivery[1].click());
       await flush();
       assert.match(dom.window.document.body.textContent!, /Queued/);
-      assert.equal(calls.filter((c) => c.method === 'DELETE' && !c.url.includes('/exports')).length, 1);
+      assert.equal(calls.filter((c) => c.method === 'DELETE' && !c.url.includes('/exports')).length, 0);
       state = 'uploading';
       await act(async () => context.mock.timers.tick(2000));
       await flush();
@@ -229,7 +229,7 @@ test('delivery methods remain separate: durable export progress, verified readin
       state = 'verifying';
       await act(async () => context.mock.timers.tick(2000));
       await flush();
-      assert.match(dom.window.document.body.textContent!, /Verifying complete temporary object/);
+      assert.match(dom.window.document.body.textContent!, /Verifying complete archive/);
       assert(!dom.window.document.querySelector('a[href$="/link"]'));
       state = 'ready';
       await act(async () => context.mock.timers.tick(2000));
@@ -242,7 +242,10 @@ test('delivery methods remain separate: durable export progress, verified readin
       await act(async () => context.mock.timers.tick(5000));
       await flush();
       assert.match(dom.window.document.body.textContent!, /HTTP 504/);
-      assert(!dom.window.document.querySelector('a[href$="/link"]'));
+      assert(
+         dom.window.document.querySelector('a[href$="/link"]'),
+         'Verified endpoint stays mounted during reconnect; server reauthorizes the transfer',
+      );
       assert(!dom.window.document.body.textContent!.includes('private-provider'));
    } finally {
       await act(async () => root.unmount());
@@ -255,7 +258,7 @@ test('delivery methods remain separate: durable export progress, verified readin
    }
    assert.equal(calls.filter((c) => c.method === 'DELETE' && c.url.includes('/exports')).length, 0);
 });
-test('actual panel follows queued/indexing/validating/ready, separates native transfer, and hides stale readiness on proxy error', async (context) => {
+test('actual panel follows queued/indexing/validating/ready, separates native transfer, and retains confirmed readiness on proxy error', async (context) => {
    const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.internal' });
    const saved = new Map<string, PropertyDescriptor | undefined>();
    const calls: string[] = [];
@@ -307,7 +310,7 @@ test('actual panel follows queued/indexing/validating/ready, separates native tr
       proxyError = true;
       await act(async () => context.mock.timers.tick(5000));
       await flush();
-      assert(![...dom.window.document.querySelectorAll('button')].some((button) => button.textContent === 'Download TAR'));
+      assert([...dom.window.document.querySelectorAll('button')].some((button) => button.textContent === 'Download TAR'));
       assert.match(dom.window.document.body.textContent!, /HTTP 524/);
    } finally {
       await act(async () => root.unmount());
@@ -320,7 +323,7 @@ test('actual panel follows queued/indexing/validating/ready, separates native tr
    }
 });
 
-test('actual panel cancels active full preparation before switching mode, warns about partial recovery and downloads only its proof', async (context) => {
+test('actual panel requires confirmed cancellation before switching active full preparation mode, warns about partial recovery and downloads only its proof', async (context) => {
    const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.internal' });
    const saved = new Map<string, PropertyDescriptor | undefined>();
    const calls: { method: string; mode: string }[] = [];
@@ -333,7 +336,9 @@ test('actual panel cancels active full preparation before switching mode, warns 
       fetch: async (url: string, init: RequestInit) => {
          const mode = new URL(url).searchParams.get('exportMode') || 'full';
          calls.push({ method: init.method!, mode });
-         const value = verifiedJob(init.method === 'DELETE' ? 'cancelled' : state, mode);
+         if (init.method === 'DELETE') state = 'cancelled';
+         if (init.method === 'POST' && mode === 'regular-files') state = 'indexing';
+         const value = verifiedJob(state, mode);
          return Response.json(
             { success: true, result: init.method === 'POST' ? { preparation: value } : value },
             { status: init.method === 'POST' ? 202 : 200 },
@@ -359,13 +364,23 @@ test('actual panel cancels active full preparation before switching mode, warns 
       const radios = dom.window.document.querySelectorAll<HTMLInputElement>('input[name="export-mode"]');
       assert.equal(radios.length, 2);
       assert.equal(dom.window.document.querySelectorAll('input[name="delivery-method"]').length, 2);
+      assert(radios[1].closest('fieldset')!.disabled, 'Active mode cannot be switched implicitly');
+      const buttonNamed = (name: string) =>
+         [...dom.window.document.querySelectorAll('button')].find((button) => button.textContent?.trim() === name)!;
+      await act(async () => buttonNamed('Cancel preparation').click());
+      assert.equal(calls.filter((call) => call.method === 'DELETE').length, 0);
+      await act(async () => buttonNamed('Confirm cancellation').click());
+      await flush();
       await act(async () => radios[1].click());
       await flush();
-      assert.deepEqual(calls.slice(0, 3), [
-         { method: 'POST', mode: 'full' },
-         { method: 'DELETE', mode: 'full' },
-         { method: 'POST', mode: 'regular-files' },
-      ]);
+      assert.deepEqual(
+         calls.filter((call) => call.method !== 'GET'),
+         [
+            { method: 'POST', mode: 'full' },
+            { method: 'DELETE', mode: 'full' },
+            { method: 'POST', mode: 'regular-files' },
+         ],
+      );
       assert.match(dom.window.document.body.textContent!, /This is a partial export/);
       state = 'ready';
       await act(async () => context.mock.timers.tick(1000));
