@@ -75,15 +75,15 @@ export default function ReliableDownload({backupId,
    const percent = uploadPercent(job);
    const step = downloadStep(job);
    const elapsed = (job?.elapsedMs || 0) + (active ? Math.max(0, clock - activity.observedAt) : 0);
-   const stalled = job?.state === 'uploading' && step === 2 && !error && (job.performance?.lastProgressAgeMs || 0) >= 30000;
+   const waitingForStorage = job?.state === 'uploading' && step === 2 && !error && (job.performance?.lastProgressAgeMs || 0) >= 30000;
    const status = job?.cleanupPending
       ? 'Cleanup pending'
       : error
         ? error.transient
            ? 'Waiting for connection — reconnecting'
            : 'Status check needs attention'
-        : stalled
-          ? 'Upload stalled — no recent progress reported'
+        : waitingForStorage
+          ? 'Waiting for storage response — no recent progress reported'
           : job?.state === 'failed'
             ? 'Export failed'
             : job?.state === 'cancelled'
@@ -222,6 +222,43 @@ export default function ReliableDownload({backupId,
             </p>
          )}
          {job?.failure && <p role="alert">{reliableFailure(job.failure)}</p>}
+         {job?.verificationFailure && (
+            <div role="note">
+               <p>
+                  Export verification failed: {job.verificationFailure.phase} · {job.verificationFailure.operation} ·{' '}
+                  {job.verificationFailure.outcome}.
+               </p>
+               <p>
+                  Category: {job.verificationFailure.providerCategory} · Code: {job.verificationFailure.providerCode || 'unavailable'} · HTTP{' '}
+                  {job.verificationFailure.httpStatus ?? 'unavailable'} · Attempts: {job.verificationFailure.attempts ?? 'unavailable'}.
+               </p>
+               <p>
+                  Response: {job.verificationFailure.responseKind} · Verification time: {downloadDuration(job.verificationFailure.elapsedMs || 0)} ·
+                  Read back: {downloadBytes(job.verificationFailure.plaintextBytesRead || 0)}.
+               </p>
+            </div>
+         )}
+         {(job?.cleanupFailure || job?.lastCleanupFailure) && (
+            <details>
+               <summary>Historical cleanup diagnostics</summary>
+               <p>
+                  {job.cleanupPending
+                     ? 'Cleanup is currently pending.'
+                     : 'Cleanup is not currently pending. Recorded failures below describe earlier attempts.'}
+               </p>
+               {(['cleanupFailure', 'lastCleanupFailure'] as const).map((key) => {
+                  const d = job[key];
+                  return (
+                     d && (
+                        <p key={key}>
+                           {key === 'cleanupFailure' ? 'First recorded failure' : 'Last recorded failure'}: {d.operation} · {d.providerCategory} ·
+                           HTTP {d.httpStatus ?? 'unavailable'}.
+                        </p>
+                     )
+                  );
+               })}
+            </details>
+         )}
          {job?.cleanupPending && (
             <p>Cleanup is pending. Its storage reservation remains counted until deletion is verified. Status checks continue automatically.</p>
          )}

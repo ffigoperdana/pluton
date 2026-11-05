@@ -419,3 +419,43 @@ test('app tracker survives route modal unmount, discovers multiple modes, and op
    assert(!ui.text().includes('Backup backup-tracker'));
    assert.match(ui.text(), /No admitted exports found/);
 });
+test('slow storage uses calm waiting wording; later progress and failed verification keep historical cleanup separate from current cleanup', async (t) => {
+   let value: any = { ...base(), performance: { lastProgressAgeMs: 60000 } };
+   const ui = await harness(t, 'backup-verification', async (url) => (String(url).includes('/exports') ? response(value) : standard()));
+   await ui.reliable();
+   await ui.click('Prepare Reliable Download');
+   assert.match(ui.text(), /Waiting for storage response/);
+   assert(!ui.text().includes('Upload stalled'));
+   assert.match(ui.text(), /You may close this window/);
+   value = { ...base(), uploadedBytes: 24 * 1024 ** 2, performance: { lastProgressAgeMs: 0 } };
+   await ui.tick(2000);
+   assert.match(ui.text(), /Uploaded: 24 MiB/);
+   assert.match(ui.text(), /Working normally/);
+   value = {
+      ...base(),
+      state: 'failed',
+      failure: 'storage-unavailable',
+      cleanupPending: false,
+      verificationFailure: {
+         operation: 'GetObject',
+         phase: 'get-headers',
+         outcome: 'transport',
+         category: 'network-or-deadline',
+         providerCategory: 'deadline',
+         responseKind: 'transport-error',
+         elapsedMs: 5018,
+         attempts: 1,
+         plaintextBytesRead: 0,
+      },
+      cleanupFailure: { operation: 'GetBucketVersioning', category: 'network-or-deadline', providerCategory: 'deadline' },
+      lastCleanupFailure: { operation: 'DeleteObject', category: 'cleanup-failed', providerCategory: 'access-denied', httpStatus: 403 },
+   };
+   await ui.tick(2000);
+   assert.match(ui.text(), /Export failed/);
+   assert.match(ui.text(), /get-headers · GetObject · transport/);
+   assert.match(ui.text(), /Historical cleanup diagnostics/);
+   assert.match(ui.text(), /Cleanup is not currently pending/);
+   assert.match(ui.text(), /Last recorded failure: DeleteObject/);
+   assert(!ui.text().includes('Download Verified TAR'));
+   assert(!ui.text().includes('Cleanup is currently pending.'));
+});

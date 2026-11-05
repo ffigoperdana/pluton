@@ -78,6 +78,42 @@ test('creation, polling and cancellation preserve content mode, identity and coo
       globalThis.fetch = before;
    }
 });
+test('verification/cleanup diagnostics discard raw provider fields and bound timings independently of job proof', async () => {
+   const before = fetch;
+   globalThis.fetch = async () =>
+      Response.json({
+         success: true,
+         result: {
+            ...job(),
+            verificationFailure: {
+               operation: 'GetObject',
+               phase: 'ciphertext-body',
+               outcome: 'transport',
+               category: 'network-or-deadline',
+               providerCategory: 'network',
+               providerCode: 'captured-private',
+               responseKind: 'transport-error',
+               httpStatus: 206,
+               attempts: 2,
+               elapsedMs: Infinity,
+               wireBytesRead: -1,
+               objectKey: 'captured-private',
+               rawXml: 'captured-private',
+            },
+            cleanupFailure: { operation: 'captured-private', category: 'captured-private', providerCategory: 'captured-private' },
+         },
+      });
+   try {
+      const result = await reliableRequest('https://example.internal/api', 'backup-01', 'full', id);
+      assert.equal(result.verificationFailure?.attempts, 2);
+      assert.equal(result.verificationFailure?.httpStatus, 206);
+      assert.equal(result.verificationFailure?.wireBytesRead, undefined);
+      assert.equal(result.cleanupFailure?.operation, 'unknown');
+      assert(!JSON.stringify(result).includes('captured-private'));
+   } finally {
+      globalThis.fetch = before;
+   }
+});
 test('application-encrypted responses retain original TAR proof and require authenticated proxy transport', async () => {
    const before = fetch;
    const value: any = {

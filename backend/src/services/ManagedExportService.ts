@@ -37,6 +37,11 @@ import {
 	isWriteOnce,
 } from '../utils/managedExport/ExportEncryption';
 import { ExportKeyError } from '../utils/managedExport/ExportKeyring';
+import {
+	ExportVerificationError,
+	VerificationTrace,
+	publicVerificationDiagnostic,
+} from '../utils/managedExport/ExportVerification';
 import { exportProofValid, exportReadiness } from '../utils/managedExport/ExportReadiness';
 import { publicExportPublications } from '../utils/managedExport/ExportPublication';
 import {
@@ -179,6 +184,14 @@ export class ManagedExportService {
 						integrity: p.integrity,
 						summary: p.summary,
 						failure: p.failure,
+						failureStage: p.failureStage,
+						failureDetail: p.failureDetail,
+						failureCapability: p.failureCapability,
+						failureCategory: p.failureCategory,
+						failureHttpStatus: p.failureHttpStatus,
+						verificationFailure: publicVerificationDiagnostic(job.verificationFailure),
+						cleanupFailure: p.cleanupFailure,
+						lastCleanupFailure: p.lastCleanupFailure,
 						cleanupPending: p.cleanupPending,
 						performance: p.performance,
 						integrityMode: p.integrityMode,
@@ -328,6 +341,7 @@ export class ManagedExportService {
 			integrity: job.state === 'ready' ? 'verified' : 'pending',
 			summary: job.state === 'ready' ? job.summary : undefined,
 			failure: job.failure,
+			verificationFailure: publicVerificationDiagnostic(job.verificationFailure),
 			failureStage: job.failureStage,
 			failureDetail: job.failureDetail,
 			preflightChecks: job.preflightChecks,
@@ -782,8 +796,11 @@ export class ManagedExportService {
 					stage = 'object-verification';
 					report({ phase: 'verification' });
 					const verifying = performance.now();
+					const verification = new VerificationTrace(bounded);
 					try {
 						await storage!.verify(job, bounded);
+					} catch (error) {
+						throw verification.fail(error);
 					} finally {
 						report({ verificationMs: performance.now() - verifying });
 					}
@@ -813,6 +830,10 @@ export class ManagedExportService {
 			});
 		} catch (error) {
 			const job = this.store.get(original.id)!;
+			const verificationFailure =
+				error instanceof ExportVerificationError
+					? publicVerificationDiagnostic(error.diagnostic)
+					: undefined;
 			const reason = this.stopped
 				? 'interrupted'
 				: signal.aborted || job.state === 'cancelled'
@@ -841,18 +862,37 @@ export class ManagedExportService {
 					: {}),
 				failure: reason,
 				failureStage: stage,
-				failureCapability: error instanceof ExportPreflightError ? error.capability : undefined,
-				failureCategory: error instanceof ExportPreflightError ? error.category : undefined,
-				failureHttpStatus: error instanceof ExportPreflightError ? error.httpStatus : undefined,
+				...(verificationFailure ? { verificationFailure } : {}),
+				failureCapability: verificationFailure
+					? verificationFailure.outcome === 'privacy'
+						? 'anonymous-denial'
+						: 'full-readback'
+					: error instanceof ExportPreflightError
+						? error.capability
+						: undefined,
+				failureCategory:
+					verificationFailure?.category ||
+					(error instanceof ExportPreflightError ? error.category : undefined),
+				failureHttpStatus:
+					verificationFailure?.httpStatus ??
+					(error instanceof ExportPreflightError ? error.httpStatus : undefined),
 				uploadFinishedAt: job.uploadFinishedAt || (job.uploadStartedAt ? Date.now() : undefined),
-				failureDetail:
-					error instanceof SnapshotIndexError || error instanceof ManagedExportError
+				failureDetail: verificationFailure
+					? verificationFailure.detail
+					: error instanceof SnapshotIndexError || error instanceof ManagedExportError
 						? error.reason
 						: error instanceof ManagedRepositoryAccessError
 							? error.code
 							: undefined,
 			});
 			if (original.kind !== 'inventory') await this.cleanup(this.store.get(job.id)!);
+			if (verificationFailure)
+				this.safeLog({
+					event: 'managed_export_verification_failed',
+					...verificationFailure,
+					httpStatus: verificationFailure.httpStatus || 0,
+					attempts: verificationFailure.attempts || 0,
+				});
 			if (error instanceof ExportInventoryError) {
 				const diagnostic = publicExportDiagnostic(error.diagnostic)!;
 				this.safeLog({

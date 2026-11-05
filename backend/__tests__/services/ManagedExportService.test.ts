@@ -33,6 +33,7 @@ import {
 	exportDiagnostic,
 } from '../../src/utils/managedExport/ExportDiagnostics';
 import { ExportKeyError } from '../../src/utils/managedExport/ExportKeyring';
+import { VerificationTrace } from '../../src/utils/managedExport/ExportVerification';
 import type { ManagedExportSummary } from '../../src/utils/restic/ManagedExportPolicy';
 
 jest.mock('../../src/utils/logger', () => ({ planLogger: () => ({ info: jest.fn() }) }));
@@ -253,6 +254,76 @@ describe('temporary export policy and durable admission', () => {
 	});
 });
 describe('durable independent export lifecycle', () => {
+	test('verified multipart bytes never publish Ready after readback failure; sanitized evidence survives cleanup recovery and GET rediscovery', async () => {
+		const h = harness();
+		try {
+			const trace = new VerificationTrace(new AbortController().signal);
+			trace.enter('get-headers', 'GetObject');
+			const failure = trace.fail(
+				new ExportOperationError(
+					'GetObject',
+					Object.assign(new Error('captured-provider-body'), {
+						$metadata: { httpStatusCode: 503, attempts: 1 },
+						name: 'ServiceUnavailable',
+					})
+				)
+			);
+			h.storage.verify.mockRejectedValueOnce(failure);
+			h.storage.cleanup.mockRejectedValueOnce(new Error('captured-cleanup-error'));
+			const admitted = await h.service.admit(owner, binding.backupId, 'full');
+			await until(() => h.store.get(admitted.id)?.state === 'failed');
+			await until(() => (h.store.get(admitted.id)?.cleanupAttempts || 0) >= 1);
+			const history = exportDiagnostic(
+				new ExportOperationError(
+					'DeleteObject',
+					Object.assign(new Error('captured'), { $metadata: { httpStatusCode: 403 } })
+				),
+				h.store.get(admitted.id)!,
+				'cleanup',
+				'cleanup'
+			);
+			h.store.update(admitted.id, { cleanupFailure: history, lastCleanupFailure: history });
+			const failed = await h.service.status(owner, binding.backupId, admitted.id);
+			expect(failed).toMatchObject({
+				state: 'failed',
+				failure: 'storage-unavailable',
+				failureStage: 'object-verification',
+				failureCategory: 'unexpected-response',
+				failureHttpStatus: 503,
+				integrity: 'pending',
+				verificationFailure: {
+					phase: 'get-headers',
+					operation: 'GetObject',
+					providerCode: 'ServiceUnavailable',
+					httpStatus: 503,
+				},
+			});
+			expect(failed.uploadedBytes).toBe(data.length);
+			await h.service.cancel(owner, binding.backupId, admitted.id);
+			await until(() => h.store.get(admitted.id)?.cleaned === true);
+			const activity = await h.service.activity(owner);
+			expect(activity.jobs[0].job).toMatchObject({
+				failureStage: 'object-verification',
+				failureCategory: 'unexpected-response',
+				failureHttpStatus: 503,
+				cleanupPending: false,
+				verificationFailure: { operation: 'GetObject', httpStatus: 503 },
+				cleanupFailure: { operation: 'DeleteObject', httpStatus: 403 },
+				lastCleanupFailure: { operation: 'DeleteObject', httpStatus: 403 },
+			});
+			expect(JSON.stringify(activity)).not.toMatch(/captured|synthetic-etag|immutable-version/);
+			await expect(h.service.status('other-owner', binding.backupId, admitted.id)).rejects.toThrow(
+				'Export not found'
+			);
+			const retry = await h.service.admit(owner, binding.backupId, 'full');
+			expect(retry.id).not.toBe(admitted.id);
+			await until(() => h.store.get(retry.id)?.state === 'ready');
+			expect((await h.service.status(owner, binding.backupId, retry.id)).integrity).toBe('verified');
+			expect(h.store.get(admitted.id)?.verificationFailure?.httpStatus).toBe(503);
+		} finally {
+			await h.close();
+		}
+	});
 	test('discovery survives reopening the private journal and never invokes the namespace reservation callback', async () => {
 		const h = harness();
 		const record = h.store.admit(owner, binding, h.config);

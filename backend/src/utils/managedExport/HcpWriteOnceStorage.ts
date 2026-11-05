@@ -1,5 +1,7 @@
 import { checkedCompletion } from './ExportCompletion';
 import { checkedVersioning } from './ExportVersioning';
+import { exportRequestReceipt } from './ExportRequestDiagnostics';
+import { verificationStep, type VerificationTrace } from './ExportVerification';
 import crypto from 'crypto';
 import { Readable } from 'stream';
 import {
@@ -81,7 +83,8 @@ export class HcpWriteOnceStorage {
 		private readonly privacy: (
 			key: string,
 			version: string | undefined,
-			signal: AbortSignal
+			signal: AbortSignal,
+			trace?: VerificationTrace
 		) => Promise<void>
 	) {}
 	private sse(job: ExportJob): { ServerSideEncryption?: 'AES256' } {
@@ -119,13 +122,22 @@ export class HcpWriteOnceStorage {
 				'storage-unavailable',
 				exportTarget((command.input as { Key?: string }).Key)
 			);
+			failure.request ||= exportRequestReceipt(error);
+			if (command instanceof GetObjectCommand || command instanceof HeadObjectCommand) {
+				const wireStatus = (error as { $response?: { statusCode?: number } })?.$response
+					?.statusCode;
+				if (Number.isInteger(wireStatus) && wireStatus! >= 100 && wireStatus! <= 599)
+					failure.wireHttpStatus = wireStatus;
+			}
 			if (
 				command instanceof CompleteMultipartUploadCommand &&
 				['network', 'deadline', 'aborted'].includes(failure.providerCategory)
 			)
 				failure.responseKind = 'transport-error';
 			if (
-				command instanceof CompleteMultipartUploadCommand &&
+				(command instanceof CompleteMultipartUploadCommand ||
+					command instanceof GetObjectCommand ||
+					command instanceof HeadObjectCommand) &&
 				error &&
 				typeof error === 'object' &&
 				Object.prototype.hasOwnProperty.call(error, '$response') &&
@@ -322,7 +334,7 @@ export class HcpWriteOnceStorage {
 		update({ ownedObjects });
 		job.ownedObjects = ownedObjects;
 	}
-	async identity(job: ExportJob, signal: AbortSignal) {
+	async identity(job: ExportJob, signal: AbortSignal, trace?: VerificationTrace) {
 		const identity = job.identity;
 		if (
 			!identity ||
@@ -336,7 +348,12 @@ export class HcpWriteOnceStorage {
 			identity.capability !== job.capabilityBinding
 		)
 			throw new TemporaryExportError('object-mismatch');
-		const head = await this.head(job, signal);
+		const head = await verificationStep(trace, 'head', 'HeadObject', async () => {
+			const value = await this.head(job, signal);
+			trace?.headers(value);
+			return value;
+		});
+		trace?.enter('identity', 'ObjectIdentity', true);
 		if (
 			(applicationEncrypted(job)
 				? head.Metadata?.['pluton-export-manifest'] !== job.encryption?.mac ||
@@ -346,7 +363,7 @@ export class HcpWriteOnceStorage {
 			head.LastModified?.toISOString() !== identity.created
 		)
 			throw new TemporaryExportError('object-mismatch');
-		await this.privacy(job.key, undefined, signal);
+		await this.privacy(job.key, undefined, signal, trace);
 		return head;
 	}
 	/** Only the exact structural root can be exempted. Pin HEAD to the listed
