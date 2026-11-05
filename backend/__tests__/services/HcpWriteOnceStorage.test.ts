@@ -357,6 +357,14 @@ describe('nonversioned write-once capability contract', () => {
 					pipeline(Readable.from([data]), dest, { end: false, signal }),
 			} as any;
 			await f.storage.upload(f.job, archive, AbortSignal.timeout(5000), f.update);
+			// A valid CompleteMultipartUpload is not enough to make the archive Ready.
+			f.fault('head-denied');
+			await expect(f.storage.verify(f.job, AbortSignal.timeout(5000))).rejects.toMatchObject({
+				reason: 'storage-unavailable',
+				diagnostic: { operation: 'HeadObject', phase: 'head', httpStatus: 403 },
+			});
+			expect(f.job.state).toBe('verifying');
+			f.fault('');
 			await f.storage.verify(f.job, AbortSignal.timeout(5000));
 			const object = f.objects.get(f.job.key);
 			expect(object.ServerSideEncryption).toBeUndefined();

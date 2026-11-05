@@ -1,5 +1,6 @@
 import type { DownloadMode, VerifiedExport } from './downloadPreparation';
 import { responseFailure, DownloadFailure } from './downloadFailure.ts';
+import { exportFailureDiagnostic, type ExportFailureDiagnostic } from './exportFailureDiagnostics.ts';
 export type ReliableJob = {
    id: string;
    state: 'queued' | 'validating' | 'exporting' | 'uploading' | 'verifying' | 'ready' | 'failed' | 'cancelled' | 'expired';
@@ -16,6 +17,9 @@ export type ReliableJob = {
    summary?: VerifiedExport;
    failure?: string;
    cleanupPending: boolean;
+   verificationFailure?: ExportFailureDiagnostic;
+   cleanupFailure?: ExportFailureDiagnostic;
+   lastCleanupFailure?: ExportFailureDiagnostic;
    performance?: {
       phase?: 'indexing' | 'archive-validation' | 'upload' | 'publication' | 'verification';
       indexedEntries?: number;
@@ -167,6 +171,9 @@ export function validateReliableJob(value: unknown, backupId: string, mode: Down
                     ? telemetry.lastProgressAgeMs
                     : undefined,}
          : undefined;
+   j.verificationFailure = exportFailureDiagnostic(j.verificationFailure);
+   j.cleanupFailure = exportFailureDiagnostic(j.cleanupFailure);
+   j.lastCleanupFailure = exportFailureDiagnostic(j.lastCleanupFailure);
    return j;
 }
 export async function reliableAuthorization(api: string, backupId: string, id: string, sha256: string, bytes: number, signal?: AbortSignal) {

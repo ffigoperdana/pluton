@@ -48,3 +48,11 @@ export const exportTransportCode = (e: unknown): ExportRequestDiagnostic['transp
 	const code = (e as { code?: string })?.code;
 	return codes.find(c => c === code) || (code ? 'other' : 'none');
 };
+// Ephemeral safe receipts only. Never retain an SDK request, response or body.
+const receipts = new WeakMap<object, ExportRequestDiagnostic>();
+export function recordExportRequest(value: unknown, receipt: ExportRequestDiagnostic) {
+	if (value && typeof value === 'object') receipts.set(value, publicExportRequest(receipt)!);
+}
+export function exportRequestReceipt(value: unknown) {
+	return value && typeof value === 'object' ? receipts.get(value) : undefined;
+}

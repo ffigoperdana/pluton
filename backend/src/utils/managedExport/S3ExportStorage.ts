@@ -45,6 +45,8 @@ import {
 import type { ManagedArchiveDownload } from '../../services/RemoteRepositoryRecoveryService';
 import { planLogger } from '../logger';
 import { checkedVersioning } from './ExportVersioning';
+import { recordExportRequest, exportTransportCode } from './ExportRequestDiagnostics';
+import { VerificationTrace, verificationStep } from './ExportVerification';
 
 const missing = (e: unknown) =>
 	(e as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode === 404;
@@ -93,11 +95,22 @@ export class S3ExportStorage {
 		});
 		this.client.middlewareStack.add(
 			(next, context) => async args => {
+				const requestStart = performance.now();
 				for (let attempt = 0; ; attempt++) {
 					const started = Date.now();
 					this.counters.requests++;
 					try {
 						const result = await next(args);
+						recordExportRequest(result.output, {
+							phase: 'deserialize',
+							attempts: attempt + 1,
+							elapsedMs: Math.round(performance.now() - requestStart),
+							abortedAtStart: false,
+							abortReason: 'none',
+							transportCode: 'none',
+							bodyComplete: false,
+							httpStatus: (result.response as { statusCode?: number })?.statusCode,
+						});
 						this.recent.push({
 							operation: context.commandName || 'unknown',
 							status: (result.response as { statusCode?: number })?.statusCode || 0,
@@ -153,6 +166,21 @@ export class S3ExportStorage {
 							this.counters.readConnectionRetries++;
 							continue;
 						}
+						recordExportRequest(error, {
+							phase: 'sdk',
+							attempts: attempt + 1,
+							elapsedMs: Math.round(performance.now() - requestStart),
+							abortedAtStart: false,
+							abortReason:
+								e.name === 'TimeoutError' || e.code === 'ETIMEDOUT'
+									? 'deadline'
+									: e.name === 'AbortError'
+										? 'cancelled'
+										: 'none',
+							transportCode: exportTransportCode(error),
+							httpStatus: status,
+							bodyComplete: false,
+						});
 						throw error;
 					} finally {
 						const elapsed = Date.now() - started;
@@ -169,7 +197,7 @@ export class S3ExportStorage {
 			(job, key) => this.scope(job, key),
 			job => this.metadata(job),
 			(job, head) => this.owns(job, head),
-			(key, version, signal) => this.assertPrivate(key, version, signal)
+			(key, version, signal, trace) => this.assertPrivate(key, version, signal, trace)
 		);
 	}
 	async mode(signal: AbortSignal) {
@@ -828,19 +856,28 @@ export class S3ExportStorage {
 			request.on('error', reject); // Caller reduces transport errors to bounded diagnostics.
 		});
 	}
-	private async assertPrivate(key: string, version: string | undefined, signal: AbortSignal) {
+	private async assertPrivate(
+		key: string,
+		version: string | undefined,
+		signal: AbortSignal,
+		trace?: VerificationTrace
+	) {
 		const url = new URL(
 			`${this.config.endpoint}/${encodeURIComponent(this.config.bucket)}/${key.split('/').map(encodeURIComponent).join('/')}`
 		);
 		if (version) url.searchParams.set('versionId', version);
-		await this.assertAnonymousDenied(url, signal);
+		await verificationStep(trace, 'privacy-object', 'AnonymousObjectGet', () =>
+			this.assertAnonymousDenied(url, signal, trace)
+		);
 		const listing = new URL(`${this.config.endpoint}/${encodeURIComponent(this.config.bucket)}`);
 		listing.searchParams.set('list-type', '2');
 		listing.searchParams.set('prefix', `${this.config.prefix}/`);
 		listing.searchParams.set('max-keys', '1');
-		await this.assertAnonymousDenied(listing, signal);
+		await verificationStep(trace, 'privacy-list', 'AnonymousListGet', () =>
+			this.assertAnonymousDenied(listing, signal, trace)
+		);
 	}
-	private assertAnonymousDenied(url: URL, signal: AbortSignal) {
+	private assertAnonymousDenied(url: URL, signal: AbortSignal, trace?: VerificationTrace) {
 		return new Promise<void>((resolve, reject) => {
 			const request = https.request(
 				url,
@@ -852,6 +889,7 @@ export class S3ExportStorage {
 					signal,
 				},
 				response => {
+					trace?.headers({ $metadata: { httpStatusCode: response.statusCode, attempts: 1 } });
 					response.destroy(); // privacy requires headers only; never consume provider contents
 					if ([403, 404].includes(response.statusCode || 0)) resolve();
 					else
@@ -1118,30 +1156,48 @@ export class S3ExportStorage {
 		}
 	}
 	async verify(job: ExportJob, signal: AbortSignal) {
-		await this.identity(job, signal);
-		const object = await this.get(job, signal);
-		const hash = crypto.createHash('sha256');
-		let bytes = 0;
+		const trace = new VerificationTrace(signal);
 		try {
-			for await (const chunk of object.Body as Readable) {
-				bytes += chunk.length;
-				if (bytes > job.summary!.archiveBytes) throw new TemporaryExportError('object-mismatch');
-				hash.update(chunk);
+			await verificationStep(trace, 'identity', 'ObjectIdentity', () =>
+				this.identity(job, signal, trace)
+			);
+			const object = await this.get(job, signal, undefined, trace);
+			const hash = crypto.createHash('sha256');
+			let bytes = 0;
+			if (!applicationEncrypted(job)) trace.enter('plaintext-body', 'GetObject', true);
+			try {
+				for await (const chunk of object.Body as Readable) {
+					bytes += chunk.length;
+					trace.plainBytes(chunk.length);
+					if (bytes > job.summary!.archiveBytes) throw new TemporaryExportError('object-mismatch');
+					hash.update(chunk);
+				}
+				trace.bodyComplete();
+			} finally {
+				(object.Body as Readable)?.destroy();
 			}
-		} finally {
-			(object.Body as Readable)?.destroy();
+			trace.enter('plaintext-sha256', 'PlaintextSha256', true);
+			if (bytes !== job.summary!.archiveBytes || hash.digest('hex') !== job.summary!.archiveSha256)
+				throw new TemporaryExportError('object-mismatch');
+			await this.assertPrivate(job.key, job.versionId!, signal, trace);
+		} catch (error) {
+			throw trace.fail(error);
 		}
-		if (bytes !== job.summary!.archiveBytes || hash.digest('hex') !== job.summary!.archiveSha256)
-			throw new TemporaryExportError('object-mismatch');
-		await this.assertPrivate(job.key, job.versionId!, signal);
 	}
-	async identity(job: ExportJob, signal: AbortSignal) {
+	async identity(job: ExportJob, signal: AbortSignal, trace?: VerificationTrace) {
 		if (applicationEncrypted(job)) {
-			const cipher = ExportCipher.open(job, this.config);
-			cipher.close();
+			await verificationStep(trace, 'keyring-manifest', 'KeyringValidation', async () => {
+				const cipher = ExportCipher.open(job, this.config);
+				cipher.close();
+			});
 		}
-		if (isWriteOnce(job.integrityMode)) return this.writeOnce.identity(job, signal);
-		const head = await this.head(job, signal);
+		if (isWriteOnce(job.integrityMode)) return this.writeOnce.identity(job, signal, trace);
+		const head = await verificationStep(trace, 'head', 'HeadObject', async () => {
+			const value = await this.head(job, signal);
+			trace?.headers(value);
+			return value;
+		});
+		trace?.enter('identity', 'ObjectIdentity', true);
 		if (
 			!job.versionId ||
 			!job.etag ||
@@ -1153,7 +1209,7 @@ export class S3ExportStorage {
 			head.Metadata?.['archive-sha256'] !== job.summary!.archiveSha256
 		)
 			throw new TemporaryExportError('object-mismatch');
-		await this.assertPrivate(job.key, job.versionId, signal);
+		await this.assertPrivate(job.key, job.versionId, signal, trace);
 		return head;
 	}
 	head(job: ExportJob, signal: AbortSignal) {
@@ -1163,9 +1219,14 @@ export class S3ExportStorage {
 			{ abortSignal: signal }
 		);
 	}
-	async get(job: ExportJob, signal: AbortSignal, range?: string) {
+	async get(job: ExportJob, signal: AbortSignal, range?: string, trace?: VerificationTrace) {
 		if (applicationEncrypted(job)) {
-			const cipher = ExportCipher.open(job, this.config),
+			const cipher = await verificationStep(
+					trace,
+					'keyring-manifest',
+					'KeyringValidation',
+					async () => ExportCipher.open(job, this.config)
+				),
 				m = cipher.value.manifest;
 			try {
 				const match = range && /^bytes=(\d+)-(\d+)$/.exec(range);
@@ -1173,14 +1234,21 @@ export class S3ExportStorage {
 				const start = match ? Number(match[1]) : 0,
 					end = match ? Number(match[2]) : m.plaintextBytes - 1;
 				const selection = cipher.range(start, end);
-				const result = await this.writeOnce.get(
-					job,
-					signal,
-					`bytes=${selection.start}-${selection.end}`
+				const result = await verificationStep(trace, 'get-headers', 'GetObject', () =>
+					this.writeOnce.get(job, signal, `bytes=${selection.start}-${selection.end}`)
 				);
+				trace?.headers(result);
 				async function* body() {
 					try {
-						yield* cipher.decrypt(result.Body as Readable, start, end, signal);
+						yield* cipher.decrypt(
+							result.Body as Readable,
+							start,
+							end,
+							signal,
+							trace
+								? (phase, bytes, complete) => trace.wireEvent(phase, bytes, complete)
+								: undefined
+						);
 					} finally {
 						cipher.close();
 					}
@@ -1202,7 +1270,14 @@ export class S3ExportStorage {
 				throw e;
 			}
 		}
-		if (isWriteOnce(job.integrityMode)) return this.writeOnce.get(job, signal, range);
+		if (isWriteOnce(job.integrityMode)) {
+			const result = await verificationStep(trace, 'get-headers', 'GetObject', () =>
+				this.writeOnce.get(job, signal, range)
+			);
+			trace?.headers(result);
+			return result;
+		}
+		trace?.enter('get-headers', 'GetObject');
 		const result = await this.client.send(
 			new GetObjectCommand({
 				...this.scope(job),
@@ -1212,6 +1287,7 @@ export class S3ExportStorage {
 			}),
 			{ abortSignal: signal }
 		);
+		trace?.headers(result);
 		if (
 			result.VersionId !== job.versionId ||
 			result.ETag !== job.etag ||

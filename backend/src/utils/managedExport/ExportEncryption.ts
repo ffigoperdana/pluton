@@ -258,15 +258,30 @@ export class ExportCipher {
 			end: Math.min(m.ciphertextBytes, (last + 1) * (m.chunkBytes + TAG_BYTES)) - 1,
 		};
 	}
-	async *decrypt(source: Readable, start: number, end: number, signal: AbortSignal) {
+	async *decrypt(
+		source: Readable,
+		start: number,
+		end: number,
+		signal: AbortSignal,
+		observe?: (phase: 'ciphertext-body' | 'decrypt', bytes?: number, complete?: boolean) => void
+	) {
+		const report = (phase: 'ciphertext-body' | 'decrypt', bytes?: number, complete?: boolean) => {
+			try {
+				observe?.(phase, bytes, complete);
+			} catch {
+				/* Diagnostics cannot change authentication or stream behavior. */
+			}
+		};
 		const selection = this.range(start, end),
 			m = this.value.manifest;
 		const frame = Buffer.allocUnsafe(m.chunkBytes + TAG_BYTES);
 		let index = selection.first,
 			used = 0;
 		try {
+			report('ciphertext-body');
 			for await (const chunk of source) {
 				signal.throwIfAborted();
+				report('decrypt', Buffer.isBuffer(chunk) ? chunk.length : 0);
 				if (!Buffer.isBuffer(chunk)) throw fail();
 				let offset = 0;
 				while (offset < chunk.length) {
@@ -291,7 +306,9 @@ export class ExportCipher {
 						used = 0;
 					}
 				}
+				report('ciphertext-body');
 			}
+			report('ciphertext-body', undefined, true);
 			if (used || index !== selection.last + 1) throw fail();
 		} finally {
 			frame.fill(0);
