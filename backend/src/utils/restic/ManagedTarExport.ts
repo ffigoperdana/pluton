@@ -16,6 +16,8 @@ import {
 	type ManagedExportSummary,
 } from './ManagedExportPolicy';
 
+type ArchiveIndex = Pick<ManagedSnapshotIndex, 'get' | 'assertExportEntries'>;
+
 const MAX_EXTENSION = 64 * 1024;
 const decoder = new TextDecoder('utf-8', { fatal: true });
 type Metadata = {
@@ -177,7 +179,7 @@ class TarReader {
 	private included = 0;
 	private readonly cursor: string;
 	constructor(
-		private readonly index: ManagedSnapshotIndex,
+		private readonly index: ArchiveIndex,
 		private readonly proof: ManagedExportProof,
 		private readonly pack: tar.Pack,
 		private readonly compare: boolean,
@@ -418,7 +420,7 @@ class TarReader {
  * consumers. Preparation discards canonical bytes after hashing; transfer checks
  * every selected entry against that immutable proof before writing its TAR footer. */
 async function runManagedExport(
-	index: ManagedSnapshotIndex,
+	index: ArchiveIndex,
 	session: ManagedRepositorySession,
 	proof: ManagedExportProof,
 	destination: Writable,
@@ -499,7 +501,7 @@ async function runManagedExport(
 }
 
 export async function prepareManagedExport(
-	index: ManagedSnapshotIndex,
+	index: ArchiveIndex,
 	session: ManagedRepositorySession,
 	proof: ManagedExportProof,
 	signal: AbortSignal
@@ -521,7 +523,7 @@ export async function prepareManagedExport(
 
 /** Consumers cannot bypass comparison with the completed preparation proof. */
 export function streamManagedExport(
-	index: ManagedSnapshotIndex,
+	index: ArchiveIndex,
 	session: ManagedRepositorySession,
 	proof: ManagedExportProof,
 	destination: Writable,
@@ -529,4 +531,16 @@ export function streamManagedExport(
 	observe?: (value: Partial<ExportPerformance>) => void
 ): Promise<ManagedExportSummary> {
 	return runManagedExport(index, session, proof, destination, signal, true, observe);
+}
+
+/** One-pass selected-directory transfer. Uses an ephemeral proof, never a durable
+ * Ready export or a resumable authorization. Full export preparation is unchanged. */
+export function streamSelectedManagedArchive(
+	index: ArchiveIndex,
+	session: ManagedRepositorySession,
+	proof: ManagedExportProof,
+	destination: Writable,
+	signal: AbortSignal
+) {
+	return runManagedExport(index, session, proof, destination, signal, false);
 }

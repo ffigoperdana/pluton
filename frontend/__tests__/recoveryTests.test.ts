@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { canTestRecovery, recoveryActive, recoveryForBackup, recoveryStatusLabel } from '../src/utils/recoveryTests.ts';
+import { canTestRecovery, hasDatabaseArtifact, recoveryActive, recoveryForBackup, recoveryStatusLabel } from '../src/utils/recoveryTests.ts';
 import type { RecoveryTest } from '../src/@types/recoveryTests.ts';
 const snapshot = 'a'.repeat(64),
    newerSnapshot = 'b'.repeat(64);
@@ -146,4 +146,18 @@ test('settings label recovery infrastructure, separate credentials and required 
       'postgresql recovery-only target',
    ])
       assert.ok(html.includes(text));
+});
+
+test('database action needs an actual snapshot receipt, independent of present plan settings', () => {
+   for (const value of [
+      undefined,
+      {},
+      { database: undefined },
+      { databases: [] },
+      { database: { path: '/pluton/database/example.sql', bytes: 8, sha256: 'short' } },
+   ])
+      assert.equal(hasDatabaseArtifact({ completionStats: { lifecycle: value } } as any), false);
+   const artifact = { path: '/pluton/database/example.sql', bytes: 8, sha256: 'a'.repeat(64) };
+   assert.equal(hasDatabaseArtifact({ completionStats: { lifecycle: { database: artifact } } } as any), true);
+   assert.equal(hasDatabaseArtifact({ completionStats: { lifecycle: { databases: [artifact] } } } as any), true);
 });

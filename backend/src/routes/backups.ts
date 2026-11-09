@@ -13,6 +13,7 @@ export function createBackupRouter(
 	router.get('/:id/comparison', authM, controller.snapshotComparison.bind(controller));
 	router.post('/:id/comparison', authM, controller.snapshotComparison.bind(controller));
 	router.delete('/:id/comparison', authM, controller.snapshotComparison.bind(controller));
+	router.get('/:id/files/download', authM, controller.downloadSnapshotItem.bind(controller));
 	router.get('/:id/files/page', authM, controller.getSnapshotPage.bind(controller));
 	router.get('/:id/progress', authM, controller.getBackupProgress.bind(controller));
 	router.post('/:id/action/cancel', authM, controller.cancelBackup.bind(controller));

@@ -344,3 +344,25 @@ test('native token create/copy-once dismissal and exact-hash human approval stay
       delete (globalThis as any).IS_REACT_ACT_ENVIRONMENT;
    }
 });
+
+test('native flag on with missing resource URL shows precise setup issue instead of claiming the flag is off', async () => {
+   const Component = (await compile()).default,
+      client = new QueryClient();
+   fixture({
+      overview: {
+         data: {
+            ...overview,
+            configured: false,
+            nativeTokensEnabled: false,
+            endpoint: null,
+            configuration: { configured: false, nativeTokensRequested: true, resourceUrlPresent: false, reason: 'resource-url-missing' },
+         },
+      },
+   });
+   const html = renderToStaticMarkup(React.createElement(QueryClientProvider, { client }, React.createElement(Component)));
+   assert.match(html, /MCP_RESOURCE_URL is missing/);
+   assert.match(html, /Native-token server flag: on/);
+   assert(!html.includes('Native tokens are disabled in server configuration'));
+   assert.equal((globalThis as any).__mcpRequests.length, 0);
+   client.clear();
+});

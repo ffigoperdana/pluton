@@ -20,7 +20,7 @@ import {
 	type Tool,
 } from './OperationalReadService';
 import type { McpStore } from './McpStore';
-import { createTokenVerifier, type McpConfig } from './authorization';
+import { createTokenVerifier, type McpConfig, type McpConfigurationStatus } from './authorization';
 import {
 	actionNames,
 	actionSchemas,
@@ -480,7 +480,8 @@ export function createMcpAdminRouter(
 	store: McpStore,
 	admin: RequestHandler,
 	config?: McpConfig,
-	actions?: McpActionService
+	actions?: McpActionService,
+	configuration?: McpConfigurationStatus
 ): Router {
 	const router = Router();
 	router.use((_req, res, next) => {
@@ -518,6 +519,12 @@ export function createMcpAdminRouter(
 			...store.counts(),
 			endpoint: config?.resource || null,
 			configured: !!config,
+			configuration: configuration || {
+				configured: !!config,
+				nativeTokensRequested: !!config?.nativeTokens,
+				resourceUrlPresent: !!config,
+				reason: config ? 'ready' : 'resource-url-missing',
+			},
 			health: config ? 'configured_not_connectivity_verified' : 'configuration_required',
 			protocols,
 			transport: 'Streamable HTTP (stateless JSON)',

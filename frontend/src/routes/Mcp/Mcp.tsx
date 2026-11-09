@@ -1,3 +1,4 @@
+import { mcpConfigurationMessage } from '../../utils/mcpConfiguration';
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import PageHeader from '../../components/common/PageHeader/PageHeader';
@@ -233,6 +234,12 @@ export default function Mcp() {
                <br />
                <code>{state.endpoint || 'Configure an HTTPS resource URL and native tokens or OAuth first.'}</code>
             </p>
+            {state.configuration && (
+               <p role="status">
+                  Native-token server flag: {state.configuration.nativeTokensRequested ? 'on' : 'off'} ·{' '}
+                  {mcpConfigurationMessage(state.configuration.reason)}
+               </p>
+            )}
             <p className={classes.muted}>
                {state.transport} · Protocols {state.protocols.join(', ')}
                <br />
@@ -251,7 +258,11 @@ export default function Mcp() {
             </div>
             <p role="status">{copyMessage}</p>
          </section>
-         <McpV2Panel enabled={!!state.nativeTokensEnabled} endpoint={state.endpoint} />
+         <McpV2Panel
+            enabled={!!state.nativeTokensEnabled}
+            endpoint={state.endpoint}
+            nativeTokensRequested={state.configuration?.nativeTokensRequested}
+         />
          <section className={classes.card} aria-labelledby="mcp-clients">
             <div className={classes.heading}>
                <h3 id="mcp-clients">OAuth client authorizations</h3>

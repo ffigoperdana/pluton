@@ -57,6 +57,7 @@ describe('Backup Routes', () => {
 			deleteBackup: jest.fn(),
 			getSnapshotFiles: jest.fn(),
 			getSnapshotPage: jest.fn(),
+			downloadSnapshotItem: jest.fn(),
 			getBackupProgress: jest.fn(),
 			cancelBackup: jest.fn(),
 			getBackupDownload: jest.fn(),
@@ -74,6 +75,78 @@ describe('Backup Routes', () => {
 
 		// Default to authenticated
 		setupAuthMock(true);
+	});
+
+	describe('selected snapshot download authorization and streaming', () => {
+		it.each(['get', 'head'] as const)(
+			'requires a session for %s without repository access',
+			async method => {
+				setupAuthMock(false);
+				const result = await request(app)[method](
+					'/api/backups/backup-01/files/download?path=%2Fsrv%2Fapp.txt'
+				);
+				expect(result.status).toBe(401);
+				expect(mockBackupService.downloadSnapshotItem).not.toHaveBeenCalled();
+			}
+		);
+		it.each(['get', 'head'] as const)(
+			'authorizes exact path metadata and native %s transfer',
+			async method => {
+				setupAuthMock(true);
+				mockBackupService.downloadSnapshotItem.mockImplementation(
+					async (id, selected, output, signal, headers, head) => {
+						expect(id).toBe('backup-01');
+						expect(selected).toBe('/srv/100%complete.txt');
+						expect(signal).toBeInstanceOf(AbortSignal);
+						expect(head).toBe(method === 'head');
+						headers({
+							fileName: '100_complete.txt',
+							contentType: 'application/octet-stream',
+							length: 5,
+						});
+						if (!head) output.write(Buffer.from('hello'));
+					}
+				);
+				const result = await request(app)[method](
+					'/api/backups/backup-01/files/download?path=%2Fsrv%2F100%25complete.txt'
+				);
+				expect(result.status).toBe(200);
+				expect(result.headers['content-disposition']).toBe(
+					'attachment; filename="100_complete.txt"'
+				);
+				expect(result.headers['cache-control']).toBe('private, no-store');
+				expect(result.headers['content-length']).toBe('5');
+				if (method === 'get') expect(result.body).toEqual(Buffer.from('hello'));
+				else expect(result.text).toBeUndefined();
+			}
+		);
+		it.each([
+			'path=%2Fsrv%2F..%2Fescape',
+			'path=%2Fsrv%2Fapp&repositoryId=other',
+			'',
+			'path=%2Fsrv%2Fa&path=%2Fsrv%2Fb',
+		])('rejects unsafe selectors before repository access: %s', async query => {
+			setupAuthMock(true);
+			const result = await request(app).get('/api/backups/backup-01/files/download?' + query);
+			expect(result.status).toBe(400);
+			expect(mockBackupService.downloadSnapshotItem).not.toHaveBeenCalled();
+		});
+		it('sanitizes provider exceptions and removes attachment headers when verification fails before bytes', async () => {
+			setupAuthMock(true);
+			mockBackupService.downloadSnapshotItem.mockImplementation(
+				async (_id, _path, _output, _signal, headers) => {
+					headers({ fileName: 'app.txt', contentType: 'application/octet-stream', length: 5 });
+					throw new Error('synthetic-private-provider-detail');
+				}
+			);
+			const result = await request(app).get(
+				'/api/backups/backup-01/files/download?path=%2Fsrv%2Fapp.txt'
+			);
+			expect(result.status).toBe(502);
+			expect(result.headers['content-disposition']).toBeUndefined();
+			expect(result.body.error).toBe('Selected snapshot download failed.');
+			expect(JSON.stringify(result.body)).not.toContain('synthetic-private');
+		});
 	});
 
 	describe('mode-bound verified exports', () => {

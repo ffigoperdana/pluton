@@ -12,7 +12,7 @@ import { McpActionService } from '../../src/mcp/McpActionService';
 import { OperationalReadService, toolCatalog } from '../../src/mcp/OperationalReadService';
 import { actionNames, actionSchemas } from '../../src/mcp/v2Contracts';
 import { createMcpGateway, createMcpAdminRouter, isMcpMachineRequest } from '../../src/mcp/gateway';
-import { mcpConfig } from '../../src/mcp/authorization';
+import { mcpConfig, mcpConfigurationStatus } from '../../src/mcp/authorization';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
@@ -845,5 +845,58 @@ test('saved recovery policy timestamps remain valid and policy edits invalidate 
 		assert.equal(f.calls.length, 1);
 	} finally {
 		f.close();
+	}
+});
+
+test('MCP native flag alone is not valid HTTPS configuration; diagnostics expose no rejected URL or environment values', async () => {
+	const secret = 'captured-private-value';
+	const env = { MCP_NATIVE_TOKENS_ENABLED: 'true' };
+	assert.equal(mcpConfig(env), undefined);
+	assert.deepEqual(mcpConfigurationStatus(env), {
+		configured: false,
+		nativeTokensRequested: true,
+		resourceUrlPresent: false,
+		reason: 'resource-url-missing',
+	});
+	for (const url of [
+		'http://backup.example.internal/mcp',
+		'https://' + secret + '@backup.example.internal/mcp',
+		'https://backup.example.internal/mcp?credential=' + secret,
+		'https://backup.example.internal/',
+	]) {
+		const result = mcpConfigurationStatus({ ...env, MCP_RESOURCE_URL: url });
+		assert.equal(result.reason, 'resource-url-invalid');
+		assert(!JSON.stringify(result).includes(secret));
+	}
+	assert.equal(
+		mcpConfigurationStatus({ ...env, MCP_RESOURCE_URL: config.resource }).reason,
+		'ready'
+	);
+	const { db, store } = fixture();
+	try {
+		const app = express();
+		app.use(
+			'/api/mcp-admin',
+			createMcpAdminRouter(
+				store,
+				(req, res, next) => {
+					if (!req.headers['x-test-admin']) return void res.sendStatus(401);
+					res.locals.mcpAdministrator = 'administrator';
+					next();
+				},
+				undefined,
+				undefined,
+				mcpConfigurationStatus(env)
+			)
+		);
+		assert.equal((await request(app).get('/api/mcp-admin/overview')).status, 401);
+		const response = await request(app).get('/api/mcp-admin/overview').set('x-test-admin', 'yes');
+		assert.equal(response.status, 200);
+		assert.equal(response.body.result.configured, false);
+		assert.equal(response.body.result.nativeTokensEnabled, false);
+		assert.equal(response.body.result.configuration.nativeTokensRequested, true);
+		assert.equal(response.body.result.configuration.reason, 'resource-url-missing');
+	} finally {
+		db.close();
 	}
 });

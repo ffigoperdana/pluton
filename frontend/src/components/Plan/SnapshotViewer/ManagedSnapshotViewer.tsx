@@ -1,3 +1,5 @@
+import { downloadSnapshotItem } from '../../../utils/snapshotItemDownload';
+import { downloadFailure } from '../../../utils/downloadFailure';
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
@@ -17,7 +19,7 @@ import type { SnapshotViewerProps } from './SnapshotViewer';
 import classes from '../../common/SnapshotBrowser/SnapshotBrowser.module.scss';
 import reviewClasses from './SnapshotReview.module.scss';
 import { useSnapshotComparison } from '../../../hooks/useSnapshotComparison';
-import { snapshotRequest, type ChangeFilter } from '../../../utils/snapshotReview';
+import { comparisonFailureMessage, snapshotRequest, type ChangeFilter } from '../../../utils/snapshotReview';
 
 const consumeRetry = (request: { current: boolean }) => {
    const retry = request.current;
@@ -56,6 +58,54 @@ function ManagedViewer({
    const [sort, setSort] = useState<ManagedSnapshotQuery['sort']>('name');
    const [order, setOrder] = useState<ManagedSnapshotQuery['order']>('asc');
    const [selected, setSelected] = useState<FileItem | null>(null);
+   const [downloadSelection, setDownloadSelection] = useState<FileItem | null>(null);
+   const [downloadBusy, setDownloadBusy] = useState(false);
+   const [downloadError, setDownloadError] = useState('');
+   const downloadStop = useRef<AbortController>();
+   useEffect(
+      () => () => {
+         downloadStop.current?.abort();
+         downloadStop.current = undefined;
+      },
+      [],
+   );
+   const closeDownload = () => {
+      downloadStop.current?.abort();
+      downloadStop.current = undefined;
+      setDownloadBusy(false);
+      setDownloadSelection(null);
+      setDownloadError('');
+   };
+   const downloadItem = async () => {
+      if (!downloadSelection || downloadStop.current) return;
+      const stop = new AbortController();
+      downloadStop.current = stop;
+      setDownloadBusy(true);
+      setDownloadError('');
+      const timer = setTimeout(() => stop.abort(), 35000);
+      try {
+         await downloadSnapshotItem(
+            API_URL,
+            backup.id,
+            downloadSelection.path,
+            downloadSelection.isDirectory,
+            downloadSelection.size || 0,
+            stop.signal,
+         );
+         if (!stop.signal.aborted) {
+            toast.info('Download requested. Check your browser Downloads for progress or errors.');
+            closeDownload();
+         }
+      } catch (error) {
+         if (downloadStop.current === stop) setDownloadError(downloadFailure(error).message);
+      } finally {
+         clearTimeout(timer);
+         if (downloadStop.current === stop) {
+            downloadStop.current = undefined;
+            setDownloadBusy(false);
+         }
+      }
+   };
    const content = useRef<HTMLDivElement>(null);
    const retryIndex = useRef(false);
    const [treeReady, setTreeReady] = useState(false);
@@ -160,6 +210,8 @@ function ManagedViewer({
    };
    return (
       <div className={`${classes.snapshotBrowser} ${classes.managedBrowser}`}>
+         {comparisonFailureMessage(review.query.data) && <p role="alert">{comparisonFailureMessage(review.query.data)}</p>}
+
          <SnapshotBrowserToolbar
             search={search}
             onSearchChange={setSearch}
@@ -340,7 +392,19 @@ function ManagedViewer({
                                             </button>
                                          </>
                                       )
-                                    : undefined
+                                    : (file) => (
+                                         <button
+                                            type="button"
+                                            aria-label={'Download ' + file.name}
+                                            onClick={(event) => {
+                                               event.stopPropagation();
+                                               setDownloadError('');
+                                               setDownloadSelection(file);
+                                            }}
+                                         >
+                                            <Icon type="download" size={16} />
+                                         </button>
+                                      )
                               }
                            />
                         )}
@@ -361,6 +425,27 @@ function ManagedViewer({
                )}
             </div>
          </div>
+         {downloadSelection && !selection && (
+            <ActionModal
+               title={downloadSelection.isDirectory ? 'Download Directory as TAR' : 'Download File'}
+               closeModal={closeDownload}
+               errorMessage={downloadError}
+               message={
+                  <>
+                     <p>{downloadSelection.path}</p>
+                     <p>
+                        {downloadSelection.isDirectory
+                           ? 'Only the selected directory contents are streamed as a TAR archive.'
+                           : 'Only the selected regular file is streamed in its original format.'}{' '}
+                        Your browser reports transfer progress. This standard transfer does not support resume. Full-snapshot Reliable Download
+                        remains available from the backup menu.
+                     </p>
+                  </>
+               }
+               primaryAction={{ title: 'Download', type: 'default', isPending: downloadBusy, action: downloadItem }}
+               secondaryAction={{ title: 'Close', action: closeDownload }}
+            />
+         )}
          {selected && !selection && (
             <ActionModal
                title={`Restore ${selected.isDirectory ? 'Directory' : 'File'}`}

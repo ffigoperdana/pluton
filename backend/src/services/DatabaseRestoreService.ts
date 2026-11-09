@@ -129,6 +129,8 @@ export class DatabaseRestoreService {
 				selection.planId,
 				selection.snapshotId
 			);
+			if (!metadata.databases.length)
+				throw new AppError(409, 'This snapshot has no recorded database artifacts.');
 			const policy = await this.targets.policy();
 			const lifecycle = this.targets.automatic
 				? await this.targets.automatic.capability()

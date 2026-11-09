@@ -2,7 +2,13 @@ import { Fragment, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Modal from '../../common/Modal/Modal';
 import { API_URL } from '../../../utils/constants';
-import { detailBackup, snapshotRequest, type SnapshotDetails as Details, type ChangeFilter } from '../../../utils/snapshotReview';
+import {
+   detailBackup,
+   comparisonFailureMessage,
+   snapshotRequest,
+   type SnapshotDetails as Details,
+   type ChangeFilter,
+} from '../../../utils/snapshotReview';
 import { useSnapshotComparison } from '../../../hooks/useSnapshotComparison';
 import { formatBytes } from '../../../utils/helpers';
 import { formatHistoryDate } from '../../../utils/backupHistory';
@@ -127,6 +133,7 @@ export default function SnapshotDetails({
                                  ? `${review.query.data.phase} · ${review.query.data.processedEntries?.toLocaleString() || 0} entries · ${Math.floor((review.query.data.elapsedMs || 0) / 1000)}s`
                                  : review.query.data?.reason || review.query.data?.state || 'Not compared'}
                            </p>
+                           {comparisonFailureMessage(review.query.data) && <p role="alert">{comparisonFailureMessage(review.query.data)}</p>}
                            <button
                               disabled={review.action.isPending}
                               onClick={() => review.action.mutate(review.query.data?.state === 'preparing' ? 'cancel' : 'start')}

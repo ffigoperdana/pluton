@@ -62,6 +62,11 @@ import {
 	type SnapshotPageQuery,
 } from '../utils/restic/ManagedSnapshotIndex';
 
+import {
+	streamSelectedSnapshot,
+	type SelectedDownloadHeaders,
+} from '../utils/restic/SelectedSnapshotDownload';
+
 type RecoveryContext = {
 	backupId: string;
 	planId: string;
@@ -91,6 +96,7 @@ export type ManagedArchiveDownload = {
 export class RemoteRepositoryRecoveryService {
 	private readonly jobs = new Map<string, { controller: AbortController; done: Promise<void> }>();
 	private readonly preparing = new Set<string>();
+	private selectedDownloads = 0;
 	private readonly downloads = new ManagedDownloadPreparation();
 	private readonly indexes: ManagedSnapshotIndexCache;
 	private readonly comparisons: SnapshotComparisonCache;
@@ -676,6 +682,48 @@ export class RemoteRepositoryRecoveryService {
 		};
 	}
 
+	async downloadItem(
+		backupId: string,
+		itemPath: string,
+		output: Writable,
+		signal: AbortSignal,
+		headers: (value: SelectedDownloadHeaders) => void,
+		headOnly = false
+	) {
+		if (this.selectedDownloads >= 2) throw new AppError(429, 'Snapshot item downloads are busy.');
+		this.selectedDownloads++;
+		try {
+			managedSnapshotPath(itemPath);
+			const context = await this.context(backupId);
+			await this.withIndex(
+				context,
+				index =>
+					this.sessions.withSession(
+						context.access,
+						async session => {
+							await this.verifySnapshot(context, session);
+							await this.assertCurrentContext(context);
+							await streamSelectedSnapshot(
+								index,
+								session,
+								this.exportBinding(context),
+								itemPath,
+								output,
+								signal,
+								headers,
+								headOnly
+							);
+							await this.verifySnapshot(context, session);
+							await this.assertCurrentContext(context);
+						},
+						signal
+					),
+				signal
+			);
+		} finally {
+			this.selectedDownloads--;
+		}
+	}
 	async downloadManifest(
 		backupId: string,
 		preparationId: string,
