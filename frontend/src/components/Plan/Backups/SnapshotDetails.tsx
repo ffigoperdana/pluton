@@ -134,6 +134,12 @@ export default function SnapshotDetails({
                                  : review.query.data?.reason || review.query.data?.state || 'Not compared'}
                            </p>
                            {comparisonFailureMessage(review.query.data) && <p role="alert">{comparisonFailureMessage(review.query.data)}</p>}
+                           {review.query.data?.previousSnapshotId && (
+                              <p>
+                                 Selected previous snapshot: <code>{review.query.data.previousSnapshotId}</code>
+                                 {!!review.query.data.skippedCandidates && ' · Older compatible recorded scope selected.'}
+                              </p>
+                           )}
                            <button
                               disabled={review.action.isPending}
                               onClick={() => review.action.mutate(review.query.data?.state === 'preparing' ? 'cancel' : 'start')}
@@ -145,7 +151,11 @@ export default function SnapshotDetails({
                                    : 'Compare with previous'}
                            </button>
                            {(review.query.isError || review.action.isError) && (
-                              <p role="alert">Comparison unavailable. Retry later; browsing remains available.</p>
+                              <p role="alert">
+                                 {review.action.error?.message ||
+                                    review.query.error?.message ||
+                                    'Comparison unavailable. Retry explicitly; browsing remains available.'}
+                              </p>
                            )}
                            {review.query.data?.state === 'ready' && (
                               <>

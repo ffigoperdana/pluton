@@ -2,6 +2,11 @@ import fs from 'fs/promises';
 import path from 'path';
 import Database from 'better-sqlite3';
 import { AppError } from '../AppError';
+import {
+	comparisonDiagnostic,
+	SnapshotComparisonError,
+	type ComparisonStage,
+} from './SnapshotComparisonPolicy';
 import { managedSnapshotPath } from '../managedSnapshotPath';
 import type { ManagedSnapshotIndex, SnapshotPageQuery } from './ManagedSnapshotIndex';
 
@@ -22,6 +27,7 @@ export type ComparisonBinding = {
 	previousBackupId: string;
 	currentSnapshotId: string;
 	previousSnapshotId: string;
+	skippedCandidates?: number;
 };
 type Row = {
 	path: string;
@@ -40,6 +46,12 @@ export class SnapshotComparison {
 	processedEntries = 0;
 	currentEntries = 0;
 	totalEntries = 0;
+	validationStage: ComparisonStage = 'pair-selection';
+	compatibility?: {
+		mode: 'exact-roots' | 'verified-database-roots';
+		currentDatabaseArtifacts: number;
+		previousDatabaseArtifacts: number;
+	};
 	phase: 'preparing' | 'indexing' | 'comparing' | 'ready' = 'preparing';
 	constructor(
 		file: string,
@@ -63,6 +75,7 @@ export class SnapshotComparison {
 		signal: AbortSignal
 	) {
 		this.phase = 'indexing';
+		this.validationStage = 'comparison-indexing';
 		this.currentEntries = current.count;
 		this.totalEntries = current.count + previous.count;
 		const insert = this.db.prepare(
@@ -98,6 +111,7 @@ export class SnapshotComparison {
 			flush();
 		}
 		this.phase = 'comparing';
+		this.validationStage = 'restic-diff';
 		const record = this.db.prepare('INSERT INTO observed VALUES(?,?)');
 		const findRow = this.db.prepare('SELECT change,type FROM entries WHERE path=?');
 		const findObserved = this.db.prepare('SELECT 1 FROM observed WHERE path=?');
@@ -112,7 +126,7 @@ export class SnapshotComparison {
 					value.source_snapshot !== this.binding.previousSnapshotId ||
 					value.target_snapshot !== this.binding.currentSnapshotId
 				)
-					throw new AppError(409, 'Snapshot comparison identity mismatch.');
+					throw new SnapshotComparisonError('diff-identity-mismatch');
 				summary = true;
 				return;
 			}
@@ -259,12 +273,25 @@ export type ComparisonFailureCategory =
 	| 'resource-limit'
 	| 'metadata-invalid'
 	| 'binding-mismatch'
+	| 'source-scope-mismatch'
+	| 'snapshot-root-incompatible'
+	| 'snapshot-ownership-mismatch'
+	| 'historical-metadata-incomplete'
+	| 'diff-unavailable'
+	| 'index-verification'
+	| 'validation-conflict'
 	| 'snapshot-unavailable'
 	| 'repository-unavailable'
 	| 'unavailable';
 export function comparisonFailure(error: unknown, timedOut = false): ComparisonFailureCategory {
 	const value = error as { code?: unknown; name?: unknown; statusCode?: unknown };
-	if (timedOut || value?.name === 'TimeoutError' || value?.code === 'timeout') return 'timeout';
+	if (
+		timedOut ||
+		value?.name === 'TimeoutError' ||
+		value?.code === 'timeout' ||
+		value?.statusCode === 504
+	)
+		return 'timeout';
 	if (value?.name === 'AbortError' || value?.code === 'cancelled') return 'cancelled';
 	if (value?.statusCode === 429 || value?.code === 'repository-busy') return 'busy';
 	if (
@@ -275,7 +302,24 @@ export function comparisonFailure(error: unknown, timedOut = false): ComparisonF
 	)
 		return 'resource-limit';
 	if (value?.statusCode === 422 || value?.code === 'invalid-output') return 'metadata-invalid';
-	if (value?.statusCode === 409) return 'binding-mismatch';
+	const detail = comparisonDiagnostic(error);
+	if (detail)
+		return (
+			{
+				'repository-binding-changed': 'binding-mismatch',
+				'comparison-context-changed': 'binding-mismatch',
+				'historical-source-scope-mismatch': 'source-scope-mismatch',
+				'snapshot-root-path-incompatible': 'snapshot-root-incompatible',
+				'snapshot-ownership-mismatch': 'snapshot-ownership-mismatch',
+				'snapshot-identity-missing': 'historical-metadata-incomplete',
+				'previous-snapshot-unavailable': 'snapshot-unavailable',
+				'historical-metadata-incomplete': 'historical-metadata-incomplete',
+				'restic-diff-unavailable': 'diff-unavailable',
+				'snapshot-index-verification': 'index-verification',
+				'diff-identity-mismatch': 'snapshot-ownership-mismatch',
+			} as const
+		)[detail];
+	if (value?.statusCode === 409) return 'validation-conflict';
 	if (value?.statusCode === 404) return 'snapshot-unavailable';
 	if (
 		typeof value?.code === 'string' &&
@@ -300,6 +344,8 @@ type Job = {
 	directory?: string;
 	reason?: string;
 	failureCode?: string;
+	failureDetail?: ReturnType<typeof comparisonDiagnostic>;
+	failureStage?: ComparisonStage;
 	failureCategory?: ComparisonFailureCategory;
 };
 export class SnapshotComparisonCache {
@@ -338,9 +384,17 @@ export class SnapshotComparisonCache {
 			}
 		})());
 	}
+	find(backupId: string) {
+		for (const [key, job] of this.jobs)
+			if (
+				job.binding.currentBackupId === backupId &&
+				(job.state === 'preparing' || Date.now() - job.updated <= COMPARISON_LIMITS.ttlMs)
+			)
+				return { key, binding: job.binding };
+	}
 	status(key: string) {
 		const job = this.jobs.get(key);
-		if (!job || Date.now() - job.updated > COMPARISON_LIMITS.ttlMs)
+		if (!job || (job.state !== 'preparing' && Date.now() - job.updated > COMPARISON_LIMITS.ttlMs))
 			return { state: 'missing' as const };
 		return {
 			...job.binding,
@@ -352,6 +406,10 @@ export class SnapshotComparisonCache {
 			summary: job.state === 'ready' ? job.index?.summary() : undefined,
 			reason: job.reason,
 			failureCode: job.failureCode,
+			failureDetail: job.failureDetail,
+			failureStage: job.failureStage,
+			validationStage: job.index?.validationStage,
+			compatibility: job.index?.compatibility,
 			failureCategory: job.failureCategory,
 			retryAfterMs: 2000,
 		};
@@ -373,10 +431,16 @@ export class SnapshotComparisonCache {
 		retry = false
 	) {
 		if (this.closed) throw new AppError(503, 'Snapshot comparisons are unavailable.');
+		// Two tabs may have selected different candidates before either admitted.
+		// The serialized admission fence must preserve the first pair even if it
+		// already finished by the time the second request reaches this queue.
+		const pinned = this.find(binding.currentBackupId);
+		if (pinned && pinned.key !== key)
+			throw new SnapshotComparisonError('comparison-context-changed');
 		const old = this.jobs.get(key);
 		if (
 			old &&
-			Date.now() - old.updated < COMPARISON_LIMITS.ttlMs &&
+			(old.state === 'preparing' || Date.now() - old.updated < COMPARISON_LIMITS.ttlMs) &&
 			!(retry && ['failed', 'cancelled'].includes(old.state))
 		)
 			return this.status(key);
@@ -391,7 +455,7 @@ export class SnapshotComparisonCache {
 		}
 		const controller = new AbortController();
 		const job: Job = {
-			binding,
+			binding: Object.freeze({ ...binding }),
 			state: 'preparing',
 			started: Date.now(),
 			updated: Date.now(),
@@ -412,12 +476,14 @@ export class SnapshotComparisonCache {
 				job.directory = await fs.mkdtemp(path.join(this.root, 'compare-'));
 				const file = path.join(job.directory, 'metadata.sqlite');
 				await fs.writeFile(file, '', { flag: 'wx', mode: 0o600 });
-				job.index = new SnapshotComparison(file, binding);
+				job.index = new SnapshotComparison(file, job.binding);
 				await populate(job.index, bounded);
 				bounded.throwIfAborted();
 				job.state = 'ready';
 			} catch (error) {
 				job.state = controller.signal.aborted ? 'cancelled' : 'failed';
+				job.failureDetail = comparisonDiagnostic(error);
+				job.failureStage = job.index?.validationStage || 'pair-selection';
 				job.failureCategory = controller.signal.aborted
 					? 'cancelled'
 					: comparisonFailure(error, bounded.aborted);

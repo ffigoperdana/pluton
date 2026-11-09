@@ -62,7 +62,7 @@ describe('verified bounded snapshot comparisons', () => {
 			[{ code: 'SQLITE_FULL' }, 'resource-limit'],
 			[{ statusCode: 429 }, 'busy'],
 			[{ code: 'invalid-output' }, 'metadata-invalid'],
-			[{ statusCode: 409 }, 'binding-mismatch'],
+			[{ statusCode: 409 }, 'validation-conflict'],
 			[{ code: 'wrong-password' }, 'repository-unavailable'],
 			[{ message: 'private-provider-body', code: 'private-provider-body' }, 'unavailable'],
 		] as const)
@@ -251,9 +251,20 @@ describe('verified bounded snapshot comparisons', () => {
 		try {
 			expect((await cache.start('first', binding, work)).state).toBe('preparing');
 			await ready;
+			const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 16 * 60_000);
+			try {
+				expect(cache.find(binding.currentBackupId)?.key).toBe('first');
+				expect(Object.isFrozen(cache.find(binding.currentBackupId)?.binding)).toBe(true);
+				expect(cache.status('first').state).toBe('preparing');
+				expect((await cache.start('first', binding, work)).state).toBe('preparing');
+			} finally {
+				clock.mockRestore();
+			}
 			expect((await cache.start('first', binding, work)).state).toBe('preparing');
 			expect(work).toHaveBeenCalledTimes(1);
-			await expect(cache.start('second', binding, work)).rejects.toThrow('Another snapshot');
+			await expect(
+				cache.start('second', { ...binding, currentBackupId: 'backup-other' }, work)
+			).rejects.toThrow('Another snapshot');
 			expect((await cache.cancel('first')).state).toBe('cancelled');
 			await cache.start(
 				'first',
@@ -268,6 +279,12 @@ describe('verified bounded snapshot comparisons', () => {
 				await new Promise<void>(resolve => setImmediate(resolve));
 			}
 			expect(cache.status('first').state).toBe('ready');
+			const competing = jest.fn(async () => undefined);
+			await expect(
+				cache.start('raced-key', { ...binding, previousBackupId: 'backup-raced' }, competing)
+			).rejects.toMatchObject({ diagnostic: 'comparison-context-changed' });
+			expect(competing).not.toHaveBeenCalled();
+			expect(cache.find(binding.currentBackupId)?.key).toBe('first');
 			expect(cache.page('first', { path: '/srv' }).files).toHaveLength(1);
 		} finally {
 			await cache.close();

@@ -239,3 +239,82 @@ test('comparison failure notes separate resource, deadline and evidence errors w
    assert(!value.includes('captured-provider-secret'));
    assert.equal(comparisonFailureMessage({ state: 'ready' }), '');
 });
+
+test('specific compare diagnostics keep missing distinct and never reflect unknown codes or provider text', async () => {
+   const original = globalThis.fetch;
+   try {
+      for (const [failureDetail, pattern] of [
+         ['snapshot-root-path-incompatible', /root paths/],
+         ['historical-source-scope-mismatch', /source scopes/],
+         ['historical-metadata-incomplete', /incomplete/],
+         ['snapshot-ownership-mismatch', /ownership tags/],
+         ['previous-snapshot-unavailable', /previous snapshot/],
+         ['restic-diff-unavailable', /adapter/],
+         ['comparison-context-changed', /evidence changed/],
+      ] as const) {
+         assert.match(comparisonFailureMessage({ state: 'failed', failureDetail }), pattern);
+         globalThis.fetch = async () => Response.json({ success: false, error: 'private-provider-body', failureDetail }, { status: 409 });
+         await assert.rejects(snapshotRequest('https://example.internal/api', 'backup-01', 'comparison'), pattern);
+      }
+      for (const state of ['missing', 'preparing', 'ready'] as const)
+         assert.equal(comparisonFailureMessage({ state, failureDetail: 'snapshot-root-path-incompatible' }), '');
+      for (const failureDetail of ['private-provider-body', '__proto__', 'constructor'])
+         assert(!comparisonFailureMessage({ state: 'failed', failureDetail }).includes(failureDetail));
+   } finally {
+      globalThis.fetch = original;
+   }
+});
+test('SQL snapshot Details shows the exact failed pair and explicit retry; GET refresh never admits a replacement job', async () => {
+   let posts = 0;
+   let state: any = { state: 'missing' };
+   const sqlDetails = {
+      ...details,
+      databases: [
+         {
+            reference: 'db_01',
+            engine: 'mariadb',
+            database: 'app',
+            path: '/pluton/database/app.sql',
+            bytes: 10,
+            sha256: 'c'.repeat(64),
+            status: 'completed',
+         },
+      ],
+   };
+   const ui = await mount(
+      React.createElement(Details, { backupId: 'backup-01', close: () => {}, onBrowse: () => {} }),
+      async (input: any, options: any) => {
+         const url = new URL(input);
+         if (options.method === 'POST') {
+            posts++;
+            state = {
+               state: 'failed',
+               failureCode: 'preparing-409',
+               failureCategory: 'snapshot-root-incompatible',
+               failureDetail: 'snapshot-root-path-incompatible',
+               currentSnapshotId: 'a'.repeat(64),
+               previousSnapshotId: 'b'.repeat(64),
+               previousBackupId: 'backup-old',
+               processedEntries: 0,
+            };
+         }
+         return Response.json({ success: true, result: url.pathname.endsWith('/details') ? sqlDetails : state });
+      },
+   );
+   try {
+      await ui.until(() => ui.dom.window.document.body.textContent?.includes('Compare with previous'));
+      assert.equal(posts, 0);
+      assert.match(ui.dom.window.document.body.textContent!, /app\.sql/);
+      await ui.click('Compare with previous');
+      await ui.until(() => ui.dom.window.document.body.textContent?.includes('root paths cannot be proven'));
+      assert.equal(posts, 1);
+      assert(ui.dom.window.document.body.textContent?.includes('b'.repeat(64)));
+      assert(ui.dom.window.document.body.textContent?.includes('Retry comparison'));
+      await act(async () => ui.client.refetchQueries());
+      assert.equal(posts, 1);
+      assert.equal((ui.client.getQueryData(['snapshot-comparison', 'backup-01']) as any).state, 'failed');
+      assert(!ui.dom.window.document.body.textContent?.includes('Detailed changes'));
+   } finally {
+      await ui.close();
+   }
+});

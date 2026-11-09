@@ -211,6 +211,7 @@ function ManagedViewer({
    return (
       <div className={`${classes.snapshotBrowser} ${classes.managedBrowser}`}>
          {comparisonFailureMessage(review.query.data) && <p role="alert">{comparisonFailureMessage(review.query.data)}</p>}
+         {(review.query.isError || review.action.isError) && <p role="alert">{review.action.error?.message || review.query.error?.message}</p>}
 
          <SnapshotBrowserToolbar
             search={search}
@@ -271,7 +272,9 @@ function ManagedViewer({
                      ? `Compared with ${review.query.data?.previousSnapshotId}`
                      : review.query.data?.state === 'preparing'
                        ? `Comparing snapshots · ${review.query.data.processedEntries?.toLocaleString() || 0} metadata entries · ${Math.floor((review.query.data.elapsedMs || 0) / 1000)}s`
-                       : 'Not compared'}
+                       : review.query.data?.previousSnapshotId
+                         ? 'Selected previous snapshot: ' + review.query.data.previousSnapshotId
+                         : 'Not compared'}
                </span>
                {review.query.data?.state === 'preparing' ? (
                   <button disabled={review.action.isPending} onClick={() => review.action.mutate('cancel')}>

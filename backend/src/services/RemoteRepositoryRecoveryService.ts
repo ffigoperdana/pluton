@@ -1,5 +1,17 @@
 import crypto from 'crypto';
-import { SnapshotComparisonCache, type ComparisonQuery } from '../utils/restic/SnapshotComparison';
+import {
+	SnapshotComparisonCache,
+	comparisonFailure,
+	type ComparisonQuery,
+} from '../utils/restic/SnapshotComparison';
+import {
+	comparisonEvidence,
+	sameFilesystemScope,
+	verifyComparisonRoots,
+	SnapshotComparisonError,
+	type ComparisonEvidence,
+	type ComparisonDiagnostic,
+} from '../utils/restic/SnapshotComparisonPolicy';
 import fs from 'fs/promises';
 import path from 'path';
 import Cryptr from 'cryptr';
@@ -132,27 +144,99 @@ export class RemoteRepositoryRecoveryService {
 	}
 	private async comparisonContext(backupId: string) {
 		const current = await this.context(backupId);
-		const row = (await this.backups.getById(backupId))!;
-		const scope = (paths: string[]) => JSON.stringify([...paths].sort());
-		for (const candidate of await this.backups.comparisonCandidates(row)) {
-			if (!fullSnapshotId.safeParse(candidate.completionStats?.snapshot_id).success) continue;
-			const paths =
-				candidate.completionStats?.sourcePaths || candidate.sourceConfig?.includes || [];
-			if (
-				!paths.length ||
-				!current.sourcePaths.length ||
-				scope(paths) !== scope(current.sourcePaths)
-			)
+		const unavailable = (diagnostic: ComparisonDiagnostic) => ({
+			current,
+			previous: undefined,
+			key: undefined,
+			currentEvidence: undefined,
+			previousEvidence: undefined,
+			skippedCandidates: 0,
+			diagnostic,
+		});
+		const currentRow = await this.backups.getById(backupId);
+		let currentEvidence: ComparisonEvidence;
+		try {
+			currentEvidence = comparisonEvidence(currentRow!);
+		} catch {
+			return unavailable('historical-metadata-incomplete');
+		}
+		const pinned = this.comparisons.find(backupId);
+		if (pinned && pinned.binding.currentSnapshotId !== current.snapshotId)
+			return unavailable('comparison-context-changed');
+		const candidates = pinned
+			? [await this.backups.getById(pinned.binding.previousBackupId)]
+			: await this.backups.comparisonCandidates(currentRow!);
+		let diagnostic: ComparisonDiagnostic = 'previous-snapshot-unavailable',
+			skippedCandidates = 0;
+		for (const candidate of candidates) {
+			if (!candidate) {
+				diagnostic = 'previous-snapshot-unavailable';
 				continue;
+			}
+			if (!fullSnapshotId.safeParse(candidate.completionStats?.snapshot_id).success) {
+				diagnostic = 'snapshot-identity-missing';
+				skippedCandidates++;
+				continue;
+			}
+			let previousEvidence: ComparisonEvidence;
+			try {
+				previousEvidence = comparisonEvidence(candidate);
+			} catch {
+				diagnostic = 'historical-metadata-incomplete';
+				skippedCandidates++;
+				continue;
+			}
+			if (!sameFilesystemScope(currentEvidence, previousEvidence)) {
+				diagnostic = 'historical-source-scope-mismatch';
+				skippedCandidates++;
+				continue;
+			}
 			const previous = await this.context(candidate.id, current.planId);
 			if (
 				previous.repositoryId !== current.repositoryId ||
 				previous.snapshotId === current.snapshotId
-			)
+			) {
+				diagnostic = 'repository-binding-changed';
+				skippedCandidates++;
 				continue;
-			return { current, previous, key: ManagedSnapshotIndexCache.key([current, previous]) };
+			}
+			const key = ManagedSnapshotIndexCache.key([
+				current,
+				previous,
+				currentEvidence.fingerprint,
+				previousEvidence.fingerprint,
+			]);
+			if (
+				pinned &&
+				(pinned.key !== key || pinned.binding.previousSnapshotId !== previous.snapshotId)
+			)
+				return unavailable('comparison-context-changed');
+			return {
+				current,
+				previous,
+				key,
+				currentEvidence,
+				previousEvidence,
+				skippedCandidates: pinned?.binding.skippedCandidates ?? skippedCandidates,
+				diagnostic: undefined,
+			};
 		}
-		return { current, previous: undefined, key: undefined };
+		return unavailable(diagnostic);
+	}
+	private async assertComparisonEvidence(
+		context: RecoveryContext,
+		evidence: ComparisonEvidence,
+		previous = false
+	) {
+		await this.assertCurrentContext(context);
+		const row = await this.backups.getById(context.backupId);
+		if (!row)
+			throw new SnapshotComparisonError(
+				previous ? 'previous-snapshot-unavailable' : 'snapshot-identity-missing',
+				404
+			);
+		if (comparisonEvidence(row).fingerprint !== evidence.fingerprint)
+			throw new SnapshotComparisonError('comparison-context-changed');
 	}
 	async comparison(
 		backupId: string,
@@ -161,74 +245,123 @@ export class RemoteRepositoryRecoveryService {
 		retry = false,
 		signal?: AbortSignal
 	) {
-		const { current, previous, key } = await this.comparisonContext(backupId);
-		if (!previous || !key)
+		const {
+			current,
+			previous,
+			key,
+			currentEvidence,
+			previousEvidence,
+			skippedCandidates,
+			diagnostic,
+		} = await this.comparisonContext(backupId);
+		if (!previous || !key || !currentEvidence || !previousEvidence) {
+			const failure = new SnapshotComparisonError(diagnostic || 'historical-metadata-incomplete');
 			return {
 				state: 'unavailable' as const,
-				reason: 'No compatible previous completed snapshot with recorded source scope.',
+				reason: failure.message,
+				failureDetail: failure.diagnostic,
+				failureCategory: comparisonFailure(failure),
+				failureStage: 'pair-selection' as const,
 			};
+		}
 		const binding = {
 			currentBackupId: backupId,
 			previousBackupId: previous.backupId,
 			currentSnapshotId: current.snapshotId,
 			previousSnapshotId: previous.snapshotId,
+			skippedCandidates,
 		};
 		if (action === 'start')
 			return this.comparisons.start(
 				key,
 				binding,
 				async (index, bounded) => {
-					await this.withIndex(
-						current,
-						async currentIndex =>
-							this.withIndex(
-								previous,
-								async previousIndex => {
-									await this.sessions.withSession(
-										current.access,
-										async session => {
-											const a = await this.verifySnapshot(current, session),
-												b = await this.verifySnapshot(previous, session);
-											if (
-												JSON.stringify([...a.paths].sort()) !==
-													JSON.stringify([...b.paths].sort()) ||
-												!session.diff
-											)
-												throw new AppError(
-													409,
-													'Compatible snapshot comparison metadata is unavailable.'
+					try {
+						index.validationStage = 'current-index';
+						await this.withIndex(
+							current,
+							async currentIndex => {
+								index.validationStage = 'previous-index';
+								await this.withIndex(
+									previous,
+									async previousIndex => {
+										await this.sessions.withSession(
+											current.access,
+											async session => {
+												index.validationStage = 'snapshot-verification';
+												const a = await this.comparisonSnapshot(current, session);
+												let b: Awaited<ReturnType<typeof this.comparisonSnapshot>>;
+												try {
+													b = await this.comparisonSnapshot(previous, session);
+												} catch (error) {
+													if (error instanceof AppError && error.statusCode === 404)
+														throw new SnapshotComparisonError('previous-snapshot-unavailable', 404);
+													throw error;
+												}
+												if (!session.diff)
+													throw new SnapshotComparisonError('restic-diff-unavailable');
+												index.validationStage = 'root-validation';
+												index.compatibility = await verifyComparisonRoots(
+													a,
+													b,
+													currentIndex,
+													previousIndex,
+													currentEvidence,
+													previousEvidence,
+													bounded
 												);
-											await index.populate(
-												currentIndex,
-												previousIndex,
-												consume => session.diff!(previous.snapshotId, current.snapshotId, consume),
-												bounded
-											);
-											await this.verifySnapshot(current, session);
-											await this.verifySnapshot(previous, session);
-											await this.assertCurrentContext(current);
-											await this.assertCurrentContext(previous);
-										},
-										bounded
-									);
-								},
-								bounded
-							),
-						bounded
-					);
+												await this.assertComparisonEvidence(current, currentEvidence);
+												await this.assertComparisonEvidence(previous, previousEvidence, true);
+												await index.populate(
+													currentIndex,
+													previousIndex,
+													consume =>
+														session.diff!(previous.snapshotId, current.snapshotId, consume),
+													bounded
+												);
+												index.validationStage = 'final-revalidation';
+												await this.comparisonSnapshot(current, session);
+												await this.comparisonSnapshot(previous, session);
+												await this.assertComparisonEvidence(current, currentEvidence);
+												await this.assertComparisonEvidence(previous, previousEvidence, true);
+											},
+											bounded
+										);
+									},
+									bounded
+								);
+							},
+							bounded
+						);
+					} catch (error) {
+						if (
+							error instanceof AppError &&
+							error.statusCode === 404 &&
+							index.validationStage === 'previous-index'
+						)
+							throw new SnapshotComparisonError('previous-snapshot-unavailable', 404);
+						throw error;
+					}
 				},
 				retry
 			);
 		if (action === 'cancel') return this.comparisons.cancel(key);
-		await this.sessions.withSession(
-			current.access,
-			async session => {
-				await this.verifySnapshot(current, session);
-				await this.verifySnapshot(previous, session);
-			},
-			signal
-		);
-		return action === 'page' ? this.comparisons.page(key, query) : this.comparisons.status(key);
+		const status = this.comparisons.status(key);
+		// Polling never creates jobs or selects a replacement predecessor. Failed
+		// jobs remain inspectable even when their remote snapshot is unavailable.
+		if (status.state === 'ready' || action === 'page') {
+			await this.sessions.withSession(
+				current.access,
+				async session => {
+					await this.comparisonSnapshot(current, session);
+					await this.comparisonSnapshot(previous, session);
+					await this.assertComparisonEvidence(current, currentEvidence);
+					await this.assertComparisonEvidence(previous, previousEvidence, true);
+				},
+				signal
+			);
+		}
+		return action === 'page' ? this.comparisons.page(key, query) : { ...binding, ...status };
 	}
 
 	/** Metadata only. Source agent identity is checked in SQLite, never contacted. */
@@ -1069,11 +1202,11 @@ export class RemoteRepositoryRecoveryService {
 			repository.storagePath !== backup.storagePath ||
 			plan.storagePath !== backup.storagePath
 		) {
-			throw new AppError(409, 'The managed repository binding is unavailable or has changed.');
+			throw new SnapshotComparisonError('repository-binding-changed');
 		}
 		const snapshotId = backup.completionStats?.snapshot_id;
 		if (!fullSnapshotId.safeParse(snapshotId).success)
-			throw new AppError(409, 'This backup has no complete, unambiguous snapshot ID.');
+			throw new SnapshotComparisonError('snapshot-identity-missing');
 		let password: string;
 		let options: Record<string, string>;
 		try {
@@ -1088,7 +1221,9 @@ export class RemoteRepositoryRecoveryService {
 			storageId: repository.storageId,
 			repositoryId: repository.id,
 			snapshotId: snapshotId!,
-			sourcePaths: backup.completionStats?.sourcePaths || backup.sourceConfig?.includes || [],
+			sourcePaths: [
+				...(backup.completionStats?.sourcePaths || backup.sourceConfig?.includes || []),
+			],
 			access: { options, password, repositoryPath: repository.storagePath },
 		};
 	}
@@ -1100,8 +1235,19 @@ export class RemoteRepositoryRecoveryService {
 			!snapshot.tags.includes(`pluton-plan-${context.planId}`) ||
 			!snapshot.tags.includes(`pluton-backup-${context.backupId}`)
 		) {
-			throw new AppError(409, 'Snapshot does not belong to this backup and managed repository.');
+			throw new SnapshotComparisonError('snapshot-ownership-mismatch');
 		}
+		return snapshot;
+	}
+
+	/** Comparison requires one unambiguous owner; other recovery contracts stay unchanged. */
+	private async comparisonSnapshot(context: RecoveryContext, session: ManagedRepositorySession) {
+		const snapshot = await this.verifySnapshot(context, session);
+		if (
+			snapshot.tags.filter(tag => tag.startsWith('pluton-plan-')).length !== 1 ||
+			snapshot.tags.filter(tag => tag.startsWith('pluton-backup-')).length !== 1
+		)
+			throw new SnapshotComparisonError('snapshot-ownership-mismatch');
 		return snapshot;
 	}
 
@@ -1120,7 +1266,7 @@ export class RemoteRepositoryRecoveryService {
 		if (
 			this.indexKey(await this.context(context.backupId, context.planId)) !== this.indexKey(context)
 		)
-			throw new AppError(409, 'The managed repository binding has changed. Retry the operation.');
+			throw new SnapshotComparisonError('comparison-context-changed');
 	}
 	private async populateIndex(
 		context: RecoveryContext,

@@ -1,5 +1,6 @@
 /** Only synthetic configuration received inside disposable Linux fixtures. */
 import express from 'express';
+import type { Backup } from '../../src/db/schema/backups';
 import net from 'node:net';
 import Cryptr from 'cryptr';
 import { RemoteRepositoryRecoveryService } from '../../src/services/RemoteRepositoryRecoveryService';
@@ -12,6 +13,7 @@ import { BackupController } from '../../src/controllers/BackupController';
 import { createBackupRouter } from '../../src/routes/backups';
 export type LinkFixtureConfig = {
 	snapshots: Record<string, string>;
+	receipts?: Record<string, Partial<NonNullable<Backup['completionStats']>>>;
 	source: string;
 	secret: string;
 	password: string;
@@ -50,7 +52,11 @@ export async function startLinkFixture(
 						status: 'completed',
 						success: true,
 						inProgress: false,
-						completionStats: { snapshot_id: config.snapshots[id], sourcePaths: [config.source] },
+						completionStats: {
+							snapshot_id: config.snapshots[id],
+							sourcePaths: [config.source],
+							...config.receipts?.[id],
+						},
 					}
 				: undefined,
 	};
