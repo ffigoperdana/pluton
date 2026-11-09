@@ -4,6 +4,8 @@ import { AppError } from '../utils/AppError';
 import { RetainedRestoreDependencyError } from '../utils/retainedRestoreDependency';
 import { z } from 'zod';
 import { managedSnapshotPath } from '../utils/managedSnapshotPath';
+import { comparisonDiagnostic } from '../utils/restic/SnapshotComparisonPolicy';
+import { comparisonFailure } from '../utils/restic/SnapshotComparison';
 import { SnapshotIndexError } from '../utils/restic/ManagedSnapshotIndex';
 import { ManagedRepositoryAccessError } from '../utils/restic/ManagedSftpRepositorySession';
 import { observeTransfer, transferReason } from '../utils/managedExport/TransferTelemetry';
@@ -106,12 +108,14 @@ export class BackupController {
 			res.status(action === 'start' ? 202 : 200).json({ success: true, result });
 		} catch (error) {
 			if (error instanceof AppError && error.statusCode === 429) res.setHeader('Retry-After', '2');
-			res
-				.status(error instanceof AppError ? error.statusCode : 500)
-				.json({
-					success: false,
-					error: error instanceof AppError ? error.message : 'Snapshot comparison unavailable.',
-				});
+			res.status(error instanceof AppError ? error.statusCode : 500).json({
+				success: false,
+				error: error instanceof AppError ? error.message : 'Snapshot comparison unavailable.',
+				failureDetail: comparisonDiagnostic(error),
+				failureCategory: comparisonFailure(error),
+				failureStage: 'request',
+				...failureCode(error),
+			});
 		} finally {
 			request.cleanup();
 		}
