@@ -233,12 +233,13 @@ test('delivery methods remain separate: durable export progress, verified readin
       await act(async () => context.mock.timers.tick(2000));
       await flush();
       assert.match(dom.window.document.body.textContent!, /Verifying complete archive/);
-      assert(!dom.window.document.querySelector('a[href$="/link"]'));
+      const downloadButton = () => [...dom.window.document.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Download Verified TAR');
+      assert(!downloadButton());
       state = 'ready';
       await act(async () => context.mock.timers.tick(2000));
       await flush();
       assert.match(dom.window.document.body.textContent!, /Integrity: complete object size and SHA-256 verified/);
-      assert(dom.window.document.querySelector('a[href$="/link"]'));
+      assert(downloadButton() && !downloadButton()!.disabled);
       assert.match(dom.window.document.body.textContent!, /Browser Resume/);
       assert(!/laptop download finished/i.test(dom.window.document.body.textContent!));
       proxy = true;
@@ -247,7 +248,7 @@ test('delivery methods remain separate: durable export progress, verified readin
       await flush();
       assert.match(dom.window.document.body.textContent!, /HTTP 504/);
       assert(
-         dom.window.document.querySelector('a[href$="/link"]'),
+         downloadButton(),
          'Verified endpoint stays mounted during reconnect; server reauthorizes the transfer',
       );
       assert(!dom.window.document.body.textContent!.includes('private-provider'));

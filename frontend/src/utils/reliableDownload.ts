@@ -50,7 +50,11 @@ const reasons: Record<string, string> = {'not-configured': 'Reliable Download ne
 export const reliableFailure = (reason?: string) =>
    reasons[reason || ''] || 'Reliable Download is unavailable. Review server readiness and diagnostics.';
 export async function exportJson(response: Response, signal?: AbortSignal, maxBytes = 64 * 1024) {
-   if (response.redirected || !/application\/json/i.test(response.headers.get('Content-Type') || '')) {
+   if (response.redirected || response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+      await response.body?.cancel();
+      throw new DownloadFailure('Download service redirected unexpectedly. Check your session or the access gateway.', 'protocol', false);
+   }
+   if (!/application\/json/i.test(response.headers.get('Content-Type') || '')) {
       await response.body?.cancel();
       throw responseFailure(response);
    }
@@ -180,11 +184,13 @@ export async function reliableAuthorization(api: string, backupId: string, id: s
    const response = await fetch(`${api}/backups/${encodeURIComponent(backupId)}/exports/${encodeURIComponent(id)}/authorization`, {method: 'POST',
       signal,
       credentials: 'include',
-      redirect: 'error',
+      redirect: 'manual',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',});
    const body = await exportJson(response, signal);
    const a = body.result;
+   const invalid = () => new DownloadFailure('Download authorization could not be verified. Check export status before trying again.', 'protocol', false);
+   if (!a || typeof a !== 'object' || typeof a.url !== 'string') throw invalid();
    let url: URL;
    const proxy = a.transport === 'authenticated-proxy';
    try {
@@ -197,7 +203,7 @@ export async function reliableAuthorization(api: string, backupId: string, id: s
          if (url.href !== expected.href) throw new Error();
       }
    } catch {
-      throw new Error('Download authorization was invalid.');
+      throw invalid();
    }
    if (
       (url.protocol !== 'https:' && !(proxy && url.protocol === 'http:')) ||
@@ -209,6 +215,47 @@ export async function reliableAuthorization(api: string, backupId: string, id: s
       a.expiresAt <= Date.now() ||
       a.expiresAt > Date.now() + 301000
    )
-      throw new Error('Download authorization was invalid.');
+      throw invalid();
    return { url: url.href, expiresAt: a.expiresAt as number, transport: proxy ? ('authenticated-proxy' as const) : ('versioned-presigned' as const) };
+}
+
+/** Bounded metadata check, never buffer the archive or follow an ingress rewrite. */
+export async function checkReliableContent(url: string, sha256: string, bytes: number, signal?: AbortSignal) {
+   const response = await fetch(url, { method: 'HEAD', credentials: 'include', redirect: 'manual', cache: 'no-store', signal });
+   if (response.redirected || response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+      await response.body?.cancel();
+      throw new DownloadFailure('Download service redirected unexpectedly. Check your session or the access gateway.', 'protocol', false);
+   }
+   if (response.status !== 200) {
+      await response.body?.cancel();
+      throw responseFailure(response);
+   }
+   if (
+      !/^application\/x-tar(?:\s*;|$)/i.test(response.headers.get('Content-Type') || '') ||
+      !/^attachment;\s*filename="[a-zA-Z0-9._-]+\.tar"$/i.test(response.headers.get('Content-Disposition') || '') ||
+      response.headers.get('Content-Length') !== String(bytes) ||
+      response.headers.get('X-Archive-SHA256') !== sha256 ||
+      response.headers.get('ETag') !== `"sha256-${sha256}"` ||
+      response.headers.get('Accept-Ranges') !== 'bytes'
+   ) {
+      await response.body?.cancel();
+      throw new DownloadFailure('Download metadata could not be verified. Check export status or the access gateway.', 'protocol', false, response.status);
+   }
+}
+
+/** Browser-owned attachment: no full-body fetch/blob, and no React route navigation. */
+export function startReliableTransfer(url: string) {
+   const link = document.createElement('a');
+   link.href = url;
+   link.download = '';
+   link.referrerPolicy = 'no-referrer';
+   // External versioned destinations may ignore download=; keep the app open.
+   link.target = '_blank';
+   link.rel = 'noopener noreferrer';
+   document.body.appendChild(link);
+   try {
+      link.click();
+   } finally {
+      link.remove();
+   }
 }

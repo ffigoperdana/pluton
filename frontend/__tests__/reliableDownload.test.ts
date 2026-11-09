@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { reliableRequest, reliableAuthorization, reliableActive } from '../src/utils/reliableDownload.ts';
+import { reliableRequest, reliableAuthorization, reliableActive, checkReliableContent } from '../src/utils/reliableDownload.ts';
 const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
    snapshotId = 'a'.repeat(64);
 const job = () => ({
@@ -267,3 +267,60 @@ test('nonversioned authorization permits only the exact authenticated same-origi
       globalThis.fetch = before;
    }
 });
+
+const contentHeaders = () => ({
+   'Content-Type': 'application/x-tar',
+   'Content-Disposition': 'attachment; filename="backup-example.tar"',
+   'Content-Length': '2048',
+   'X-Archive-SHA256': 'c'.repeat(64),
+   ETag: `"sha256-${'c'.repeat(64)}"`,
+   'Accept-Ranges': 'bytes',
+});
+test('authorization redirect is explicit and permanent; malformed grants never become connection errors', async () => {
+   const before = fetch;
+   try {
+      for (const result of [undefined, null, 'private-response', {}, { url: 42 }]) {
+         globalThis.fetch = async () => Response.json({ success: true, result });
+         await assert.rejects(reliableAuthorization('https://example.internal/api', 'backup-01', id, 'c'.repeat(64), 2048),
+            (e: any) => e.kind === 'protocol' && !e.transient && !e.message.includes('private-response'));
+      }
+      globalThis.fetch = async (_url, options) => {
+         assert.equal(options?.redirect, 'manual');
+         return new Response(null, { status: 303, headers: { Location: '/login' } });
+      };
+      await assert.rejects(reliableAuthorization('https://example.internal/api', 'backup-01', id, 'c'.repeat(64), 2048),
+         (e: any) => e.kind === 'protocol' && !e.transient && e.message.includes('redirected unexpectedly'));
+   } finally { globalThis.fetch = before; }
+});
+test('native proxy precheck uses HEAD only, session cookies, no cache, and never follows an ingress redirect', async () => {
+   const before = fetch;
+   globalThis.fetch = async (_url, options) => {
+      assert.equal(options?.method, 'HEAD');
+      assert.equal(options?.credentials, 'include');
+      assert.equal(options?.redirect, 'manual');
+      assert.equal(options?.cache, 'no-store');
+      return new Response(null, { headers: contentHeaders() });
+   };
+   try { await checkReliableContent('https://example.internal/api/content', 'c'.repeat(64), 2048); }
+   finally { globalThis.fetch = before; }
+});
+for (const field of Object.keys(contentHeaders()))
+   test(`native proxy precheck rejects missing or changed ${field}`, async () => {
+      const before = fetch;
+      try {
+         for (const value of [undefined, 'private-gateway-body']) {
+            const headers: Record<string, string> = contentHeaders();
+            if (value === undefined) delete headers[field]; else headers[field] = value;
+            globalThis.fetch = async () => new Response(null, { headers });
+            await assert.rejects(checkReliableContent('https://example.internal/api/content', 'c'.repeat(64), 2048), (e: Error) =>
+               e.message.includes('metadata could not be verified') && !e.message.includes('private-gateway-body'));
+         }
+      } finally { globalThis.fetch = before; }
+   });
+for (const status of [200, 206, 303, 401, 403, 405, 409, 416, 429, 503])
+   test(`native proxy precheck rejects HTML/redirect or failed HTTP ${status} without exposing it`, async () => {
+      const before = fetch;
+      globalThis.fetch = async () => new Response(null, { status, headers: { 'Content-Type': 'text/html', Location: '/login' } });
+      try { await assert.rejects(checkReliableContent('https://example.internal/api/content', 'c'.repeat(64), 2048)); }
+      finally { globalThis.fetch = before; }
+   });

@@ -34,6 +34,7 @@ import {
 } from '../../src/utils/managedExport/ExportDiagnostics';
 import { ExportKeyError } from '../../src/utils/managedExport/ExportKeyring';
 import { VerificationTrace } from '../../src/utils/managedExport/ExportVerification';
+import { registerSpaFallback } from '../../src/utils/spaFallback';
 import type { ManagedExportSummary } from '../../src/utils/restic/ManagedExportPolicy';
 
 jest.mock('../../src/utils/logger', () => ({ planLogger: () => ({ info: jest.fn() }) }));
@@ -1533,6 +1534,8 @@ describe('authenticated Range proxy and authorization boundaries', () => {
 		const app = express();
 		app.use(express.json());
 		app.use('/api/backups', createManagedExportRouter(new ManagedExportController(h.service)));
+		fs.writeFileSync(path.join(path.dirname(h.file), 'index.html'), '<h1>SPA fixture</h1>');
+		registerSpaFallback(app, path.dirname(h.file));
 		const cookie = (user: string) =>
 			`token=${jwt.sign({ user }, configService.config.SECRET!, { expiresIn: '2m' })}`;
 		try {
@@ -1555,6 +1558,72 @@ describe('authenticated Range proxy and authorization boundaries', () => {
 			const id = created.body.result.id,
 				url = `${route}/${id}`;
 			await until(() => h.store.get(id)?.state === 'ready');
+			h.store.update(id, { integrityMode: 'application-encrypted-hcp' });
+			// Browser navigation headers must not change API routing or session ownership.
+			const navigation = await api
+				.get(url + '/link')
+				.set('Cookie', cookie('fixture-admin'))
+				.set('Accept', 'text/html,application/xhtml+xml')
+				.set('Sec-Fetch-Mode', 'navigate')
+				.set('Sec-Fetch-Dest', 'document');
+			expect(navigation.status).toBe(303);
+			expect(navigation.headers.location).toBe(url + '/content');
+			expect(navigation.headers['cache-control']).toContain('no-store');
+			expect(navigation.headers['referrer-policy']).toBe('no-referrer');
+			const redirected = await api
+				.get(url + '/link')
+				.set('Cookie', cookie('fixture-admin'))
+				.redirects(1)
+				.buffer(true)
+				.parse((res, done) => {
+					const chunks: Buffer[] = [];
+					res.on('data', chunk => chunks.push(Buffer.from(chunk)));
+					res.on('end', () => done(null, Buffer.concat(chunks)));
+					res.on('error', done);
+				});
+			expect(redirected.status).toBe(200);
+			expect(redirected.headers['content-type']).toBe('application/x-tar');
+			expect(redirected.headers['content-disposition']).toMatch(
+				/^attachment; filename="backup-.*\.tar"$/
+			);
+			expect(redirected.body).toEqual(data);
+			expect(crypto.createHash('sha256').update(redirected.body).digest('hex')).toBe(
+				summary.archiveSha256
+			);
+			expect((await api.get(url + '/content/unknown').set('Accept', 'text/html')).status).toBe(404);
+			expect((await api.get(url + '/link')).headers['content-type']).toContain('json');
+			expect((await api.get(url + '/link').set('Cookie', 'token=invalid')).status).toBe(401);
+			expect(
+				(
+					await api
+						.get(url + '/link')
+						.set(
+							'Cookie',
+							`token=${jwt.sign({ user: 'fixture-admin' }, configService.config.SECRET!, { expiresIn: -1 })}`
+						)
+				).status
+			).toBe(401);
+			h.storage.identity.mockRejectedValueOnce(new TemporaryExportError('storage-unavailable'));
+			const rejected = await api
+				.post(url + '/authorization')
+				.set('Cookie', cookie('fixture-admin'))
+				.send({});
+			expect(rejected.status).toBe(409);
+			expect(rejected.body.reason).toBe('storage-unavailable');
+			expect(rejected.headers.location).toBeUndefined();
+			expect(h.store.get(id)!.state).toBe('ready');
+			const renewed = await api
+				.post(url + '/authorization')
+				.set('Cookie', cookie('fixture-admin'))
+				.send({});
+			expect(renewed.status).toBe(200);
+			expect(renewed.body.result).toMatchObject({
+				url: url + '/content',
+				transport: 'authenticated-proxy',
+				bytes: data.length,
+				sha256: summary.archiveSha256,
+			});
+			expect(h.storage.authorize).not.toHaveBeenCalled();
 			for (const suffix of ['', '/authorization', '/link', '/content']) {
 				const r =
 					suffix === '/authorization'
@@ -1601,6 +1670,11 @@ describe('authenticated Range proxy and authorization boundaries', () => {
 						.send({ key: 'foreign' })
 				).status
 			).toBe(400);
+			h.store.update(id, { expiresAt: Date.now() - 1000 });
+			const expired = await api.get(url + '/link').set('Cookie', cookie('fixture-admin'));
+			expect(expired.status).toBe(409);
+			expect(expired.body.reason).toBe('expired');
+			expect(expired.headers.location).toBeUndefined();
 		} finally {
 			await h.close();
 		}
