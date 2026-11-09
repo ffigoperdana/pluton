@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { API_URL } from '../../../utils/constants';
 import type { DownloadMode } from '../../../utils/downloadPreparation';
-import { reliableAuthorization, reliableActive, reliableFailure } from '../../../utils/reliableDownload';
+import { reliableAuthorization, reliableActive, reliableFailure, checkReliableContent, startReliableTransfer } from '../../../utils/reliableDownload';
 import { downloadBytes, downloadDuration, downloadStep, uploadPercent } from '../../../utils/downloadProgress';
 import { useExportActivity } from '../../../hooks/useExportActivity';
 import { activityKey, readinessMessages } from '../../../utils/exportActivity';
@@ -35,15 +35,10 @@ export default function ReliableDownload({backupId,
    const job = manager.find(backupId, mode, selectedId);
    const error = activity.error;
    const [authorizationError, setAuthorizationError] = useState('');
+   const [downloadRequested, setDownloadRequested] = useState(false);
    const actionError = activity.denials[key]?.message || authorizationError;
    const [authorizing, setAuthorizing] = useState(false);
    const authorizationController = useRef<AbortController>();
-   useEffect(
-      () => () => {
-         authorizationController.current?.abort();
-      },
-      [],
-   );
    const busy = activity.pending.includes(key) || authorizing;
    const refresh = () => {
       void manager.refresh();
@@ -61,6 +56,16 @@ export default function ReliableDownload({backupId,
    const [confirm, setConfirm] = useState(false);
    const [clock, setClock] = useState(() => Date.now());
    const [authorization, setAuthorization] = useState<{ url: string; expiresAt: number; transport?: string }>();
+   useEffect(() => {
+      setAuthorization(undefined);
+      setAuthorizationError('');
+      setDownloadRequested(false);
+      setAuthorizing(false);
+      return () => {
+         authorizationController.current?.abort();
+         authorizationController.current = undefined;
+      };
+   }, [backupId, job?.id]);
    const active = !!job && reliableActive(job);
    const jobId = job?.id;
    const optionsLocked = busy || (!loaded && !error) || active || !!job?.cleanupPending;
@@ -99,20 +104,32 @@ export default function ReliableDownload({backupId,
                       : job
                         ? 'Working normally'
                         : 'Requesting reliable export…';
-   const prefix = job ? API_URL + '/backups/' + encodeURIComponent(backupId) + '/exports/' + encodeURIComponent(job.id) : '';
-   const authorize = async () => {
+   const authorize = async (download = false) => {
       if (!job?.summary || authorizationController.current) return;
       const stop = new AbortController();
       authorizationController.current = stop;
       setAuthorizing(true);
       setAuthorizationError('');
+      setDownloadRequested(false);
+      const deadline = setTimeout(() => stop.abort(), 35000);
       try {
          const value = await reliableAuthorization(API_URL, backupId, job.id, job.summary.archiveSha256, job.summary.archiveBytes, stop.signal);
-         if (!stop.signal.aborted) setAuthorization(value);
-      } catch (failure) {
-         if (!stop.signal.aborted) setAuthorizationError(downloadFailure(failure).message);
-      } finally {
+         stop.signal.throwIfAborted();
+         if (download && value.transport === 'authenticated-proxy')
+            await checkReliableContent(value.url, job.summary.archiveSha256, job.summary.archiveBytes, stop.signal);
          if (!stop.signal.aborted) {
+            setAuthorization(value);
+            if (download) {
+               startReliableTransfer(value.url);
+               setDownloadRequested(true);
+            }
+         }
+      } catch (failure) {
+         if (authorizationController.current === stop)
+            setAuthorizationError(downloadFailure(stop.signal.aborted ? new DOMException('Timed out', 'TimeoutError') : failure).message);
+      } finally {
+         clearTimeout(deadline);
+         if (authorizationController.current === stop) {
             authorizationController.current = undefined;
             setAuthorizing(false);
          }
@@ -278,9 +295,15 @@ export default function ReliableDownload({backupId,
          </div>
          {job?.state === 'ready' && job.summary && (
             <div className={styles.ready}>
-               <a className={styles.primaryDownload} href={prefix + '/link'} referrerPolicy="no-referrer">
+               <button type="button" className={styles.primaryDownload} disabled={busy} onClick={() => void authorize(true)}>
                   Download Verified TAR
-               </a>
+               </button>
+               {downloadRequested && (
+                  <p role="status">
+                     Download requested. Check your browser's Downloads for transfer progress or errors. This panel cannot confirm that the file has
+                     finished downloading. Closing this window does not cancel the server export.
+                  </p>
+               )}
                <p>Size: {downloadBytes(job.summary.archiveBytes)} · Integrity: complete object size and SHA-256 verified.</p>
                <p>
                   Included: {job.summary.includedEntries.toLocaleString()} · Excluded: {job.summary.excludedEntries.toLocaleString()}.

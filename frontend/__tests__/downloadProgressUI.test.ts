@@ -241,12 +241,13 @@ test('reopening recovers job with GET; indeterminate preparation, verification a
    value = ready('backup-reopen');
    await ui.tick(2000);
    assert.equal(ui.document.querySelector('progress')?.getAttribute('value'), '100');
-   const link = ui.document.querySelector('a[href$="/link"]');
+   const link = ui.find('Download Verified TAR');
+   assert(link);
    unavailable = true;
    await act(async () => ui.document.defaultView!.dispatchEvent(new ui.document.defaultView!.Event('focus')));
    await ui.tick(5000);
    assert.match(ui.text(), /reconnecting/);
-   assert.equal(ui.document.querySelector('a[href$="/link"]'), link);
+   assert.equal(ui.find('Download Verified TAR'), link);
    assert(!ui.find('Get or renew resume link').disabled);
    assert.equal(methods.filter((m) => m === 'POST').length, 1);
    assert.equal(ui.document.querySelector('[aria-current="step"]')?.textContent, 'Ready to download');
@@ -458,4 +459,41 @@ test('slow storage uses calm waiting wording; later progress and failed verifica
    assert.match(ui.text(), /Last recorded failure: DeleteObject/);
    assert(!ui.text().includes('Download Verified TAR'));
    assert(!ui.text().includes('Cleanup is currently pending.'));
+});
+
+test('closing the Ready panel aborts a pending authorization and ignores a stale response without starting a transfer or new export', async (t) => {
+   const backupId = 'backup-stale-authorization', value = ready(backupId);
+   let resolveAuthorization: (response: Response) => void, signal: AbortSignal | undefined;
+   let posts = 0, heads = 0;
+   const ui = await harness(t, backupId, async (url, options) => {
+      if (String(url).endsWith('/activity')) return response({
+         jobs: [{ backupId, planId: 'plan-01', job: value }],
+         readiness: { configured: true, admissionAllowed: true, preflight: 'GO', reason: 'ready' },
+      });
+      if (String(url).endsWith('/authorization')) {
+         posts++;
+         signal = options?.signal as AbortSignal;
+         // Deliberately ignore cancellation to prove stale-result rejection.
+         return new Promise<Response>((resolve) => { resolveAuthorization = resolve; });
+      }
+      if (options?.method === 'HEAD') heads++;
+      assert(!String(url).endsWith('/exports'), 'Must never admit another export.');
+      return standard();
+   }, true);
+   let transfers = 0;
+   t.mock.method(ui.document.defaultView!.HTMLAnchorElement.prototype, 'click', () => { transfers++; });
+   await ui.reliable();
+   await ui.click('Download Verified TAR');
+   assert.equal(posts, 1);
+   assert(ui.find('Download Verified TAR').disabled);
+   await ui.navigate();
+   assert(signal?.aborted);
+   await act(async () => resolveAuthorization!(response({
+      transport: 'authenticated-proxy', url: `/api/backups/${backupId}/exports/${value.id}/content`,
+      expiresAt: Date.now() + 60000, bytes: value.summary.archiveBytes, sha256: value.summary.archiveSha256,
+   })));
+   assert.equal(heads, 0);
+   assert.equal(transfers, 0);
+   assert.equal(posts, 1);
+   assert(!ui.text().includes('Download requested.'));
 });
