@@ -179,6 +179,7 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 			expect(Object.keys(session).sort()).toEqual([
 				'archive',
 				'diff',
+				'dump',
 				'files',
 				'restore',
 				'snapshot',
@@ -396,6 +397,38 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 		});
 		destination.end();
 	});
+	it('streams only the exact canonical selected path with fixed read-only dump arguments', async () => {
+		responses.push({ stdout: Buffer.from('selected') });
+		const { destination, chunks } = sink();
+		await new ManagedSftpRepositorySession().withSession(access, session =>
+			session.dump!(id, '/srv/example-app/a %2e%2e.txt', destination)
+		);
+		expect(Buffer.concat(chunks).toString()).toBe('selected');
+		const args = (spawn as jest.Mock).mock.calls[1][1];
+		expect(args.slice(-5)).toEqual([
+			'dump',
+			'--archive',
+			'tar',
+			id,
+			'/srv/example-app/a %2e%2e.txt',
+		]);
+		expect(args).toEqual(expect.arrayContaining(['--no-lock', '--no-cache']));
+		expect(args).not.toContain('--json');
+		destination.end();
+	});
+	it.each(['/srv/../escape', '//srv/app', '/srv/app\\\\escape'])(
+		'refuses unsafe selected dump path %s before a Restic process',
+		async selected => {
+			const { destination } = sink();
+			await expect(
+				new ManagedSftpRepositorySession().withSession(access, session =>
+					session.dump!(id, selected, destination)
+				)
+			).rejects.toBeDefined();
+			expect((spawn as jest.Mock).mock.calls).toHaveLength(1); // credential obscuring only
+			destination.end();
+		}
+	);
 	it.each([
 		[1, 'archive-failed'],
 		[12, 'wrong-password'],

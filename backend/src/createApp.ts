@@ -116,7 +116,7 @@ import {
 import { configureReplicaScopeResolver } from './utils/managedReplicationPolicy';
 import { McpStore } from './mcp/McpStore';
 import { OperationalReadService } from './mcp/OperationalReadService';
-import { mcpConfig } from './mcp/authorization';
+import { mcpConfig, mcpConfigurationStatus } from './mcp/authorization';
 import {
 	createMcpGateway,
 	createMcpAdminRouter,
@@ -470,7 +470,13 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	app.use('/api/database-restores', createDatabaseRestoreRouter(databaseRestoreService));
 	app.use(
 		'/api/mcp-admin',
-		createMcpAdminRouter(mcpStore, mcpBrowserAdministrator, mcpSettings, mcpActions)
+		createMcpAdminRouter(
+			mcpStore,
+			mcpBrowserAdministrator,
+			mcpSettings,
+			mcpActions,
+			mcpConfigurationStatus(configService.config)
+		)
 	);
 	app.use(databaseRestoreInputError);
 

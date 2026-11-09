@@ -4,6 +4,7 @@ import os from 'os';
 import {
 	SnapshotComparison,
 	SnapshotComparisonCache,
+	comparisonFailure,
 	type SnapshotDiffRecord,
 } from '../../../src/utils/restic/SnapshotComparison';
 const binding = {
@@ -41,6 +42,33 @@ describe('verified bounded snapshot comparisons', () => {
 		comparison = undefined;
 		await fs.rm(root, { recursive: true, force: true });
 	});
+	test('multi-GiB file size is metadata, not a content buffer or comparison size cap', async () => {
+		comparison = new SnapshotComparison(path.join(root, 'large.sqlite'), binding);
+		const rows = [{ ...node('database.sql'), size: 8 * 1024 ** 3 }, node('config')];
+		await comparison.populate(
+			index(rows, 2),
+			index(rows, 2),
+			diff([{ path: '/srv/database.sql', modifier: 'M' }]),
+			new AbortController().signal
+		);
+		expect(comparison.summary()).toMatchObject({ modified: 1, unchanged: 1 });
+		expect(comparison.page({ path: '/srv' }).files.find(f => f.name === 'database.sql')?.size).toBe(
+			8 * 1024 ** 3
+		);
+	});
+	test('failure categories are fixed and never copy provider details', () => {
+		for (const [error, expected] of [
+			[{ code: 'timeout' }, 'timeout'],
+			[{ code: 'SQLITE_FULL' }, 'resource-limit'],
+			[{ statusCode: 429 }, 'busy'],
+			[{ code: 'invalid-output' }, 'metadata-invalid'],
+			[{ statusCode: 409 }, 'binding-mismatch'],
+			[{ code: 'wrong-password' }, 'repository-unavailable'],
+			[{ message: 'private-provider-body', code: 'private-provider-body' }, 'unavailable'],
+		] as const)
+			expect(comparisonFailure(error)).toBe(expected);
+	});
+
 	test('identical snapshots become unchanged only after authoritative diff completion', async () => {
 		comparison = new SnapshotComparison(path.join(root, 'index.sqlite'), binding);
 		const rows = [node('same.txt'), node('folder', 'dir')];
@@ -184,6 +212,30 @@ describe('verified bounded snapshot comparisons', () => {
 		expect(() => comparison!.page({ limit: 201 })).toThrow();
 		expect(() => comparison!.page({ path: '/srv/../escape' })).toThrow();
 	}, 30000);
+
+	test('a late successful callback after the bounded deadline never becomes Ready and exposes only safe timeout diagnostics', async () => {
+		const cache = new SnapshotComparisonCache(path.join(root, 'deadline-jobs'));
+		const deadline = new AbortController();
+		const timeout = jest.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal);
+		try {
+			await cache.start('late', binding, async (value, signal) => {
+				await value.populate(index([node('same')], 1), index([node('same')], 1), diff([]), signal);
+				deadline.abort(new DOMException('synthetic-private-detail', 'TimeoutError'));
+			});
+			const until = Date.now() + 10000;
+			while (cache.status('late').state === 'preparing') {
+				if (Date.now() > until) throw new Error('Comparison did not settle.');
+				await new Promise<void>(resolve => setImmediate(resolve));
+			}
+			const result = cache.status('late');
+			expect(result).toMatchObject({ state: 'failed', failureCategory: 'timeout' });
+			expect(result.summary).toBeUndefined();
+			expect(JSON.stringify(result)).not.toContain('synthetic-private-detail');
+		} finally {
+			timeout.mockRestore();
+			await cache.close();
+		}
+	});
 	test('one worker, cached reuse, cancellation, retry and cleanup are enforced', async () => {
 		const cache = new SnapshotComparisonCache(path.join(root, 'jobs'));
 		let entered!: () => void;

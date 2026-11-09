@@ -41,6 +41,11 @@ export class BackupService {
 		private readonly managedReplications?: ManagedReplicationService,
 		private readonly recoveryTests?: RecoveryTestStore
 	) {}
+	async downloadSnapshotItem(...args: Parameters<RemoteRepositoryRecoveryService['downloadItem']>) {
+		if (!this.remoteRecovery)
+			throw new AppError(501, 'Selected snapshot downloads are unavailable.');
+		return this.remoteRecovery.downloadItem(...args);
+	}
 	async snapshotDetails(backupId: string) {
 		const backup = await this.backupStore.getById(backupId);
 		if (!backup) throw new NotFoundError('Backup not found.');

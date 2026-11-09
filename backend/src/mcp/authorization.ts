@@ -49,6 +49,54 @@ export function mcpConfig(env: {
 		return undefined;
 	}
 }
+export type McpConfigurationStatus = {
+	configured: boolean;
+	nativeTokensRequested: boolean;
+	resourceUrlPresent: boolean;
+	reason:
+		| 'ready'
+		| 'resource-url-missing'
+		| 'resource-url-invalid'
+		| 'authentication-not-configured'
+		| 'oauth-incomplete'
+		| 'oauth-url-invalid';
+};
+/** Read-only fixed diagnostics. Never expose rejected URLs, credentials or environment values. */
+export function mcpConfigurationStatus(
+	env: Parameters<typeof mcpConfig>[0]
+): McpConfigurationStatus {
+	const config = mcpConfig(env);
+	let reason: McpConfigurationStatus['reason'] = 'ready';
+	if (!env.MCP_RESOURCE_URL) reason = 'resource-url-missing';
+	else {
+		try {
+			const url = new URL(env.MCP_RESOURCE_URL);
+			if (
+				url.protocol !== 'https:' ||
+				url.username ||
+				url.password ||
+				url.search ||
+				url.hash ||
+				url.href !== env.MCP_RESOURCE_URL ||
+				url.pathname !== '/mcp'
+			)
+				reason = 'resource-url-invalid';
+		} catch {
+			reason = 'resource-url-invalid';
+		}
+		if (reason === 'ready' && !!env.MCP_OAUTH_ISSUER !== !!env.MCP_OAUTH_JWKS_URL)
+			reason = 'oauth-incomplete';
+		if (reason === 'ready' && env.MCP_NATIVE_TOKENS_ENABLED !== 'true' && !env.MCP_OAUTH_ISSUER)
+			reason = 'authentication-not-configured';
+		if (reason === 'ready' && !config) reason = 'oauth-url-invalid';
+	}
+	return {
+		configured: !!config,
+		nativeTokensRequested: env.MCP_NATIVE_TOKENS_ENABLED === 'true',
+		resourceUrlPresent: !!env.MCP_RESOURCE_URL,
+		reason,
+	};
+}
 /** Only a statically configured IdP is contacted. No token-controlled jku, x5u or issuer discovery. */
 export function createTokenVerifier(
 	config: McpConfig,

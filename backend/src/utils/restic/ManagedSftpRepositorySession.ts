@@ -7,6 +7,7 @@ import { Writable } from 'stream';
 import { pipeline } from 'stream/promises';
 import { z } from 'zod';
 import type { SnapshotDiffRecord } from './SnapshotComparison';
+import { managedSnapshotPath } from '../managedSnapshotPath';
 import { AppError } from '../AppError';
 import { getBinaryPath } from '../binaryPathResolver';
 import { killProcessTree } from '../processTree';
@@ -82,6 +83,8 @@ export interface ManagedRepositorySession {
 	restore(id: string, selectedFiles: string[], stagingPath: string): Promise<ManagedRestoreSummary>;
 	/** Full snapshot TAR only; no client-controlled path, format or command. */
 	archive(id: string, destination: Writable): Promise<void>;
+	/** Exact validated snapshot item only; files are raw, directories are TAR. */
+	dump?(id: string, itemPath: string, destination: Writable): Promise<void>;
 }
 
 export type ManagedSftpAccess = {
@@ -281,6 +284,24 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 							);
 							onRecord(record);
 						},
+						signal
+					);
+				},
+				dump: async (id, itemPath, destination) => {
+					checkId(id);
+					managedSnapshotPath(itemPath);
+					await this.streamArchive(
+						restic,
+						[
+							...prefix.filter(argument => argument !== '--json'),
+							'dump',
+							'--archive',
+							'tar',
+							id,
+							itemPath,
+						],
+						resticEnvironment,
+						destination,
 						signal
 					);
 				},

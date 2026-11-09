@@ -222,6 +222,124 @@ describe('Phase 4 remote managed repository recovery', () => {
 	});
 
 	const preparationIds = new Map<string, string>();
+	it('selected file uses the exact owned snapshot and no staging restore or full-export admission', async () => {
+		session.dump = jest.fn(async (_id, _selected, sink) => {
+			sink.write(Buffer.from('fixture'));
+		});
+		const chunks: Buffer[] = [];
+		const output = new Writable({
+			write(chunk, _encoding, done) {
+				chunks.push(Buffer.from(chunk));
+				done();
+			},
+		});
+		const headers = jest.fn();
+		await service.downloadItem(
+			'backup-01',
+			'/srv/example-app/index.txt',
+			output,
+			new AbortController().signal,
+			headers
+		);
+		expect(Buffer.concat(chunks).toString()).toBe('fixture');
+		expect(session.dump).toHaveBeenCalledWith(
+			snapshotId,
+			'/srv/example-app/index.txt',
+			expect.any(Writable)
+		);
+		expect(session.restore).not.toHaveBeenCalled();
+		expect(session.archive).not.toHaveBeenCalled();
+		expect(stores.restores.create).not.toHaveBeenCalled();
+		expect(headers).toHaveBeenCalledWith(expect.objectContaining({ length: 7 }));
+		output.end();
+	});
+
+	it('selected download HEAD reads no contents and admission remains bounded until live transfers release', async () => {
+		const outputs = Array.from(
+			{ length: 4 },
+			() =>
+				new Writable({
+					write(_chunk, _encoding, done) {
+						done();
+					},
+				})
+		);
+		const signal = new AbortController().signal;
+		session.dump = jest.fn();
+		await service.downloadItem(
+			'backup-01',
+			'/srv/example-app/index.txt',
+			outputs[0],
+			signal,
+			() => {},
+			true
+		);
+		expect(session.dump).not.toHaveBeenCalled();
+		let release!: () => void;
+		const hold = new Promise<void>(resolve => {
+			release = resolve;
+		});
+		let started = 0;
+		session.dump.mockImplementation(async (_id, _selected, sink) => {
+			started++;
+			await hold;
+			sink.write(Buffer.from('fixture'));
+		});
+		const pending = [1, 2].map(i =>
+			service.downloadItem('backup-01', '/srv/example-app/index.txt', outputs[i], signal, () => {})
+		);
+		try {
+			const deadline = Date.now() + 5000;
+			while (started !== 2) {
+				if (Date.now() > deadline) throw new Error('Selected downloads did not enter streaming.');
+				await new Promise<void>(resolve => setImmediate(resolve));
+			}
+			await expect(
+				service.downloadItem(
+					'backup-01',
+					'/srv/example-app/index.txt',
+					outputs[3],
+					signal,
+					() => {}
+				)
+			).rejects.toMatchObject({ statusCode: 429 });
+			expect(session.dump).toHaveBeenCalledTimes(2);
+		} finally {
+			release();
+			await Promise.all(pending);
+			for (const output of outputs) output.end();
+		}
+	});
+	it.each(['foreign-plan', 'changed-storage', 'failed-backup', 'wrong-snapshot'])(
+		'selected download refuses changed authority before contents: %s',
+		async mismatch => {
+			session.dump = jest.fn();
+			if (mismatch === 'foreign-plan') repository.planId = 'another-plan';
+			if (mismatch === 'changed-storage') backup.storageId = 'another-storage';
+			if (mismatch === 'failed-backup') backup.success = false;
+			if (mismatch === 'wrong-snapshot')
+				session.snapshot.mockResolvedValue({ id: 'b'.repeat(64), tags: [] } as any);
+			const output = new Writable({
+				write(_chunk, _encoding, done) {
+					done();
+				},
+			});
+			const headers = jest.fn();
+			await expect(
+				service.downloadItem(
+					'backup-01',
+					'/srv/example-app/index.txt',
+					output,
+					new AbortController().signal,
+					headers
+				)
+			).rejects.toBeDefined();
+			expect(session.dump).not.toHaveBeenCalled();
+			expect(headers).not.toHaveBeenCalled();
+			output.end();
+		}
+	);
+
 	it('missing previous identities/source scope remain Not compared and cross-plan predecessor injection is refused before session access', async () => {
 		stores.backups.comparisonCandidates = jest.fn(async () => []);
 		expect((await service.comparison('backup-01', 'status')).state).toBe('unavailable');

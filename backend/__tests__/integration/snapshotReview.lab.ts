@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import jwt from 'jsonwebtoken';
+import tar from 'tar-stream';
 import { configService } from '../../src/services/ConfigService';
 import { ManagedSftpRepositorySession } from '../../src/utils/restic/ManagedSftpRepositorySession';
 import { startLinkFixture } from './managedSymlinkRecovery.runtime';
@@ -38,6 +39,7 @@ const monitor = measureProcesses();
 let sftp: ReturnType<typeof spawn> | undefined,
 	app: Awaited<ReturnType<typeof startLinkFixture>> | undefined;
 const snapshots: Record<string, string> = {};
+const largeFixture = process.env.PLUTON_COMPARE_LARGE_FIXTURE === '1';
 const fileCount = process.argv[2] === 'small' ? 3 : 100005;
 let archives = 0,
 	diffs = 0;
@@ -51,6 +53,14 @@ try {
 	await fs.writeFile(path.join(source, 'modified.txt'), 'before\n');
 	await fs.writeFile(path.join(source, 'deleted.txt'), 'remove\n');
 	await fs.symlink('modified.txt', path.join(source, 'relative-link'));
+	if (largeFixture) {
+		const large = await fs.open(path.join(source, 'database.sql'), 'w');
+		try {
+			await large.truncate(8 * 1024 ** 3);
+		} finally {
+			await large.close();
+		}
+	}
 	await command(['init']);
 	const backup = async (id: string) => {
 		snapshots[id] = JSON.parse(
@@ -78,6 +88,14 @@ try {
 	await fs.writeFile(path.join(source, 'new & 雪.txt'), 'added\n');
 	await fs.unlink(path.join(source, 'relative-link'));
 	await fs.symlink('new & 雪.txt', path.join(source, 'relative-link'));
+	if (largeFixture) {
+		const large = await fs.open(path.join(source, 'database.sql'), 'r+');
+		try {
+			await large.write(Buffer.from('changed synthetic database metadata fixture'));
+		} finally {
+			await large.close();
+		}
+	}
 	await backup('after');
 	const before = await hashTree(repository),
 		sourceBefore = await hashTree(source);
@@ -172,7 +190,7 @@ try {
 	const comparisonMs = Math.round(performance.now() - started);
 	assert.deepEqual(state.summary, {
 		added: 1,
-		modified: 1,
+		modified: largeFixture ? 2 : 1,
 		unchanged: fileCount,
 		deleted: 1,
 		addedLogicalBytes: 6,
@@ -193,6 +211,62 @@ try {
 	assert.equal(diffs, 1);
 	assert.equal(archives, 0);
 	assert.equal((await app.recovery.comparison('before', 'status')).state, 'unavailable');
+	// Real authenticated selected downloads use immutable snapshot data; HEAD
+	// checks identity without reading file contents or creating a restore/export.
+	const selected =
+		app.base +
+		'/after/files/download?path=' +
+		encodeURIComponent(path.join(source, 'modified.txt'));
+	assert.equal((await fetch(selected)).status, 401);
+	const head = await fetch(selected, { method: 'HEAD', headers });
+	assert.equal(head.status, 200);
+	assert.equal(head.headers.get('content-length'), '7');
+	assert.equal((await head.arrayBuffer()).byteLength, 0);
+	const raw = await fetch(selected, { headers });
+	assert.equal(raw.status, 200);
+	assert.equal(await raw.text(), 'after!\n');
+	assert.equal(
+		(
+			await fetch(
+				app.base + '/after/files/download?path=' + encodeURIComponent(source + '/../escape'),
+				{ headers }
+			)
+		).status,
+		400
+	);
+	assert.equal(
+		(
+			await fetch(
+				app.base + '/after/files/download?path=' + encodeURIComponent(source + '/relative-link'),
+				{ headers }
+			)
+		).status,
+		409
+	);
+	if (!largeFixture && fileCount === 3) {
+		const folder = await fetch(
+			app.base + '/after/files/download?path=' + encodeURIComponent(source),
+			{ headers }
+		);
+		assert.equal(folder.status, 200);
+		assert.equal(folder.headers.get('content-type'), 'application/x-tar');
+		const extract = tar.extract();
+		const entries: string[] = [];
+		extract.on('entry', (header, stream, next) => {
+			entries.push(header.name);
+			stream.on('end', next);
+			stream.resume();
+		});
+		const complete = new Promise<void>((resolve, reject) => {
+			extract.once('finish', resolve);
+			extract.once('error', reject);
+		});
+		extract.end(Buffer.from(await folder.arrayBuffer()));
+		await complete;
+		assert.equal(entries.length, fileCount + 3); // native dump excludes the selected root itself
+		assert(entries.every(name => name.startsWith(source.slice(1) + '/')));
+		assert(entries.includes(source.slice(1) + '/modified.txt'));
+	}
 	assert.deepEqual(await hashTree(repository), before);
 	assert.deepEqual(await hashTree(source), sourceBefore);
 	await command(['--no-lock', 'check', '--read-data']);
@@ -207,7 +281,8 @@ try {
 	console.log(
 		JSON.stringify({
 			event: 'snapshot_review_native_pass',
-			entries: fileCount + 3,
+			entries: fileCount + 3 + (largeFixture ? 1 : 0),
+			largeLogicalBytes: largeFixture ? 8 * 1024 ** 3 : 0,
 			admissionMs: Math.round(admissionMs),
 			comparisonMs,
 			archives,

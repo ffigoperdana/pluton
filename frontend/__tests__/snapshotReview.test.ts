@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { snapshotRequest, snapshotChangeLabel } from '../src/utils/snapshotReview.ts';
+import { snapshotRequest, snapshotChangeLabel, comparisonFailureMessage } from '../src/utils/snapshotReview.ts';
 const require = createRequire(new URL('../package.json', import.meta.url)),
    backendRequire = createRequire(new URL('../../backend/package.json', import.meta.url));
 const React = require('react'),
@@ -225,4 +225,17 @@ test('review transport suppresses provider errors and unknown classifications re
    } finally {
       globalThis.fetch = original;
    }
+});
+
+test('comparison failure notes separate resource, deadline and evidence errors without raw strings', () => {
+   for (const [failureCategory, pattern] of [
+      ['timeout', /deadline/],
+      ['resource-limit', /capacity/],
+      ['metadata-invalid', /inconsistent/],
+      ['repository-unavailable', /Repository access/],
+   ] as const)
+      assert.match(comparisonFailureMessage({ state: 'failed', failureCategory, failureCode: 'comparing-422' }), pattern);
+   const value = comparisonFailureMessage({ state: 'failed', failureCategory: 'captured-provider-secret', failureCode: 'captured-provider-secret' });
+   assert(!value.includes('captured-provider-secret'));
+   assert.equal(comparisonFailureMessage({ state: 'ready' }), '');
 });

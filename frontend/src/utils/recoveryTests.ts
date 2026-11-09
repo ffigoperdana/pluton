@@ -1,3 +1,4 @@
+import type { Backup } from '../@types/backups.ts';
 import type { RecoveryTest } from '../@types/recoveryTests.ts';
 export const recoveryStatusLabel = {
    queued: 'Queued',
@@ -30,4 +31,18 @@ export function recoveryActive(test?: RecoveryTest) {
 }
 export function canTestRecovery(backup: { status: string; inProgress?: boolean; completionStats?: { snapshot_id?: string } | null }) {
    return backup.status === 'completed' && !backup.inProgress && /^[a-f0-9]{64}$/.test(backup.completionStats?.snapshot_id || '');
+}
+
+/** Receipt presence, not present-day plan configuration; historical artifacts remain recoverable. */
+export function hasDatabaseArtifact(backup: Pick<Backup, 'completionStats'>) {
+   const receipt = backup.completionStats?.lifecycle;
+   const artifacts = receipt?.databases?.length ? receipt.databases : receipt?.database ? [receipt.database] : [];
+   return artifacts.some(
+      (item) =>
+         typeof item.path === 'string' &&
+         item.path.startsWith('/') &&
+         Number.isSafeInteger(item.bytes) &&
+         item.bytes >= 0 &&
+         /^[a-f0-9]{64}$/.test(item.sha256),
+   );
 }

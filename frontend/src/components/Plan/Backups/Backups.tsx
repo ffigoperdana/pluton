@@ -26,7 +26,7 @@ import MirrorStatusBadge from '../Mirrors/MirrorStatusBadge';
 import MirrorStorageSelectorModal from '../Mirrors/MirrorStorageSelectorModal';
 import { Modal } from '../..';
 import { useRecoveryAction, useRecoveryTests } from '../../../services/recoveryTests';
-import { canTestRecovery, recoveryActive, recoveryForBackup, recoveryStatusLabel } from '../../../utils/recoveryTests';
+import { canTestRecovery, hasDatabaseArtifact, recoveryActive, recoveryForBackup, recoveryStatusLabel } from '../../../utils/recoveryTests';
 import RecoveryResult from '../RecoveryTesting/RecoveryResult';
 import RecoveryConfirmation from '../RecoveryTesting/RecoveryConfirmation';
 import DatabaseRestoreWizard from '../../Restore/DatabaseRestore/DatabaseRestoreWizard';
@@ -384,7 +384,7 @@ const Backups = ({
                                     <Icon type="restore" size={14} /> Run Recovery Test
                                  </button>
                               )}
-                              {isRemoteManaged && canTestRecovery(snapshot) && (
+                              {isRemoteManaged && canTestRecovery(snapshot) && hasDatabaseArtifact(snapshot) && (
                                  <button
                                     onClick={() => {
                                        setRecoveryConfirmation({

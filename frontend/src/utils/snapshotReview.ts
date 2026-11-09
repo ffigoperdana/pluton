@@ -34,6 +34,8 @@ export type ComparisonStatus = {
    totalEntries?: number;
    elapsedMs?: number;
    reason?: string;
+   failureCode?: string;
+   failureCategory?: string;
    retryAfterMs?: number;
    currentBackupId?: string;
    previousBackupId?: string;
@@ -104,3 +106,27 @@ export function detailBackup(details: SnapshotDetails): Backup {
 }
 export const snapshotChangeLabel = (change?: string) =>
    ({ added: 'Added', modified: 'Modified', unchanged: 'Unchanged', deleted: 'Deleted' })[change || ''] || 'Not compared';
+
+export function comparisonFailureMessage(value?: ComparisonStatus) {
+   if (value?.state !== 'failed' && value?.state !== 'cancelled') return '';
+   const labels: Record<string, string> = {
+      timeout: 'Comparison reached its bounded deadline. Review repository latency and recorded progress before an explicit retry.',
+      cancelled: 'Comparison was cancelled. No completed comparison is available.',
+      busy: 'Repository or metadata work is busy. Wait for other work to finish, then retry explicitly.',
+      'resource-limit': 'Comparison metadata reached a cache, output, entry or disk-capacity limit. Review server resources.',
+      'metadata-invalid':
+         'Comparison evidence was incomplete, invalid or inconsistent. Ordinary browsing remains available; no unchanged result is assumed.',
+      'binding-mismatch': 'Snapshot identity or source/repository binding changed. Review the exact snapshot pair.',
+      'snapshot-unavailable': 'An exact snapshot in this comparison is unavailable.',
+      'repository-unavailable': 'Repository access failed. Check storage availability and the recorded server diagnostic category.',
+   };
+   const code = /^(preparing|indexing|comparing|ready)-(?:[45][0-9]{2}|sqlite|unavailable)$/.test(value.failureCode || '')
+      ? value.failureCode
+      : 'unavailable';
+   return (
+      (labels[value.failureCategory || ''] || 'Comparison did not complete. Review server diagnostics before retrying.') +
+      ' Diagnostic: ' +
+      code +
+      '.'
+   );
+}

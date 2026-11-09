@@ -72,7 +72,7 @@ const output = await backendRequire('esbuild').build({
             );
             stub(
                /[\\/]SnapshotViewerFile\.tsx$/,
-               'import React from "react";export default p=>React.createElement("button",{onClick:()=>p.file.isGoUp?p.onGoUp():p.file.isDirectory?p.onDirectoryClick(p.file.path):p.onRestore(p.file)},p.file.name);',
+               'import React from "react";export default p=>React.createElement(React.Fragment,{},React.createElement("button",{onClick:()=>p.file.isGoUp?p.onGoUp():p.file.isDirectory?p.onDirectoryClick(p.file.path):p.onRestore(p.file)},p.file.name),!p.file.isGoUp&&!p.historical&&p.renderFileActions?.(p.file,{fileExtension:"",isDirectory:p.file.isDirectory}));',
             );
          },
       },
@@ -446,10 +446,24 @@ test('deep navigation retains ancestor expansion with bounded requests and curre
    let calls = 0;
    const ui = await mount(async (input: any) => {
       calls++;
-      const url = new URL(input), parent = url.searchParams.get('path') || '';
+      const url = new URL(input),
+         parent = url.searchParams.get('path') || '';
       const depth = parent.split('/').filter(Boolean).length;
-      const name = `level-${depth}`, files = depth < 80 ? [{ name, path: `${parent}/${name}`, type: 'dir', isDirectory: true }] : [];
-      return Response.json({ success: true, result: { status: 'ready', files, total: files.length, offset: 0, limit: 200, nextOffset: null, entries: 100000, snapshotId: 'a'.repeat(64) } });
+      const name = `level-${depth}`,
+         files = depth < 80 ? [{ name, path: `${parent}/${name}`, type: 'dir', isDirectory: true }] : [];
+      return Response.json({
+         success: true,
+         result: {
+            status: 'ready',
+            files,
+            total: files.length,
+            offset: 0,
+            limit: 200,
+            nextOffset: null,
+            entries: 100000,
+            snapshotId: 'a'.repeat(64),
+         },
+      });
    });
    try {
       for (let depth = 0; depth < 80; depth++) await ui.click(`level-${depth}`);
@@ -457,7 +471,9 @@ test('deep navigation retains ancestor expansion with bounded requests and curre
       assert.equal(ui.dom.window.document.querySelectorAll('[aria-expanded="true"]').length >= 79, true);
       assert(calls <= 165, 'Each navigation fetches at most one file page and one directory page.');
       assert(ui.client.getQueryCache().getAll().length <= 1);
-   } finally { await ui.close(); }
+   } finally {
+      await ui.close();
+   }
 });
 
 // Advance only the application's 300 ms search debounce. Query notifications and
@@ -657,5 +673,61 @@ test('only an actual debounced search change resets a later page', async () => {
    } finally {
       await ui.close();
       clock.restore();
+   }
+});
+
+test('desktop and mobile selected download requires confirmation, HEAD access and native transfer without restore or POST', async () => {
+   for (const mobile of [false, true]) {
+      const requests: { url: URL; method: string }[] = [];
+      const ui = await mount(
+         async (input: any, options) => {
+            const url = new URL(input),
+               method = options?.method || 'GET';
+            requests.push({ url, method });
+            if (url.pathname.endsWith('/files/download')) {
+               assert.equal(method, 'HEAD');
+               return new Response(null, {
+                  headers: {
+                     'Content-Type': 'application/octet-stream',
+                     'Content-Length': '7',
+                     'Content-Disposition': 'attachment; filename="report.txt"',
+                  },
+               });
+            }
+            return Response.json({
+               success: true,
+               result: {
+                  status: 'ready',
+                  snapshotId: 'a'.repeat(64),
+                  files: [{ name: 'report.txt', path: '/srv/report.txt', type: 'file', isDirectory: false, size: 7, modifiedAt: '2026-01-01' }],
+                  entries: 1,
+                  total: 1,
+                  offset: 0,
+                  limit: 200,
+                  nextOffset: null,
+               },
+            });
+         },
+         false,
+         mobile,
+      );
+      const transfers: string[] = [];
+      ui.dom.window.HTMLAnchorElement.prototype.click = function () {
+         transfers.push(this.href);
+      };
+      try {
+         const button = ui.dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Download report.txt"]');
+         assert(button);
+         await act(async () => button.click());
+         assert.equal(requests.filter((r) => r.url.pathname.endsWith('/files/download')).length, 0);
+         await ui.click('Download');
+         assert.equal(requests.filter((r) => r.url.pathname.endsWith('/files/download')).length, 1);
+         assert.equal(transfers.length, 1);
+         assert.equal(new URL(transfers[0]).searchParams.get('path'), '/srv/report.txt');
+         assert.equal(ui.restores.length, 0);
+         assert(requests.every((r) => r.method !== 'POST'));
+      } finally {
+         await ui.close();
+      }
    }
 });

@@ -252,6 +252,43 @@ export class SnapshotComparison {
 	}
 }
 
+export type ComparisonFailureCategory =
+	| 'timeout'
+	| 'cancelled'
+	| 'busy'
+	| 'resource-limit'
+	| 'metadata-invalid'
+	| 'binding-mismatch'
+	| 'snapshot-unavailable'
+	| 'repository-unavailable'
+	| 'unavailable';
+export function comparisonFailure(error: unknown, timedOut = false): ComparisonFailureCategory {
+	const value = error as { code?: unknown; name?: unknown; statusCode?: unknown };
+	if (timedOut || value?.name === 'TimeoutError' || value?.code === 'timeout') return 'timeout';
+	if (value?.name === 'AbortError' || value?.code === 'cancelled') return 'cancelled';
+	if (value?.statusCode === 429 || value?.code === 'repository-busy') return 'busy';
+	if (
+		value?.statusCode === 413 ||
+		value?.statusCode === 507 ||
+		(typeof value?.code === 'string' &&
+			['SQLITE_FULL', 'SQLITE_NOMEM', 'SQLITE_TOOBIG', 'output-limit'].includes(value.code))
+	)
+		return 'resource-limit';
+	if (value?.statusCode === 422 || value?.code === 'invalid-output') return 'metadata-invalid';
+	if (value?.statusCode === 409) return 'binding-mismatch';
+	if (value?.statusCode === 404) return 'snapshot-unavailable';
+	if (
+		typeof value?.code === 'string' &&
+		[
+			'repository-unavailable',
+			'wrong-password',
+			'credentials-unavailable',
+			'execution-failed',
+		].includes(value.code)
+	)
+		return 'repository-unavailable';
+	return 'unavailable';
+}
 type Job = {
 	binding: ComparisonBinding;
 	state: 'preparing' | 'failed' | 'cancelled' | 'ready';
@@ -263,6 +300,7 @@ type Job = {
 	directory?: string;
 	reason?: string;
 	failureCode?: string;
+	failureCategory?: ComparisonFailureCategory;
 };
 export class SnapshotComparisonCache {
 	private jobs = new Map<string, Job>();
@@ -314,6 +352,7 @@ export class SnapshotComparisonCache {
 			summary: job.state === 'ready' ? job.index?.summary() : undefined,
 			reason: job.reason,
 			failureCode: job.failureCode,
+			failureCategory: job.failureCategory,
 			retryAfterMs: 2000,
 		};
 	}
@@ -361,6 +400,10 @@ export class SnapshotComparisonCache {
 		};
 		this.jobs.set(key, job);
 		job.done = (async () => {
+			const bounded = AbortSignal.any([
+				controller.signal,
+				AbortSignal.timeout(COMPARISON_LIMITS.deadlineMs),
+			]);
 			try {
 				await this.initialize();
 				const capacity = await fs.statfs(this.root);
@@ -370,14 +413,14 @@ export class SnapshotComparisonCache {
 				const file = path.join(job.directory, 'metadata.sqlite');
 				await fs.writeFile(file, '', { flag: 'wx', mode: 0o600 });
 				job.index = new SnapshotComparison(file, binding);
-				await populate(
-					job.index,
-					AbortSignal.any([controller.signal, AbortSignal.timeout(COMPARISON_LIMITS.deadlineMs)])
-				);
-				controller.signal.throwIfAborted();
+				await populate(job.index, bounded);
+				bounded.throwIfAborted();
 				job.state = 'ready';
 			} catch (error) {
 				job.state = controller.signal.aborted ? 'cancelled' : 'failed';
+				job.failureCategory = controller.signal.aborted
+					? 'cancelled'
+					: comparisonFailure(error, bounded.aborted);
 				job.failureCode = `${job.index?.phase || 'preparing'}-${error instanceof AppError ? error.statusCode : error instanceof Error && error.name === 'SqliteError' ? 'sqlite' : 'unavailable'}`;
 				job.reason =
 					'Comparison unavailable; ordinary browsing remains available. Retry comparison.';

@@ -9,6 +9,7 @@ export type McpOverview = {
    disabledTools: string[];
    endpoint: string | null;
    configured: boolean;
+   configuration?: { configured: boolean; nativeTokensRequested: boolean; resourceUrlPresent: boolean; reason: string };
    health: string;
    configuredClients: number;
    recentlyActive: number | null;

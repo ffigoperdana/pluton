@@ -124,6 +124,24 @@ describe('Persistent MySQL service lifecycle and immutable binding', () => {
 		await service.idle();
 		return result.id;
 	};
+	it('snapshot without database artifacts refuses database restore before probing targets or native workers', async () => {
+		recovery.testMetadata.mockResolvedValue({
+			planId: item.planId,
+			backupId: item.backupId,
+			snapshotId: item.snapshotId,
+			repositoryId: item.repositoryId,
+			databases: [],
+		});
+		const policy = jest.spyOn(targets, 'policy'),
+			list = jest.spyOn(targets, 'list');
+		await expect(
+			service.preview({ planId: item.planId, backupId: item.backupId, snapshotId: item.snapshotId })
+		).rejects.toMatchObject({ statusCode: 409 });
+		expect(policy).not.toHaveBeenCalled();
+		expect(list).not.toHaveBeenCalled();
+		expect(native.restore).not.toHaveBeenCalled();
+	});
+
 	it('automatic deletion waits for the complete Removed receipt, not the earlier native/public Removed state', async () => {
 		target.engine = target.target.engine = item.artifact.engine = 'mariadb';
 		target.mode = item.mode = 'internal';

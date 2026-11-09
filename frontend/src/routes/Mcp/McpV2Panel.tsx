@@ -185,7 +185,15 @@ function TokenForm({ initial, busy, save }: { initial: Token | 'new'; busy: bool
    );
 }
 
-export default function McpV2Panel({ enabled, endpoint }: { enabled: boolean; endpoint: string | null }) {
+export default function McpV2Panel({
+   enabled,
+   endpoint,
+   nativeTokensRequested,
+}: {
+   enabled: boolean;
+   endpoint: string | null;
+   nativeTokensRequested?: boolean;
+}) {
    const cache = useQueryClient();
    const [tokenOffset, setTokenOffset] = useState(0);
    const [actionOffset, setActionOffset] = useState(0);
@@ -296,8 +304,9 @@ export default function McpV2Panel({ enabled, endpoint }: { enabled: boolean; en
             </div>
             {!enabled && (
                <p>
-                  Native tokens are disabled in server configuration. Set MCP_NATIVE_TOKENS_ENABLED=true with an HTTPS MCP_RESOURCE_URL, restart, then
-                  enable the service above.
+                  {nativeTokensRequested
+                     ? 'The native-token flag is on, but server configuration is incomplete. Review the configuration message above.'
+                     : 'Set MCP_NATIVE_TOKENS_ENABLED=true and a valid HTTPS MCP_RESOURCE_URL, recreate the application container, then explicitly enable the service above.'}
                </p>
             )}
             <p>

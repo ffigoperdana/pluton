@@ -117,6 +117,48 @@ export class BackupController {
 		}
 	}
 
+	async downloadSnapshotItem(req: Request, res: Response): Promise<void> {
+		const request = this.downloadRequest(req, res);
+		const transfer = observeTransfer(res, 'standard');
+		try {
+			const query = z.strictObject({ path: z.string().min(1).max(1025) }).safeParse(req.query);
+			if (!query.success) throw new AppError(400, 'Select one exact snapshot path.');
+			managedSnapshotPath(query.data.path);
+			await this.backupService.downloadSnapshotItem(
+				req.params.id,
+				query.data.path,
+				transfer.output,
+				request.signal,
+				value => {
+					res.setHeader('Content-Type', value.contentType);
+					res.setHeader('Content-Disposition', 'attachment; filename="' + value.fileName + '"');
+					res.setHeader('Cache-Control', 'private, no-store');
+					res.setHeader('Accept-Ranges', 'none');
+					if (value.length !== undefined) res.setHeader('Content-Length', value.length);
+				},
+				req.method === 'HEAD'
+			);
+			if (!res.destroyed) res.end();
+			transfer.finish('origin-stream-complete');
+		} catch (error) {
+			transfer.finish(transferReason(error));
+			if (res.headersSent || res.destroyed) {
+				if (!res.destroyed) res.destroy();
+			} else {
+				res.removeHeader('Content-Type');
+				res.removeHeader('Content-Length');
+				res.removeHeader('Content-Disposition');
+				res.status(error instanceof AppError ? error.statusCode : 502).json({
+					success: false,
+					error: error instanceof AppError ? error.message : 'Selected snapshot download failed.',
+					...failureCode(error),
+				});
+			}
+		} finally {
+			request.cleanup();
+		}
+	}
+
 	async getBackupDownload(req: Request, res: Response): Promise<void> {
 		if (!req.params.id) {
 			res.status(400).json({
