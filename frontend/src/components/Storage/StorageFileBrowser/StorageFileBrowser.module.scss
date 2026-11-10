@@ -214,7 +214,8 @@
    }
 }
 
-.fileRow:hover .fileActions {
+.fileRow:hover .fileActions,
+.fileRow:focus-within .fileActions {
    opacity: 1;
 }
 

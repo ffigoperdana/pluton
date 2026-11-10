@@ -145,7 +145,12 @@ const LogViewer = ({ type = '', planMethod = 'backup', logs = [], planId, settin
          </div>
          {showPagination && !isLoading && (
             <div className={classes.pagination}>
-               <button onClick={() => handlePageChange(currentPage - 1)} disabled={currentPage === 1} className={classes.paginationButton}>
+               <button
+                  aria-label="Previous log page"
+                  onClick={() => handlePageChange(currentPage - 1)}
+                  disabled={currentPage === 1}
+                  className={classes.paginationButton}
+               >
                   <Icon type="arrow-left" size={16} />
                </button>
                {getPageNumbers().map((page) => (
@@ -157,7 +162,12 @@ const LogViewer = ({ type = '', planMethod = 'backup', logs = [], planId, settin
                      {page}
                   </button>
                ))}
-               <button onClick={() => handlePageChange(currentPage + 1)} disabled={currentPage === totalPages} className={classes.paginationButton}>
+               <button
+                  aria-label="Next log page"
+                  onClick={() => handlePageChange(currentPage + 1)}
+                  disabled={currentPage === totalPages}
+                  className={classes.paginationButton}
+               >
                   <Icon type="arrow-right" size={16} />
                </button>
             </div>

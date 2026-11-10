@@ -113,6 +113,7 @@ const PathPicker = ({ onUpdate, single = false, disallowChange = false, paths = 
                      {pathSlice === 'ep#' && <span className={classes.excludeCount}>Exclude</span>}
                      {!disallowChange && (
                         <button
+                           aria-label={`Remove ${p}`}
                            onClick={(e) => {
                               e.stopPropagation();
                               removePath(p);
@@ -243,7 +244,7 @@ const PathPicker = ({ onUpdate, single = false, disallowChange = false, paths = 
                   <div className={classes.pathPickerModalInner}>
                      <div className={classes.pathPickerHeader}>
                         <h4>Choose Paths/Files to Backup</h4>
-                        <button onClick={() => setShowPicker(false)}>
+                        <button aria-label="Close path picker" onClick={() => setShowPicker(false)}>
                            <Icon type="close" size={20} />
                         </button>
                      </div>

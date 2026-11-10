@@ -70,7 +70,7 @@ const RestoreWizard = ({ backupId, planId, deviceId, mirrors, planStorage, stagi
                <h3>
                   <Icon type="restore" size={16} /> Restore Backup
                </h3>
-               <button className={classes.close} onClick={() => !isLoading && close()}>
+               <button aria-label="Close restore wizard" className={classes.close} onClick={() => !isLoading && close()}>
                   <Icon type="close" size={24} />
                </button>
             </div>

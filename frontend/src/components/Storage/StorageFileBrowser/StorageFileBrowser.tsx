@@ -138,7 +138,7 @@ const StorageFileBrowser = ({ title, storageId, storageType, defaultPath, rootPa
                   {storageType && <img src={`/providers/${storageType}.png`} />}
                   {title}
                </h4>
-               <button onClick={() => close()}>
+               <button aria-label="Close file browser" onClick={() => close()}>
                   <Icon type="close" size={20} />
                </button>
             </div>
