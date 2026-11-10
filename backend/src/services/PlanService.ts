@@ -151,7 +151,7 @@ export class PlanService {
 		} = planData;
 
 		// Get Storage Details
-		validateReplicationSettings(settings?.replication);
+		validateReplicationSettings(settings?.replication, planData);
 		const planStorage: BackupPlanArgs['storage'] = await this.getStorageDetails(
 			planData.storage.id
 		);
@@ -185,7 +185,7 @@ export class PlanService {
 		}
 
 		// Fetch the device early so we can use its OS for cross-platform path sanitization.
-		// Without this, a Windows server would mangle Linux paths (e.g., /var/home → F:/var/home).
+		// Without this, a Windows server would mangle Linux paths (e.g., /var/home â†’ F:/var/home).
 		const device = isStorageSource ? null : await this.deviceStore.getById(sourceId);
 		if (!isStorageSource && !device) {
 			throw new NotFoundError('Source device not found');
@@ -317,6 +317,10 @@ export class PlanService {
 		if (!currentPlan) {
 			throw new NotFoundError('Plan not found.');
 		}
+		validateReplicationSettings(
+			planData.settings?.replication || currentPlan.settings.replication,
+			{ ...currentPlan, ...planData }
+		);
 		let databaseCredential: DatabaseCredential[] | undefined;
 		let previousCredential: DatabaseCredential[] = [];
 		const lifecycleSupplied =
@@ -369,7 +373,7 @@ export class PlanService {
 			throw error;
 		}
 
-		// The backup destination is immutable after a plan is created — the restic
+		// The backup destination is immutable after a plan is created â€” the restic
 		// repository and all its snapshots live there. Refuse any change.
 		if (parsedPlanData.storageId != null && parsedPlanData.storageId !== currentPlan.storageId) {
 			throw new AppError(
@@ -897,7 +901,7 @@ export class PlanService {
 			...replication,
 			storages: updatedStorages,
 			// Disable replication if no storages remain
-			...(updatedStorages.length === 0 && { enabled: false }),
+			...(updatedStorages.length === 0 && { enabled: false, recoveryPolicy: 'primary-only' as const }),
 		};
 		const updatedSettings = { ...plan.settings, replication: updatedReplication };
 		await this.planStore.update(planId, { settings: updatedSettings } as any);

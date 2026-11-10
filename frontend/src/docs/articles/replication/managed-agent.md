@@ -54,11 +54,11 @@ lama sebelum tujuan baru dan pemulihannya diterima.
 **Redundancy incomplete** berkaitan dengan mirrors backup exact, bukan quota
 storage atau jumlah plan yang memakai storage. Untuk bukti copy, bandingkan
 source snapshot/verification/last replicated snapshot di dialog; bila field
-evidence tidak tersedia jangan mengisinya dengan asumsi. Direct recovery dari
-managed mirror belum tersedia: recovery primer tidak menjadi bukti recovery
-replica. Runbook operator terpisah diperlukan sebelum mengandalkan replica saat
-primary hilang. Lihat [retention/restore](/docs/replication/retention-restore).
+evidence tidak tersedia jangan mengisinya dengan asumsi. Recovery primer bukan
+bukti recovery replika. Assisted Failover yang diaktifkan operator menyediakan
+file/directory/artefak SQL recovery ke staging privat dari replika terverifikasi,
+dengan approval sekali pakai dan pemeriksaan integrity. Plan lama tetap Primary Only. Lihat [retention/restore](/docs/replication/retention-restore).
 
 Contoh `app-01` dengan dua tujuan baru dinyatakan redundansinya lengkap bila kedua mirror **Completed** untuk backup yang diperiksa. Simpan bukti exact snapshot dan waktu verifikasi secara privat. RAM server 4 GiB bukan capacity result; ukur workload, queue wait, disk, dan memori tanpa menurunkan guard atau menambah concurrency.
 
-Physical cleanup/prune replika, Agent prune, serta direct mirror file/native database restore belum didukung. Detach mempertahankan data. Periksa [retention dan restore](/docs/replication/retention-restore) sebelum menghapus plan atau merencanakan recovery saat primary hilang. Interoperabilitas **HCP nyata belum diuji**; konfigurasi dan fixture otomatis tidak menggantikannya.
+Physical cleanup/prune replika, Agent prune, dan native database import dari replika belum didukung. Assisted Failover hanya menyediakan staging file/direktori/artefak SQL yang diverifikasi; tidak melakukan recovery destruktif ke target produksi. Detach mempertahankan data. Periksa [retention dan restore](/docs/replication/retention-restore) sebelum menghapus plan atau merencanakan recovery saat primary hilang. Interoperabilitas **HCP nyata belum diuji**; konfigurasi dan fixture otomatis tidak menggantikannya.

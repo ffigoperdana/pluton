@@ -155,6 +155,13 @@
       "when": 1792800000000,
       "tag": "0021_mcp_native_tokens_actions",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1794268800000,
+      "tag": "0022_assisted_recovery",
+      "breakpoints": true
     }
   ]
 }

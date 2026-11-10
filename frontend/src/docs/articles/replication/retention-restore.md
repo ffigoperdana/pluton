@@ -27,9 +27,13 @@ Pada Standard, dialog dapat menawarkan **Permanently delete this destination's o
 
 Pada Standard, browse/download dapat menawarkan **Primary** serta **Mirror** yang Completed. Pilih sumber yang benar, cocokkan backup/snapshot, lalu lakukan [browse](/docs/restore/browse) dan pemulihan staging sesuai kemampuan alur. Mirror gagal/pending tidak layak dipilih sebagai salinan selesai.
 
-Pada **Managed Agent**, file restore, browse/download melalui jalur managed, Recovery Testing, dan native database recovery tetap menggunakan repository utama yang dipercaya. **Direct mirror file restore dan native database restore belum didukung.** UI tidak menyediakan pemilihan mirror sebagai pengganti primary. Completed mirror membuktikan copy/artefak terverifikasi, bukan kemampuan pemulihan langsung melalui plan.
+Pada **Managed Agent**, plan lama tetap **Primary Only**. Browse/download, Recovery Testing otomatis, dan native database import tetap memakai primary. Salinan Completed bukan bukti bahwa recovery sudah diuji.
 
-Jika primary hilang, jangan mengedit mirror menjadi primary, mengubah binding, menyalinnya ke repository Legacy secara otomatis, atau menjanjikan tombol restore yang belum tersedia. Pertahankan data, credential, dan bukti snapshot; rencana pemulihan dari salinan tersebut memerlukan runbook terpisah yang ditinjau pada lingkungan uji. [Disaster recovery](/docs/operations/disaster-recovery) menjelaskan bukti yang harus dikumpulkan.
+Untuk recovery staging dari replika terverifikasi, aktifkan **Edit → Replication → Recovery & Failover → Assisted Failover** dengan tujuan S3 yang kompatibel. Restore memeriksa primary lebih dahulu. Kegagalan koneksi yang dapat diklasifikasikan aman akan memicu pemeriksaan read-only atas receipt, repository, mapping snapshot tujuan, ownership, tree, credential, dan TLS. Operator tetap harus memilih serta menyetujui **Continue with S3 Replica**. Kegagalan autentikasi, identitas, integrity, atau yang belum jelas tidak menurunkan pemeriksaan.
+
+Untuk uji tanpa mematikan primary, buka detail replika backup dan pilih **Check replica recovery**. Kosongkan path untuk snapshot penuh, atau masukkan exact path file/direktori/artefak SQL. Approval terikat snapshot, tujuan, selection, pemilik, dan staging privat, berlaku sepuluh menit dan sekali pakai. Hasil diperiksa dengan SHA-256 dan aman terhadap path escape/symlink. **Staging artefak SQL bukan native database import atau bukti aplikasi/database sudah pulih.**
+
+Tutup dialog atau refresh tidak membatalkan job. Buka Restore/detail replika pada backup yang sama untuk menemukan kembali state milik sesi yang sah melalui GET. Sesudah restart saat eksekusi, status uncertain tidak dijalankan ulang otomatis. Review lalu gunakan Cancel Recovery untuk cleanup lokal yang terikat job, atau Discard staged result setelah inspeksi. Jangan menukar mirror menjadi primary, mengubah binding, atau menghapus objek repository secara manual. Uji outage hanya pada plan disposable; primary produksi tidak perlu dimatikan.
 
 ## Verifikasi keputusan retention
 

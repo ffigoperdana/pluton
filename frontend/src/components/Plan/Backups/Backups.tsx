@@ -535,6 +535,7 @@ const Backups = ({
                backupId={showRestoreModal.id}
                deviceId={deviceId}
                stagingOnly={isRemoteManaged}
+               assisted={replicationSettings?.recoveryPolicy === 'assisted'}
                planStorage={storage}
                mirrors={
                   !isRemoteManaged &&
@@ -623,6 +624,7 @@ const Backups = ({
                planId={planId}
                isSync={isSync}
                stagingOnly={isRemoteManaged}
+               assisted={replicationSettings?.recoveryPolicy === 'assisted'}
                onClose={() => setShowSnapshotViewer(false)}
                mirrors={!isRemoteManaged && replicationSettings?.enabled ? showSnapshotViewer.mirrors : undefined}
                primaryStorage={!isRemoteManaged && replicationSettings?.enabled ? storage : undefined}

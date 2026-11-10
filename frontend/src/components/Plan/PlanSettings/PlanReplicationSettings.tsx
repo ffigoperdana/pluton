@@ -70,7 +70,7 @@ const PlanReplicationSettings = ({
    );
 
    const updateEnabled = (enabled: boolean) => {
-      onUpdate({ ...settings, enabled });
+      onUpdate({ ...settings, enabled, ...(!enabled && { recoveryPolicy: 'primary-only' }) });
    };
 
    const updateConcurrent = (concurrent: boolean) => {
@@ -144,7 +144,11 @@ const PlanReplicationSettings = ({
                onSuccess: () => {
                   // Remove the storage from local state and close modal
                   const updated = settings.storages.filter((s) => s.replicationId !== storageToRemove.replicationId);
-                  onUpdate({ ...settings, storages: updated, ...(updated.length === 0 && { enabled: false }) });
+                  onUpdate({
+                     ...settings,
+                     storages: updated,
+                     ...(updated.length === 0 && { enabled: false, recoveryPolicy: 'primary-only' as const }),
+                  });
                   setShowRemoveModal(false);
                   setRemoveStorageData(false);
                   deleteStorageMutation.reset();
@@ -177,6 +181,34 @@ const PlanReplicationSettings = ({
                      {managedAgent && ' The Pluton server performs the copy; the source Agent does not receive replica credentials.'}
                   </p>
                   {validationError && <p role="alert">{validationError}</p>}
+                  {managedAgent && (
+                     <fieldset>
+                        <legend>Recovery &amp; Failover</legend>
+                        <label>
+                           Recovery source policy
+                           <select
+                              value={settings.recoveryPolicy || 'primary-only'}
+                              onChange={(event) => onUpdate({ ...settings, recoveryPolicy: event.target.value as 'primary-only' | 'assisted' })}
+                           >
+                              <option value="primary-only">Primary Only (default)</option>
+                              <option
+                                 value="assisted"
+                                 disabled={
+                                    !settings.storages.length ||
+                                    settings.storages.some((storage) => !['s3', 's3compatible'].includes(storage.storageType))
+                                 }
+                              >
+                                 Assisted Failover (optional, recommended with verified replicas)
+                              </option>
+                           </select>
+                        </label>
+                        <p>
+                           Prefer primary SFTP. A verified S3 replica requires your explicit approval and restores only into isolated staging.
+                           Database import keeps its existing separate approval.
+                        </p>
+                     </fieldset>
+                  )}
+
                   {settings.storages.map((mirror, index) => (
                      <div key={mirror.addedAt || index} className={mirrorClasses.mirrorDestination}>
                         <div className={mirrorClasses.mirrorHeader}>
@@ -316,15 +348,24 @@ const PlanReplicationSettings = ({
                title="Detach Replication Destination"
                message={
                   <div>
-                     <p>{managedAgent ? 'Detach this destination and retain its remote repository? Physical cleanup of managed replicas is unavailable in this release.' : 'Detach this destination from the plan? Its remote repository is retained unless you explicitly select cleanup below.'}</p>
-                     <p>Retained data is no longer updated by this plan. Cleanup requires an exact owned repository path; shared or uncertain scopes are refused.</p>
-                     {!managedAgent && <Toggle
-                        fieldValue={removeStorageData}
-                        disabled={deleteStorageMutation.isPending}
-                        onUpdate={() => setRemoveStorageData((prev) => !prev)}
-                        description="Permanently delete this destination's owned repository data"
-                        customClasses={classes.removeRemoteToggle}
-                     />}
+                     <p>
+                        {managedAgent
+                           ? 'Detach this destination and retain its remote repository? Physical cleanup of managed replicas is unavailable in this release.'
+                           : 'Detach this destination from the plan? Its remote repository is retained unless you explicitly select cleanup below.'}
+                     </p>
+                     <p>
+                        Retained data is no longer updated by this plan. Cleanup requires an exact owned repository path; shared or uncertain scopes
+                        are refused.
+                     </p>
+                     {!managedAgent && (
+                        <Toggle
+                           fieldValue={removeStorageData}
+                           disabled={deleteStorageMutation.isPending}
+                           onUpdate={() => setRemoveStorageData((prev) => !prev)}
+                           description="Permanently delete this destination's owned repository data"
+                           customClasses={classes.removeRemoteToggle}
+                        />
+                     )}
                   </div>
                }
                closeModal={() => {

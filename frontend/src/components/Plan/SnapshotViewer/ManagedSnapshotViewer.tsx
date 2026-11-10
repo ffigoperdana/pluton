@@ -1,3 +1,5 @@
+import AssistedRecovery from '../../Restore/AssistedRecovery/AssistedRecovery';
+import Modal from '../../common/Modal/Modal';
 import { downloadSnapshotItem } from '../../../utils/snapshotItemDownload';
 import { downloadFailure } from '../../../utils/downloadFailure';
 import { useEffect, useRef, useState } from 'react';
@@ -43,6 +45,7 @@ export default function ManagedSnapshotViewer(props: ManagedViewerProps) {
 }
 /** Only the current page is retained. Managed metadata never enters Dexie. */
 function ManagedViewer({
+   assisted = false,
    backup,
    planId,
    onClose,
@@ -126,6 +129,23 @@ function ManagedViewer({
       return () => observer.disconnect();
    }, []);
    const restore = useRestoreBackup();
+   const [assistedFile, setAssistedFile] = useState<FileItem | null>(null);
+   const performRestore = (file: FileItem) =>
+      restore.mutate(
+         { backupId: backup.id, planId, target: '', includes: [file.path], overwrite: 'never', deleteOption: false },
+         {
+            onSuccess: () => {
+               toast.success('Staged restoration started.');
+               navigate(`/plan/${planId}`);
+               onClose();
+            },
+            onError: (error) => toast.error(error.message),
+            onSettled: () => {
+               setSelected(null);
+               setAssistedFile(null);
+            },
+         },
+      );
    const navigate = useNavigate();
    useEffect(() => {
       // Only an actual filter change may reset pagination. An initial/no-op
@@ -449,6 +469,16 @@ function ManagedViewer({
                secondaryAction={{ title: 'Close', action: closeDownload }}
             />
          )}
+         {assistedFile && (
+            <Modal title="Review recovery source" width="700px" closeModal={() => setAssistedFile(null)}>
+               <AssistedRecovery
+                  planId={planId}
+                  backupId={backup.id}
+                  initialIncludes={[assistedFile.path]}
+                  onPrimaryReady={() => performRestore(assistedFile)}
+               />
+            </Modal>
+         )}
          {selected && !selection && (
             <ActionModal
                title={`Restore ${selected.isDirectory ? 'Directory' : 'File'}`}
@@ -464,19 +494,12 @@ function ManagedViewer({
                   title: 'Restore to staging',
                   type: 'default',
                   isPending: restore.isPending,
-                  action: () =>
-                     restore.mutate(
-                        { backupId: backup.id, planId, target: '', includes: [selected.path], overwrite: 'never', deleteOption: false },
-                        {
-                           onSuccess: () => {
-                              toast.success('Staged restoration started.');
-                              navigate(`/plan/${planId}`);
-                              onClose();
-                           },
-                           onError: (error) => toast.error(error.message),
-                           onSettled: () => setSelected(null),
-                        },
-                     ),
+                  action: () => {
+                     if (assisted) {
+                        setAssistedFile(selected);
+                        setSelected(null);
+                     } else performRestore(selected);
+                  },
                }}
             />
          )}

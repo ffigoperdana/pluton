@@ -51,3 +51,21 @@ TLS and exact configured Host/Origin are checked before authentication; trusted-
 New management routes use existing session validation **and** explicit local-administrator identity and same-origin JSON checks. OAuth/API/Agent credentials cannot manage grants. Changes to policy, grants and revocation commit atomically with audit. Revocation is idempotent; creating a duplicate subject/client pair is refused, and revoked pairs cannot be silently re-enabled. A local administrator controls all delegation; there is no claim of separate tenant administration.
 
 Remaining risks requiring deployment review: trusted proxy/network isolation; actual IdP PKCE/resource binding and token revocation policy; provider connectivity; browser accessibility/visual validation on target devices; audit storage growth/retention; exact runtime SDK/protocol compatibility; all broader legacy API debts above. A public-facing implementation must be reviewed before enablement. No production-readiness declaration is made.
+
+## Assisted replica recovery boundary
+
+The session-only `/api/assisted-recovery` routes require independent verification
+of the signed owner and strict request schemas. GET rediscovery is owner/plan/
+backup scoped and never creates or approves recovery. The new routes are not
+added to the legacy API-key allowlist or MCP operational write catalog. Global
+same-origin/CSRF checks remain in force.
+
+Replica eligibility requires durable managed receipts and current live repository,
+snapshot, source mapping, owner, TLS and integrity evidence; a mirror badge or
+matching key is insufficient. Approval is expiring, one-time SQLite CAS, bound to
+the operation/selection and generated private target. Only isolated staging is
+implemented; native database import and production-target writes retain separate
+existing approvals. Interrupted execution is not replayed. Cleanup removes only
+job-bound private local workspaces and never issues repository DELETE/unlock/prune.
+See [the operator/security runbook](ASSISTED_REPLICA_RECOVERY.md) and the API,
+store, process, integrity, actual React and real SFTP-to-S3 regression tests.

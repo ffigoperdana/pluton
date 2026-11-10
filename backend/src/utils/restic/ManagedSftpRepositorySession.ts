@@ -15,6 +15,9 @@ import { processManager } from '../../managers/ProcessManager';
 import { planLogger } from '../logger';
 
 export type RecoveryFailureCode =
+	| 'network-unavailable'
+	| 'authentication-denied'
+	| 'tls-invalid'
 	| 'configuration-invalid'
 	| 'credentials-unavailable'
 	| 'repository-unavailable'
@@ -50,6 +53,8 @@ const snapshotSchema = z.object({
 	id: fullSnapshotId,
 	tags: z.array(z.string()),
 	paths: z.array(z.string()),
+	tree: fullSnapshotId.optional(),
+	original: fullSnapshotId.optional(),
 });
 const nodeSchema = z.object({
 	struct_type: z.literal('node'),
@@ -68,11 +73,14 @@ export type ManagedSnapshotNode = z.infer<typeof nodeSchema>;
 export type ManagedRestoreSummary = { files_restored: number; bytes_restored: number };
 
 export interface ManagedRepositorySession {
+	/** Fixed bounded transport check; names are discarded, never identity proof. */
+	probe?(): Promise<void>;
 	diff?(
 		previous: string,
 		current: string,
 		consume: (record: SnapshotDiffRecord) => void
 	): Promise<void>;
+	identity?(): Promise<string>;
 	snapshot(id: string): Promise<ManagedSnapshot>;
 	/** Bounded compatibility helper. Production consumers use streamFiles. */
 	files(id: string): Promise<ManagedSnapshotNode[]>;
@@ -141,12 +149,7 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			ManagedSftpRepositorySession.active--;
 		}
 	}
-	private async scopedSession<T>(
-		access: ManagedSftpAccess,
-		consume: (session: ManagedRepositorySession) => Promise<T>,
-		signal?: AbortSignal,
-		limits?: { restoreTimeoutMs: number; temporaryRoot?: string; cleanupWarning?: () => void }
-	): Promise<T> {
+	protected validateAccess(access: ManagedSftpAccess) {
 		const keys = Object.keys(access.options);
 		if (
 			keys.some(key => !['host', 'port', 'user', 'pass'].includes(key)) ||
@@ -163,6 +166,40 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			access.repositoryPath.split('/').includes('..')
 		)
 			throw new ManagedRepositoryAccessError('configuration-invalid');
+	}
+	protected async connectionConfiguration(
+		access: ManagedSftpAccess,
+		environment: NodeJS.ProcessEnv,
+		signal?: AbortSignal
+	): Promise<{ contents: string; environment?: NodeJS.ProcessEnv }> {
+		const obscured = (
+			await this.run(
+				getBinaryPath('rclone'),
+				['obscure', '-'],
+				environment,
+				signal,
+				access.options.pass + '\n'
+			)
+		).trim();
+		if (!obscured || !/^[A-Za-z0-9_-]+$/.test(obscured))
+			throw new ManagedRepositoryAccessError('credentials-unavailable');
+		const options = { ...access.options, pass: obscured };
+		return {
+			contents:
+				'[pluton]\ntype = sftp\n' +
+				Object.entries(options)
+					.map(([key, value]) => key + ' = ' + value)
+					.join('\n') +
+				'\n',
+		};
+	}
+	private async scopedSession<T>(
+		access: ManagedSftpAccess,
+		consume: (session: ManagedRepositorySession) => Promise<T>,
+		signal?: AbortSignal,
+		limits?: { restoreTimeoutMs: number; temporaryRoot?: string; cleanupWarning?: () => void }
+	): Promise<T> {
+		this.validateAccess(access);
 		const restic = getBinaryPath('restic');
 		const rclone = getBinaryPath('rclone');
 		// Never silently fall back to an unpinned executable in PATH.
@@ -172,28 +209,17 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		const environment = safeEnvironment();
 		let directory: string | undefined;
 		try {
-			const obscured = (
-				await this.run(rclone, ['obscure', '-'], environment, signal, `${access.options.pass}\n`)
-			).trim();
-			if (!obscured || !/^[A-Za-z0-9_-]+$/.test(obscured)) {
-				throw new ManagedRepositoryAccessError('credentials-unavailable');
-			}
+			const connection = await this.connectionConfiguration(access, environment, signal);
 			directory = await fs.mkdtemp(
 				path.join(limits?.temporaryRoot || os.tmpdir(), 'pluton-recovery-')
 			);
 			await fs.chmod(directory, 0o700);
 			const configPath = path.join(directory, 'rclone.conf');
-			const options = { ...access.options, pass: obscured };
-			await fs.writeFile(
-				configPath,
-				`[pluton]\ntype = sftp\n${Object.entries(options)
-					.map(([key, value]) => `${key} = ${value}`)
-					.join('\n')}\n`,
-				{ flag: 'wx', mode: 0o600 }
-			);
+			await fs.writeFile(configPath, connection.contents, { flag: 'wx', mode: 0o600 });
 			await fs.chmod(configPath, 0o600);
 			const resticEnvironment = {
 				...environment,
+				...connection.environment,
 				RCLONE_CONFIG: configPath,
 				RESTIC_PASSWORD: access.password,
 			};
@@ -258,6 +284,28 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 				if (!header) throw new ManagedRepositoryAccessError('invalid-output');
 			};
 			return await consume({
+				probe: async () => {
+					await this.run(
+						rclone,
+						[
+							'lsf',
+							'pluton:' + access.repositoryPath,
+							'--max-depth',
+							'1',
+							'--files-only',
+							'--retries',
+							'1',
+							'--low-level-retries',
+							'1',
+							'--timeout',
+							'10s',
+							'--contimeout',
+							'5s',
+						],
+						resticEnvironment,
+						signal
+					);
+				},
 				streamFiles,
 				diff: async (previous, current, onRecord) => {
 					checkId(previous);
@@ -322,6 +370,8 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 						signal
 					);
 				},
+				identity: async () =>
+					this.parse(z.object({ id: fullSnapshotId }), await execute(['cat', 'config'])).id,
 				snapshot: async id => {
 					checkId(id);
 					const snapshots = this.parse(z.array(snapshotSchema), await execute(['snapshots', id]));
@@ -602,13 +652,15 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			const processId = `managed-recovery-${crypto.randomUUID()}`;
 			processManager.trackProcess(processId, child);
 			let output = '';
+			let diagnostic = Buffer.alloc(0);
+			let diagnosticTruncated = false;
 			let bytes = 0;
 			let failure: RecoveryFailureCode | undefined;
 			const stop = (reason: RecoveryFailureCode) => {
 				failure ||= reason;
 				killProcessTree(child, 'SIGKILL');
 			};
-			const abort = () => stop('cancelled');
+			const abort = () => stop(signal?.reason?.name === 'TimeoutError' ? 'timeout' : 'cancelled');
 			signal?.addEventListener('abort', abort, { once: true });
 			const timer = setTimeout(
 				() => stop('timeout'),
@@ -627,8 +679,11 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 				if (bytes > 32 * 1024 * 1024) stop('output-limit');
 				else output += chunk;
 			});
-			// Drain, but never retain/return stderr (may contain secrets/locations).
-			child.stderr?.on('data', () => undefined);
+			// Bounded private classification only. Never return or log provider text.
+			child.stderr?.on('data', (chunk: Buffer) => {
+				diagnosticTruncated ||= diagnostic.length + chunk.length > 16 * 1024;
+				diagnostic = Buffer.concat([diagnostic, Buffer.from(chunk)]).subarray(-16 * 1024);
+			});
 			child.on('close', code => {
 				// Also stop descendants that survived a normally exiting parent.
 				if (process.platform !== 'win32' && child.pid) {
@@ -641,15 +696,22 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 				processManager.untrackProcess(processId);
 				clearTimeout(timer);
 				signal?.removeEventListener('abort', abort);
-				if (failure) reject(new ManagedRepositoryAccessError(failure));
+				if (failure)
+					reject(
+						new ManagedRepositoryAccessError(
+							failure === 'timeout'
+								? diagnosticTruncated
+									? 'output-limit'
+									: recoveryProcessFailure(code, diagnostic.toString(), failure)
+								: failure
+						)
+					);
 				else if (code !== 0)
 					reject(
 						new ManagedRepositoryAccessError(
-							code === 12
-								? 'wrong-password'
-								: code === 10
-									? 'repository-unavailable'
-									: 'execution-failed'
+							diagnosticTruncated && code !== 12
+								? 'output-limit'
+								: recoveryProcessFailure(code, diagnostic.toString())
 						)
 					);
 				else resolve(output);
@@ -697,4 +759,36 @@ export async function consumeMetadataLines(
 	}
 	// Restic's encoder always terminates records. EOF inside a record is truncation.
 	if (pending.length) throw new ManagedRepositoryAccessError('invalid-output');
+}
+
+/** Closed classifications only; authentication/TLS/encryption always outrank availability. */
+export function recoveryProcessFailure(
+	exitCode: number | null,
+	diagnostic: string,
+	fallback: RecoveryFailureCode = 'execution-failed'
+): RecoveryFailureCode {
+	if (
+		exitCode === 12 ||
+		/wrong password|no key found|unable to decrypt|cipher|authentication tag/i.test(diagnostic)
+	)
+		return 'wrong-password';
+	if (
+		/permission denied|authentication failed|unable to authenticate|AccessDenied|Forbidden|SignatureDoesNotMatch|InvalidAccessKey|\b(?:401|403)\b/i.test(
+			diagnostic
+		)
+	)
+		return 'authentication-denied';
+	if (
+		/x509|certificate|tls handshake|host key (?:mismatch|verification failed|not found|unknown)|knownhosts: (?:key mismatch|key is unknown)|remote host identification has changed|fingerprint mismatch/i.test(
+			diagnostic
+		)
+	)
+		return 'tls-invalid';
+	if (
+		/connection refused|network is unreachable|no route to host|no such host|connection reset by peer|i\/o timeout|dial tcp.*timeout|temporary failure in name resolution|EHOSTUNREACH|ECONNREFUSED|ENETUNREACH|ENOTFOUND/i.test(
+			diagnostic
+		)
+	)
+		return 'network-unavailable';
+	return fallback === 'timeout' ? 'timeout' : exitCode === 10 ? 'repository-unavailable' : fallback;
 }

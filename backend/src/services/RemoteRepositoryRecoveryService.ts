@@ -55,6 +55,7 @@ import {
 	recoveryArtifacts,
 	RecoveryTestError,
 	validateRestoredFiles,
+	validateRecoveryArtifact,
 } from '../utils/recoveryValidation';
 import type { RecoveryStage } from '../types/recoveryTests';
 import { ManagedDownloadPreparation } from './ManagedDownloadPreparation';
@@ -79,7 +80,7 @@ import {
 	type SelectedDownloadHeaders,
 } from '../utils/restic/SelectedSnapshotDownload';
 
-type RecoveryContext = {
+export type RecoveryContext = {
 	backupId: string;
 	planId: string;
 	storageId: string;
@@ -122,7 +123,11 @@ export class RemoteRepositoryRecoveryService {
 		private readonly agents: Pick<AgentStore, 'getAgentById'>,
 		private readonly sessions: ManagedRepositorySessionProvider = new ManagedSftpRepositorySession(),
 		private readonly secret = configService.config.SECRET,
-		private readonly stagingRoot = path.join(appPaths.getDataDir(), 'managed-remote-restores')
+		private readonly stagingRoot = path.join(appPaths.getDataDir(), 'managed-remote-restores'),
+		private readonly resolveReplica?: (
+			backupId: string,
+			planId?: string
+		) => Promise<RecoveryContext>
 	) {
 		this.indexes = new ManagedSnapshotIndexCache(
 			path.join(path.dirname(stagingRoot), 'managed-snapshot-indexes'),
@@ -364,6 +369,34 @@ export class RemoteRepositoryRecoveryService {
 		return action === 'page' ? this.comparisons.page(key, query) : { ...binding, ...status };
 	}
 
+	/** Read-only exact primary probe. No fallback decision is inferred from generic process failures. */
+	async primaryAvailability(backupId: string, planId: string, signal: AbortSignal) {
+		const context = await this.context(backupId, planId);
+		await this.sessions.withSession(
+			context.access,
+			async session => {
+				await session.probe?.();
+				try {
+					const snapshot = await this.verifySnapshot(context, session);
+					if (
+						snapshot.tags.filter(t => t.startsWith('pluton-plan-')).length !== 1 ||
+						snapshot.tags.filter(t => t.startsWith('pluton-backup-')).length !== 1
+					)
+						throw new SnapshotComparisonError('snapshot-ownership-mismatch');
+					await this.assertCurrentContext(context);
+				} catch (error) {
+					// A transport that connected successfully does not prove that a later
+					// metadata deadline is a connectivity failure. Keep uncertain cases closed.
+					if (error instanceof ManagedRepositoryAccessError && error.code === 'timeout')
+						throw new ManagedRepositoryAccessError('repository-unavailable');
+					throw error;
+				}
+			},
+			AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+		);
+		return { snapshotId: context.snapshotId };
+	}
+
 	/** Metadata only. Source agent identity is checked in SQLite, never contacted. */
 	async testBinding(backupId: string, planId?: string) {
 		const context = await this.context(backupId, planId);
@@ -421,6 +454,83 @@ export class RemoteRepositoryRecoveryService {
 				databases: entries,
 			};
 		});
+	}
+
+	/** Internal replica executor only. The caller owns an exclusive private workspace;
+	 * full authenticated Restic TAR readback supplies per-file hashes and safe link proof.
+	 * No production target, overwrite, import or repository mutation is accepted. */
+	async replicaStage(
+		binding: { backupId: string; planId: string; repositoryId: string; snapshotId: string },
+		config: RestoreConfig,
+		target: string,
+		signal: AbortSignal,
+		stage: (value: string) => void,
+		assertWorkspace: () => Promise<void>,
+		maxBytes = 1024 ** 4
+	) {
+		if (!this.resolveReplica) throw new AppError(409, 'Replica source is not authorized.');
+		this.validateConfig(config);
+		if (config.target)
+			throw new AppError(400, 'Replica recovery uses an isolated internal target.');
+		const context = await this.context(binding.backupId, binding.planId);
+		if (context.repositoryId !== binding.repositoryId || context.snapshotId !== binding.snapshotId)
+			throw new RecoveryTestError('snapshot-validation', 'snapshot-binding-mismatch');
+		return this.withIndex(
+			context,
+			async index => {
+				stage('snapshot-validation');
+				index.assertExportEntries('full', true);
+				const selection = this.select(index, config);
+				if (
+					!Number.isSafeInteger(selection.stats.total_bytes) ||
+					selection.stats.total_bytes > maxBytes
+				)
+					throw new RecoveryTestError('staged-restore', 'workspace-size-limit');
+				const empty = async () => {
+					await assertWorkspace();
+					const stat = await fs.lstat(target);
+					if (!stat.isDirectory() || stat.isSymbolicLink() || (await fs.readdir(target)).length)
+						throw new RecoveryTestError('staged-restore', 'unsafe-workspace');
+				};
+				await empty();
+				const disk = await fs.statfs(target);
+				if (disk.bavail * disk.bsize < selection.stats.total_bytes + 512 * 1024 ** 2)
+					throw new RecoveryTestError('staged-restore', 'insufficient-space');
+				const proof = index.exportProof(this.exportBinding(context), 'full');
+				await this.sessions.withSession(
+					context.access,
+					async session => {
+						await this.verifySnapshot(context, session);
+						await this.assertCurrentContext(context);
+						stage('integrity-preparation');
+						await prepareManagedExport(index, session, proof, signal);
+						await empty();
+						checkRecoveryCancellation(signal);
+						stage('staged-restore');
+						await session.restore(context.snapshotId, selection.includes, target);
+						await assertWorkspace();
+						stage('filesystem-validation');
+						const measured = await validateRestoredFiles(selection.files, target, signal, proof);
+						const backup = await this.backups.getById(context.backupId);
+						const artifacts = recoveryArtifacts(backup?.completionStats?.lifecycle);
+						const selected = (value: string) =>
+							selection.files instanceof ManagedSnapshotIndex
+								? selection.files.get(value)
+								: selection.files.find(file => file.path === value);
+						for (const artifact of artifacts)
+							if (selected(artifact.path)) await validateRecoveryArtifact(artifact, target, signal);
+						await this.verifySnapshot(context, session);
+						await this.assertCurrentContext(context);
+						checkRecoveryCancellation(signal);
+						return measured;
+					},
+					signal,
+					{ restoreTimeoutMs: 60 * 60_000 }
+				);
+				return { stats: selection.stats, integrity: 'sha256-readback-and-restic-restore' as const };
+			},
+			signal
+		);
 	}
 
 	/** Same allowlisted Phase 4 session/selection/restore, with a caller-owned private workspace. */
@@ -1171,6 +1281,7 @@ export class RemoteRepositoryRecoveryService {
 	}
 
 	private async context(backupId: string, expectedPlanId?: string): Promise<RecoveryContext> {
+		if (this.resolveReplica) return this.resolveReplica(backupId, expectedPlanId);
 		const backup = await this.backups.getById(backupId);
 		if (!backup || !backup.planId) throw new NotFoundError('Backup not found.');
 		if (expectedPlanId !== undefined && expectedPlanId !== backup.planId)

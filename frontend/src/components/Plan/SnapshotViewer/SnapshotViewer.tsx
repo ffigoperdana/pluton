@@ -28,6 +28,7 @@ export interface SnapshotViewerProps {
    planId: string;
    isSync?: boolean;
    stagingOnly?: boolean;
+   assisted?: boolean;
    mirrors?: BackupMirror[];
    onClose: () => void;
    replicationId?: string;
