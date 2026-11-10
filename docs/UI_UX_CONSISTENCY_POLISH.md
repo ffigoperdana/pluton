@@ -168,11 +168,43 @@ handler):
 - Two debug `console.log` calls that ran on every render or selection
   (`StorageProviderSelect`, `MultiSelect`) were removed.
 
-Observed and left unchanged (needs its own decision): the group-level
-`disabled` prop of `RadioIconSelect` only changes styling; a click on an
-option still calls `onUpdate`. Keyboard activation mirrors that click, and the
-option now announces `aria-disabled`. Whether Edit Plan relies on this is not
-verified here.
+### RadioIconSelect: disabled group is read-only (`64f471c`)
+
+Root cause (proven): `RadioIconSelect` applied `disabled` only as a CSS class
+(`opacity: 0.7`, `cursor: not-allowed`). Its click handler never checked it, so
+a disabled group still called `onUpdate`, and a disabled option without
+`onDisableClick` also fell through to `onUpdate`.
+
+Contract audit:
+
+- Only two callers exist. `PlanTypeSettings` is commented out in `PlanForm`.
+  `PlanStrategySettings` is rendered by `PlanForm` with
+  `disabled={type === 'edit' ? true : false}` (unchanged since the first
+  commit), so in Edit Plan the backup strategy is meant to be locked; Add Plan
+  passes `false`.
+- The styling (`not-allowed` cursor) and the other shared controls (Select
+  refuses to open, Toggle uses a native disabled input) all treat `disabled`
+  as non-interactive. Nothing in the code or docs treats it as visual only.
+- Impact before the fix, observed in the local `after` container without
+  saving: in Edit Plan the strategy group carried the disabled class and
+  `aria-disabled`, yet clicking "Storage Sync" opened the "Feature
+  availability" prompt. In a jsdom test of `PlanStrategySettings` in edit mode
+  for an existing storage-source plan (method `sync`), clicking "Incremental
+  Backup" called `onUpdate('backup')`, i.e. the edit form changed the plan's
+  strategy. For ordinary `backup` plans the only enabled option is the current
+  value, so their method did not change. Whether the backend would have
+  accepted such a method change on save was not tested (backend unchanged; the
+  update path spreads submitted fields onto the stored plan).
+
+Fix, presentation and interaction only:
+
+- A disabled group ignores mouse and keyboard: no `onUpdate`, no
+  `onDisableClick` prompt; the group and options announce `aria-disabled`, the
+  options leave the tab order, and the saved choice stays visibly checked.
+- An individually disabled option is never selected. It still calls
+  `onDisableClick` when provided (the Add Plan upgrade prompt) and is only
+  focusable in that case.
+- Enabled groups behave exactly as before for mouse and keyboard.
 
 ### Behaviour differences to be aware of
 
@@ -216,19 +248,19 @@ segment, `#575aff` primary).
 
 Windows, Node 24.16.0, pnpm 10.20.0.
 
-| Check                                                                 | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `node --experimental-strip-types --test frontend/__tests__/*.test.ts` | **456 passed, 0 failed, 0 skipped**                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| New/updated tests                                                     | Toggle token contrast and saturation (Light/Dark), toggle focusability and `role=switch`, semantic-token guard (no error text on the fill token, no `turquoise`, no `var()` without `--`, device dot, MCP badge), Snapshot Details summary, lazy disclosure, `aria-pressed` selection driving Browse Changed Files; `formControlAccessibility.test.ts` (9 tests): carets never submit an enclosing form, Enter/Space selection, disabled options, radio groups, named toggles |
-| Test-first evidence                                                   | New toggle tests failed on the old styles ("Missing token", "visibility:hidden"); the updated Snapshot Details test failed before the component change; the guarded patterns exist in 9 files on `origin/main`; all 9 form-control tests failed before the fix, and a throwaway jsdom check showed one caret click submitting a form for each of the four controls                                                                                                            |
-| `pnpm --filter @plutonhq/core-frontend exec tsc -b`                   | Passed                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `pnpm --filter @plutonhq/core-frontend build`                         | Passed (existing Browserslist and chunk-size warnings)                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| Docker `Dockerfile.source` builds of `04f5f2d` and the branch         | Passed; both containers healthy                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| Full frontend ESLint                                                  | Pre-existing configuration failure (string `eslint-config-prettier` in `extends`), unchanged                                                                                                                                                                                                                                                                                                                                                                                  |
-| Targeted ESLint, temporary corrected config outside Git               | Per-file rule counts for all changed TS/TSX files are identical to `origin/main`; the new `utils/keyboard.ts` is clean (the remaining findings are the existing `object-curly-newline` vs Prettier baseline)                                                                                                                                                                                                                                                                  |
-| Prettier on changed files                                             | Clean, except `SnapshotBrowserDirectories.tsx`, already non-conformant on `main` and not reformatted                                                                                                                                                                                                                                                                                                                                                                          |
-| `git diff --check`                                                    | Passed                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| Backend tests                                                         | Not run: no backend file changed                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Check                                                                 | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `node --experimental-strip-types --test frontend/__tests__/*.test.ts` | **461 passed, 0 failed, 0 skipped**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| New/updated tests                                                     | Toggle token contrast and saturation (Light/Dark), toggle focusability and `role=switch`, semantic-token guard (no error text on the fill token, no `turquoise`, no `var()` without `--`, device dot, MCP badge), Snapshot Details summary, lazy disclosure, `aria-pressed` selection driving Browse Changed Files; `formControlAccessibility.test.ts` (14 tests): carets never submit an enclosing form, Enter/Space selection, disabled options, radio groups, named toggles, disabled RadioIconSelect group (mouse and keyboard), individually disabled options, Edit Plan locked strategy vs Add Plan selectable strategy and upgrade prompt |
+| Test-first evidence                                                   | New toggle tests failed on the old styles ("Missing token", "visibility:hidden"); the updated Snapshot Details test failed before the component change; the guarded patterns exist in 9 files on `origin/main`; all 9 form-control tests failed before the fix, and a throwaway jsdom check showed one caret click submitting a form for each of the four controls; the 3 RadioIconSelect/Edit Plan regression tests failed before `64f471c` (Edit Plan test: "must not change the backup strategy") while the Add Plan test passed before and after                                                                                             |
+| `pnpm --filter @plutonhq/core-frontend exec tsc -b`                   | Passed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `pnpm --filter @plutonhq/core-frontend build`                         | Passed (existing Browserslist and chunk-size warnings)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Docker `Dockerfile.source` builds of `04f5f2d` and the branch         | Passed; both containers healthy                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Full frontend ESLint                                                  | Pre-existing configuration failure (string `eslint-config-prettier` in `extends`), unchanged                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Targeted ESLint, temporary corrected config outside Git               | Per-file rule counts for all changed TS/TSX files are identical to `origin/main`; the new `utils/keyboard.ts` is clean (the remaining findings are the existing `object-curly-newline` vs Prettier baseline)                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Prettier on changed files                                             | Clean, except `SnapshotBrowserDirectories.tsx`, already non-conformant on `main` and not reformatted                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `git diff --check`                                                    | Passed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Backend tests                                                         | Not run: no backend file changed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 Accessibility checks performed: keyboard Tab/Shift+Tab to a switch, Enter/Space on options and radios (jsdom),
 `:focus-visible`, `role=switch`, `aria-pressed`, `aria-expanded` +
@@ -261,7 +293,8 @@ change: deploying the new image is sufficient.
 Commits (oldest first): `2d5821e` theme tokens and toggles, `270ed02`
 accessible names and focus reveal, `ba711db` Browse Snapshot / Snapshot
 Details, `7ace756` local status line, `e96fc79` synthetic preview data,
-`e051898` this report, `285272d` form controls, then this report update.
+`e051898` this report, `285272d` form controls, `bf1a6db` report update,
+`64f471c` read-only disabled RadioIconSelect, then this report update.
 
 Theme tokens and toggles:
 
@@ -345,7 +378,11 @@ service worker serves the new assets, then check in both Dark and Light:
    plan, Compare with previous → summary tiles; choose Deleted → Browse Changed
    Files opens the tree filtered to deleted entries; Detailed changes opens a
    paged list of 50.
-4. MCP page: Enabled/Disabled badges are readable in Dark. Machines page: the
+4. Plan → Edit → Basic: clicking a Backup Strategy card does nothing (no
+   "Feature availability" prompt, selection unchanged). New Plan: Incremental
+   Backup is selectable and "Linux Server Backup" still shows the prompt.
+   Close without saving.
+5. MCP page: Enabled/Disabled badges are readable in Dark. Machines page: the
    connected dot is green-teal, a disconnected dot is grey.
 
 If something looks wrong, record only: page, theme, browser width and a
@@ -354,9 +391,9 @@ screenshot without hostnames or identifiers.
 ## Rollback
 
 Deploy the previous image digest (frontend assets only, no schema or data
-change), or revert commits `285272d`, `e96fc79`, `7ace756`, `ba711db`,
-`270ed02`, `2d5821e` and the two report commits. `285272d` can be reverted on
-its own.
+change), or revert commits `64f471c`, `285272d`, `e96fc79`, `7ace756`, `ba711db`,
+`270ed02`, `2d5821e` and the report commits. `64f471c` and `285272d` can be
+reverted on their own (newest first).
 
 ## Limitations and follow-up recommendations
 
@@ -367,10 +404,15 @@ its own.
 - "Edit Plan with Replication" was not rendered: it needs an HCP S3 storage.
   Toggles were checked in the Advanced tab instead.
 - Not implemented (larger or functional, separate tasks):
-  - Decide whether a group-disabled `RadioIconSelect` should ignore option
-    clicks (today it only changes styling; see Form controls above).
-  - Dropdowns still open on click/Enter only: arrow-key navigation, Escape to
-    close and returning focus to the caret are not implemented.
+  - Dropdown keyboard gaps (Select, MultiSelect, StorageProviderSelect, chart
+    range menu). Basic operation works without a focus trap: Tab to the caret,
+    Enter/Space to open, Tab through options, Enter/Space to choose, Enter on
+    the caret to close. Not implemented: ArrowUp/ArrowDown between options and
+    Home/End, Escape to close, returning focus to the caret after a single
+    choice closes the list (focus currently falls back to the page, so the next
+    Tab starts from the top), `aria-activedescendant`, and closing on outside
+    click for Select. Recommended as one follow-up with a shared listbox hook
+    and tests rather than per-control patches.
   - Skeleton shimmer sweeps a white band over Dark surfaces; the tertiary
     button hover (`brightness(0.95)`) is nearly invisible in Dark; the modal
     close button rotates on hover and dialogs use an overshooting easing.
