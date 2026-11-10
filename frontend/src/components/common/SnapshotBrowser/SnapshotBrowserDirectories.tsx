@@ -64,11 +64,13 @@ const SnapshotBrowserDirectories = ({directories,
                      aria-selected={selectedFolder === dir}
                      aria-expanded={hasChildren ? isExpanded : undefined}
                      className={`${classes.directory} ${selectedFolder === dir ? classes.selected : ''} ${hasChildren ? '' : classes.directoryEmpty}`}
-                     style={{ paddingLeft: `${depth * 20}px` }}
+                     style={{ paddingLeft: `${12 + depth * 20}px` }}
+                     title={dir}
                      onClick={() => onDirectoryClick(dir)}
                   >
                      {hasChildren ? (
                         <button
+                           type="button"
                            aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${dirName}`}
                            className={classes.toggleButton}
                            onClick={(e) => {
@@ -76,7 +78,7 @@ const SnapshotBrowserDirectories = ({directories,
                               onToggleFolder(dir);
                            }}
                         >
-                           {isExpanded ? '-' : '+'}
+                           <Icon type="caret-down" size={12} />
                         </button>
                      ) : (
                         <span className={classes.togglePlaceholder} />
