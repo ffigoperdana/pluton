@@ -48,14 +48,14 @@
       width: 12px;
       height: 12px;
       border-radius: 50%;
-      background-color: var(--line-active-color);
+      background-color: var(--content-text-color-light);
       position: absolute;
       top: 3px;
       right: 0px;
       z-index: 9;
 
       &.connected {
-         background-color: turquoise;
+         background-color: var(--success-text-color);
       }
    }
 }

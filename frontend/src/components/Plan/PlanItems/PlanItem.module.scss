@@ -205,7 +205,7 @@
    &.planHasError {
       border: 1px solid var(--error-bg-color-active);
       .status {
-         color: var(--error-button-color);
+         color: var(--error-text-color);
       }
    }
 }

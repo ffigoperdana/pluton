@@ -41,6 +41,9 @@
    --card-shadow: 0 2px 10px rgba(28, 39, 77, 0.04);
    --progress-fill: #087b6c;
    --progress-text: #ffffff;
+   // Switch OFF is a neutral, never a paler accent; ON uses --primary-color.
+   --toggle-track-off: #73778a;
+   --toggle-thumb: #ffffff;
 
    --error-bg-color: #ffecec;
    --error-bg-active: #b54444;
@@ -88,6 +91,8 @@
    --field-bg: #202430;
    --surface-muted: #222631;
    --surface-hover: #25273f;
+   --toggle-track-off: #767987;
+   --toggle-thumb: #e8e8ec;
    --card-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
    --text-primary: #e1e1e1;
    --text-secondary: #c0c0c0;

@@ -81,6 +81,27 @@ for (const theme of ['light', 'dark']) {
       assert.ok(contrast(theme, '--content-text-color-light', '--line-color') >= 3, 'Disabled text must remain discernible');
       assert.ok(contrast(theme, '--field-line-color', '--field-bg') >= 3, 'Input boundary must remain discernible');
    });
+
+   test(`${theme}: toggle OFF track is a visible neutral and both track states keep a readable thumb`, () => {
+      for (const surface of ['--content-background-color', '--field-bg', '--surface-muted', '--background-color']) {
+         const ratio = contrast(theme, '--toggle-track-off', surface);
+         assert.ok(ratio >= 3, `--toggle-track-off on ${surface}: ${ratio.toFixed(2)}`);
+      }
+      for (const track of ['--toggle-track-off', '--primary-color']) {
+         const ratio = contrast(theme, '--toggle-thumb', track);
+         assert.ok(ratio >= 3, `--toggle-thumb on ${track}: ${ratio.toFixed(2)}`);
+      }
+      // OFF must read as neutral, never as a paler version of the purple ON accent.
+      assert.ok(saturation(value(theme, '--toggle-track-off')) < 0.2, `--toggle-track-off is too saturated`);
+   });
+}
+
+function saturation(hex: string): number {
+   const channels = [1, 3, 5].map((index) => parseInt(hex.slice(index, index + 2), 16) / 255);
+   const max = Math.max(...channels),
+      min = Math.min(...channels);
+   const lightness = (max + min) / 2;
+   return max === min ? 0 : (max - min) / (1 - Math.abs(2 * lightness - 1));
 }
 
 function sourceFiles(directory: URL): URL[] {
@@ -143,6 +164,47 @@ test('Phase 4 errors and Phase 5 controls use the existing error/field/card pale
    assert.ok(lifecycle.includes('background: var(--field-bg)'));
    assert.ok(lifecycle.includes('background: var(--content-background-color)'));
    assert.ok(lifecycle.includes('border: 1px solid var(--field-line-color)'));
+});
+
+test('shared toggle stays keyboard reachable, shows focus and uses theme tokens instead of a hue gradient', () => {
+   const toggle = compiled('components/common/form/Toggle/Toggle.module.scss');
+   const rules = (match: (selector: string) => boolean) =>
+      toggle.nodes.filter((rule: any) => rule.selector && match(rule.selector.replace(/['"]/g, '')));
+   const declarations = (selector: string) => rules((s) => s === selector).flatMap((rule: any) => rule.nodes);
+   const input = declarations('.toggleCheckbox input[type=checkbox]');
+   assert.ok(input.length, 'native checkbox rule exists');
+   assert.ok(
+      !input.some((decl: any) => decl.prop === 'visibility' && decl.value === 'hidden'),
+      'visibility:hidden removes the switch from tab order',
+   );
+   assert.ok(!input.some((decl: any) => decl.prop === 'display' && decl.value === 'none'), 'display:none removes the switch from tab order');
+   const focus = rules((s) => s.includes('input:focus-visible + label'));
+   assert.ok(focus.some((rule: any) => rule.nodes.some((decl: any) => decl.prop === 'outline' && decl.value.includes('var(--line-active-color)'))));
+   assert.ok(declarations('.toggleCheckbox label').some((decl: any) => decl.prop === 'background' && decl.value === 'var(--toggle-track-off)'));
+   assert.ok(declarations('.toggleCheckbox label:after').some((decl: any) => decl.prop === 'background' && decl.value === 'var(--toggle-thumb)'));
+   assert.ok(
+      declarations('.toggleCheckbox input:checked + label').some((decl: any) => decl.prop === 'background' && decl.value === 'var(--primary-color)'),
+   );
+   assert.ok(!toggle.toString().includes('gradient'), 'no hue gradient on the ON track');
+   const component = readFileSync(new URL('components/common/form/Toggle/Toggle.tsx', sourceRoot), 'utf8');
+   assert.ok(component.includes('role="switch"'), 'assistive technology announces on/off');
+});
+
+test('text, status dots and badges use theme-aware semantic tokens instead of fills or fixed named colors', () => {
+   const sources = sourceFiles(sourceRoot)
+      .filter((path) => path.pathname.endsWith('.scss'))
+      .map((path) => ({ path: fileURLToPath(path), text: readFileSync(path, 'utf8') }));
+   for (const { path, text } of sources) {
+      // --error-button-color is a fill behind white text; as text it is ~3:1 on Dark cards.
+      assert.ok(!/^\s*color:\s*var\(--error-button-color\)/m.test(text), `${path}: error text must use --error-text-color`);
+      assert.ok(!/:\s*turquoise\b/.test(text), `${path}: use a semantic token instead of turquoise`);
+      assert.ok(!/var\((?!--)[\w-]+/.test(text), `${path}: var() without "--" is silently ignored`);
+   }
+   const dot = compiled('components/Device/DeviceItem/DeviceItem.module.scss').toString();
+   assert.ok(!dot.includes('background-color: var(--line-active-color)'), 'disconnected dot must not use the Dark accent');
+   const badge = compiled('routes/Mcp/Mcp.module.scss').nodes.find((rule: any) => rule.selector === '.badge');
+   assert.ok(badge.nodes.some((decl: any) => decl.prop === 'color' && decl.value === 'var(--primary-color-foreground)'));
+   assert.ok(badge.nodes.some((decl: any) => decl.prop === 'background' && decl.value === 'var(--primary-color-light)'));
 });
 
 test('status badges, selected files and toast surfaces no longer bypass the shared palette', () => {

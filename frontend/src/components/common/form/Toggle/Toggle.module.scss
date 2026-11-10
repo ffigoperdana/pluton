@@ -11,6 +11,7 @@
 }
 
 .toggleCheckbox {
+   position: relative;
    display: flex;
    span {
       // width: 250px;
@@ -18,23 +19,31 @@
       font-size: 0.75rem;
    }
 
+   // Visually hidden but still focusable, so Tab and Space reach the switch.
    input[type='checkbox'] {
-      height: 0;
-      width: 0;
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 1px;
+      height: 1px;
       margin: 0;
       min-width: 0;
-      visibility: hidden;
+      opacity: 0;
+      pointer-events: none;
    }
 
    label {
       cursor: pointer;
       text-indent: -9999px;
+      overflow: hidden;
+      flex: 0 0 auto;
       width: 32px;
       height: 18px;
-      background: var(--line-active-color);
+      background: var(--toggle-track-off);
       display: inline-block;
       border-radius: 30px;
       position: relative;
+      transition: background-color 0.15s ease-out;
    }
 
    label:after {
@@ -44,23 +53,24 @@
       left: 3px;
       width: 12px;
       height: 12px;
-      background: var(--content-background-color);
+      background: var(--toggle-thumb);
       border-radius: 30px;
-      transition: 0.3s;
+      transition: transform 0.15s ease-out;
    }
 
    input:checked + label {
-      background: linear-gradient(135deg, #8778ff 0%, #526ec7 100%);
+      background: var(--primary-color);
    }
 
    input:checked + label:after {
-      left: calc(100% - 3px);
-      transform: translateX(-100%);
+      transform: translateX(14px);
    }
 
-   label:active:after {
-      width: 30px;
+   input:focus-visible + label {
+      outline: 2px solid var(--line-active-color);
+      outline-offset: 2px;
    }
+
    &.toggleDisabled {
       opacity: 0.6;
       cursor: not-allowed;

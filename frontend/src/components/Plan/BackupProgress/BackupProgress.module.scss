@@ -37,7 +37,7 @@
       }
 
       .backupError {
-         color: var(--error-button-color);
+         color: var(--error-text-color);
          margin-left: 0.5rem;
          font-size: 0.9em;
          cursor: pointer;
@@ -68,7 +68,7 @@
             border-radius: 12px;
             transition: all 0.12s linear;
             &:hover {
-               color: var(--error-button-color);
+               color: var(--error-text-color);
                background-color: var(--error-bg-color);
             }
          }
@@ -197,7 +197,7 @@
       color: var(--success-text-color);
    }
    &.mirrorFailed {
-      color: var(--error-button-color);
+      color: var(--error-text-color);
    }
 }
 
@@ -212,13 +212,13 @@
       border-radius: 3px;
       transition: all 0.3s linear;
       &.mirrorCompleted {
-         background-color: turquoise;
+         background-color: var(--progress-fill);
       }
       &.mirrorFailed {
          background-color: var(--error-button-color);
       }
       &.mirrorRunning {
-         background-color: turquoise;
+         background-color: var(--progress-fill);
       }
       &.mirrorPending {
          background-color: var(--line-color);
@@ -226,7 +226,7 @@
       }
 
       &.mirrorRunningIndeterminate {
-         background-color: turquoise;
+         background-color: var(--progress-fill);
          width: 100% !important;
          opacity: 0.4;
          animation: mirrorPulse 1.8s ease-in-out infinite;

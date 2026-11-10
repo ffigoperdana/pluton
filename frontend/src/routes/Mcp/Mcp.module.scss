@@ -78,7 +78,8 @@
    font-size: 0.8em;
    padding: 4px 8px;
    border-radius: 5px;
-   background: var(--primary-color-mid, #39364e);
+   background: var(--primary-color-light);
+   color: var(--primary-color-foreground);
 }
 .muted {
    opacity: 0.7;
