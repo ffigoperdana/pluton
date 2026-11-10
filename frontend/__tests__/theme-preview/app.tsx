@@ -256,6 +256,52 @@ const repository = {
    createdAt: new Date(now).toISOString(),
    updatedAt: null,
 };
+// Synthetic Snapshot Details / comparison review data (read-only GETs only).
+const snapshotDetails = (backupId: string) => {
+   const backup = backups.find((item) => item.id === backupId) || backups[0];
+   return {
+      backupId: backup.id,
+      planId: plan.id,
+      planName: plan.title,
+      status: 'completed',
+      snapshotId: backup.snapshotId,
+      started: new Date(backup.started).toISOString(),
+      completed: new Date(backup.ended).toISOString(),
+      durationSeconds: 44,
+      timeZone: 'Asia/Jakarta',
+      storage: { id: storage.id, name: storage.name, type: 'sftp' },
+      source: { id: device.id, type: 'device' },
+      statistics: {
+         totalFiles: 5200,
+         totalDirectories: 340,
+         logicalBytes: 1200 * 1024 ** 2,
+         newFiles: 3,
+         modifiedFiles: 2,
+         unchangedFiles: 5195,
+         deletedFiles: null,
+         addedRepositoryBytes: 18 * 1024 ** 2,
+         packedRepositoryBytes: 6 * 1024 ** 2,
+      },
+      databases: ['one', 'two'].map((name, index) => ({
+         reference: `db_example_${name}`,
+         engine: index ? 'postgresql' : 'mariadb',
+         database: `example_${name}`,
+         path: `/pluton/database/example_${name}.sql`,
+         bytes: (index + 1) * 42 * 1024 ** 2,
+         sha256: (index ? 'b' : 'a').repeat(8) + '0123456789abcdef'.repeat(3) + 'c'.repeat(8),
+         status: 'completed',
+      })),
+      recovery: null,
+      replication: [{ id: 'example-replica', storageName: 'Example Secondary SFTP', status: 'completed', snapshotId: 'e'.repeat(64) }],
+      warnings: [],
+      comparisonAvailable: true,
+   };
+};
+const changedPaths: Record<string, string[]> = {
+   added: Array.from({ length: 63 }, (_, index) => `/srv/example-app/uploads/2026/11/delivery-receipt-${String(index + 1).padStart(3, '0')}.jpg`),
+   modified: ['/srv/example-app/config/app.yaml', '/srv/example-app/public/index.html', '/srv/example-app/logs/access.log'],
+   deleted: ['/srv/example-app/public/assets/js/app.8b1d4e.js', '/srv/example-app/src/routes/uploads.js'],
+};
 const requests: string[] = [];
 let failures = 0;
 const realFetch = window.fetch.bind(window);
@@ -330,6 +376,26 @@ window.fetch = async (input, init) => {
          { ...storage, id: 'example-secondary', name: 'Example Secondary SFTP', usedSize: 0 },
       ];
    else if (path === '/storages/example-storage') result = { ...storage, authTypes: ['password'] };
+   else if (/^\/backups\/[^/]+\/details$/.test(path)) result = snapshotDetails(decodeURIComponent(path.split('/')[2]));
+   else if (/^\/backups\/[^/]+\/comparison$/.test(path) && url.searchParams.get('view') === 'files') {
+      const change = url.searchParams.get('change') || 'added';
+      const offset = Number(url.searchParams.get('offset') || 0),
+         limit = Number(url.searchParams.get('limit') || 50);
+      const all = changedPaths[change] || [];
+      result = {
+         files: all.slice(offset, offset + limit).map((path) => ({ path, change, backupId: change === 'deleted' ? backups[1].id : backups[0].id })),
+         total: all.length,
+         nextOffset: offset + limit < all.length ? offset + limit : null,
+      };
+   } else if (/^\/backups\/[^/]+\/comparison$/.test(path))
+      result = {
+         state: 'ready',
+         currentBackupId: backups[0].id,
+         currentSnapshotId: backups[0].snapshotId,
+         previousBackupId: backups[1].id,
+         previousSnapshotId: backups[1].snapshotId,
+         summary: { added: 63, modified: 3, unchanged: 5134, deleted: 2, addedLogicalBytes: 9 * 1024 ** 2, removedLogicalBytes: 412 * 1024 },
+      };
    else if (path.startsWith('/backups/') && path.endsWith('/files')) result = files;
    else if (path.startsWith('/backups/')) result = backups.find((backup) => path === `/backups/${backup.id}`);
    else if (path === '/legacy-repositories') result = [repository];
