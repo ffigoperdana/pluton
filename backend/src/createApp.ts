@@ -1,3 +1,8 @@
+import { AssistedRecoveryStore } from './stores/AssistedRecoveryStore';
+import { AssistedRecoveryService } from './services/AssistedRecoveryService';
+import { VerifiedReplicaRecoveryService } from './services/VerifiedReplicaRecoveryService';
+import { AssistedRecoveryController } from './controllers/AssistedRecoveryController';
+import { createAssistedRecoveryRouter } from './routes/assistedRecovery';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -198,6 +203,22 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		restoreStore,
 		remoteBackupService,
 		agentStore
+	);
+	const replicaRecoveryService = new VerifiedReplicaRecoveryService(
+		managedReplicationStore,
+		backupStore,
+		planStore,
+		remoteManagedRepositoryStore,
+		agentStore,
+		storageStore,
+		path.join(appPaths.getDataDir(), 'replica-recovery-indexes')
+	);
+	const assistedRecoveryService = new AssistedRecoveryService(
+		new AssistedRecoveryStore(sqlite),
+		planStore,
+		remoteRecoveryService,
+		replicaRecoveryService,
+		path.join(appPaths.getDataDir(), 'assisted-recovery')
 	);
 	let managedExportService: ManagedExportService | undefined;
 	const exportState = path.join(appPaths.getDataDir(), 'temporary-exports', 'jobs.sqlite');
@@ -457,6 +478,10 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	app.use('/api/devices', createDeviceRouter(deviceController));
 	app.use('/api/storages', createStorageRouter(storageController));
 	app.use('/api/restores', createRestoreRouter(restoreController));
+	app.use(
+		'/api/assisted-recovery',
+		createAssistedRecoveryRouter(new AssistedRecoveryController(assistedRecoveryService))
+	);
 	app.use('/api/settings', createSettingsRouter(settingsController));
 	app.use('/api/notifications', createNotificationRouter(notificationStore));
 	app.use('/api/legacy-repositories', createLegacyRepositoryRouter(legacyRepositoryController));
@@ -551,6 +576,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 			await managedExportService?.shutdown();
 			await recoveryTestService.shutdown();
 			await databaseRestoreService.shutdown();
+			await assistedRecoveryService.shutdown();
 			await remoteRecoveryService.close();
 		},
 	};

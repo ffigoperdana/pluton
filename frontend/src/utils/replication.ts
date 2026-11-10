@@ -10,6 +10,9 @@ export function replicationSettingsError(
    managedAgent = false,
 ): string | undefined {
    if (!settings) return;
+   if (settings.recoveryPolicy && !['primary-only', 'assisted'].includes(settings.recoveryPolicy)) return 'Invalid recovery source policy.';
+   if (settings.recoveryPolicy === 'assisted' && (!managedAgent || !settings.enabled || !settings.storages.length))
+      return 'Assisted Failover requires enabled compatible managed Agent replicas.';
    if (settings.storages.length > MAX_REPLICATION_DESTINATIONS) return 'A backup plan supports at most two replication destinations.';
    if (!settings.enabled) return;
    if (!settings.storages.length) return 'Select at least one replication destination, or disable replication.';
@@ -32,10 +35,8 @@ export function mirrorSummary(mirrors: BackupMirror[], expectedDestinations = mi
    const completed = mirrors.filter((mirror) => mirror.status === 'completed').length;
    const failed = mirrors.filter((mirror) => mirror.status === 'failed').length;
    const pending = Math.max(0, total - completed - failed);
-   if (completed === total && total > 0)
-      return { state: 'success' as const, label: `${completed}/${total} mirrors complete`, incomplete: false };
-   if (failed > 0)
-      return { state: 'failed' as const, label: `Redundancy incomplete: ${completed}/${total} mirrors complete`, incomplete: true };
+   if (completed === total && total > 0) return { state: 'success' as const, label: `${completed}/${total} mirrors complete`, incomplete: false };
+   if (failed > 0) return { state: 'failed' as const, label: `Redundancy incomplete: ${completed}/${total} mirrors complete`, incomplete: true };
    return { state: 'pending' as const, label: `Replication pending: ${pending}/${total} mirrors incomplete`, incomplete: true };
 }
 
@@ -44,5 +45,5 @@ export function mirrorStatusLabel(status: BackupMirror['status']) {
 }
 
 export function hasPendingMirrors(backups: { mirrors?: BackupMirror[] }[]) {
-   return backups.some(backup => backup.mirrors?.some(mirror => mirror.status === 'pending' || mirror.status === 'started'));
+   return backups.some((backup) => backup.mirrors?.some((mirror) => mirror.status === 'pending' || mirror.status === 'started'));
 }

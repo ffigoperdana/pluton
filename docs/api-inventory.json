@@ -518,6 +518,171 @@
     "security": "Never reuse device/enrollment credentials for MCP."
   },
   {
+    "feature": "assistedRecovery",
+    "method": "GET",
+    "route": "/api/assisted-recovery",
+    "handler": "AssistedRecoveryController.handle",
+    "services": [
+      "service.start",
+      "service.list",
+      "service.approve",
+      "service.cancel",
+      "service.get"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "body",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/assistedRecovery.test.ts"
+    ],
+    "source": "backend/src/controllers/AssistedRecoveryController.ts",
+    "routeSource": "backend/src/routes/assistedRecovery.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "assistedRecovery",
+    "method": "POST",
+    "route": "/api/assisted-recovery",
+    "handler": "AssistedRecoveryController.handle",
+    "services": [
+      "service.start",
+      "service.list",
+      "service.approve",
+      "service.cancel",
+      "service.get"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "body",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/assistedRecovery.test.ts"
+    ],
+    "source": "backend/src/controllers/AssistedRecoveryController.ts",
+    "routeSource": "backend/src/routes/assistedRecovery.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "assistedRecovery",
+    "method": "GET",
+    "route": "/api/assisted-recovery/:id",
+    "handler": "AssistedRecoveryController.handle",
+    "services": [
+      "service.start",
+      "service.list",
+      "service.approve",
+      "service.cancel",
+      "service.get"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "body",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/assistedRecovery.test.ts"
+    ],
+    "source": "backend/src/controllers/AssistedRecoveryController.ts",
+    "routeSource": "backend/src/routes/assistedRecovery.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "assistedRecovery",
+    "method": "POST",
+    "route": "/api/assisted-recovery/:id/approve",
+    "handler": "AssistedRecoveryController.handle",
+    "services": [
+      "service.start",
+      "service.list",
+      "service.approve",
+      "service.cancel",
+      "service.get"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "body",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/assistedRecovery.test.ts"
+    ],
+    "source": "backend/src/controllers/AssistedRecoveryController.ts",
+    "routeSource": "backend/src/routes/assistedRecovery.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "assistedRecovery",
+    "method": "POST",
+    "route": "/api/assisted-recovery/:id/cancel",
+    "handler": "AssistedRecoveryController.handle",
+    "services": [
+      "service.start",
+      "service.list",
+      "service.approve",
+      "service.cancel",
+      "service.get"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "body",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/routes/assistedRecovery.test.ts"
+    ],
+    "source": "backend/src/controllers/AssistedRecoveryController.ts",
+    "routeSource": "backend/src/routes/assistedRecovery.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
     "feature": "backups",
     "method": "DELETE",
     "route": "/api/backups/:id",
@@ -1157,6 +1322,36 @@
       "params.id",
       "query",
       "query.replicationId"
+    ],
+    "requestSchemas": [],
+    "response": "controller JSON or binary/stream contract; unversioned",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "backups",
+    "method": "GET",
+    "route": "/api/backups/:id/files/download",
+    "handler": "BackupController.downloadSnapshotItem",
+    "services": [
+      "backupService.downloadSnapshotItem"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "params.id"
     ],
     "requestSchemas": [],
     "response": "controller JSON or binary/stream contract; unversioned",

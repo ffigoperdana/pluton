@@ -714,7 +714,18 @@ describe('Phase 4 remote managed repository recovery', () => {
 			await fs.mkdir(target, { recursive: true, mode: 0o700 });
 			return target;
 		}
-		it('measures actual files/bytes against listing, verifies source tree, and uses no agent content calls', async () => {
+
+	it('a known transport TLS failure cannot become primary availability or start a restore',async()=>{
+		session.probe=jest.fn().mockRejectedValue(new ManagedRepositoryAccessError('tls-invalid'));
+		await expect(service.primaryAvailability('backup-01','plan-01',new AbortController().signal)).rejects.toMatchObject({code:'tls-invalid'});
+		expect(session.snapshot).not.toHaveBeenCalled();expect(session.restore).not.toHaveBeenCalled();
+	});
+	it('a metadata deadline after a connected transport stays uncertain rather than authorizing fallback',async()=>{
+		session.probe=jest.fn().mockResolvedValue(undefined);session.snapshot.mockRejectedValue(new ManagedRepositoryAccessError('timeout'));
+		await expect(service.primaryAvailability('backup-01','plan-01',new AbortController().signal)).rejects.toMatchObject({code:'repository-unavailable'});
+		expect(session.probe).toHaveBeenCalledTimes(1);expect(session.restore).not.toHaveBeenCalled();
+	});
+	it('measures actual files/bytes against listing, verifies source tree, and uses no agent content calls', async () => {
 			backup.sourceConfig = { includes: ['/srv/example-app'] };
 			const target = await workspace();
 			const check = jest.fn();

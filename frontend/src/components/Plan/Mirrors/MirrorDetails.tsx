@@ -1,3 +1,4 @@
+import AssistedRecovery from '../../Restore/AssistedRecovery/AssistedRecovery';
 import { toast } from 'react-toastify';
 import { Backup, PlanReplicationSettings } from '../../../@types';
 import { useRetryFailedReplications } from '../../../services';
@@ -38,7 +39,15 @@ const MirrorDetails = ({ mirrors = [], replicationSettings, managedAgent, backup
          <div>
             {summary.incomplete && <p role="status">{summary.label}. A successful primary backup does not confirm replica protection.</p>}
             <p>Retries are explicit. Pending copies are reconciled by the server; uncertain results may require an operator review.</p>
-            {managedAgent && <p>Managed Agent file restore and native database recovery currently require the primary repository. Direct restore from a mirror is unavailable.</p>}
+            {managedAgent &&
+               (replicationSettings?.recoveryPolicy === 'assisted' ? (
+                  <AssistedRecovery planId={planId} backupId={backupId} manual />
+               ) : (
+                  <p>
+                     This plan uses Primary Only. Enable Assisted Failover in plan settings to authorize isolated replica recovery. Native database
+                     import retains its separate approval.
+                  </p>
+               ))}
             <div className={classes.mirrorList}>
                {mirrors && mirrors.length > 0 ? (
                   mirrors.map((mirror, index) => {
@@ -84,8 +93,16 @@ const MirrorDetails = ({ mirrors = [], replicationSettings, managedAgent, backup
                                  <Icon type={iconType} size={12} /> {label}
                               </div>
                            </div>
-                           {mirror.snapshotId && <div className={classes.mirrorMetadata}>Last replicated snapshot: <code>{mirror.snapshotId}</code></div>}
-                           {mirror.sourceSnapshotId && <div className={classes.mirrorMetadata}>Source snapshot: <code>{mirror.sourceSnapshotId}</code></div>}
+                           {mirror.snapshotId && (
+                              <div className={classes.mirrorMetadata}>
+                                 Last replicated snapshot: <code>{mirror.snapshotId}</code>
+                              </div>
+                           )}
+                           {mirror.sourceSnapshotId && (
+                              <div className={classes.mirrorMetadata}>
+                                 Source snapshot: <code>{mirror.sourceSnapshotId}</code>
+                              </div>
+                           )}
                            {mirror.attempts !== undefined && <div className={classes.mirrorMetadata}>Attempts: {mirror.attempts}</div>}
                            {mirror.verifiedAt && <div className={classes.mirrorMetadata}>Verified: {new Date(mirror.verifiedAt).toISOString()}</div>}
                            {mirror.lastErrorCode && <div className={classes.mirrorMetadata}>Decision: {mirror.lastErrorCode}</div>}

@@ -186,11 +186,35 @@ export function assertStorageUpdateReplicaIsolation(
 }
 
 /** Common server limit; UI limits never substitute for API enforcement. */
-export function validateReplicationSettings(settings: unknown): void {
+export function validateReplicationSettings(
+	settings: unknown,
+	scope?: { sourceType?: string; sourceId?: string; method?: string }
+): void {
 	if (settings === undefined || settings === null) return;
 	if (typeof settings !== 'object' || Array.isArray(settings))
 		throw new AppError(400, 'Invalid replication settings.');
-	const value = settings as { enabled?: unknown; concurrent?: unknown; storages?: unknown };
+	const value = settings as {
+		enabled?: unknown;
+		concurrent?: unknown;
+		storages?: unknown;
+		recoveryPolicy?: unknown;
+	};
+	if (
+		value.recoveryPolicy !== undefined &&
+		!['primary-only', 'assisted'].includes(value.recoveryPolicy as string)
+	)
+		throw new AppError(400, 'Invalid recovery source policy.');
+	if (
+		value.recoveryPolicy === 'assisted' &&
+		scope &&
+		(scope.sourceType !== 'device' || scope.sourceId === 'main' || scope.method !== 'backup')
+	)
+		throw new AppError(400, 'Assisted Failover requires a managed remote filesystem backup.');
+	if (
+		value.recoveryPolicy === 'assisted' &&
+		(!value.enabled || !Array.isArray(value.storages) || !value.storages.length)
+	)
+		throw new AppError(400, 'Assisted Failover requires enabled compatible replicas.');
 	if (
 		typeof value.enabled !== 'boolean' ||
 		(value.concurrent !== undefined && typeof value.concurrent !== 'boolean') ||

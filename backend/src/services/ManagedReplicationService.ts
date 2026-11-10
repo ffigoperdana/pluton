@@ -1,3 +1,4 @@
+import { replicaSourceBinding } from '../utils/replicaSourceBinding';
 import crypto from 'crypto';
 import Cryptr from 'cryptr';
 import type { Plan, NewPlan } from '../db/schema/plans';
@@ -60,6 +61,11 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 	async validatePlan(plan: Plan | NewPlan): Promise<void> {
 		const replication = plan.settings.replication;
 		if (!replication) return;
+		if (
+			replication.recoveryPolicy === 'assisted' &&
+			(plan.sourceType !== 'device' || plan.sourceId === 'main' || plan.method !== 'backup')
+		)
+			throw new AppError(400, 'Assisted Failover requires a managed remote filesystem backup.');
 		if (!Array.isArray(replication.storages) || replication.storages.length > 2)
 			throw new AppError(400, 'Managed Agent plans support at most two replica destinations.');
 		if (!replication.enabled) return;
@@ -445,18 +451,7 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 			snapshotId: snapshotId!,
 			artifacts,
 		};
-		const bindingHash = crypto
-			.createHash('sha256')
-			.update(
-				JSON.stringify({
-					snapshotId,
-					sourceId: backup.sourceId,
-					sourceType: backup.sourceType,
-					sourcePaths: backup.completionStats?.sourcePaths || backup.sourceConfig?.includes || [],
-					lifecycle,
-				})
-			)
-			.digest('hex');
+		const bindingHash = replicaSourceBinding(backup);
 		return { source, repository, plan, backup, bindingHash };
 	}
 

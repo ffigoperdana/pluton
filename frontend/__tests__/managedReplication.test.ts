@@ -160,7 +160,9 @@ test('actual mirror details show independent status, exact snapshots, explicit r
    const view = await fixture(Details, { mirrors: [mirror], managedAgent: true, replicationSettings: settings(1), planId: 'plan-01', backupId: 'backup-01', close() {} });
    try {
       assert.match(view.text(), /successful primary backup does not confirm replica protection/);
-      assert.match(view.text(), /Direct restore from a mirror is unavailable/);
+      assert.match(view.text(), /This plan uses Primary Only/);
+      assert.match(view.text(), /Native database import retains its separate approval/);
+      assert.equal([...view.dom.window.document.querySelectorAll('button')].some(button => button.textContent === 'Check replica recovery'), false);
       assert.match(view.text(), new RegExp(snapshot));
       assert.match(view.text(), /Attempts: 2/);
       assert.match(view.text(), /replication-copy-failed/);

@@ -148,6 +148,16 @@ jobs:
         # Native Linux operator test; no socket or new privileges in Pluton.
         run: python3 scripts/validate-deployment.py pluton-recovery-ci:local
 
+      - name: Build isolated replica recovery test dependencies
+        timeout-minutes: 15
+        run: |
+          docker build --target build -f Dockerfile.source -t pluton-replica-build:local .
+          docker build -f backend/__tests__/fixtures/replica-recovery/Dockerfile -t pluton-replica-recovery:local .
+
+      - name: Verify real SFTP to S3 assisted recovery and one-time approval
+        timeout-minutes: 6
+        run: python3 scripts/validate-replica-recovery.py pluton-replica-recovery:local
+
       - name: Build isolated database-only fixture
         run: docker build -f backend/__tests__/fixtures/recovery-clients/Dockerfile -t pluton-recovery-db-only:local .
 

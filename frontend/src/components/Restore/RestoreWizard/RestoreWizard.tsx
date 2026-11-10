@@ -1,3 +1,4 @@
+import AssistedRecovery from '../AssistedRecovery/AssistedRecovery';
 import { useMemo, useState } from 'react';
 import { useIsFetching, useIsMutating } from '@tanstack/react-query';
 import Icon from '../../common/Icon/Icon';
@@ -19,11 +20,13 @@ interface RestoreWizardProps {
    planStorage: Plan['storage'];
    mirrors?: Backup['mirrors'];
    stagingOnly?: boolean;
+   assisted?: boolean;
    close: () => void;
 }
 
-const RestoreWizard = ({ backupId, planId, deviceId, mirrors, planStorage, stagingOnly = false, close }: RestoreWizardProps) => {
+const RestoreWizard = ({ backupId, planId, deviceId, mirrors, planStorage, stagingOnly = false, assisted = false, close }: RestoreWizardProps) => {
    const [step, setStep] = useState(1);
+   const [primaryReady, setPrimaryReady] = useState(false);
    const [restoreSettings, setRestoreSettings] = useState<RestoreSettings>({
       type: 'original',
       path: '',
@@ -50,6 +53,15 @@ const RestoreWizard = ({ backupId, planId, deviceId, mirrors, planStorage, stagi
          total_bytes: counts.totalBytes,
       };
    }, [files]);
+
+   if (stagingOnly && assisted && !primaryReady)
+      return (
+         <div className={classes.restoreWizard}>
+            <div className={classes.content}>
+               <AssistedRecovery planId={planId} backupId={backupId} onPrimaryReady={() => setPrimaryReady(true)} close={close} />
+            </div>
+         </div>
+      );
 
    return (
       <div className={classes.restoreWizard}>

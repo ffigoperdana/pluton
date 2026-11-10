@@ -287,6 +287,18 @@ Run `pnpm --filter @plutonhq/core-backend test:mcp` in addition to existing chec
 `node --test scripts/__tests__/apiInventory.test.mjs`, and
 `node --experimental-strip-types --test frontend/__tests__/mcp.test.ts`.
 
+## Assisted managed replica recovery
+
+Managed SFTP plans can opt into Assisted Failover; missing policy remains Primary
+Only. The read/staging-only S3 adapter, verified receipt/source mapping resolver,
+owner-bound durable approval coordinator and scoped GET rediscovery are documented
+in [the architecture and operator runbook](ASSISTED_REPLICA_RECOVERY.md). Migration
+0022 adds a separate journal; it does not rewrite backups or replica repositories.
+Real loopback SFTP-to-S3 copy/restore testing is a separate bounded Container Image
+CI gate. Native database import and automatic recovery tests remain on their
+existing primary paths. Replica recovery writes only isolated local staging and
+never silently switches sources or alters retention, Agent or Reliable Download.
+
 ## Configuration and remaining questions
 
 The root [.env.template](../.env.template) already provides generic placeholders;

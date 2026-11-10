@@ -119,6 +119,42 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 		});
 	});
 
+	it('probes only the exact repository root with bounded read-only rclone arguments and discards names', async () => {
+		responses.push({ stdout: 'config\n' });
+		await new ManagedSftpRepositorySession().withSession(access, async session => {
+			await expect(session.probe!()).resolves.toBeUndefined();
+		});
+		expect((spawn as jest.Mock).mock.calls[1][1]).toEqual([
+			'lsf',
+			'pluton:' + access.repositoryPath,
+			'--max-depth',
+			'1',
+			'--files-only',
+			'--retries',
+			'1',
+			'--low-level-retries',
+			'1',
+			'--timeout',
+			'10s',
+			'--contimeout',
+			'5s',
+		]);
+	});
+	it('keeps authentication failure ineligible when a deadline abort races a held request', async () => {
+		responses.push({ held: true });
+		const controller = new AbortController();
+		const request = new ManagedSftpRepositorySession().withSession(
+			access,
+			session => session.snapshot(id),
+			controller.signal
+		);
+		const rejected = expect(request).rejects.toMatchObject({ code: 'authentication-denied' });
+		while (children.length < 2) await new Promise<void>(resolve => setImmediate(resolve));
+		children[1].stderr.emit('data', Buffer.from('AccessDenied synthetic fixture failure'));
+		controller.abort(new DOMException('Synthetic deadline', 'TimeoutError'));
+		await rejected;
+	});
+
 	it('uses private config 0600/directory 0700, obscures plaintext on stdin and cleans after browse', async () => {
 		responses.push(
 			{ stdout: JSON.stringify([snapshot]) },
@@ -181,6 +217,8 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 				'diff',
 				'dump',
 				'files',
+				'identity',
+				'probe',
 				'restore',
 				'snapshot',
 				'streamFiles',
