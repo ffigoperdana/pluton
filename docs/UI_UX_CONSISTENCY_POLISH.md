@@ -424,6 +424,22 @@ Native controls (`155b7f8`):
 - `frontend/src/components/Plan/PlanSettings/PlanReplicationSettings.module.scss`
 - `frontend/src/routes/Mcp/McpV2Panel.tsx` and `Mcp.module.scss` (also above)
 
+Assisted Recovery and Mirror Details (`0cb2475`, `fb8af1f`; details in
+`docs/ASSISTED_RECOVERY_UI_POLISH.md`):
+
+- `frontend/src/components/Restore/AssistedRecovery/AssistedRecovery.tsx`
+- `frontend/src/components/Restore/AssistedRecovery/AssistedRecovery.module.scss`
+- `frontend/src/components/Restore/RestoreWizard/RestoreWizard.tsx`
+- `frontend/src/components/Restore/RestoreWizard/RestoreWizard.module.scss`
+- `frontend/src/components/Plan/Mirrors/MirrorDetails.tsx`
+- `frontend/src/components/Plan/Mirrors/MirrorDetails.module.scss` (also above)
+- `frontend/src/utils/assistedRecovery.ts`
+- `frontend/__tests__/assistedRecovery.test.ts`
+- `frontend/__tests__/recoveryPresentation.test.ts`
+- `frontend/__tests__/theme-preview/recovery.html`
+- `frontend/__tests__/theme-preview/recovery.tsx`
+- `docs/ASSISTED_RECOVERY_UI_POLISH.md`
+
 ## Operator UAT (Chrome)
 
 Deploy the reviewed image by digest as usual, close old Pluton tabs so the new

@@ -2,9 +2,9 @@
 
 ## Scope and execution
 
-Branch `claude/assisted-recovery-ui`, stacked on `claude/ui-ux-consistency-polish`
-(currently `12dfaa0`) (that branch is not yet merged; merge it first, or review this
-branch as a stacked change). Local commits only: no push, pull request, merge,
+Part of branch `claude/ui-ux-consistency-polish` (the separate
+`claude/assisted-recovery-ui` branch was fast-forwarded into it and deleted at
+the owner's request). Local commits only: no push, pull request, merge,
 deployment or production access. Frontend presentation only.
 
 Unchanged: recovery business logic, approvals and their binding, polling,
@@ -65,6 +65,34 @@ Reviewed in a synthetic preview of every recovery state (see Evidence).
   4px grid, `alt=""` on the decorative provider image.
 - Modal width (560px) and its scroll behaviour are unchanged.
 
+## Follow-up: wizard frame, readable values, new-check label (`fb8af1f`)
+
+- **Restore Wizard frame (proven):** in assisted mode `RestoreWizard`
+  rendered `AssistedRecovery` directly inside its panel, without the wizard
+  header, close button or padding, so the content touched the panel edge.
+  The assisted step now uses the normal wizard header ("Restore Backup", the
+  same close action as the panel's Close button) and a padded body that
+  scrolls within the full-height panel.
+- **Readable values:** `target` and `operation` already arrive as sentences
+  from `AssistedRecoveryService` ("Isolated Pluton staging", "File/directory/SQL
+  artifact staging (no database import)"). The earlier note naming
+  `restore-files` / `private-staging` came from the synthetic preview data, not
+  the backend. Phases (`primary-check`, `replica-check`,
+  `staging-preparation`, `integrity-verified`, `staging-cleanup-pending`, ...),
+  the primary state, audit events and diagnostic codes are kebab-case values.
+  A new `recoveryLabel()` turns them into words mechanically
+  (`staging-preparation` -> "Staging preparation"); nothing is re-interpreted.
+  The exact value stays available: phase and primary state as a `title`,
+  diagnostic and audit codes as a monospace chip next to the words.
+- **Manual check under a finished job:** the form is still shown in exactly
+  the same states (only blocking jobs hide it), so the workflow is unchanged.
+  When an earlier job is shown it now carries the heading "Start a new replica
+  check", so it no longer reads as an action on that job. With no earlier job
+  there is no heading.
+- Tests: readable phase/codes with the exact codes kept and no request started;
+  no heading without an earlier job; mechanical `recoveryLabel`; wizard header
+  and padded body. Full frontend suite **471 passed**.
+
 ## Evidence
 
 Synthetic preview (fixture only, every mutation refused):
@@ -86,7 +114,7 @@ and no horizontal scroll inside the 351px dialog.
 
 | Check                                                                 | Result                                                                                                                                                                                                                                                              |
 | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `node --experimental-strip-types --test frontend/__tests__/*.test.ts` | **465 passed, 0 failed**                                                                                                                                                                                                                                            |
+| `node --experimental-strip-types --test frontend/__tests__/*.test.ts` | **471 passed, 0 failed** (465 before `fb8af1f`)                                                                                                                                                                                                                     |
 | New `recoveryPresentation.test.ts`                                    | Tone for every state including cleanup pending; themed module, no inline styles, primary approval action, replica rows, token-only stylesheets; Mirror Details order, `alt`, no fixed colours. Failed before the change (missing helper, then contract assertions). |
 | `assistedRecovery.test.ts` (existing behaviour)                       | Passes unchanged in its assertions; its esbuild setup gained the same `.scss` stub other UI tests use, because the component now imports a stylesheet                                                                                                               |
 | `pnpm --filter @plutonhq/core-frontend exec tsc -b`                   | Passed                                                                                                                                                                                                                                                              |
@@ -101,6 +129,7 @@ and no horizontal scroll inside the 351px dialog.
 - `frontend/src/utils/assistedRecovery.ts` (`recoveryTone`, presentation only)
 - `frontend/src/components/Plan/Mirrors/MirrorDetails.tsx`
 - `frontend/src/components/Plan/Mirrors/MirrorDetails.module.scss`
+- `frontend/src/components/Restore/RestoreWizard/RestoreWizard.tsx` and `RestoreWizard.module.scss` (assisted frame)
 - `frontend/__tests__/recoveryPresentation.test.ts` (new)
 - `frontend/__tests__/assistedRecovery.test.ts` (`.scss` stub only)
 - `frontend/__tests__/theme-preview/recovery.html`, `recovery.tsx` (new synthetic preview)
@@ -125,18 +154,11 @@ if something looks wrong.
 
 ## Rollback
 
-Revert this branch's commits (frontend only), or deploy the previous image.
+Revert `fb8af1f` and `0cb2475` (newest first; frontend only), or deploy the
+previous image. They can be reverted without touching the rest of the branch.
 
 ## Remaining inconsistencies (not changed here)
 
-- Manual mode still shows the "Check replica recovery" form under a completed
-  or failed job (existing logic: only blocking jobs hide it). It may read as a
-  second, competing action; a product decision.
-- Status sentences, phases and codes are raw backend values (`restore-files`,
-  `private-staging`, `primary-repository-unreachable`); friendly labels would
-  need an agreed mapping.
 - The audit history is a plain list with local times only (no date or zone).
-- `RestoreWizard` renders the recovery panel inside its own container; its
-  surrounding wizard chrome was not restyled.
 - Other dialogs still use `.modalButton` or local button styles; a shared
   dialog button component would remove the remaining per-feature copies.
