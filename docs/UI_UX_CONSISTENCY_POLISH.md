@@ -225,6 +225,33 @@ fallbacks.
 - Table headers, muted text, cards and the overview use theme tokens only (no
   hex fallbacks). Labels, routes, confirmations and API calls are unchanged.
 
+### Native selects, fieldsets and disclosures (`155b7f8`)
+
+Audit: 19 files render a native `<select>`, 9 a `<fieldset>` and 12 a
+`<details>`. About half had component styles; the rest showed browser
+defaults (thin light border, unpadded select, default legend line, large
+triangle markers), for example Recovery & Failover in Edit Plan and the MCP
+"Connect a client" guides.
+
+- `global.scss` gains low-specificity element rules: `select` (field border,
+  6px radius, padding, 0.8125rem), `fieldset`/`legend` (line border, 8px
+  radius, semibold title), `summary` (pointer, 500 weight) and a muted, smaller
+  `summary::marker`. Component rules keep precedence, so the already-styled
+  controls (pagination, collection filters, backup history, Legacy, Recovery
+  Testing, notifications) are unchanged; no `::before` marker is added
+  globally, so custom summaries such as the backup-history info button keep
+  their single icon.
+- Recovery & Failover uses a `.recoveryPolicy` box matching the replication
+  destination boxes (field border, 6px radius, 16px padding, full-width 40px
+  select, muted note); the replication validation message is an error box.
+- MCP "Connect a client": endpoint shown as a chip; the three client guides
+  are one bordered disclosure list with a rotating chevron, hover surface and
+  indented content.
+- Verified with computed styles in the synthetic preview (Edit Plan, remote
+  plan, replication toggled on without saving): box border `#6c6f7b`, radius
+  6px, padding 16px, legend 13px/600, select 40px on `--field-bg`, note 12px
+  muted.
+
 ### Behaviour differences to be aware of
 
 - The Detailed changes path list is requested only when the disclosure is
@@ -269,7 +296,7 @@ Windows, Node 24.16.0, pnpm 10.20.0.
 
 | Check                                                                 | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `node --experimental-strip-types --test frontend/__tests__/*.test.ts` | **462 passed, 0 failed, 0 skipped**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `node --experimental-strip-types --test frontend/__tests__/*.test.ts` | **464 passed, 0 failed, 0 skipped**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | New/updated tests                                                     | Toggle token contrast and saturation (Light/Dark), toggle focusability and `role=switch`, semantic-token guard (no error text on the fill token, no `turquoise`, no `var()` without `--`, device dot, MCP badge), Snapshot Details summary, lazy disclosure, `aria-pressed` selection driving Browse Changed Files; `formControlAccessibility.test.ts` (14 tests): carets never submit an enclosing form, Enter/Space selection, disabled options, radio groups, named toggles, disabled RadioIconSelect group (mouse and keyboard), individually disabled options, Edit Plan locked strategy vs Add Plan selectable strategy and upgrade prompt |
 | Test-first evidence                                                   | New toggle tests failed on the old styles ("Missing token", "visibility:hidden"); the updated Snapshot Details test failed before the component change; the guarded patterns exist in 9 files on `origin/main`; all 9 form-control tests failed before the fix, and a throwaway jsdom check showed one caret click submitting a form for each of the four controls; the 3 RadioIconSelect/Edit Plan regression tests failed before `64f471c` (Edit Plan test: "must not change the backup strategy") while the Add Plan test passed before and after                                                                                             |
 | `pnpm --filter @plutonhq/core-frontend exec tsc -b`                   | Passed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -314,7 +341,8 @@ accessible names and focus reveal, `ba711db` Browse Snapshot / Snapshot
 Details, `7ace756` local status line, `e96fc79` synthetic preview data,
 `e051898` this report, `285272d` form controls, `bf1a6db` report update,
 `64f471c` read-only disabled RadioIconSelect, `eac7d9b` report update,
-`8871270` MCP administration, then this report update.
+`8871270` MCP administration, `5190c6a` report update, `155b7f8` native
+controls, then this report update.
 
 Theme tokens and toggles:
 
@@ -389,6 +417,13 @@ MCP administration (`8871270`):
 - `frontend/src/routes/Mcp/McpV2Panel.tsx`
 - `frontend/__tests__/themeStyles.test.ts` (MCP contract test; also in the first group)
 
+Native controls (`155b7f8`):
+
+- `frontend/src/styles/global.scss` (also in the first group)
+- `frontend/src/components/Plan/PlanSettings/PlanReplicationSettings.tsx`
+- `frontend/src/components/Plan/PlanSettings/PlanReplicationSettings.module.scss`
+- `frontend/src/routes/Mcp/McpV2Panel.tsx` and `Mcp.module.scss` (also above)
+
 ## Operator UAT (Chrome)
 
 Deploy the reviewed image by digest as usual, close old Pluton tabs so the new
@@ -418,7 +453,7 @@ screenshot without hostnames or identifiers.
 ## Rollback
 
 Deploy the previous image digest (frontend assets only, no schema or data
-change), or revert commits `8871270`, `64f471c`, `285272d`, `e96fc79`, `7ace756`, `ba711db`,
+change), or revert commits `155b7f8`, `8871270`, `64f471c`, `285272d`, `e96fc79`, `7ace756`, `ba711db`,
 `270ed02`, `2d5821e` and the report commits. `64f471c` and `285272d` can be
 reverted on their own (newest first).
 
