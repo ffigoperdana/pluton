@@ -1,3 +1,26 @@
+// Mirror Details: replica results first, then the separated recovery controls.
+$mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+
+.mirrorDetails {
+   display: grid;
+   gap: 12px;
+   font-size: 0.8125rem;
+   p {
+      margin: 0;
+      line-height: 1.5;
+   }
+}
+.note {
+   font-size: 0.75rem;
+   color: var(--content-text-color-light);
+}
+.notice {
+   padding: 8px 12px;
+   border-radius: 6px;
+   background: var(--warning-bg-color);
+   color: var(--warning-text-color);
+}
+
 .mirrorStats {
    display: flex;
    flex-direction: row;
@@ -9,58 +32,83 @@
    border: 1px solid var(--line-color);
    border-radius: 6px;
    .mirrorItem {
-      padding: 12px 20px;
+      padding: 12px 16px;
       border-bottom: 1px solid var(--line-color);
+      &:last-child {
+         border-bottom: 0;
+      }
 
       .mirrorItemContent {
          display: flex;
          flex-direction: row;
+         align-items: center;
          justify-content: space-between;
+         gap: 12px;
+         flex-wrap: wrap;
       }
       img {
          max-width: 14px;
          vertical-align: middle;
-         margin-right: 2px;
+         margin-right: 4px;
       }
       .mirrorItemLabel {
+         min-width: 0;
+         strong {
+            font-weight: 500;
+            color: var(--content-title-color);
+         }
          i {
             color: var(--content-text-color-light);
-            font-size: 0.7rem;
+            font-size: 0.75rem;
             font-style: normal;
-            margin-left: 5px;
+            margin-left: 8px;
          }
       }
       .mirrorItemStatus {
+         display: inline-flex;
+         align-items: center;
+         gap: 6px;
+         font-size: 0.75rem;
+         font-weight: 500;
+         color: var(--content-text-color-light);
          .retryButton {
-            border-radius: 12px;
-            padding: 2px 12px;
-            margin-right: 5px;
-            border: 1px solid var(--line-active-color);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            min-height: 28px;
+            padding: 4px 12px;
+            margin-right: 4px;
+            border-radius: 4px;
+            border: 1px solid transparent;
+            background: var(--line-color);
+            color: var(--content-text-color);
+            font-size: 0.75rem;
+            font-weight: 600;
             cursor: pointer;
+            transition:
+               background-color 0.12s ease-out,
+               color 0.12s ease-out;
             :global(.icon) {
-               color: var(--icon-color) !important;
+               top: 0;
+               color: currentColor !important;
             }
-            &:hover {
+            &:hover:not(:disabled) {
                background-color: var(--primary-color);
-               color: white;
-               border-color: var(--primary-color);
-               :global(.icon) {
-                  color: white !important;
-               }
+               color: var(--primary-text-color);
+            }
+            &:disabled {
+               opacity: 0.5;
+               cursor: not-allowed;
             }
          }
-         span {
-            color: var(--icon-color);
+         &.completed {
+            color: var(--success-text-color);
          }
-         &.mirrorItemStatus.completed {
-            span {
-               color: var(--success-text-color);
-            }
+         &.failed {
+            color: var(--error-text-color);
          }
-         &.mirrorItemStatus.failed {
-            span {
-               color: var(--error-text-color);
-            }
+         &.started {
+            color: var(--primary-color-foreground);
          }
       }
       .mirrorItemError {
@@ -68,14 +116,32 @@
          background-color: var(--error-bg-color);
          color: var(--error-text-color);
          border-radius: 6px;
-         padding: 12px;
+         padding: 8px 12px;
          box-sizing: border-box;
-         margin-top: 12px;
+         margin-top: 8px;
       }
       .mirrorMetadata {
-         margin-top: 8px;
+         margin-top: 6px;
          font-size: 0.75rem;
+         color: var(--content-text-color-light);
          overflow-wrap: anywhere;
+         code {
+            font-family: $mono;
+            padding: 0 4px;
+            border-radius: 4px;
+            border: 1px solid var(--line-color);
+            background: var(--surface-muted);
+            color: var(--content-title-color);
+         }
       }
    }
+   .empty {
+      padding: 12px 16px;
+      color: var(--content-text-color-light);
+   }
+}
+// Recovery controls are a separate step below the replica results.
+.recovery {
+   padding-top: 16px;
+   border-top: 1px solid var(--line-color);
 }

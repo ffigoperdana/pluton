@@ -22,6 +22,8 @@ const bundle = await backendRequire('esbuild').build({
          name: 'fixture-api',
          setup(builder: any) {
             builder.onLoad({ filter: /constants[.]ts$/ }, () => ({ contents: 'export const API_URL="https://example.internal/api";', loader: 'js' }));
+            // Styles are presentation only; class names resolve to their own keys.
+            builder.onLoad({ filter: /[.]scss$/ }, () => ({ contents: 'export default new Proxy({}, {get:(_,key)=>String(key)});', loader: 'js' }));
          },
       },
    ],
@@ -344,9 +346,16 @@ test('granular restore intent is preserved, and a different pending selection ca
    }
 });
 
-test('restart uncertainty and pending cleanup are rediscovered with GET only',async()=>{
- for(const status of ['uncertain','failed'] as const){
-  const s=server([row({status,cleanupPending:true,failureCode:'restart-interrupted'})]);const ui=await mount(s.fetcher,false);
-  try{await ui.waitFor(()=>ui.dom.window.document.body.textContent.includes('cleanup needs attention'),'pending cleanup');assert(s.calls.every(call=>call.method==='GET'));assert.equal(ui.button('Continue with S3 Replica'),undefined);}finally{await ui.close();}
- }
+test('restart uncertainty and pending cleanup are rediscovered with GET only', async () => {
+   for (const status of ['uncertain', 'failed'] as const) {
+      const s = server([row({ status, cleanupPending: true, failureCode: 'restart-interrupted' })]);
+      const ui = await mount(s.fetcher, false);
+      try {
+         await ui.waitFor(() => ui.dom.window.document.body.textContent.includes('cleanup needs attention'), 'pending cleanup');
+         assert(s.calls.every((call) => call.method === 'GET'));
+         assert.equal(ui.button('Continue with S3 Replica'), undefined);
+      } finally {
+         await ui.close();
+      }
+   }
 });

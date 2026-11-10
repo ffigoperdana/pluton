@@ -36,18 +36,15 @@ const MirrorDetails = ({ mirrors = [], replicationSettings, managedAgent, backup
 
    return (
       <Modal title={`Mirrors for ${backupTitle ? backupTitle : 'backup-' + backupId}`} closeModal={close} width="560px">
-         <div>
-            {summary.incomplete && <p role="status">{summary.label}. A successful primary backup does not confirm replica protection.</p>}
-            <p>Retries are explicit. Pending copies are reconciled by the server; uncertain results may require an operator review.</p>
-            {managedAgent &&
-               (replicationSettings?.recoveryPolicy === 'assisted' ? (
-                  <AssistedRecovery planId={planId} backupId={backupId} manual />
-               ) : (
-                  <p>
-                     This plan uses Primary Only. Enable Assisted Failover in plan settings to authorize isolated replica recovery. Native database
-                     import retains its separate approval.
-                  </p>
-               ))}
+         <div className={classes.mirrorDetails}>
+            {summary.incomplete && (
+               <p role="status" className={classes.notice}>
+                  {summary.label}. A successful primary backup does not confirm replica protection.
+               </p>
+            )}
+            <p className={classes.note}>
+               Retries are explicit. Pending copies are reconciled by the server; uncertain results may require an operator review.
+            </p>
             <div className={classes.mirrorList}>
                {mirrors && mirrors.length > 0 ? (
                   mirrors.map((mirror, index) => {
@@ -66,7 +63,7 @@ const MirrorDetails = ({ mirrors = [], replicationSettings, managedAgent, backup
                         <div key={mirror.replicationId || index} className={classes.mirrorItem}>
                            <div className={classes.mirrorItemContent}>
                               <div className={classes.mirrorItemLabel}>
-                                 <img src={`/providers/${mirror.storageType}.png`} /> {mirror.storageName}{' '}
+                                 <img alt="" src={`/providers/${mirror.storageType}.png`} /> <strong>{mirror.storageName}</strong>{' '}
                                  {mirror.status === 'completed' && (
                                     <>
                                        {mirrorSize && (
@@ -83,6 +80,7 @@ const MirrorDetails = ({ mirrors = [], replicationSettings, managedAgent, backup
                               <div className={`${classes.mirrorItemStatus} ${classes[mirror.status]}`}>
                                  {mirror.status === 'failed' && (
                                     <button
+                                       type="button"
                                        className={classes.retryButton}
                                        disabled={retryReplicationsMutation.isPending}
                                        onClick={() => !retryReplicationsMutation.isPending && retryReplication(backupId, mirror.replicationId)}
@@ -111,9 +109,21 @@ const MirrorDetails = ({ mirrors = [], replicationSettings, managedAgent, backup
                      );
                   })
                ) : (
-                  <div>No replica result has been recorded for this backup yet.</div>
+                  <div className={classes.empty}>No replica result has been recorded for this backup yet.</div>
                )}
             </div>
+            {managedAgent && (
+               <div className={classes.recovery}>
+                  {replicationSettings?.recoveryPolicy === 'assisted' ? (
+                     <AssistedRecovery planId={planId} backupId={backupId} manual />
+                  ) : (
+                     <p className={classes.note}>
+                        This plan uses Primary Only. Enable Assisted Failover in plan settings to authorize isolated replica recovery. Native database
+                        import retains its separate approval.
+                     </p>
+                  )}
+               </div>
+            )}
          </div>
       </Modal>
    );
