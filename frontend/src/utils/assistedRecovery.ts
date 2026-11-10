@@ -40,6 +40,11 @@ export const recoveryCanApprove = (job: AssistedRecoveryJob, replica: string, no
    !job.expired &&
    job.expiresAt > now &&
    job.candidates.some((candidate) => candidate.replicationId === replica && candidate.state === 'passed');
+/** Readable words for backend phase/state/code values (`staging-preparation` -> `Staging preparation`); callers keep the exact value visible. */
+export function recoveryLabel(value?: string) {
+   const words = (value || '').replace(/[-_]+/g, ' ').trim();
+   return words ? words[0].toUpperCase() + words.slice(1) : '';
+}
 /** Presentation tone for recoveryStatus(); cleanup that needs attention outranks any finished status. */
 export type RecoveryTone = 'progress' | 'attention' | 'success' | 'error' | 'neutral';
 export function recoveryTone(job: AssistedRecoveryJob): RecoveryTone {

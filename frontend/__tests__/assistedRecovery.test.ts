@@ -359,3 +359,36 @@ test('restart uncertainty and pending cleanup are rediscovered with GET only', a
       }
    }
 });
+
+test('phase, primary state and diagnostic codes read as words while the exact codes stay visible', async () => {
+   const s = server([row({ status: 'failed', phase: 'check-failed', failureCode: 'no-eligible-replica', candidates: [] })]);
+   const ui = await mount(s.fetcher, true);
+   try {
+      await ui.waitFor(() => ui.dom.window.document.body.textContent.includes('Check failed'), 'readable phase');
+      const text = ui.dom.window.document.body.textContent;
+      const phase = [...ui.dom.window.document.querySelectorAll('dt')].find((dt: any) => dt.textContent === 'Phase')!.nextElementSibling!;
+      assert.equal(phase.getAttribute('title'), 'check-failed', 'the exact phase stays available');
+      assert(text.includes('Network unavailable') && text.includes('network-unavailable'), 'primary code: words plus exact code');
+      assert(text.includes('No eligible replica') && text.includes('no-eligible-replica'), 'diagnostic: words plus exact code');
+      // The manual check is still offered exactly as before; it is only labelled as a new check.
+      assert(text.includes('Start a new replica check'));
+      assert(ui.button('Check replica recovery'));
+      assert(
+         s.calls.every((call) => call.method === 'GET'),
+         'presentation only: no request was started',
+      );
+   } finally {
+      await ui.close();
+   }
+});
+
+test('without an earlier job the manual check has no "new check" heading', async () => {
+   const s = server([]);
+   const ui = await mount(s.fetcher, true);
+   try {
+      await ui.waitFor(() => ui.button('Check replica recovery'), 'manual form');
+      assert(!ui.dom.window.document.body.textContent.includes('Start a new replica check'));
+   } finally {
+      await ui.close();
+   }
+});

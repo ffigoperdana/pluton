@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider, useTheme } from '../../src/context/ThemeContext';
 import AssistedRecovery from '../../src/components/Restore/AssistedRecovery/AssistedRecovery';
 import MirrorDetails from '../../src/components/Plan/Mirrors/MirrorDetails';
+import RestoreWizard from '../../src/components/Restore/RestoreWizard/RestoreWizard';
 import type { AssistedRecoveryJob } from '../../src/utils/assistedRecovery';
 import '../../src/styles/global.scss';
 
@@ -121,12 +122,13 @@ const mirrors = [
 
 function Preview() {
    const { theme, setTheme } = useTheme();
-   const [view, setView] = useState<'states' | 'mirrors'>('states');
+   const [view, setView] = useState<'states' | 'mirrors' | 'wizard'>('states');
    return (
       <div style={{ padding: 24, display: 'grid', gap: 24, maxWidth: 760, margin: '0 auto' }}>
          <div style={{ fontSize: 12 }}>
             Synthetic · {theme} <button onClick={() => setTheme('light')}>Light</button> <button onClick={() => setTheme('dark')}>Dark</button>{' '}
-            <button onClick={() => setView('states')}>Recovery states</button> <button onClick={() => setView('mirrors')}>Mirror Details</button>
+            <button onClick={() => setView('states')}>Recovery states</button> <button onClick={() => setView('mirrors')}>Mirror Details</button>{' '}
+            <button onClick={() => setView('wizard')}>Restore Wizard</button>
          </div>
          {view === 'states' ? (
             Object.keys(states).map((name) => (
@@ -134,6 +136,19 @@ function Preview() {
                   <AssistedRecovery planId="example-plan" backupId={name} manual close={() => {}} />
                </div>
             ))
+         ) : view === 'wizard' ? (
+            // Assisted step of the real wizard; the job is already awaiting approval, so nothing is started.
+            <RestoreWizard
+               {...({
+                  planId: 'example-plan',
+                  backupId: 'awaiting-approval',
+                  deviceId: 'example-agent',
+                  stagingOnly: true,
+                  assisted: true,
+                  mirrors: [],
+                  close: () => setView('states'),
+               } as never)}
+            />
          ) : (
             <MirrorDetails
                mirrors={mirrors}

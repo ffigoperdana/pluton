@@ -51,3 +51,21 @@ test('Mirror Details lists replicas before recovery controls and drops hard-code
    const styles = css('components/Plan/Mirrors/MirrorDetails.module.scss');
    assert.ok(!/#[0-9a-f]{3,8}\b|(?<![\w-])(?:white|black)(?![\w-])/i.test(styles), 'theme tokens only');
 });
+
+test('backend phase, state and code values are humanised mechanically, never re-interpreted', async () => {
+   const { recoveryLabel } = await import('../src/utils/assistedRecovery.ts');
+   assert.equal(recoveryLabel('staging-preparation'), 'Staging preparation');
+   assert.equal(recoveryLabel('no-eligible-replica'), 'No eligible replica');
+   assert.equal(recoveryLabel('not-checked'), 'Not checked');
+   assert.equal(recoveryLabel(undefined), '');
+});
+
+test('Restore Wizard frames the assisted recovery step with its normal header and padded body', () => {
+   const wizard = src('components/Restore/RestoreWizard/RestoreWizard.tsx');
+   const assisted = wizard.slice(wizard.indexOf('if (stagingOnly && assisted && !primaryReady)'), wizard.indexOf('<div className={classes.steps}>'));
+   assert.match(assisted, /className=\{`\$\{classes\.content\} \$\{classes\.assistedContent\}`\}/);
+   assert.match(assisted, /aria-label="Close restore wizard"/);
+   assert.match(assisted, /className=\{classes\.assistedBody\}/);
+   const styles = css('components/Restore/RestoreWizard/RestoreWizard.module.scss');
+   assert.ok(styles.includes('.assistedBody'));
+});

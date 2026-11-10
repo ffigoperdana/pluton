@@ -393,3 +393,18 @@
       }
    }
 }
+
+// Assisted recovery step: same header as the wizard, a padded body and one
+// scroll area for the full panel height.
+.assistedContent {
+   height: 100vh;
+   display: flex;
+   flex-direction: column;
+}
+.assistedBody {
+   flex: 1 1 auto;
+   min-height: 0;
+   overflow-y: auto;
+   padding: 20px;
+   box-sizing: border-box;
+}

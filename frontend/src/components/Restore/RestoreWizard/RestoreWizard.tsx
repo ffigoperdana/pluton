@@ -57,8 +57,18 @@ const RestoreWizard = ({ backupId, planId, deviceId, mirrors, planStorage, stagi
    if (stagingOnly && assisted && !primaryReady)
       return (
          <div className={classes.restoreWizard}>
-            <div className={classes.content}>
-               <AssistedRecovery planId={planId} backupId={backupId} onPrimaryReady={() => setPrimaryReady(true)} close={close} />
+            <div className={`${classes.content} ${classes.assistedContent}`}>
+               <div className={classes.header}>
+                  <h3>
+                     <Icon type="restore" size={16} /> Restore Backup
+                  </h3>
+                  <button aria-label="Close restore wizard" className={classes.close} onClick={() => close()}>
+                     <Icon type="close" size={24} />
+                  </button>
+               </div>
+               <div className={classes.assistedBody}>
+                  <AssistedRecovery planId={planId} backupId={backupId} onPrimaryReady={() => setPrimaryReady(true)} close={close} />
+               </div>
             </div>
          </div>
       );

@@ -10,6 +10,7 @@ import {
    recoveryPolling,
    recoveryStatus,
    recoveryTone,
+   recoveryLabel,
    type AssistedRecoveryJob,
 } from '../../../utils/assistedRecovery';
 import classes from './AssistedRecovery.module.scss';
@@ -207,10 +208,16 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
                      <code>{job.sourceSnapshotId}</code>
                   </dd>
                   <dt>Phase</dt>
-                  <dd>{job.phase}</dd>
+                  <dd title={job.phase}>{recoveryLabel(job.phase)}</dd>
                   <dt>Primary</dt>
-                  <dd>
-                     {job.primary?.state || 'checking'} {job.primary?.code || ''}
+                  <dd title={job.primary?.state || 'checking'}>
+                     {recoveryLabel(job.primary?.state || 'checking')}
+                     {job.primary?.code && (
+                        <>
+                           {' · '}
+                           {recoveryLabel(job.primary.code)} <code>{job.primary.code}</code>
+                        </>
+                     )}
                   </dd>
                   <dt>Operation</dt>
                   <dd>{job.operation}</dd>
@@ -221,7 +228,7 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
                </dl>
                {job.failureCode && (
                   <p role="alert" className={classes.alert}>
-                     Diagnostic: {job.failureCode}. No source switch will be retried automatically.
+                     Diagnostic: {recoveryLabel(job.failureCode)} <code>{job.failureCode}</code>. No source switch will be retried automatically.
                   </p>
                )}
                {!!job.candidates.length && (
@@ -240,7 +247,13 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
                               />
                               <span>
                                  S3 Replica {candidate.position} —{' '}
-                                 {candidate.state === 'passed' ? 'Replica verified; recovery preflight passed' : 'Unavailable: ' + candidate.code}
+                                 {candidate.state === 'passed' ? (
+                                    'Replica verified; recovery preflight passed'
+                                 ) : (
+                                    <>
+                                       Unavailable: {recoveryLabel(candidate.code)} <code>{candidate.code}</code>
+                                    </>
+                                 )}
                               </span>
                            </label>
                            {candidate.destinationSnapshotId && (
@@ -292,8 +305,13 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
                   <ul>
                      {job.audit.map((event, index) => (
                         <li key={index}>
-                           {new Date(event.at).toLocaleTimeString()} — {event.event}
-                           {event.code ? ' · ' + event.code : ''}
+                           {new Date(event.at).toLocaleTimeString()} — {recoveryLabel(event.event)}
+                           {event.code && (
+                              <>
+                                 {' · '}
+                                 {recoveryLabel(event.code)} <code>{event.code}</code>
+                              </>
+                           )}
                         </li>
                      ))}
                   </ul>
@@ -302,6 +320,7 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
          )}
          {manual && !jobs.data?.some(recoveryBlocking) && (
             <div className={classes.manual}>
+               {job && <h5 className={classes.subhead}>Start a new replica check</h5>}
                <label>
                   Exact file or directory path in the snapshot (optional)
                   <input value={path} onChange={(event) => setPath(event.target.value)} placeholder="/srv/example-app" />

@@ -271,3 +271,9 @@ $mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospa
       }
    }
 }
+.subhead {
+   margin: 0;
+   font-size: 0.8125rem;
+   font-weight: 600;
+   color: var(--content-title-color);
+}
