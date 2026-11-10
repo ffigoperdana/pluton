@@ -320,3 +320,71 @@
       width: 100%;
    }
 }
+
+// Connect a client: endpoint chip and one bordered disclosure list.
+.endpoint {
+   display: flex;
+   align-items: center;
+   flex-wrap: wrap;
+   gap: 8px;
+   margin: 0 0 16px;
+   font-size: 0.8125rem;
+   color: var(--content-text-color-light);
+   code {
+      padding: 2px 8px;
+      border-radius: 4px;
+      border: 1px solid var(--line-color);
+      background: var(--surface-muted);
+      color: var(--content-title-color);
+      font-size: 0.75rem;
+   }
+}
+.guides {
+   margin-bottom: 16px;
+   border: 1px solid var(--line-color);
+   border-radius: 8px;
+   overflow: hidden;
+   details + details {
+      border-top: 1px solid var(--line-color);
+   }
+   summary {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      list-style: none;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      color: var(--content-title-color);
+      transition: background-color 0.12s ease-out;
+      &::before {
+         content: '';
+         flex: 0 0 auto;
+         width: 6px;
+         height: 6px;
+         border-right: 1.5px solid var(--content-text-color-light);
+         border-bottom: 1.5px solid var(--content-text-color-light);
+         transform: rotate(-45deg);
+         transition: transform 0.15s ease-out;
+      }
+      &:hover {
+         background: var(--surface-muted);
+      }
+      &:focus-visible {
+         outline-offset: -2px;
+      }
+   }
+   summary::-webkit-details-marker {
+      display: none;
+   }
+   details[open] > summary::before {
+      transform: rotate(45deg);
+   }
+   details > :not(summary) {
+      margin: 0 16px 12px 32px;
+   }
+   details > p {
+      font-size: 0.8125rem;
+      color: var(--content-text-color);
+   }
+}

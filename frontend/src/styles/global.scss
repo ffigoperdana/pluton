@@ -162,6 +162,42 @@ textarea {
    background-color: var(--field-bg);
 }
 
+// Base look for native controls that have no component styles. Element
+// selectors keep the lowest specificity, so component rules still win.
+select {
+   padding: 6px 10px;
+   border: 1px solid var(--field-line-color);
+   border-radius: 6px;
+   color: var(--content-title-color);
+   font-size: 0.8125rem;
+}
+
+fieldset {
+   margin: 0;
+   min-width: 0;
+   padding: 12px 16px;
+   border: 1px solid var(--line-color);
+   border-radius: 8px;
+}
+
+legend {
+   padding: 0 6px;
+   font-size: 0.8125rem;
+   font-weight: 600;
+   color: var(--content-title-color);
+}
+
+summary {
+   cursor: pointer;
+   font-weight: 500;
+   color: var(--content-title-color);
+}
+
+summary::marker {
+   color: var(--content-text-color-light);
+   font-size: 0.75em;
+}
+
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,

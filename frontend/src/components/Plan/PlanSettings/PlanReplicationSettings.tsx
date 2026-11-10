@@ -180,9 +180,13 @@ const PlanReplicationSettings = ({
                      Replication runs sequentially by default. Use a dedicated repository path for each destination.
                      {managedAgent && ' The Pluton server performs the copy; the source Agent does not receive replica credentials.'}
                   </p>
-                  {validationError && <p role="alert">{validationError}</p>}
+                  {validationError && (
+                     <p role="alert" className={mirrorClasses.validationError}>
+                        {validationError}
+                     </p>
+                  )}
                   {managedAgent && (
-                     <fieldset>
+                     <fieldset className={mirrorClasses.recoveryPolicy}>
                         <legend>Recovery &amp; Failover</legend>
                         <label>
                            Recovery source policy

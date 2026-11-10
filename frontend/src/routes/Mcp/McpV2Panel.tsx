@@ -537,33 +537,37 @@ export default function McpV2Panel({
          </section>
          <section className={classes.card}>
             <h3>Connect a client</h3>
-            <p>
-               Endpoint: <code>{endpoint || 'Not configured'}</code>
+            <p className={classes.endpoint}>
+               Endpoint <code>{endpoint || 'Not configured'}</code>
             </p>
-            <details>
-               <summary>Codex CLI and IDE</summary>
-               <pre
-                  className={classes.instructions}
-               >{`[mcp_servers.pluton]\nurl = ${JSON.stringify(endpoint || 'https://backup.example.internal/mcp')}\nbearer_token_env_var = "PLUTON_MCP_ACCESS_TOKEN"`}</pre>
-               <p>Set the environment variable securely before starting Codex. Keep the real token out of configuration files and shell history.</p>
-            </details>
-            <details>
-               <summary>Claude remote connector</summary>
-               <p>
-                  In Settings → Connectors → Add custom connector, enter the endpoint. Where Request headers is available, add Authorization with
-                  Bearer followed by your native token. Keep the value private. Your administrator may need to allow custom connectors and endpoint
-                  access.
-               </p>
-            </details>
-            <details>
-               <summary>OpenAI API and ChatGPT</summary>
-               <p>
-                  The Responses API MCP tool accepts the token in its authorization field. Your OpenAI API key is separate and stays in your
-                  application. ChatGPT custom connectors use the supported OAuth flow; native token entry there has not been verified. Configure the
-                  external OAuth provider for that flow.
-               </p>
-            </details>
-            <p>
+            <div className={classes.guides}>
+               <details>
+                  <summary>Codex CLI and IDE</summary>
+                  <pre
+                     className={classes.instructions}
+                  >{`[mcp_servers.pluton]\nurl = ${JSON.stringify(endpoint || 'https://backup.example.internal/mcp')}\nbearer_token_env_var = "PLUTON_MCP_ACCESS_TOKEN"`}</pre>
+                  <p>
+                     Set the environment variable securely before starting Codex. Keep the real token out of configuration files and shell history.
+                  </p>
+               </details>
+               <details>
+                  <summary>Claude remote connector</summary>
+                  <p>
+                     In Settings → Connectors → Add custom connector, enter the endpoint. Where Request headers is available, add Authorization with
+                     Bearer followed by your native token. Keep the value private. Your administrator may need to allow custom connectors and endpoint
+                     access.
+                  </p>
+               </details>
+               <details>
+                  <summary>OpenAI API and ChatGPT</summary>
+                  <p>
+                     The Responses API MCP tool accepts the token in its authorization field. Your OpenAI API key is separate and stays in your
+                     application. ChatGPT custom connectors use the supported OAuth flow; native token entry there has not been verified. Configure
+                     the external OAuth provider for that flow.
+                  </p>
+               </details>
+            </div>
+            <p className={classes.muted}>
                These instructions were checked against official documentation. Real provider accounts have not been tested. See{' '}
                <a href="/docs/reference/mcp">the MCP setup guide</a> for scope, examples and troubleshooting.
             </p>

@@ -230,6 +230,33 @@ test('MCP administration uses Pluton field tokens, a clear button hierarchy and 
    assert.match(page, /className=\{classes\.filters\}/);
 });
 
+test('unstyled native selects, fieldsets and disclosure summaries inherit one field and section look', () => {
+   const rule = (selector: string) => css.nodes.find((node: any) => node.selector === selector);
+   const decls = (selector: string) => Object.fromEntries((rule(selector)?.nodes || []).map((decl: any) => [decl.prop, decl.value]));
+   const select = decls('select');
+   assert.match(select.border || '', /var\(--field-line-color\)/, 'select boundary uses the field token');
+   assert.equal(select['border-radius'], '6px');
+   assert.ok(select.padding, 'select has padding instead of the browser default');
+   const fieldset = decls('fieldset');
+   assert.match(fieldset.border || '', /var\(--line-color\)/);
+   assert.equal(decls('legend').color, 'var(--content-title-color)');
+   assert.equal(decls('summary').cursor, 'pointer');
+   assert.equal(decls('summary::marker').color, 'var(--content-text-color-light)');
+});
+
+test('MCP client guides and the Recovery & Failover policy use themed sections', () => {
+   const mcp = compiled('routes/Mcp/Mcp.module.scss').toString();
+   assert.ok(mcp.includes('.guides details'), 'guides are bordered disclosure rows');
+   assert.ok(mcp.includes('.guides summary::-webkit-details-marker'), 'native triangle replaced by one chevron');
+   const panel = readFileSync(new URL('routes/Mcp/McpV2Panel.tsx', sourceRoot), 'utf8');
+   assert.match(panel, /className=\{classes\.guides\}/);
+   const replication = readFileSync(new URL('components/Plan/PlanSettings/PlanReplicationSettings.tsx', sourceRoot), 'utf8');
+   assert.match(replication, /<fieldset className=\{mirrorClasses\.recoveryPolicy\}>/);
+   const policy = compiled('components/Plan/PlanSettings/PlanReplicationSettings.module.scss').toString();
+   assert.ok(policy.includes('.recoveryPolicy select'), 'policy select is styled');
+   assert.ok(policy.includes('border: 1px solid var(--field-line-color)'));
+});
+
 test('status badges, selected files and toast surfaces no longer bypass the shared palette', () => {
    const global = css.toString();
    assert.ok(global.includes('background-color: var(--success-bg-color)'));
