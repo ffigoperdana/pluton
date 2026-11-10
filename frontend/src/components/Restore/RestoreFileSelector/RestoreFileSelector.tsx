@@ -229,6 +229,8 @@ const RestoreFileSelector = ({ selected, files, isLoading, errorFetching, showCh
          >
             <div className={sbClasses.fileName}>
                <button
+                  type="button"
+                  aria-label={`Select ${fileName}`}
                   className={`${classes.selectButton} ${isSelected ? classes.selected : ''} ${!canBeSelected ? classes.notSelectable : ''}`}
                   onClick={(e) => {
                      if (!canBeSelected) return;
@@ -313,6 +315,9 @@ const RestoreFileSelector = ({ selected, files, isLoading, errorFetching, showCh
                         ) === 'all';
                      return (
                         <button
+                           type="button"
+                           aria-label={`Select folder ${dir}`}
+                           aria-pressed={isSelected}
                            className={`${classes.selectButton} ${isSelected ? classes.selected : ''}`}
                            onClick={(e) => {
                               e.stopPropagation();

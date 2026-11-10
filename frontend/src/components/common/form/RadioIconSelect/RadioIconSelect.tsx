@@ -1,5 +1,6 @@
 import Icon from '../../Icon/Icon';
 import FormField from '../FormField/FormField';
+import { onActivateKey } from '../../../../utils/keyboard';
 import classes from './RadioIconSelect.module.scss';
 
 interface RadioIconSelectProps {
@@ -27,24 +28,35 @@ const RadioIconSelect = ({
    onUpdate,
    onDisableClick,
 }: RadioIconSelectProps) => {
+   const groupLabel = label,
+      groupDisabled = disabled;
    return (
       <FormField type="radioIconSelect" label={label} classes={classes.radioIconField} hint={hint} inline={inline}>
          <div
+            role="radiogroup"
+            aria-label={groupLabel}
             className={`${classes.radioIconFieldOptions} ${disabled ? classes.radioIconFieldOptionsDisabled : ''} ${showDescription ? classes.radioIconFieldOptionsDesc : ''} ${layout === 'list' ? classes.radioIconFieldList : ''}`}
          >
             {options.map((option) => {
                const { label, value, icon, description, disabled = false } = option;
+               // Keyboard activation runs exactly the same handler as a mouse click.
+               const choose = () => {
+                  if (disabled && onDisableClick) {
+                     onDisableClick(value);
+                  } else {
+                     onUpdate(value);
+                  }
+               };
                return (
                   <div
                      key={value}
+                     role="radio"
+                     aria-checked={fieldValue === value}
+                     aria-disabled={disabled || groupDisabled || undefined}
+                     tabIndex={0}
                      className={`${classes.radioIconFieldOption} ${disabled ? classes.radioIconFieldDisabled : ''} ${fieldValue === value ? classes.radioIconFieldActive : ''}`}
-                     onClick={() => {
-                        if (disabled && onDisableClick) {
-                           onDisableClick(value);
-                        } else {
-                           onUpdate(value);
-                        }
-                     }}
+                     onClick={choose}
+                     onKeyDown={onActivateKey(choose)}
                      data-tooltip-id="appTooltip"
                      data-tooltip-content={description}
                      data-tooltip-place="top"

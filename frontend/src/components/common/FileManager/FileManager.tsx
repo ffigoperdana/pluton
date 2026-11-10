@@ -138,6 +138,9 @@ export const FileManager = ({
          >
             <div className={classes.fileName}>
                <button
+                  type="button"
+                  aria-label={`Select ${item.name}`}
+                  aria-pressed={isPathSelected(item.path)}
                   onClick={(e) => {
                      e.stopPropagation();
                      if (isPathSelectable(item.path)) {

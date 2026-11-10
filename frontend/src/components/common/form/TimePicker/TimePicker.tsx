@@ -50,7 +50,7 @@ const TimePicker = ({ label, description, customClasses, fieldValue, onUpdate }:
             {label && <div className={classes.fieldLabel}>{label}</div>}
             <div className={classes.currentTime} onClick={() => setShowPicker(!showPicker)}>
                <span>{timeString}</span>
-               <button className={classes.dropBtn}>
+               <button type="button" className={classes.dropBtn} aria-label={`${label || 'Time'}: ${timeString}`} aria-expanded={showPicker}>
                   <Icon type={showPicker ? 'caret-up' : 'caret-down'} size={13} />
                </button>
             </div>
@@ -82,10 +82,20 @@ const TimePicker = ({ label, description, customClasses, fieldValue, onUpdate }:
                      </div>
                   </div>
                   <div className={classes.ampm}>
-                     <button onClick={() => setAmpm('AM')} className={ampm === 'AM' ? classes.ampmActive : ''}>
+                     <button
+                        type="button"
+                        aria-pressed={ampm === 'AM'}
+                        onClick={() => setAmpm('AM')}
+                        className={ampm === 'AM' ? classes.ampmActive : ''}
+                     >
                         AM
                      </button>
-                     <button onClick={() => setAmpm('PM')} className={ampm === 'PM' ? classes.ampmActive : ''}>
+                     <button
+                        type="button"
+                        aria-pressed={ampm === 'PM'}
+                        onClick={() => setAmpm('PM')}
+                        className={ampm === 'PM' ? classes.ampmActive : ''}
+                     >
                         PM
                      </button>
                   </div>

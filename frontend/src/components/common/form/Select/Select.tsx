@@ -2,6 +2,7 @@ import { useState } from 'react';
 import classes from './Select.module.scss';
 import Icon from '../../Icon/Icon';
 import FormField from '../FormField/FormField';
+import { onActivateKey } from '../../../../utils/keyboard';
 
 type SelectOptionType = {
    id?: string;
@@ -77,7 +78,14 @@ const Select = ({
                <span>
                   {selectedItemImage} {selectedItemIcon && <Icon type={selectedItemIcon} size={13} />} {selectedItemLabel}
                </span>
-               <button className={classes.dropBtn}>
+               <button
+                  type="button"
+                  className={classes.dropBtn}
+                  aria-label={`${label || 'Options'}: ${selectedItemLabel}`}
+                  aria-haspopup="listbox"
+                  aria-expanded={showDropDown}
+                  disabled={disabled}
+               >
                   <Icon type={showDropDown ? 'caret-up' : 'caret-down'} size={12} />
                </button>
             </div>
@@ -86,22 +94,33 @@ const Select = ({
                   {search && (
                      <div className={classes.search}>
                         <Icon type="search" size={15} />
-                        <input placeholder="Search..." value={searchText} onChange={(e) => setSearchText(e.target.value)} />
+                        <input
+                           placeholder="Search..."
+                           aria-label="Search options"
+                           value={searchText}
+                           onChange={(e) => setSearchText(e.target.value)}
+                        />
                         {searchText && (
-                           <button onClick={() => setSearchText('')}>
+                           <button type="button" aria-label="Clear search" onClick={() => setSearchText('')}>
                               <Icon type="close" size={15} />
                            </button>
                         )}
                      </div>
                   )}
                   <div className={`${classes.lists} styled__scrollbar`}>
-                     <ul>
+                     <ul role="listbox" aria-label={label || 'Options'}>
                         {optionsItems.length > 0 &&
                            optionsItems.map((item, indx) => {
+                              const selectable = !item.pro && !item.disabled;
                               return (
                                  <li
                                     key={indx}
-                                    onClick={() => !item.pro && !item.disabled && updateOption(item.value)}
+                                    role="option"
+                                    aria-selected={item.value === selectedItemValue}
+                                    aria-disabled={!selectable || undefined}
+                                    tabIndex={selectable ? 0 : -1}
+                                    onClick={() => selectable && updateOption(item.value)}
+                                    onKeyDown={onActivateKey(() => selectable && updateOption(item.value))}
                                     className={`${item.value === selectedItemValue ? classes.selectedItem : ''} ${item.disabled ? classes.disabledItem : ''}`}
                                  >
                                     {item.icon && <Icon type={item.icon} size={13} />}

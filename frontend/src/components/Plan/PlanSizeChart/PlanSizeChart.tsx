@@ -7,6 +7,7 @@ import { formatBytes, formatNumberToK } from '../../../utils/helpers';
 import { useTheme } from '../../../context/ThemeContext';
 import classes from './PlanSizeChart.module.scss';
 import { backupStatistics } from '../../../utils/backupStatistics';
+import { onActivateKey } from '../../../utils/keyboard';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Filler, Tooltip, Legend);
 
@@ -148,21 +149,35 @@ const PlanSizeChart = ({ backups, remoteManaged = false, isSync = false }: PlanS
    return (
       <div className={classes.chartWrap}>
          <div className={classes.rangeSelector} ref={dropdownRef}>
-            <button type="button" className={classes.rangeBtn} onClick={() => setOpen((v) => !v)}>
+            <button
+               type="button"
+               className={classes.rangeBtn}
+               aria-label={`Chart range: ${activeRange.labelFull}`}
+               aria-haspopup="listbox"
+               aria-expanded={open}
+               onClick={() => setOpen((v) => !v)}
+            >
                {activeRange.label}
             </button>
             {open && (
-               <ul className={classes.rangeMenu}>
+               <ul className={classes.rangeMenu} role="listbox" aria-label="Chart range">
                   {RANGE_OPTIONS.slice()
                      .reverse()
                      .map((opt) => (
                         <li
                            key={opt.key}
+                           role="option"
+                           aria-selected={opt.key === range}
+                           tabIndex={0}
                            className={opt.key === range ? classes.active : ''}
                            onClick={() => {
                               setRange(opt.key);
                               setOpen(false);
                            }}
+                           onKeyDown={onActivateKey(() => {
+                              setRange(opt.key);
+                              setOpen(false);
+                           })}
                         >
                            {opt.labelFull}
                         </li>

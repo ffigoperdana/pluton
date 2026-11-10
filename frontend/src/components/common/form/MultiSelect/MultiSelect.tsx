@@ -2,6 +2,7 @@ import { useState } from 'react';
 import classes from './MultiSelect.module.scss';
 import Icon from '../../Icon/Icon';
 import FormField from '../FormField/FormField';
+import { onActivateKey } from '../../../../utils/keyboard';
 
 type MultiMultiSelectOptionType = {
    id?: string;
@@ -55,7 +56,6 @@ const MultiSelect = ({
       } else {
          newValues = [...fieldValue, val];
       }
-      console.log('newValues :', newValues);
       onUpdate(newValues);
    };
 
@@ -87,7 +87,14 @@ const MultiSelect = ({
                      'Select items...'
                   )}
                </span>
-               <button className={classes.dropBtn}>
+               <button
+                  type="button"
+                  className={classes.dropBtn}
+                  aria-label={`${label || title || 'Options'}: ${fieldValue.length} of ${options.length} selected`}
+                  aria-haspopup="listbox"
+                  aria-expanded={showDropDown}
+                  disabled={disabled}
+               >
                   <Icon type={showDropDown ? 'caret-up' : 'caret-down'} size={12} />
                </button>
             </div>
@@ -96,22 +103,32 @@ const MultiSelect = ({
                   {search && (
                      <div className={classes.search}>
                         <Icon type="search" size={15} />
-                        <input placeholder="Search Providers..." value={searchText} onChange={(e) => setSearchText(e.target.value)} />
+                        <input
+                           placeholder="Search Providers..."
+                           aria-label="Search options"
+                           value={searchText}
+                           onChange={(e) => setSearchText(e.target.value)}
+                        />
                         {searchText && (
-                           <button onClick={() => setSearchText('')}>
+                           <button type="button" aria-label="Clear search" onClick={() => setSearchText('')}>
                               <Icon type="close" size={15} />
                            </button>
                         )}
                      </div>
                   )}
                   <div className={`${classes.lists} styled__scrollbar`}>
-                     <ul>
+                     <ul role="listbox" aria-multiselectable="true" aria-label={label || title || 'Options'}>
                         {optionsItems.length > 0 &&
                            optionsItems.map((item, indx) => {
                               return (
                                  <li
                                     key={indx}
+                                    role="option"
+                                    aria-selected={fieldValue.includes(item.value)}
+                                    aria-disabled={item.pro || undefined}
+                                    tabIndex={item.pro ? -1 : 0}
                                     onClick={() => !item.pro && toggleOption(item.value)}
+                                    onKeyDown={onActivateKey(() => !item.pro && toggleOption(item.value))}
                                     className={`${fieldValue.includes(item.value) ? classes.selectedItem : ''}`}
                                  >
                                     <Icon type={'check-circle-filled'} size={13} />
