@@ -32,6 +32,39 @@ export type RecoveryFailureCode =
 	| 'stream-interrupted'
 	| 'cleanup-failed';
 
+export type RepositoryOperation =
+	| 'credential-setup'
+	| 'connection-probe'
+	| 'repository-identity'
+	| 'snapshot-metadata'
+	| 'snapshot-index'
+	| 'snapshot-diff'
+	| 'archive-readback'
+	| 'native-restore';
+
+export type RepositoryTimeoutCategory =
+	| 'connection-timeout'
+	| 'repository-io-timeout'
+	| 'command-deadline'
+	| 'metadata-stream-deadline'
+	| 'native-restore-deadline'
+	| 'archive-first-output'
+	| 'archive-output-idle'
+	| 'archive-consumer-idle'
+	| 'archive-exit-idle'
+	| 'caller-deadline';
+
+export type ArchiveActivity = 'awaiting-archive-output' | 'validating-archive-output';
+
+export type RepositoryOperationDiagnostic = {
+	operation: RepositoryOperation;
+	elapsedMs: number;
+	timeoutCategory?: RepositoryTimeoutCategory;
+};
+
+const callerDeadline = (signal?: AbortSignal): 'caller-deadline' | undefined =>
+	signal?.aborted && signal.reason?.name === 'TimeoutError' ? 'caller-deadline' : undefined;
+
 /** Only closed error categories cross the process/credential boundary. */
 export class ManagedRepositoryAccessError extends AppError {
 	constructor(
@@ -40,7 +73,8 @@ export class ManagedRepositoryAccessError extends AppError {
 			| 'repository-output-invalid'
 			| 'metadata-schema-invalid'
 			| 'invalid-size'
-			| 'invalid-timestamp'
+			| 'invalid-timestamp',
+		readonly diagnostic?: RepositoryOperationDiagnostic
 	) {
 		super(code === 'repository-busy' ? 429 : 502, `Managed repository access failed (${code}).`);
 		// AppError sets its own prototype; retain this closed-category subclass.
@@ -90,7 +124,7 @@ export interface ManagedRepositorySession {
 	): Promise<void>;
 	restore(id: string, selectedFiles: string[], stagingPath: string): Promise<ManagedRestoreSummary>;
 	/** Full snapshot TAR only; no client-controlled path, format or command. */
-	archive(id: string, destination: Writable): Promise<void>;
+	archive(id: string, destination: Writable, onFirstOutput?: () => void): Promise<void>;
 	/** Exact validated snapshot item only; files are raw, directories are TAR. */
 	dump?(id: string, itemPath: string, destination: Writable): Promise<void>;
 }
@@ -173,13 +207,10 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		signal?: AbortSignal
 	): Promise<{ contents: string; environment?: NodeJS.ProcessEnv }> {
 		const obscured = (
-			await this.run(
-				getBinaryPath('rclone'),
-				['obscure', '-'],
-				environment,
-				signal,
-				access.options.pass + '\n'
-			)
+			await this.run(getBinaryPath('rclone'), ['obscure', '-'], environment, signal, {
+				operation: 'credential-setup',
+				input: access.options.pass + '\n',
+			})
 		).trim();
 		if (!obscured || !/^[A-Za-z0-9_-]+$/.test(obscured))
 			throw new ManagedRepositoryAccessError('credentials-unavailable');
@@ -232,16 +263,14 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 				'-o',
 				`rclone.program=${rclone}`,
 			];
-			const execute = (args: string[], restore = false) =>
-				this.run(
-					restic,
-					[...prefix, ...args],
-					resticEnvironment,
-					signal,
-					undefined,
-					restore,
-					limits?.restoreTimeoutMs
-				);
+			const execute = (args: string[], operation: RepositoryOperation) =>
+				this.run(restic, [...prefix, ...args], resticEnvironment, signal, {
+					operation,
+					deadlineMs:
+						operation === 'native-restore'
+							? Math.min(24 * 60 * 60_000, Math.max(1000, limits?.restoreTimeoutMs ?? 30 * 60_000))
+							: 60_000,
+				});
 			const checkId = (id: string) => {
 				if (!fullSnapshotId.safeParse(id).success)
 					throw new ManagedRepositoryAccessError('configuration-invalid');
@@ -279,7 +308,8 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 							await onNode(parsed.data);
 						} else throw new ManagedRepositoryAccessError('invalid-output');
 					},
-					signal
+					signal,
+					'snapshot-index'
 				);
 				if (!header) throw new ManagedRepositoryAccessError('invalid-output');
 			};
@@ -303,7 +333,8 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 							'5s',
 						],
 						resticEnvironment,
-						signal
+						signal,
+						{ operation: 'connection-probe' }
 					);
 				},
 				streamFiles,
@@ -332,7 +363,8 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 							);
 							onRecord(record);
 						},
-						signal
+						signal,
+						'snapshot-diff'
 					);
 				},
 				dump: async (id, itemPath, destination) => {
@@ -353,7 +385,7 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 						signal
 					);
 				},
-				archive: async (id, destination) => {
+				archive: async (id, destination, onFirstOutput) => {
 					checkId(id);
 					await this.streamArchive(
 						restic,
@@ -367,14 +399,21 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 						],
 						resticEnvironment,
 						destination,
-						signal
+						signal,
+						onFirstOutput
 					);
 				},
 				identity: async () =>
-					this.parse(z.object({ id: fullSnapshotId }), await execute(['cat', 'config'])).id,
+					this.parse(
+						z.object({ id: fullSnapshotId }),
+						await execute(['cat', 'config'], 'repository-identity')
+					).id,
 				snapshot: async id => {
 					checkId(id);
-					const snapshots = this.parse(z.array(snapshotSchema), await execute(['snapshots', id]));
+					const snapshots = this.parse(
+						z.array(snapshotSchema),
+						await execute(['snapshots', id], 'snapshot-metadata')
+					);
 					if (snapshots.length !== 1 || snapshots[0].id !== id)
 						throw new AppError(404, 'The exact backup snapshot is unavailable.');
 					return snapshots[0];
@@ -399,7 +438,7 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 							'never',
 							...selectedFiles.flatMap(file => ['--include', file]),
 						],
-						true
+						'native-restore'
 					);
 					const summary = output
 						.split(/\r?\n/)
@@ -455,9 +494,23 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		args: string[],
 		env: NodeJS.ProcessEnv,
 		consume: (line: string) => Promise<void>,
-		signal?: AbortSignal
+		signal: AbortSignal | undefined,
+		operation: 'snapshot-index' | 'snapshot-diff'
 	) {
-		if (signal?.aborted) throw new ManagedRepositoryAccessError('cancelled');
+		const began = performance.now();
+		const diagnostic = (
+			timeoutCategory?: RepositoryTimeoutCategory
+		): RepositoryOperationDiagnostic => ({
+			operation,
+			elapsedMs: Math.round(performance.now() - began),
+			timeoutCategory,
+		});
+		if (signal?.aborted)
+			throw new ManagedRepositoryAccessError(
+				'cancelled',
+				undefined,
+				diagnostic(callerDeadline(signal))
+			);
 		const child = spawn(binary, args, {
 			env,
 			shell: false,
@@ -473,7 +526,10 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			failure ||= error;
 			if (!hasClosed) killProcessTree(child, 'SIGKILL');
 		};
-		const abort = () => stop(new ManagedRepositoryAccessError('cancelled'));
+		const abort = () =>
+			stop(
+				new ManagedRepositoryAccessError('cancelled', undefined, diagnostic(callerDeadline(signal)))
+			);
 		const closed = new Promise<void>(resolve => {
 			child.once('close', code => {
 				hasClosed = true;
@@ -491,7 +547,17 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		child.on('error', () => stop(new ManagedRepositoryAccessError('execution-failed')));
 		child.stderr?.on('data', () => undefined);
 		signal?.addEventListener('abort', abort, { once: true });
-		const timer = setTimeout(() => stop(new ManagedRepositoryAccessError('timeout')), 15 * 60_000);
+		const timer = setTimeout(
+			() =>
+				stop(
+					new ManagedRepositoryAccessError(
+						'timeout',
+						undefined,
+						diagnostic('metadata-stream-deadline')
+					)
+				),
+			15 * 60_000
+		);
 		timer.unref();
 		try {
 			if (!child.stdout) throw new ManagedRepositoryAccessError('execution-failed');
@@ -526,10 +592,21 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		args: string[],
 		env: NodeJS.ProcessEnv,
 		destination: Writable,
-		signal?: AbortSignal
+		signal?: AbortSignal,
+		onFirstOutput?: () => void
 	): Promise<void> {
-		if (signal?.aborted || destination.destroyed)
-			throw new ManagedRepositoryAccessError('cancelled');
+		const began = performance.now();
+		let timeoutCategory: RepositoryTimeoutCategory | undefined;
+		const archiveError = (code: RecoveryFailureCode) =>
+			new ManagedRepositoryAccessError(code, undefined, {
+				operation: 'archive-readback',
+				elapsedMs: Math.round(performance.now() - began),
+				timeoutCategory,
+			});
+		if (signal?.aborted || destination.destroyed) {
+			timeoutCategory = callerDeadline(signal);
+			throw archiveError('cancelled');
+		}
 		const child = spawn(binary, args, {
 			env,
 			shell: false,
@@ -538,7 +615,6 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			stdio: ['ignore', 'pipe', 'pipe'],
 		});
 		const processId = `managed-download-${crypto.randomUUID()}`;
-		const began = Date.now();
 		let exitStatus: number | null = null,
 			exitSignal: string | null = null;
 		processManager.trackProcess(processId, child);
@@ -548,8 +624,11 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		let receivedData = false;
 		const transfer = new AbortController();
 		let timer: ReturnType<typeof setTimeout>;
-		const stop = (reason: RecoveryFailureCode) => {
-			failure ||= reason;
+		const stop = (reason: RecoveryFailureCode, category?: RepositoryTimeoutCategory) => {
+			if (!failure) {
+				failure = reason;
+				timeoutCategory = category;
+			}
 			if (!hasClosed) killProcessTree(child, 'SIGKILL');
 			// Also interrupt a blocked destination after Restic's stdout has ended.
 			// Destroying only stdout cannot release that backpressure wait.
@@ -560,11 +639,22 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 				destination.destroy();
 			}
 		};
-		const abort = () => stop('cancelled');
+		const abort = () => stop('cancelled', callerDeadline(signal));
 		// Inactivity bound, not a tiny archive size or total-transfer-time limit.
 		const activity = () => {
 			clearTimeout(timer);
-			timer = setTimeout(() => stop('timeout'), receivedData ? 10 * 60_000 : 15_000);
+			timer = setTimeout(
+				() => {
+					let category: RepositoryTimeoutCategory = 'archive-first-output';
+					if (receivedData) {
+						if (pipelineFinished) category = 'archive-exit-idle';
+						else if (hasClosed || destination.writableNeedDrain) category = 'archive-consumer-idle';
+						else category = 'archive-output-idle';
+					}
+					stop('timeout', category);
+				},
+				receivedData ? 10 * 60_000 : 15_000
+			);
 			timer.unref();
 		};
 		const closed = new Promise<void>(resolve => {
@@ -588,8 +678,16 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		child.stderr?.on('data', () => undefined); // never retain provider diagnostics
 		signal?.addEventListener('abort', abort, { once: true });
 		const dataActivity = () => {
+			const first = !receivedData;
 			receivedData = true;
 			activity();
+			if (first) {
+				try {
+					onFirstOutput?.();
+				} catch {
+					/* Progress reporting cannot interrupt archive verification. */
+				}
+			}
 		};
 		child.stdout?.on('data', dataActivity);
 		destination.on('drain', activity);
@@ -601,11 +699,11 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			await pipeline(child.stdout, destination, { end: false, signal: transfer.signal });
 			pipelineFinished = true;
 			await closed;
-			if (failure) throw new ManagedRepositoryAccessError(failure);
+			if (failure) throw archiveError(failure);
 		} catch {
 			stop(signal?.aborted ? 'cancelled' : failure || 'stream-interrupted');
 			await closed; // config cleanup must wait until Restic/Rclone have stopped
-			throw new ManagedRepositoryAccessError(failure || 'execution-failed');
+			throw archiveError(failure || 'execution-failed');
 		} finally {
 			clearTimeout(timer!);
 			signal?.removeEventListener('abort', abort);
@@ -616,7 +714,8 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 				planLogger('download').info(
 					{
 						event: 'managed_native_archive',
-						elapsedMs: Date.now() - began,
+						elapsedMs: Math.round(performance.now() - began),
+						timeoutCategory,
 						exitStatus,
 						signal: exitSignal,
 						classification: failure || 'success',
@@ -635,12 +734,26 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		binary: string,
 		args: string[],
 		env: NodeJS.ProcessEnv,
-		signal?: AbortSignal,
-		input?: string,
-		restore = false,
-		restoreTimeoutMs = 30 * 60_000
+		signal: AbortSignal | undefined,
+		{
+			operation,
+			input,
+			deadlineMs = 60_000,
+		}: { operation: RepositoryOperation; input?: string; deadlineMs?: number }
 	): Promise<string> {
-		if (signal?.aborted) return Promise.reject(new ManagedRepositoryAccessError('cancelled'));
+		const began = performance.now();
+		let timeoutCategory: RepositoryTimeoutCategory | undefined;
+		const operationDiagnostic = (): RepositoryOperationDiagnostic => ({
+			operation,
+			elapsedMs: Math.round(performance.now() - began),
+			timeoutCategory,
+		});
+		if (signal?.aborted) {
+			timeoutCategory = callerDeadline(signal);
+			return Promise.reject(
+				new ManagedRepositoryAccessError('cancelled', undefined, operationDiagnostic())
+			);
+		}
 		return new Promise((resolve, reject) => {
 			const child = spawn(binary, args, {
 				env,
@@ -656,15 +769,25 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			let diagnosticTruncated = false;
 			let bytes = 0;
 			let failure: RecoveryFailureCode | undefined;
-			const stop = (reason: RecoveryFailureCode) => {
-				failure ||= reason;
+			const stop = (reason: RecoveryFailureCode, category?: RepositoryTimeoutCategory) => {
+				if (!failure) {
+					failure = reason;
+					timeoutCategory = category;
+				}
 				killProcessTree(child, 'SIGKILL');
 			};
-			const abort = () => stop(signal?.reason?.name === 'TimeoutError' ? 'timeout' : 'cancelled');
+			const abort = () => {
+				const category = callerDeadline(signal);
+				stop(category ? 'timeout' : 'cancelled', category);
+			};
 			signal?.addEventListener('abort', abort, { once: true });
 			const timer = setTimeout(
-				() => stop('timeout'),
-				restore ? Math.min(24 * 60 * 60_000, Math.max(1000, restoreTimeoutMs)) : 60_000
+				() =>
+					stop(
+						'timeout',
+						operation === 'native-restore' ? 'native-restore-deadline' : 'command-deadline'
+					),
+				deadlineMs
 			);
 			child.on('error', () => {
 				failure ||= 'execution-failed';
@@ -696,25 +819,23 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 				processManager.untrackProcess(processId);
 				clearTimeout(timer);
 				signal?.removeEventListener('abort', abort);
-				if (failure)
-					reject(
-						new ManagedRepositoryAccessError(
-							failure === 'timeout'
-								? diagnosticTruncated
-									? 'output-limit'
-									: recoveryProcessFailure(code, diagnostic.toString(), failure)
-								: failure
-						)
-					);
-				else if (code !== 0)
-					reject(
-						new ManagedRepositoryAccessError(
-							diagnosticTruncated && code !== 12
-								? 'output-limit'
-								: recoveryProcessFailure(code, diagnostic.toString())
-						)
-					);
-				else resolve(output);
+				if (!failure && code === 0) {
+					resolve(output);
+					return;
+				}
+				const providerText = diagnostic.toString();
+				const failureCode =
+					failure && failure !== 'timeout'
+						? failure
+						: diagnosticTruncated && (failure === 'timeout' || code !== 12)
+							? 'output-limit'
+							: recoveryProcessFailure(code, providerText, failure);
+				if (!timeoutCategory && failureCode === 'network-unavailable') {
+					if (/dial tcp[^\r\n]*(?:i\/o timeout|connection timed out)/i.test(providerText))
+						timeoutCategory = 'connection-timeout';
+					else if (/i\/o timeout/i.test(providerText)) timeoutCategory = 'repository-io-timeout';
+				}
+				reject(new ManagedRepositoryAccessError(failureCode, undefined, operationDiagnostic()));
 			});
 			// Cleanup is intentionally AFTER close, never while rclone still uses config.
 		});

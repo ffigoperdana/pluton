@@ -320,6 +320,118 @@ describe('durable assisted failover authorization and lifecycle', () => {
 		});
 		expect(JSON.stringify(service.get('owner-01', job.id))).not.toContain('private filesystem');
 	});
+	it('distinguishes a replica preflight deadline from operator cancellation and preserves candidate order', async () => {
+		const deadline = new AbortController();
+		const timer = jest.spyOn(AbortSignal, 'timeout').mockReturnValueOnce(deadline.signal);
+		replicas.preflight.mockImplementationOnce(async (_backup, _plan, _replica, signal) => {
+			deadline.abort(new DOMException('Synthetic preflight deadline', 'TimeoutError'));
+			expect(signal.aborted).toBe(true);
+			throw new ManagedRepositoryAccessError('cancelled', undefined, {
+				operation: 'snapshot-index',
+				timeoutCategory: 'caller-deadline',
+				elapsedMs: 179990,
+			});
+		});
+		try {
+			const job = await pending();
+			expect(service.get('owner-01', job.id).candidates).toMatchObject([
+				{
+					replicationId: 'replica-01',
+					state: 'failed',
+					code: 'timeout',
+					diagnostic: {
+						phase: 'replica-check',
+						operation: 'snapshot-index',
+						timeoutCategory: 'replica-preflight-deadline',
+						failureCode: 'timeout',
+					},
+				},
+				{ replicationId: 'replica-02', state: 'passed' },
+			]);
+		} finally {
+			timer.mockRestore();
+		}
+	});
+	it.each([false, true])(
+		'persists archive diagnostics through restart (cleanup fails: %s)',
+		async cleanupFails => {
+			const job = await pending();
+			let entered!: () => void, release!: () => void;
+			const started = new Promise<void>(resolve => {
+				entered = resolve;
+			});
+			const resume = new Promise<void>(resolve => {
+				release = resolve;
+			});
+			replicas.withReplica.mockImplementation(async (_b, _p, _r, _signal, consume) =>
+				consume(
+					{
+						testBinding: async () => ({ snapshotId: binding.destinationSnapshotId }),
+						replicaStage: async (
+							_binding: unknown,
+							_config: unknown,
+							_target: string,
+							_jobSignal: AbortSignal,
+							phase: (value: string, activity?: string) => void
+						) => {
+							phase('integrity-preparation', 'awaiting-archive-output');
+							phase('integrity-preparation', 'validating-archive-output');
+							entered();
+							await resume;
+							throw Object.assign(new ManagedRepositoryAccessError('timeout'), {
+								diagnostic: {
+									operation: 'archive-readback',
+									timeoutCategory: 'archive-output-idle',
+									elapsedMs: 600010,
+									raw: 'synthetic-private',
+								},
+							});
+						},
+					},
+					binding
+				)
+			);
+			await service.approve('owner-01', job.id, 'replica-01');
+			await started;
+			if (cleanupFails)
+				replicas.cleanup.mockRejectedValueOnce(new Error('synthetic cleanup secret'));
+			try {
+				expect(service.get('owner-01', job.id)).toMatchObject({
+					status: 'running',
+					phase: 'integrity-preparation',
+					activity: 'validating-archive-output',
+					activeSince: expect.any(Number),
+				});
+			} finally {
+				release();
+				await service.settled(job.id);
+			}
+			service = create();
+			const restored = service.list('owner-01', 'plan-01', 'backup-01')[0];
+			expect(restored).toMatchObject({
+				status: 'failed',
+				phase: 'recovery-stopped',
+				failureCode: 'timeout',
+				cleanupPending: cleanupFails,
+				diagnostic: {
+					phase: 'integrity-preparation',
+					operation: 'archive-readback',
+					timeoutCategory: 'archive-output-idle',
+					elapsedMs: 600010,
+					failureCode: 'timeout',
+				},
+			});
+			expect(restored.activity).toBeUndefined();
+			expect(JSON.stringify(restored)).not.toMatch(/synthetic-private|synthetic cleanup secret/);
+			if (cleanupFails) {
+				const cancelled = await service.cancel('owner-01', job.id);
+				expect(cancelled).toMatchObject({ cleanupPending: false, diagnostic: restored.diagnostic });
+			}
+			expect(service.list('other-owner', 'plan-01', 'backup-01')).toEqual([]);
+			expect(replicas.withReplica).toHaveBeenCalledTimes(1);
+		}
+	);
+
 	it('manual mode validates replicas read-only even when primary is healthy', async () => {
 		const job = await pending('owner-01', { ...input(), mode: 'manual-replica' } as any);
 		expect(primary.primaryAvailability).not.toHaveBeenCalled();

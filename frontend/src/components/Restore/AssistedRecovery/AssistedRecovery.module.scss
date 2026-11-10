@@ -63,7 +63,7 @@ $mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospa
       background: var(--content-text-color-light);
    }
    &.progress::before {
-      background: var(--primary-color);
+      content: none;
    }
    &.attention {
       background: var(--warning-bg-color);
@@ -89,6 +89,32 @@ $mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospa
          background: var(--error-text-color);
       }
    }
+}
+.spinner {
+   flex: 0 0 auto;
+   width: 14px;
+   height: 14px;
+   box-sizing: border-box;
+   margin-top: 3px;
+   border: 2px solid var(--primary-color);
+   border-right-color: transparent;
+   border-radius: 50%;
+   animation: recovery-spin 0.9s linear infinite;
+}
+@keyframes recovery-spin {
+   to {
+      transform: rotate(1turn);
+   }
+}
+@media (prefers-reduced-motion: reduce) {
+   .spinner {
+      animation: none;
+   }
+}
+.diagnostic {
+   display: block;
+   margin-block: 4px;
+   overflow-wrap: anywhere;
 }
 .meta {
    display: grid;

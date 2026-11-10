@@ -4,6 +4,7 @@ import {
 	AssistedRecoveryStore,
 	type AssistedPayload,
 	type AssistedJob,
+	type AssistedRecoveryDiagnostic,
 } from '../stores/AssistedRecoveryStore';
 import type { PlanStore } from '../stores/PlanStore';
 import {
@@ -11,7 +12,11 @@ import {
 	ReplicaRecoveryError,
 } from './VerifiedReplicaRecoveryService';
 import { RemoteRepositoryRecoveryService } from './RemoteRepositoryRecoveryService';
-import { ManagedRepositoryAccessError } from '../utils/restic/ManagedSftpRepositorySession';
+import {
+	ManagedRepositoryAccessError,
+	type ArchiveActivity,
+} from '../utils/restic/ManagedSftpRepositorySession';
+import { ManagedExportError } from '../utils/restic/ManagedExportPolicy';
 import { SnapshotIndexError } from '../utils/restic/ManagedSnapshotIndex';
 import { RecoveryTestError } from '../utils/recoveryValidation';
 import { RecoveryWorkspace } from '../utils/recoveryWorkspace';
@@ -27,11 +32,47 @@ export function assistedFailure(error: unknown): string {
 	)
 		return error.code;
 	if (error instanceof SnapshotComparisonError) return error.diagnostic;
+	if (error instanceof ManagedExportError) return error.reason;
 	if (error instanceof SnapshotIndexError)
 		return error.reason === 'timeout' ? 'timeout' : error.code;
 	if (error instanceof AppError && [401, 403].includes(error.statusCode))
 		return 'authorization-denied';
 	return 'unclassified-failure';
+}
+function recoveryDiagnostic(
+	error: unknown,
+	phase: string,
+	began: number,
+	failureCode = assistedFailure(error),
+	preflightDeadline = false
+): AssistedRecoveryDiagnostic {
+	const native =
+		error instanceof ManagedRepositoryAccessError || error instanceof SnapshotIndexError
+			? error.diagnostic
+			: undefined;
+	let timeoutCategory: AssistedRecoveryDiagnostic['timeoutCategory'] = native?.timeoutCategory;
+	if (timeoutCategory === 'caller-deadline' || (preflightDeadline && !timeoutCategory)) {
+		if (phase === 'primary-check') timeoutCategory = 'primary-check-deadline';
+		if (phase === 'replica-check') timeoutCategory = 'replica-preflight-deadline';
+	}
+	const duration = native?.elapsedMs;
+	return {
+		phase,
+		operation: native?.operation ?? 'recovery-phase',
+		elapsedMs: Math.min(
+			24 * 60 * 60_000,
+			Math.max(
+				0,
+				Math.round(
+					typeof duration === 'number' && Number.isFinite(duration)
+						? duration
+						: performance.now() - began
+				)
+			)
+		),
+		timeoutCategory: timeoutCategory ?? (failureCode === 'timeout' ? 'undetermined' : undefined),
+		failureCode,
+	};
 }
 export class AssistedRecoveryService {
 	private readonly work = new Map<string, { controller: AbortController; done: Promise<void> }>();
@@ -85,6 +126,14 @@ export class AssistedRecoveryService {
 			status: row.status,
 			phase: row.phase,
 			createdAt: row.createdAt,
+			activeSince:
+				row.status === 'checking'
+					? row.createdAt
+					: row.status === 'running'
+						? row.audit.find(event => event.event === 'operator-approved')?.at
+						: undefined,
+			activity: row.status === 'running' ? row.payload.activity : undefined,
+			diagnostic: row.payload.diagnostic,
 			expiresAt: row.expiresAt,
 			expired: row.expiresAt <= this.now(),
 			sourceSnapshotId: row.payload.sourceSnapshotId,
@@ -94,6 +143,7 @@ export class AssistedRecoveryService {
 				position: c.position,
 				state: c.state,
 				code: c.code,
+				diagnostic: c.diagnostic,
 				destinationSnapshotId: c.binding?.destinationSnapshotId,
 				replicaVerified: c.state === 'passed',
 				recoveryPreflight: c.state === 'passed' ? 'passed' : 'failed',
@@ -172,7 +222,7 @@ export class AssistedRecoveryService {
 			requestKey: input.requestKey,
 			requestHash,
 			status: 'checking',
-			phase: 'primary-check',
+			phase: input.mode === 'manual-replica' ? 'replica-check' : 'primary-check',
 			payload,
 			createdAt: time,
 			updatedAt: time,
@@ -192,6 +242,9 @@ export class AssistedRecoveryService {
 		void done.catch(() => {});
 	}
 	private async check(row: AssistedJob, signal: AbortSignal) {
+		let phaseBegan = performance.now();
+		let phase = row.phase;
+		let payload = row.payload;
 		try {
 			const plan = await this.policy(row.planId);
 			let primary: NonNullable<AssistedJob['payload']['primary']> = { state: 'not-checked' };
@@ -204,7 +257,11 @@ export class AssistedRecoveryService {
 				} catch (error) {
 					const code = assistedFailure(error);
 					if (!['network-unavailable', 'timeout'].includes(code)) throw error;
-					primary = { state: 'unavailable', code };
+					primary = {
+						state: 'unavailable',
+						code,
+						diagnostic: recoveryDiagnostic(error, 'primary-check', phaseBegan, code),
+					};
 				}
 				if (primary.state === 'ready') {
 					if (!signal.aborted)
@@ -222,7 +279,9 @@ export class AssistedRecoveryService {
 					return;
 				}
 			}
-			const payload: AssistedPayload = { ...row.payload, primary };
+			payload = { ...row.payload, primary };
+			phase = 'replica-check';
+			phaseBegan = performance.now();
 			this.store.update(
 				row.id,
 				['checking'],
@@ -231,12 +290,14 @@ export class AssistedRecoveryService {
 			);
 			for (const [position, replica] of plan.settings.replication!.storages.entries()) {
 				if (signal.aborted) throw new ManagedRepositoryAccessError('cancelled');
+				const began = performance.now();
+				const deadline = AbortSignal.timeout(3 * 60_000);
 				try {
 					const binding = await this.replicas.preflight(
 						row.backupId,
 						row.planId,
 						replica.replicationId,
-						AbortSignal.any([signal, AbortSignal.timeout(3 * 60_000)]),
+						AbortSignal.any([signal, deadline]),
 						row.id
 					);
 					if (binding.sourceSnapshotId !== row.payload.sourceSnapshotId)
@@ -248,11 +309,15 @@ export class AssistedRecoveryService {
 						binding,
 					});
 				} catch (error) {
+					const failure = assistedFailure(error);
+					const expired = deadline.aborted && (failure === 'cancelled' || failure === 'timeout');
+					const code = expired ? 'timeout' : failure;
 					payload.candidates.push({
 						replicationId: replica.replicationId,
 						position: position + 1,
 						state: 'failed',
-						code: assistedFailure(error),
+						code,
+						diagnostic: recoveryDiagnostic(error, 'replica-check', began, code, expired),
 					});
 				}
 				if (signal.aborted) throw new ManagedRepositoryAccessError('cancelled');
@@ -274,6 +339,7 @@ export class AssistedRecoveryService {
 				eligible ? 'approval-required' : 'recovery-refused'
 			);
 		} catch (error) {
+			const diagnostic = recoveryDiagnostic(error, phase, phaseBegan);
 			let cleanupPending = false;
 			try {
 				await this.replicas.cleanup(row.id);
@@ -288,7 +354,8 @@ export class AssistedRecoveryService {
 						status: signal.aborted ? 'cancelled' : 'failed',
 						phase: 'check-failed',
 						cleanupPending,
-						failureCode: signal.aborted ? 'cancelled' : assistedFailure(error),
+						failureCode: signal.aborted ? 'cancelled' : diagnostic.failureCode,
+						payload: { ...payload, diagnostic },
 					},
 					'check-failed'
 				);
@@ -303,6 +370,18 @@ export class AssistedRecoveryService {
 	}
 	private async execute(row: AssistedJob, signal: AbortSignal) {
 		const candidate = row.payload.candidates.find(c => c.replicationId === row.payload.selected)!;
+		let phase = row.phase;
+		let phaseBegan = performance.now();
+		const stage = (value: string, activity?: ArchiveActivity, event?: string) => {
+			if (phase !== value) phaseBegan = performance.now();
+			phase = value;
+			this.store.update(
+				row.id,
+				['running'],
+				{ phase, payload: { ...row.payload, activity } },
+				event
+			);
+		};
 		try {
 			await this.policy(row.planId);
 			await this.replicas.withReplica(
@@ -317,12 +396,7 @@ export class AssistedRecoveryService {
 						throw new ReplicaRecoveryError('approval-binding-changed');
 					const workspace = await this.workspace.create(row.id),
 						target = path.join(workspace, 'files');
-					this.store.update(
-						row.id,
-						['running'],
-						{ phase: 'staging-preparation' },
-						'recovery-source-approved'
-					);
+					stage('staging-preparation', undefined, 'recovery-source-approved');
 					const result = await recovery.replicaStage(
 						binding,
 						{
@@ -334,9 +408,7 @@ export class AssistedRecoveryService {
 						},
 						target,
 						signal,
-						phase => {
-							this.store.update(row.id, ['running'], { phase });
-						},
+						stage,
 						async () => {
 							await this.policy(row.planId);
 							await this.workspace.assert(row.id);
@@ -360,6 +432,7 @@ export class AssistedRecoveryService {
 				row.id
 			);
 		} catch (error) {
+			const diagnostic = recoveryDiagnostic(error, phase, phaseBegan);
 			let cleanupPending = false;
 			try {
 				await this.workspace.remove(row.id);
@@ -375,7 +448,8 @@ export class AssistedRecoveryService {
 					{
 						status: signal.aborted ? 'cancelled' : 'failed',
 						phase: 'recovery-stopped',
-						failureCode: signal.aborted ? 'cancelled' : assistedFailure(error),
+						failureCode: signal.aborted ? 'cancelled' : diagnostic.failureCode,
+						payload: { ...row.payload, diagnostic },
 						cleanupPending,
 					},
 					'staged-recovery-failed'

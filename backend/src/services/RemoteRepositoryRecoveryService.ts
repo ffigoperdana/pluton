@@ -60,6 +60,7 @@ import {
 import type { RecoveryStage } from '../types/recoveryTests';
 import { ManagedDownloadPreparation } from './ManagedDownloadPreparation';
 import { prepareManagedExport, streamManagedExport } from '../utils/restic/ManagedTarExport';
+import type { ArchiveActivity } from '../utils/restic/ManagedSftpRepositorySession';
 import type { ExportPerformance } from '../utils/managedExport/ExportPerformance';
 import {
 	managedExportMode,
@@ -388,7 +389,11 @@ export class RemoteRepositoryRecoveryService {
 					// A transport that connected successfully does not prove that a later
 					// metadata deadline is a connectivity failure. Keep uncertain cases closed.
 					if (error instanceof ManagedRepositoryAccessError && error.code === 'timeout')
-						throw new ManagedRepositoryAccessError('repository-unavailable');
+						throw new ManagedRepositoryAccessError(
+							'repository-unavailable',
+							undefined,
+							error.diagnostic
+						);
 					throw error;
 				}
 			},
@@ -464,7 +469,7 @@ export class RemoteRepositoryRecoveryService {
 		config: RestoreConfig,
 		target: string,
 		signal: AbortSignal,
-		stage: (value: string) => void,
+		stage: (value: string, activity?: ArchiveActivity) => void,
 		assertWorkspace: () => Promise<void>,
 		maxBytes = 1024 ** 4
 	) {
@@ -475,10 +480,10 @@ export class RemoteRepositoryRecoveryService {
 		const context = await this.context(binding.backupId, binding.planId);
 		if (context.repositoryId !== binding.repositoryId || context.snapshotId !== binding.snapshotId)
 			throw new RecoveryTestError('snapshot-validation', 'snapshot-binding-mismatch');
+		stage('snapshot-indexing');
 		return this.withIndex(
 			context,
 			async index => {
-				stage('snapshot-validation');
 				index.assertExportEntries('full', true);
 				const selection = this.select(index, config);
 				if (
@@ -502,8 +507,10 @@ export class RemoteRepositoryRecoveryService {
 					async session => {
 						await this.verifySnapshot(context, session);
 						await this.assertCurrentContext(context);
-						stage('integrity-preparation');
-						await prepareManagedExport(index, session, proof, signal);
+						stage('integrity-preparation', 'awaiting-archive-output');
+						await prepareManagedExport(index, session, proof, signal, () =>
+							stage('integrity-preparation', 'validating-archive-output')
+						);
 						await empty();
 						checkRecoveryCancellation(signal);
 						stage('staged-restore');
@@ -519,6 +526,7 @@ export class RemoteRepositoryRecoveryService {
 								: selection.files.find(file => file.path === value);
 						for (const artifact of artifacts)
 							if (selected(artifact.path)) await validateRecoveryArtifact(artifact, target, signal);
+						stage('final-verification');
 						await this.verifySnapshot(context, session);
 						await this.assertCurrentContext(context);
 						checkRecoveryCancellation(signal);
@@ -529,7 +537,8 @@ export class RemoteRepositoryRecoveryService {
 				);
 				return { stats: selection.stats, integrity: 'sha256-readback-and-restic-restore' as const };
 			},
-			signal
+			signal,
+			() => stage('snapshot-validation')
 		);
 	}
 

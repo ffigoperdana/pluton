@@ -1,5 +1,6 @@
 import Cryptr from 'cryptr';
 import { ManagedRepositoryAccessError } from '../../src/utils/restic/ManagedSftpRepositorySession';
+import { ManagedS3RecoverySession } from '../../src/utils/restic/ManagedS3RecoverySession';
 import Database from 'better-sqlite3';
 import { AssistedRecoveryStore } from '../../src/stores/AssistedRecoveryStore';
 import { AssistedRecoveryService } from '../../src/services/AssistedRecoveryService';
@@ -14,6 +15,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { Writable } from 'node:stream';
 import { replicaFixture } from '../fixtures/replicaRecovery.fixture';
 import { ManagedReplicationExecutor } from '../../src/utils/restic/ManagedReplicationExecutor';
 import { storageRcloneOptions, trustEnvironment } from '../../src/utils/storageSecurity';
@@ -278,6 +280,39 @@ try {
 		'Recovery must not write lock files or mutate replica'
 	);
 	console.log('PASS replica contents unchanged after preflight and all restores');
+	const abortedRead = new AbortController();
+	const sessionRoot = await fs.mkdtemp(path.join(root, 'cancelled-session-'));
+	const blocked = new Writable({
+		highWaterMark: 1,
+		write() {
+			abortedRead.abort();
+		},
+	});
+	const provider = new ManagedS3RecoverySession(trustEnvironment());
+	await assert.rejects(
+		provider.withSession(
+			{
+				options: { ...storageRcloneOptions(f.storage), force_path_style: 'true' },
+				repositoryPath: f.replica.storagePath,
+				password,
+			},
+			session => session.archive(copied.snapshotId, blocked),
+			AbortSignal.any([signal, abortedRead.signal]),
+			{ restoreTimeoutMs: 60 * 60_000, temporaryRoot: sessionRoot }
+		),
+		error =>
+			error instanceof ManagedRepositoryAccessError &&
+			error.code === 'cancelled' &&
+			error.diagnostic?.operation === 'archive-readback' &&
+			!error.diagnostic.timeoutCategory
+	);
+	assert.equal(abortedRead.signal.aborted, true);
+	assert.equal(blocked.destroyed, true);
+	assert.deepEqual(await fs.readdir(sessionRoot), []);
+	assert.deepEqual(await hashTree(s3root), before);
+	console.log(
+		'PASS real native archive cancellation releases backpressure and private credentials'
+	);
 	const pending = await assisted.start('owner-01', intent());
 	await assisted.settled(pending.id);
 	console.log(

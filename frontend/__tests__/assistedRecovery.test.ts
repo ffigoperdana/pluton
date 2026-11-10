@@ -174,6 +174,49 @@ test('approval and polling distinguish pending, expiry, verified completion and 
    assert.match(recoveryStatus(row({ status: 'uncertain' })), /not restart automatically/);
    assert.match(recoveryStatus(row({ status: 'failed', cleanupPending: true })), /cleanup needs attention/);
 });
+test('rediscovered active progress shows elapsed time and stops spinning on a diagnosed failure', async () => {
+   const checking = row({ status: 'checking', phase: 'replica-check', createdAt: Date.now() - 3500 });
+   const s = server([checking]);
+   const ui = await mount(s.fetcher);
+   const content = () => ui.dom.window.document.body.textContent || '';
+   const spinner = () => ui.dom.window.document.querySelector('[data-recovery-spinner]');
+   try {
+      await ui.waitFor(() => spinner() && /Replica check/.test(content()) && /Elapsed/.test(content()), 'active checking progress');
+      assert.equal(spinner()?.getAttribute('aria-hidden'), 'true');
+      assert.match(content(), /Closing this window does not cancel server work/);
+      s.set([
+         {
+            ...row({ status: 'running', phase: 'integrity-preparation' }),
+            activity: 'awaiting-archive-output',
+            activeSince: Date.now() - 4000,
+         } as AssistedRecoveryJob,
+      ]);
+      await ui.click('Refresh recovery status');
+      await ui.waitFor(() => /Waiting for the repository read to produce archive data/.test(content()), 'waiting for archive output');
+      assert.ok(spinner());
+      assert.equal(ui.dom.window.document.querySelector('progress'), null);
+      s.set([
+         {
+            ...row({ status: 'failed', phase: 'recovery-stopped', failureCode: 'timeout' }),
+            diagnostic: {
+               phase: 'integrity-preparation',
+               operation: 'archive-readback',
+               timeoutCategory: 'archive-output-idle',
+               elapsedMs: 600010,
+               failureCode: 'timeout',
+            },
+         } as AssistedRecoveryJob,
+      ]);
+      await ui.click('Refresh recovery status');
+      await ui.waitFor(() => /archive-output-idle/.test(content()), 'safe failure diagnostic');
+      assert.equal(spinner(), null);
+      assert.match(content(), /Review.*storage/i);
+      assert.ok(s.calls.every((call) => call.method === 'GET'));
+   } finally {
+      await ui.close();
+   }
+});
+
 test('GET rediscovery restores pending approval after refresh without creating or approving any job', async () => {
    const s = server([row()]);
    const ui = await mount(s.fetcher, false);
