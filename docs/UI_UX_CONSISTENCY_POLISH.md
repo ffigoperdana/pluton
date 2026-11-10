@@ -128,6 +128,52 @@ browser, Folder picker and Path picker close buttons; path chip removal;
 script removal; restore row menu; password visibility; log paging. Storage file
 row actions and plan storage actions now also appear on `:focus-within`.
 
+### Form controls: submit safety and keyboard use
+
+Root cause, separated by evidence:
+
+- **Proven, latent:** the caret buttons of `Select`, `MultiSelect`,
+  `StorageProviderSelect` and `TimePicker` (and the search clear buttons) had
+  no `type`, so they defaulted to `submit`. Rendered inside a `<form>` in jsdom,
+  one caret click submitted the form for all four controls. Today no `<form>`
+  in the application contains these controls (checked: Legacy repository
+  filter and registration, MCP v1/v2, backup history filters, notification
+  channel editor), so no current screen submits by accident.
+- **Proven, current:** dropdown options (`Select`, `MultiSelect`,
+  `StorageProviderSelect`, chart range menu), `RadioIconSelect` and `Tristate`
+  choices were mouse-only `li`/`div` elements; carets, clear buttons and file
+  selection toggles had no accessible name; AM/PM and folder selection did not
+  expose their state; the backup title edit icon and title were mouse-only
+  `span`s, and the edit icon was `visibility: hidden` so focus could not reach it.
+
+Changes (behaviour of each click is unchanged; the keyboard runs the same
+handler):
+
+- Carets and clear buttons: `type="button"`, a name that includes the current
+  value, `aria-haspopup`/`aria-expanded`, and `disabled` when the control is
+  disabled (the dropdown already refused to open).
+- Options: `role="listbox"`/`role="option"` with `aria-selected`,
+  `aria-disabled`, `tabIndex` and Enter/Space through a shared helper
+  `frontend/src/utils/keyboard.ts`. `MultiSelect` is `aria-multiselectable`.
+- `RadioIconSelect` and `Tristate`: `role="radiogroup"`/`role="radio"` with
+  `aria-checked`. A disabled `RadioIconSelect` option still calls
+  `onDisableClick` (the upgrade prompt), exactly as a click does.
+- TimePicker AM/PM, FileManager and RestoreFileSelector file/folder toggles:
+  `type="button"`, names and `aria-pressed`.
+- Backup title edit icon and title: `role="button"`, `tabIndex`, names and
+  Enter/Space; the edit icon is transparent instead of `visibility: hidden`
+  and appears on `:focus-visible`.
+- The global focus ring now also covers `[role=option]`, `[role=radio]` and
+  `[role=button]`.
+- Two debug `console.log` calls that ran on every render or selection
+  (`StorageProviderSelect`, `MultiSelect`) were removed.
+
+Observed and left unchanged (needs its own decision): the group-level
+`disabled` prop of `RadioIconSelect` only changes styling; a click on an
+option still calls `onUpdate`. Keyboard activation mirrors that click, and the
+option now announces `aria-disabled`. Whether Edit Plan relies on this is not
+verified here.
+
 ### Behaviour differences to be aware of
 
 - The Detailed changes path list is requested only when the disclosure is
@@ -170,21 +216,21 @@ segment, `#575aff` primary).
 
 Windows, Node 24.16.0, pnpm 10.20.0.
 
-| Check                                                                 | Result                                                                                                                                                                                                                                                                                                             |
-| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `node --experimental-strip-types --test frontend/__tests__/*.test.ts` | **447 passed, 0 failed, 0 skipped**                                                                                                                                                                                                                                                                                |
-| New/updated tests                                                     | Toggle token contrast and saturation (Light/Dark), toggle focusability and `role=switch`, semantic-token guard (no error text on the fill token, no `turquoise`, no `var()` without `--`, device dot, MCP badge), Snapshot Details summary, lazy disclosure, `aria-pressed` selection driving Browse Changed Files |
-| Test-first evidence                                                   | New toggle tests failed on the old styles ("Missing token", "visibility:hidden"); the updated Snapshot Details test failed before the component change; the guarded patterns exist in 9 files on `origin/main`                                                                                                     |
-| `pnpm --filter @plutonhq/core-frontend exec tsc -b`                   | Passed                                                                                                                                                                                                                                                                                                             |
-| `pnpm --filter @plutonhq/core-frontend build`                         | Passed (existing Browserslist and chunk-size warnings)                                                                                                                                                                                                                                                             |
-| Docker `Dockerfile.source` builds of `04f5f2d` and the branch         | Passed; both containers healthy                                                                                                                                                                                                                                                                                    |
-| Full frontend ESLint                                                  | Pre-existing configuration failure (string `eslint-config-prettier` in `extends`), unchanged                                                                                                                                                                                                                       |
-| Targeted ESLint, temporary corrected config outside Git               | Per-file rule counts for all 17 changed TS/TSX files are identical to `origin/main` (the remaining findings are the existing `object-curly-newline` vs Prettier baseline)                                                                                                                                          |
-| Prettier on changed files                                             | Clean, except `SnapshotBrowserDirectories.tsx`, already non-conformant on `main` and not reformatted                                                                                                                                                                                                               |
-| `git diff --check`                                                    | Passed                                                                                                                                                                                                                                                                                                             |
-| Backend tests                                                         | Not run: no backend file changed                                                                                                                                                                                                                                                                                   |
+| Check                                                                 | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `node --experimental-strip-types --test frontend/__tests__/*.test.ts` | **456 passed, 0 failed, 0 skipped**                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| New/updated tests                                                     | Toggle token contrast and saturation (Light/Dark), toggle focusability and `role=switch`, semantic-token guard (no error text on the fill token, no `turquoise`, no `var()` without `--`, device dot, MCP badge), Snapshot Details summary, lazy disclosure, `aria-pressed` selection driving Browse Changed Files; `formControlAccessibility.test.ts` (9 tests): carets never submit an enclosing form, Enter/Space selection, disabled options, radio groups, named toggles |
+| Test-first evidence                                                   | New toggle tests failed on the old styles ("Missing token", "visibility:hidden"); the updated Snapshot Details test failed before the component change; the guarded patterns exist in 9 files on `origin/main`; all 9 form-control tests failed before the fix, and a throwaway jsdom check showed one caret click submitting a form for each of the four controls                                                                                                            |
+| `pnpm --filter @plutonhq/core-frontend exec tsc -b`                   | Passed                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `pnpm --filter @plutonhq/core-frontend build`                         | Passed (existing Browserslist and chunk-size warnings)                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Docker `Dockerfile.source` builds of `04f5f2d` and the branch         | Passed; both containers healthy                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Full frontend ESLint                                                  | Pre-existing configuration failure (string `eslint-config-prettier` in `extends`), unchanged                                                                                                                                                                                                                                                                                                                                                                                  |
+| Targeted ESLint, temporary corrected config outside Git               | Per-file rule counts for all changed TS/TSX files are identical to `origin/main`; the new `utils/keyboard.ts` is clean (the remaining findings are the existing `object-curly-newline` vs Prettier baseline)                                                                                                                                                                                                                                                                  |
+| Prettier on changed files                                             | Clean, except `SnapshotBrowserDirectories.tsx`, already non-conformant on `main` and not reformatted                                                                                                                                                                                                                                                                                                                                                                          |
+| `git diff --check`                                                    | Passed                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Backend tests                                                         | Not run: no backend file changed                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
-Accessibility checks performed: keyboard Tab/Shift+Tab to a switch,
+Accessibility checks performed: keyboard Tab/Shift+Tab to a switch, Enter/Space on options and radios (jsdom),
 `:focus-visible`, `role=switch`, `aria-pressed`, `aria-expanded` +
 `aria-controls`, `aria-current` on breadcrumbs, accessible names on icon-only
 buttons. Reduced motion stays covered by the existing global rule. This is not
@@ -214,8 +260,8 @@ change: deploying the new image is sufficient.
 
 Commits (oldest first): `2d5821e` theme tokens and toggles, `270ed02`
 accessible names and focus reveal, `ba711db` Browse Snapshot / Snapshot
-Details, `7ace756` local status line, `e96fc79` synthetic preview data, then
-this report.
+Details, `7ace756` local status line, `e96fc79` synthetic preview data,
+`e051898` this report, `285272d` form controls, then this report update.
 
 Theme tokens and toggles:
 
@@ -266,6 +312,23 @@ Tests, fixture and report:
 - `frontend/__tests__/theme-preview/app.tsx`
 - `docs/UI_UX_CONSISTENCY_POLISH.md`
 
+Form controls (`285272d`):
+
+- `frontend/src/utils/keyboard.ts`
+- `frontend/src/components/common/form/Select/Select.tsx`
+- `frontend/src/components/common/form/MultiSelect/MultiSelect.tsx`
+- `frontend/src/components/common/form/StorageProviderSelect/StorageProviderSelect.tsx`
+- `frontend/src/components/common/form/TimePicker/TimePicker.tsx`
+- `frontend/src/components/common/form/RadioIconSelect/RadioIconSelect.tsx`
+- `frontend/src/components/common/form/Tristate/Tristate.tsx`
+- `frontend/src/components/common/FileManager/FileManager.tsx`
+- `frontend/src/components/Restore/RestoreFileSelector/RestoreFileSelector.tsx`
+- `frontend/src/components/Plan/PlanSizeChart/PlanSizeChart.tsx`
+- `frontend/src/components/Plan/Backups/Backups.tsx`
+- `frontend/src/components/Plan/Backups/Backups.module.scss`
+- `frontend/src/styles/global.scss` (also in the first group; focus ring selector)
+- `frontend/__tests__/formControlAccessibility.test.ts`
+
 ## Operator UAT (Chrome)
 
 Deploy the reviewed image by digest as usual, close old Pluton tabs so the new
@@ -291,8 +354,9 @@ screenshot without hostnames or identifiers.
 ## Rollback
 
 Deploy the previous image digest (frontend assets only, no schema or data
-change), or revert commits `e96fc79`, `7ace756`, `ba711db`, `270ed02`,
-`2d5821e` and this report.
+change), or revert commits `285272d`, `e96fc79`, `7ace756`, `ba711db`,
+`270ed02`, `2d5821e` and the two report commits. `285272d` can be reverted on
+its own.
 
 ## Limitations and follow-up recommendations
 
@@ -303,12 +367,10 @@ change), or revert commits `e96fc79`, `7ace756`, `ba711db`, `270ed02`,
 - "Edit Plan with Replication" was not rendered: it needs an HCP S3 storage.
   Toggles were checked in the Advanced tab instead.
 - Not implemented (larger or functional, separate tasks):
-  - Select/MultiSelect/StorageProviderSelect/TimePicker caret buttons have no
-    `type="button"` and could submit an enclosing form; they also lack names.
-  - FileManager and RestoreFileSelector selection toggles need `aria-pressed`
-    and names; RadioIconSelect, Tristate, Select options and PlanSizeChart
-    ranges are clickable elements without role/tabindex; the backup title edit
-    icon is a mouse-only `span`.
+  - Decide whether a group-disabled `RadioIconSelect` should ignore option
+    clicks (today it only changes styling; see Form controls above).
+  - Dropdowns still open on click/Enter only: arrow-key navigation, Escape to
+    close and returning focus to the caret are not implemented.
   - Skeleton shimmer sweeps a white band over Dark surfaces; the tertiary
     button hover (`brightness(0.95)`) is nearly invisible in Dark; the modal
     close button rotates on hover and dialogs use an overshooting easing.
