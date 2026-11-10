@@ -206,6 +206,25 @@ Fix, presentation and interaction only:
   focusable in that case.
 - Enabled groups behave exactly as before for mouse and keyboard.
 
+### MCP administration (`8871270`)
+
+Root cause (proven in the running `after` container): `Mcp.module.scss` styled
+every button with one outline style and only styled inputs inside `.form`, so
+the Activity and Approvals filters fell back to browser defaults (grey Chrome
+field, native select), and the API Tokens card placed Create, Previous/Next and
+Emergency revoke without hierarchy. Several rules carried hard-coded hex
+fallbacks.
+
+- One button size; `.primary` for Add MCP client, Create API token, form
+  submits, Enable service and Approve; `.danger` outline for revocations; the
+  confirm dialog uses danger for revoke routes and primary otherwise.
+- Filters and form fields share `--field-bg` / `--field-line-color`; filter
+  rows use a `.filters` layout with muted labels.
+- Pagers are right-aligned groups with the page number; the token pager gained
+  the same page label; Emergency revoke sits in a separated `.dangerZone` row.
+- Table headers, muted text, cards and the overview use theme tokens only (no
+  hex fallbacks). Labels, routes, confirmations and API calls are unchanged.
+
 ### Behaviour differences to be aware of
 
 - The Detailed changes path list is requested only when the disclosure is
@@ -250,7 +269,7 @@ Windows, Node 24.16.0, pnpm 10.20.0.
 
 | Check                                                                 | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `node --experimental-strip-types --test frontend/__tests__/*.test.ts` | **461 passed, 0 failed, 0 skipped**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `node --experimental-strip-types --test frontend/__tests__/*.test.ts` | **462 passed, 0 failed, 0 skipped**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | New/updated tests                                                     | Toggle token contrast and saturation (Light/Dark), toggle focusability and `role=switch`, semantic-token guard (no error text on the fill token, no `turquoise`, no `var()` without `--`, device dot, MCP badge), Snapshot Details summary, lazy disclosure, `aria-pressed` selection driving Browse Changed Files; `formControlAccessibility.test.ts` (14 tests): carets never submit an enclosing form, Enter/Space selection, disabled options, radio groups, named toggles, disabled RadioIconSelect group (mouse and keyboard), individually disabled options, Edit Plan locked strategy vs Add Plan selectable strategy and upgrade prompt |
 | Test-first evidence                                                   | New toggle tests failed on the old styles ("Missing token", "visibility:hidden"); the updated Snapshot Details test failed before the component change; the guarded patterns exist in 9 files on `origin/main`; all 9 form-control tests failed before the fix, and a throwaway jsdom check showed one caret click submitting a form for each of the four controls; the 3 RadioIconSelect/Edit Plan regression tests failed before `64f471c` (Edit Plan test: "must not change the backup strategy") while the Add Plan test passed before and after                                                                                             |
 | `pnpm --filter @plutonhq/core-frontend exec tsc -b`                   | Passed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -294,7 +313,8 @@ Commits (oldest first): `2d5821e` theme tokens and toggles, `270ed02`
 accessible names and focus reveal, `ba711db` Browse Snapshot / Snapshot
 Details, `7ace756` local status line, `e96fc79` synthetic preview data,
 `e051898` this report, `285272d` form controls, `bf1a6db` report update,
-`64f471c` read-only disabled RadioIconSelect, then this report update.
+`64f471c` read-only disabled RadioIconSelect, `eac7d9b` report update,
+`8871270` MCP administration, then this report update.
 
 Theme tokens and toggles:
 
@@ -362,6 +382,13 @@ Form controls (`285272d`):
 - `frontend/src/styles/global.scss` (also in the first group; focus ring selector)
 - `frontend/__tests__/formControlAccessibility.test.ts`
 
+MCP administration (`8871270`):
+
+- `frontend/src/routes/Mcp/Mcp.module.scss`
+- `frontend/src/routes/Mcp/Mcp.tsx`
+- `frontend/src/routes/Mcp/McpV2Panel.tsx`
+- `frontend/__tests__/themeStyles.test.ts` (MCP contract test; also in the first group)
+
 ## Operator UAT (Chrome)
 
 Deploy the reviewed image by digest as usual, close old Pluton tabs so the new
@@ -391,7 +418,7 @@ screenshot without hostnames or identifiers.
 ## Rollback
 
 Deploy the previous image digest (frontend assets only, no schema or data
-change), or revert commits `64f471c`, `285272d`, `e96fc79`, `7ace756`, `ba711db`,
+change), or revert commits `8871270`, `64f471c`, `285272d`, `e96fc79`, `7ace756`, `ba711db`,
 `270ed02`, `2d5821e` and the report commits. `64f471c` and `285272d` can be
 reverted on their own (newest first).
 
