@@ -7,6 +7,15 @@
    overflow: hidden;
 }
 
+// Status line directly under the toolbar (for example "Not compared" in the local viewer).
+.snapshotBrowser > .stats {
+   padding: 8px 12px;
+   border-bottom: 1px solid var(--line-color);
+   background: var(--surface-muted);
+   font-size: 0.75rem;
+   color: var(--content-text-color-light);
+}
+
 .storageSelect {
    background-color: transparent;
    :global([class*='_dropdown_']) {
