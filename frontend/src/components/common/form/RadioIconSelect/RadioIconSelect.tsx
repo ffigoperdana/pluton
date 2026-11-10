@@ -35,17 +35,22 @@ const RadioIconSelect = ({
          <div
             role="radiogroup"
             aria-label={groupLabel}
+            aria-disabled={groupDisabled || undefined}
             className={`${classes.radioIconFieldOptions} ${disabled ? classes.radioIconFieldOptionsDisabled : ''} ${showDescription ? classes.radioIconFieldOptionsDesc : ''} ${layout === 'list' ? classes.radioIconFieldList : ''}`}
          >
             {options.map((option) => {
                const { label, value, icon, description, disabled = false } = option;
-               // Keyboard activation runs exactly the same handler as a mouse click.
+               // Contract: a disabled group is read-only (no onUpdate, no option prompts).
+               // A disabled option is never selected; it may only explain itself via onDisableClick.
+               const interactive = !groupDisabled && (!disabled || !!onDisableClick);
+               // Mouse and keyboard share this handler.
                const choose = () => {
-                  if (disabled && onDisableClick) {
-                     onDisableClick(value);
-                  } else {
-                     onUpdate(value);
+                  if (groupDisabled) return;
+                  if (disabled) {
+                     onDisableClick?.(value);
+                     return;
                   }
+                  onUpdate(value);
                };
                return (
                   <div
@@ -53,7 +58,7 @@ const RadioIconSelect = ({
                      role="radio"
                      aria-checked={fieldValue === value}
                      aria-disabled={disabled || groupDisabled || undefined}
-                     tabIndex={0}
+                     tabIndex={interactive ? 0 : -1}
                      className={`${classes.radioIconFieldOption} ${disabled ? classes.radioIconFieldDisabled : ''} ${fieldValue === value ? classes.radioIconFieldActive : ''}`}
                      onClick={choose}
                      onKeyDown={onActivateKey(choose)}

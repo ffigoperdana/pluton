@@ -22,6 +22,7 @@ const output = await backendRequire('esbuild').build({
          'export {default as TimePicker} from "./components/common/form/TimePicker/TimePicker";',
          'export {default as RadioIconSelect} from "./components/common/form/RadioIconSelect/RadioIconSelect";',
          'export {default as Tristate} from "./components/common/form/Tristate/Tristate";',
+         'export {default as PlanStrategySettings} from "./components/Plan/PlanSettings/PlanStrategySettings";',
       ].join(''),
       resolveDir: sourceRoot,
       loader: 'tsx',
@@ -45,13 +46,18 @@ const output = await backendRequire('esbuild').build({
             }));
             build.onLoad({ filter: /\.scss$/ }, () => ({ contents: 'export default new Proxy({}, {get:(_,key)=>String(key)});', loader: 'js' }));
             build.onLoad({ filter: /[\\/]Icon\.tsx$/ }, () => ({ contents: 'export default ()=>null;', loader: 'js' }));
+            // The upgrade prompt is replaced by a marker so tests can see whether it opened.
+            build.onLoad({ filter: /[\\/]Upgrade[\\/]Upgrade\.tsx$/ }, () => ({
+               contents: 'import { createElement } from "react"; export default ({ focus }) => createElement("div", { "data-upgrade": focus });',
+               loader: 'js',
+            }));
          },
       },
    ],
 });
 const bundle = { exports: {} as any };
 new Function('require', 'module', 'exports', output.outputFiles[0].text)(require, bundle, bundle.exports);
-const { Select, MultiSelect, StorageProviderSelect, TimePicker, RadioIconSelect, Tristate } = bundle.exports;
+const { Select, MultiSelect, StorageProviderSelect, TimePicker, RadioIconSelect, Tristate, PlanStrategySettings } = bundle.exports;
 
 async function mount(element: any) {
    const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.internal/' });
@@ -290,6 +296,130 @@ test('RadioIconSelect is a keyboard radio group and keeps the disabled-option ca
    } finally {
       await ui.close();
    }
+});
+
+const radioOptions = [
+   { label: 'Incremental', description: 'Snapshots', value: 'incremental', icon: 'box' },
+   { label: 'Sync', description: 'Mirror', value: 'sync', icon: 'sync' },
+   { label: 'System', description: 'Image', value: 'system', icon: 'linux', disabled: true },
+];
+const radioNamed = (ui: any, text: string) => ui.all('[role="radio"]').find((r: HTMLElement) => r.textContent?.includes(text))!;
+
+test('RadioIconSelect: an individually disabled option without onDisableClick is never selected', async () => {
+   const updates: string[] = [];
+   const ui = await mount(
+      React.createElement(RadioIconSelect, {
+         label: 'Strategy',
+         fieldValue: 'incremental',
+         options: radioOptions,
+         onUpdate: (value: string) => updates.push(value),
+      }),
+   );
+   try {
+      const system = radioNamed(ui, 'System');
+      assert.equal(system.getAttribute('aria-disabled'), 'true');
+      assert.equal(system.tabIndex, -1);
+      await ui.click(system);
+      await ui.key(system, 'Enter');
+      await ui.key(system, ' ');
+      assert.deepEqual(updates, [], 'a disabled option must not reach onUpdate by mouse or keyboard');
+      await ui.click(radioNamed(ui, 'Sync'));
+      assert.deepEqual(updates, ['sync'], 'enabled options keep working');
+   } finally {
+      await ui.close();
+   }
+});
+
+test('RadioIconSelect: a disabled group ignores mouse and keyboard and announces it', async () => {
+   const updates: string[] = [];
+   const disabledClicks: string[] = [];
+   const ui = await mount(
+      React.createElement(RadioIconSelect, {
+         label: 'Strategy',
+         fieldValue: 'incremental',
+         options: radioOptions,
+         disabled: true,
+         onUpdate: (value: string) => updates.push(value),
+         onDisableClick: (value: string) => disabledClicks.push(value),
+      }),
+   );
+   try {
+      assert.equal(ui.all('[role="radiogroup"]')[0].getAttribute('aria-disabled'), 'true');
+      for (const radio of ui.all('[role="radio"]')) {
+         assert.equal(radio.getAttribute('aria-disabled'), 'true');
+         assert.equal(radio.tabIndex, -1, 'a disabled group is removed from the tab order');
+      }
+      const sync = radioNamed(ui, 'Sync');
+      await ui.click(sync);
+      await ui.key(sync, 'Enter');
+      await ui.key(sync, ' ');
+      await ui.click(radioNamed(ui, 'System'));
+      await ui.key(radioNamed(ui, 'System'), 'Enter');
+      assert.deepEqual(updates, []);
+      assert.deepEqual(disabledClicks, [], 'a disabled group does not open option prompts either');
+      assert.equal(radioNamed(ui, 'Incremental').getAttribute('aria-checked'), 'true', 'the saved value stays visible');
+   } finally {
+      await ui.close();
+   }
+});
+
+// Mirrors the strategy options PlanForm passes in Add Plan and Edit Plan.
+const strategyOptions = [
+   { value: 'backup', icon: 'backup', label: 'Incremental Backup', description: 'Incremental snapshots' },
+   { value: 'sync', icon: 'sync', label: 'Real-time Sync', description: 'Identical source', disabled: true },
+   { value: 'storage-sync', icon: 'storage-sync', label: 'Storage Sync', description: 'Storage to storage', disabled: true },
+   { value: 'rescue', icon: 'rescue', label: 'Linux Server Backup', description: 'Bootable image', disabled: true },
+];
+
+test('Edit Plan: the edit-mode strategy selector cannot change an existing plan strategy or open the upgrade prompt', async () => {
+   const updates: string[] = [];
+   const ui = await mount(
+      React.createElement(PlanStrategySettings, {
+         // An existing storage-source plan: changing it to "backup" would be invalid.
+         plan: { sourceType: 'storage', method: 'sync' },
+         disabled: true,
+         options: strategyOptions,
+         onUpdate: (method: string) => updates.push(method),
+      }),
+   );
+   try {
+      assert.equal(radioNamed(ui, 'Storage Sync').getAttribute('aria-checked'), 'true');
+      const incremental = radioNamed(ui, 'Incremental Backup');
+      await ui.click(incremental);
+      await ui.key(incremental, 'Enter');
+      await ui.key(incremental, ' ');
+      assert.deepEqual(updates, [], 'Edit Plan must not change the backup strategy');
+      await ui.click(radioNamed(ui, 'Linux Server Backup'));
+      assert.equal(ui.all('[data-upgrade]').length, 0, 'no upgrade prompt from a locked selector');
+   } finally {
+      await ui.close();
+   }
+});
+
+test('Add Plan: the same strategy selector stays selectable and still offers the upgrade prompt', async () => {
+   const updates: string[] = [];
+   const ui = await mount(
+      React.createElement(PlanStrategySettings, {
+         plan: { sourceType: 'device', method: 'backup' },
+         disabled: false,
+         options: strategyOptions,
+         onUpdate: (method: string) => updates.push(method),
+      }),
+   );
+   try {
+      await ui.key(radioNamed(ui, 'Incremental Backup'), 'Enter');
+      assert.deepEqual(updates, ['backup']);
+      await ui.click(radioNamed(ui, 'Linux Server Backup'));
+      assert.equal(ui.all('[data-upgrade="rescue"]').length, 1, 'unavailable strategies still explain themselves');
+      assert.deepEqual(updates, ['backup'], 'an unavailable strategy is never selected');
+   } finally {
+      await ui.close();
+   }
+});
+
+test('PlanForm locks the strategy selector only in edit mode', () => {
+   const form = source('components/Plan/PlanForm/PlanForm.tsx');
+   assert.match(form, /<PlanStrategySettings[\s\S]*?disabled=\{type === 'edit' \? true : false\}/);
 });
 
 test('Tristate options are keyboard radios and disabled options are ignored', async () => {
