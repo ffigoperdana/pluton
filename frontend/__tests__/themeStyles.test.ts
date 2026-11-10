@@ -207,6 +207,29 @@ test('text, status dots and badges use theme-aware semantic tokens instead of fi
    assert.ok(badge.nodes.some((decl: any) => decl.prop === 'background' && decl.value === 'var(--primary-color-light)'));
 });
 
+test('MCP administration uses Pluton field tokens, a clear button hierarchy and no hard-coded fallbacks', () => {
+   const mcp = compiled('routes/Mcp/Mcp.module.scss');
+   const text = mcp.toString();
+   assert.ok(!/#[0-9a-f]{3,8}\b/i.test(text), 'MCP styles must use theme tokens, not fixed hex fallbacks');
+   const field = mcp.nodes.find((rule: any) => /\.page input:not\(\[type=["']?checkbox["']?\]\)/.test(rule.selector || ''));
+   assert.ok(field, 'filters and form fields share one field rule');
+   assert.ok(field.nodes.some((decl: any) => decl.prop === 'background' && decl.value === 'var(--field-bg)'));
+   assert.ok(field.nodes.some((decl: any) => decl.prop === 'border' && decl.value.includes('var(--field-line-color)')));
+   for (const variant of ['.page button.primary', '.page button.danger'])
+      assert.ok(
+         mcp.nodes.some((rule: any) => rule.selector === variant),
+         `${variant} is defined`,
+      );
+   const source = (path: string) => readFileSync(new URL(path, sourceRoot), 'utf8');
+   const page = source('routes/Mcp/Mcp.tsx'),
+      tokens = source('routes/Mcp/McpV2Panel.tsx');
+   assert.match(page, /className=\{classes\.primary\}[\s\S]{0,300}?Add MCP client/);
+   assert.match(tokens, /className=\{classes\.primary\}[\s\S]{0,300}?Create API token/);
+   assert.match(tokens, /className=\{classes\.danger\}[\s\S]{0,400}?Emergency revoke all native tokens/);
+   assert.match(tokens, /className=\{classes\.dangerZone\}/);
+   assert.match(page, /className=\{classes\.filters\}/);
+});
+
 test('status badges, selected files and toast surfaces no longer bypass the shared palette', () => {
    const global = css.toString();
    assert.ok(global.includes('background-color: var(--success-bg-color)'));

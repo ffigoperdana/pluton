@@ -178,7 +178,7 @@ function TokenForm({ initial, busy, save }: { initial: Token | 'new'; busy: bool
          ) : (
             <p>Permission edits keep the existing expiration and invalidate pending approvals. Rotate to replace the credential.</p>
          )}
-         <button disabled={busy || !value.tools.length} type="submit">
+         <button className={classes.primary} disabled={busy || !value.tools.length} type="submit">
             {busy ? 'Saving…' : initial === 'new' ? 'Create token' : 'Save token permissions'}
          </button>
       </form>
@@ -293,6 +293,7 @@ export default function McpV2Panel({
             <div className={classes.heading}>
                <h3 id="mcp-tokens">API Tokens</h3>
                <button
+                  className={classes.primary}
                   disabled={!enabled || busy}
                   onClick={() => {
                      setError('');
@@ -396,6 +397,7 @@ export default function McpV2Panel({
                                        Rotate
                                     </button>
                                     <button
+                                       className={classes.danger}
                                        disabled={busy || token.revokedAt !== null}
                                        onClick={() =>
                                           setConfirm({
@@ -420,37 +422,44 @@ export default function McpV2Panel({
                <button disabled={!tokenOffset || tokens.isFetching} onClick={() => setTokenOffset(tokenOffset - 20)}>
                   Previous tokens
                </button>
+               <span>Page {tokenOffset / 20 + 1}</span>
                <button disabled={!tokens.data?.hasMore || tokens.isFetching} onClick={() => setTokenOffset(tokenOffset + 20)}>
                   Next tokens
                </button>
             </div>
-            <button
-               disabled={busy}
-               onClick={() =>
-                  setConfirm({
-                     route: 'tokens/revoke-all',
-                     body: { confirm: 'REVOKE ALL NATIVE TOKENS' },
-                     title: 'Emergency revoke all native tokens',
-                     detail: 'Immediately revoke every native token. OAuth grants remain separate. Already dispatched work is not cancelled.',
-                  })
-               }
-            >
-               Emergency revoke all native tokens
-            </button>
+            <div className={classes.dangerZone}>
+               <p className={classes.muted}>Immediately revoke every native token. OAuth grants remain separate.</p>
+               <button
+                  className={classes.danger}
+                  disabled={busy}
+                  onClick={() =>
+                     setConfirm({
+                        route: 'tokens/revoke-all',
+                        body: { confirm: 'REVOKE ALL NATIVE TOKENS' },
+                        title: 'Emergency revoke all native tokens',
+                        detail: 'Immediately revoke every native token. OAuth grants remain separate. Already dispatched work is not cancelled.',
+                     })
+                  }
+               >
+                  Emergency revoke all native tokens
+               </button>
+            </div>
          </section>
          <section className={classes.card} aria-labelledby="mcp-approvals">
             <h3 id="mcp-approvals">Approvals and action history</h3>
-            <label>
-               <input
-                  type="checkbox"
-                  checked={pendingOnly}
-                  onChange={(e) => {
-                     setPendingOnly(e.target.checked);
-                     setActionOffset(0);
-                  }}
-               />
-               Pending approvals only
-            </label>
+            <div className={classes.filters}>
+               <label>
+                  <input
+                     type="checkbox"
+                     checked={pendingOnly}
+                     onChange={(e) => {
+                        setPendingOnly(e.target.checked);
+                        setActionOffset(0);
+                     }}
+                  />
+                  Pending approvals only
+               </label>
+            </div>
             <p>
                Review the exact parameters and before/after values. Approval expires after 15 minutes or token expiration. Changes to permissions or
                resources require a fresh request.
@@ -614,7 +623,11 @@ export default function McpV2Panel({
             <Modal stableLayout title={confirm.title} width="500px" closeDisabled={busy} closeModal={() => setConfirm(null)}>
                <p>{confirm.detail}</p>
                {error && <p role="alert">{error}</p>}
-               <button disabled={busy} onClick={() => void run(confirm.route, confirm.body, 'POST', confirm.route.endsWith('/rotate'))}>
+               <button
+                  className={confirm.route.includes('revoke') ? classes.danger : classes.primary}
+                  disabled={busy}
+                  onClick={() => void run(confirm.route, confirm.body, 'POST', confirm.route.endsWith('/rotate'))}
+               >
                   Confirm
                </button>
             </Modal>
@@ -642,6 +655,7 @@ export default function McpV2Panel({
                   {review.status === 'pending_approval' && (
                      <div className={classes.actions}>
                         <button
+                           className={classes.primary}
                            disabled={busy || !enabled}
                            onClick={() => void run(`actions/${review.id}/approve`, { argumentsHash: review.argumentsHash })}
                         >

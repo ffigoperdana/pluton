@@ -142,7 +142,7 @@ function ClientForm({
             <summary>Connection instructions</summary>
             <pre className={classes.instructions}>{connectionInstructions(value.clientType, endpoint)}</pre>
          </details>
-         <button disabled={pending || !value.scopes.length} type="submit">
+         <button className={classes.primary} disabled={pending || !value.scopes.length} type="submit">
             {pending ? 'Saving…' : initial ? 'Save permissions' : 'Register authorization'}
          </button>
       </form>
@@ -267,6 +267,7 @@ export default function Mcp() {
             <div className={classes.heading}>
                <h3 id="mcp-clients">OAuth client authorizations</h3>
                <button
+                  className={classes.primary}
                   disabled={state.oauthEnabled === false}
                   onClick={() => {
                      mutation.reset();
@@ -402,7 +403,7 @@ export default function Mcp() {
          </section>
          <section className={classes.card} aria-labelledby="mcp-activity">
             <h3 id="mcp-activity">Activity & audit</h3>
-            <div className={classes.actions}>
+            <div className={classes.filters}>
                <label>
                   Client authorization ID{' '}
                   <input
@@ -531,6 +532,7 @@ export default function Mcp() {
             <Modal stableLayout title="Revoke MCP client" width="420px" closeDisabled={mutation.isPending} closeModal={() => setRevoke(null)}>
                <p>Revoke {revoke.name}? Future requests using this authorization will be refused.</p>
                <button
+                  className={classes.danger}
                   disabled={mutation.isPending}
                   onClick={() => mutation.mutate({ route: `clients/${revoke.id}/revoke`, method: 'POST', body: {} })}
                >
@@ -550,7 +552,7 @@ export default function Mcp() {
                   Enable access for native tokens and registered OAuth clients with their exact permissions and resource lists. Verify your
                   authentication settings, TLS and reverse proxy settings before connecting clients.
                </p>
-               <button disabled={mutation.isPending} onClick={() => policy(true)}>
+               <button className={classes.primary} disabled={mutation.isPending} onClick={() => policy(true)}>
                   Enable service
                </button>
             </Modal>
