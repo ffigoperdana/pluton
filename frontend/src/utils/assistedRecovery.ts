@@ -32,7 +32,7 @@ export type AssistedRecoveryJob = {
 };
 export const recoveryActive = (job: AssistedRecoveryJob) => ['checking', 'awaiting-approval', 'running'].includes(job.status);
 /** Interrupted/cleanup-pending jobs are rediscovered, never replaced on mount. */
-export const recoveryBlocking=(job:AssistedRecoveryJob)=>recoveryActive(job)||job.cleanupPending||job.status==='uncertain';
+export const recoveryBlocking = (job: AssistedRecoveryJob) => recoveryActive(job) || job.cleanupPending || job.status === 'uncertain';
 export const recoveryPolling = (jobs: AssistedRecoveryJob[]) =>
    jobs.some((job) => ['checking', 'running'].includes(job.status)) ? 3000 : jobs.some((job) => job.status === 'awaiting-approval') ? 15000 : false;
 export const recoveryCanApprove = (job: AssistedRecoveryJob, replica: string, now = Date.now()) =>
@@ -40,6 +40,21 @@ export const recoveryCanApprove = (job: AssistedRecoveryJob, replica: string, no
    !job.expired &&
    job.expiresAt > now &&
    job.candidates.some((candidate) => candidate.replicationId === replica && candidate.state === 'passed');
+/** Readable words for backend phase/state/code values (`staging-preparation` -> `Staging preparation`); callers keep the exact value visible. */
+export function recoveryLabel(value?: string) {
+   const words = (value || '').replace(/[-_]+/g, ' ').trim();
+   return words ? words[0].toUpperCase() + words.slice(1) : '';
+}
+/** Presentation tone for recoveryStatus(); cleanup that needs attention outranks any finished status. */
+export type RecoveryTone = 'progress' | 'attention' | 'success' | 'error' | 'neutral';
+export function recoveryTone(job: AssistedRecoveryJob): RecoveryTone {
+   if (job.cleanupPending && !recoveryActive(job)) return 'attention';
+   if (job.status === 'checking' || job.status === 'running') return 'progress';
+   if (job.status === 'awaiting-approval') return 'attention';
+   if (job.status === 'completed' || job.status === 'primary-ready') return 'success';
+   if (job.status === 'failed' || job.status === 'uncertain') return 'error';
+   return 'neutral';
+}
 export function recoveryStatus(job: AssistedRecoveryJob) {
    if (job.cleanupPending && !recoveryActive(job)) return 'Staging cleanup needs attention. No recovery is running.';
    if (job.status === 'awaiting-approval')

@@ -22,7 +22,7 @@ const RestoreChangeViewer = ({ restore, close }: RestoreChangeViewerProps) => {
                      {restore.status === 'completed' ? 'Successfully Restored' : 'Restoration Failed'}{' '}
                   </span>
                </h3>
-               <button className={classes.closePreview} onClick={() => close()}>
+               <button aria-label="Close preview" className={classes.closePreview} onClick={() => close()}>
                   <Icon type="close" size={24} />
                </button>
             </div>

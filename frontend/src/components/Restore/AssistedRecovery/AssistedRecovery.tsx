@@ -9,8 +9,11 @@ import {
    recoveryCanApprove,
    recoveryPolling,
    recoveryStatus,
+   recoveryTone,
+   recoveryLabel,
    type AssistedRecoveryJob,
 } from '../../../utils/assistedRecovery';
+import classes from './AssistedRecovery.module.scss';
 
 interface Props {
    planId: string;
@@ -157,46 +160,64 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
    const busy = start.isPending || approve.isPending || cancel.isPending || retryPrimary.isPending;
    const error = jobs.error || start.error || approve.error || cancel.error || retryPrimary.error;
    return (
-      <section aria-label="Assisted recovery">
-         <h3>
-            {job?.primary?.state === 'unavailable'
-               ? 'Primary Repository Unavailable'
-               : manual
-                 ? 'Manual Verified Replica Recovery'
-                 : 'Checking Recovery Sources'}
-         </h3>
-         <p>
-            Plan: {job?.planName || planId} · Backup: {backupId}
-         </p>
-         <p>
+      <section aria-label="Assisted recovery" className={classes.recovery}>
+         <header className={classes.head}>
+            <h4>
+               {job?.primary?.state === 'unavailable'
+                  ? 'Primary Repository Unavailable'
+                  : manual
+                    ? 'Manual Verified Replica Recovery'
+                    : 'Checking Recovery Sources'}
+            </h4>
+            <p className={classes.context}>
+               Plan: {job?.planName || planId} · Backup: <code>{backupId}</code>
+            </p>
+         </header>
+         <p className={classes.note}>
             Replica validation is read-only. Recovery writes only to private staging. Database import and production-target recovery require their
             existing separate authorization.
          </p>
          {error && (
-            <p role="alert">
+            <p role="alert" className={classes.alert}>
                {error instanceof Error ? error.message : 'Recovery request failed safely.'} Refresh to check server state before retrying.
             </p>
          )}
-         {jobs.isPending && <p role="status">Loading owner-authorized recovery history…</p>}
+         {jobs.isPending && (
+            <p role="status" className={classes.note}>
+               Loading owner-authorized recovery history…
+            </p>
+         )}
          {job && (
             <>
-               <p role="status">{recoveryStatus(job)}</p>
+               <p role="status" className={`${classes.status} ${classes[recoveryTone(job)]}`}>
+                  {recoveryStatus(job)}
+               </p>
                {!intentMatches && (
-                  <p role="alert">
+                  <p role="alert" className={classes.alert}>
                      This pending job has a different selection. Review and cancel it before checking the newly requested selection. Its old approval
                      cannot authorize the new selection.
                   </p>
                )}
-               <dl>
+               <dl className={classes.meta}>
                   <dt>Job</dt>
-                  <dd>{job.id}</dd>
-                  <dt>Requested snapshot</dt>
-                  <dd style={{ overflowWrap: 'anywhere' }}>{job.sourceSnapshotId}</dd>
-                  <dt>Phase</dt>
-                  <dd>{job.phase}</dd>
-                  <dt>Primary</dt>
                   <dd>
-                     {job.primary?.state || 'checking'} {job.primary?.code || ''}
+                     <code>{job.id}</code>
+                  </dd>
+                  <dt>Requested snapshot</dt>
+                  <dd>
+                     <code>{job.sourceSnapshotId}</code>
+                  </dd>
+                  <dt>Phase</dt>
+                  <dd title={job.phase}>{recoveryLabel(job.phase)}</dd>
+                  <dt>Primary</dt>
+                  <dd title={job.primary?.state || 'checking'}>
+                     {recoveryLabel(job.primary?.state || 'checking')}
+                     {job.primary?.code && (
+                        <>
+                           {' · '}
+                           {recoveryLabel(job.primary.code)} <code>{job.primary.code}</code>
+                        </>
+                     )}
                   </dd>
                   <dt>Operation</dt>
                   <dd>{job.operation}</dd>
@@ -205,12 +226,16 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
                   <dt>Selection</dt>
                   <dd>{job.includes.length ? job.includes.join(', ') : 'Full snapshot'}</dd>
                </dl>
-               {job.failureCode && <p role="alert">Diagnostic: {job.failureCode}. No source switch will be retried automatically.</p>}
+               {job.failureCode && (
+                  <p role="alert" className={classes.alert}>
+                     Diagnostic: {recoveryLabel(job.failureCode)} <code>{job.failureCode}</code>. No source switch will be retried automatically.
+                  </p>
+               )}
                {!!job.candidates.length && (
-                  <fieldset disabled={busy || job.status !== 'awaiting-approval' || job.expired}>
+                  <fieldset className={classes.replicas} disabled={busy || job.status !== 'awaiting-approval' || job.expired}>
                      <legend>Available replicas (configured priority)</legend>
                      {job.candidates.map((candidate) => (
-                        <div key={candidate.replicationId}>
+                        <div key={candidate.replicationId} className={classes.replica}>
                            <label>
                               <input
                                  type="radio"
@@ -220,11 +245,21 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
                                  disabled={candidate.state !== 'passed'}
                                  onChange={() => setSelected(candidate.replicationId)}
                               />
-                              S3 Replica {candidate.position} —{' '}
-                              {candidate.state === 'passed' ? 'Replica verified; recovery preflight passed' : 'Unavailable: ' + candidate.code}
+                              <span>
+                                 S3 Replica {candidate.position} —{' '}
+                                 {candidate.state === 'passed' ? (
+                                    'Replica verified; recovery preflight passed'
+                                 ) : (
+                                    <>
+                                       Unavailable: {recoveryLabel(candidate.code)} <code>{candidate.code}</code>
+                                    </>
+                                 )}
+                              </span>
                            </label>
                            {candidate.destinationSnapshotId && (
-                              <p style={{ overflowWrap: 'anywhere' }}>Destination snapshot: {candidate.destinationSnapshotId}</p>
+                              <p>
+                                 Destination snapshot: <code>{candidate.destinationSnapshotId}</code>
+                              </p>
                            )}
                            <p>Staged recovery tested: {candidate.recoveryTested ? 'Passed' : 'Not yet tested in this request'}</p>
                         </div>
@@ -232,41 +267,51 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
                   </fieldset>
                )}
                {job.status === 'awaiting-approval' && (
-                  <p>
+                  <p className={classes.note}>
                      Approval is tied to this owner, plan, source snapshot, selected destination snapshot, operation, selection and private staging
                      target. It expires at {new Date(job.expiresAt).toLocaleTimeString()} and can be used once.
                   </p>
                )}
                {job.stats && (
-                  <p>
+                  <p className={classes.note}>
                      Verified: {job.stats.files} files · {job.stats.bytes.toLocaleString()} bytes. The result remains in private staging until
                      discarded.
                   </p>
                )}
-               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+               <div className={classes.actions}>
                   {job.status === 'awaiting-approval' && (
-                     <button disabled={busy || !intentMatches || !recoveryCanApprove(job, selected)} onClick={() => approve.mutate()}>
+                     <button
+                        type="button"
+                        className={classes.primary}
+                        disabled={busy || !intentMatches || !recoveryCanApprove(job, selected)}
+                        onClick={() => approve.mutate()}
+                     >
                         Continue with S3 Replica
                      </button>
                   )}
                   {job.status !== 'cancelled' && (
-                     <button disabled={busy} onClick={() => cancel.mutate()}>
+                     <button type="button" className={classes.danger} disabled={busy} onClick={() => cancel.mutate()}>
                         {job.status === 'completed' ? 'Discard staged result' : 'Cancel Recovery'}
                      </button>
                   )}
                   {job.status !== 'running' && (
-                     <button disabled={busy} onClick={() => retryPrimary.mutate()}>
+                     <button type="button" className={classes.secondary} disabled={busy} onClick={() => retryPrimary.mutate()}>
                         Retry Primary
                      </button>
                   )}
                </div>
-               <details>
+               <details className={classes.audit}>
                   <summary>Safe audit history</summary>
                   <ul>
                      {job.audit.map((event, index) => (
                         <li key={index}>
-                           {new Date(event.at).toLocaleTimeString()} — {event.event}
-                           {event.code ? ' · ' + event.code : ''}
+                           {new Date(event.at).toLocaleTimeString()} — {recoveryLabel(event.event)}
+                           {event.code && (
+                              <>
+                                 {' · '}
+                                 {recoveryLabel(event.code)} <code>{event.code}</code>
+                              </>
+                           )}
                         </li>
                      ))}
                   </ul>
@@ -274,30 +319,46 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
             </>
          )}
          {manual && !jobs.data?.some(recoveryBlocking) && (
-            <div>
+            <div className={classes.manual}>
+               {job && <h5 className={classes.subhead}>Start a new replica check</h5>}
                <label>
                   Exact file or directory path in the snapshot (optional)
                   <input value={path} onChange={(event) => setPath(event.target.value)} placeholder="/srv/example-app" />
                </label>
-               <p>Leave empty for the full snapshot, including recorded database artifacts. SQL artifact recovery does not import a database.</p>
-               <button disabled={busy || jobs.isPending || !!jobs.error} onClick={() => start.mutate('manual-replica')}>
+               <p className={classes.note}>
+                  Leave empty for the full snapshot, including recorded database artifacts. SQL artifact recovery does not import a database.
+               </p>
+               <button
+                  type="button"
+                  className={classes.primary}
+                  disabled={busy || jobs.isPending || !!jobs.error}
+                  onClick={() => start.mutate('manual-replica')}
+               >
                   Check replica recovery
                </button>
             </div>
          )}
-         <button
-            disabled={jobs.isFetching}
-            onClick={() => {
-               void jobs.refetch();
-            }}
-         >
-            Refresh recovery status
-         </button>
-         {close && <button onClick={close}>Close</button>}
-         <p>
-            Closing or navigating leaves server work and pending approval intact. Reopen Restore or replica details for this backup to recover its
-            authorized job state.
-         </p>
+         <div className={classes.footer}>
+            <button
+               type="button"
+               className={classes.secondary}
+               disabled={jobs.isFetching}
+               onClick={() => {
+                  void jobs.refetch();
+               }}
+            >
+               Refresh recovery status
+            </button>
+            {close && (
+               <button type="button" className={classes.secondary} onClick={close}>
+                  Close
+               </button>
+            )}
+            <p className={classes.note}>
+               Closing or navigating leaves server work and pending approval intact. Reopen Restore or replica details for this backup to recover its
+               authorized job state.
+            </p>
+         </div>
       </section>
    );
 }

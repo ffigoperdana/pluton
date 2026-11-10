@@ -36,7 +36,7 @@
       }
       &.hasFailed {
          background-color: var(--error-bg-color);
-         color: var(--error-button-color);
+         color: var(--error-text-color);
       }
    }
 }
@@ -102,7 +102,7 @@
       }
       &.error {
          .icon {
-            color: var(--error-button-color);
+            color: var(--error-text-color);
          }
       }
       &:nth-child(odd) {
@@ -129,15 +129,15 @@
          border: 2px solid var(--error-bg-color-active);
          border-radius: 6px;
          .action {
-            color: var(--error-button-color);
+            color: var(--error-text-color);
             font-weight: 600;
          }
          .phase {
             background-color: var(--error-bg-color-active);
-            color: var(--error-button-color);
+            color: var(--error-text-color);
          }
          .icon {
-            color: var(--error-button-color);
+            color: var(--error-text-color);
          }
       }
       &.retrying {
@@ -149,7 +149,7 @@
       }
       &.isError {
          .action {
-            color: var(--error-button-color);
+            color: var(--error-text-color);
             font-weight: 600;
          }
       }
@@ -252,7 +252,7 @@
    }
    &.mirror_failed {
       background-color: var(--error-bg-color);
-      color: var(--error-button-color);
+      color: var(--error-text-color);
    }
 }
 
@@ -266,7 +266,7 @@
 .errorDetails {
    padding: 10px;
    word-break: break-word;
-   color: var(--error-button-color);
+   color: var(--error-text-color);
    max-height: 400px;
    overflow: auto;
 }

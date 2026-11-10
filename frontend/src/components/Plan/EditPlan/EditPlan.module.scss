@@ -36,6 +36,6 @@
    box-sizing: border-box;
    &:focus {
       outline: none;
-      border-color: var(line-active-color);
+      border-color: var(--line-active-color);
    }
 }

@@ -29,7 +29,7 @@ const FolderPicker = ({ title, selected, footerText = '', buttonText = 'Insert P
          <div className={classes.folderPickerModalInner}>
             <div className={classes.folderPickerHeader}>
                <h4>{title}</h4>
-               <button onClick={() => close()}>
+               <button aria-label="Close folder picker" onClick={() => close()}>
                   <Icon type="close" size={20} />
                </button>
             </div>

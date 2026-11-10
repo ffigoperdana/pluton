@@ -90,7 +90,10 @@ const Restores = ({
                         </div>
                         <div title={formatDateTime(ended || started)}>{ended ? timeAgo(new Date(ended)) : timeAgo(new Date(started))}</div>
                         <div className={classes.snapOptsBtn}>
-                           <button onClick={() => setShowSnapOptions(showSnapOptions && showSnapOptions === id ? false : id)}>
+                           <button
+                              aria-label="Restore options"
+                              onClick={() => setShowSnapOptions(showSnapOptions && showSnapOptions === id ? false : id)}
+                           >
                               <Icon type="dots-vertical" size={12} />
                            </button>
                         </div>

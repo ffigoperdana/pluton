@@ -52,7 +52,7 @@ const SidePanel = ({ close, children, title, icon, footer, width, headerWidth, w
                   <h3>
                      {icon && icon} {title}
                   </h3>
-                  <button className={classes.close} onClick={handleClose}>
+                  <button aria-label="Close panel" className={classes.close} onClick={handleClose}>
                      <Icon type="close" size={24} />
                   </button>
                </div>

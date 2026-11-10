@@ -2,7 +2,7 @@ import AssistedRecovery from '../../Restore/AssistedRecovery/AssistedRecovery';
 import Modal from '../../common/Modal/Modal';
 import { downloadSnapshotItem } from '../../../utils/snapshotItemDownload';
 import { downloadFailure } from '../../../utils/downloadFailure';
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
 import { toast } from 'react-toastify';
@@ -230,8 +230,16 @@ function ManagedViewer({
    };
    return (
       <div className={`${classes.snapshotBrowser} ${classes.managedBrowser}`}>
-         {comparisonFailureMessage(review.query.data) && <p role="alert">{comparisonFailureMessage(review.query.data)}</p>}
-         {(review.query.isError || review.action.isError) && <p role="alert">{review.action.error?.message || review.query.error?.message}</p>}
+         {comparisonFailureMessage(review.query.data) && (
+            <p role="alert" className={`${reviewClasses.alert} ${reviewClasses.inset}`}>
+               {comparisonFailureMessage(review.query.data)}
+            </p>
+         )}
+         {(review.query.isError || review.action.isError) && (
+            <p role="alert" className={`${reviewClasses.alert} ${reviewClasses.inset}`}>
+               {review.action.error?.message || review.query.error?.message}
+            </p>
+         )}
 
          <SnapshotBrowserToolbar
             search={search}
@@ -274,34 +282,50 @@ function ManagedViewer({
                Folders
             </button>
             <nav className={reviewClasses.breadcrumbs} aria-label="Snapshot path">
-               <button onClick={() => openDirectory('')}>All files</button>
+               <button type="button" aria-current={directory ? undefined : 'location'} onClick={() => openDirectory('')}>
+                  All files
+               </button>
                {directory
                   .split('/')
                   .filter(Boolean)
                   .map((part, index, parts) => (
-                     <button key={index} onClick={() => openDirectory('/' + parts.slice(0, index + 1).join('/'))}>
-                        {part}
-                     </button>
+                     <Fragment key={index}>
+                        <span aria-hidden="true">/</span>
+                        <button
+                           type="button"
+                           title={part}
+                           aria-current={index === parts.length - 1 ? 'location' : undefined}
+                           onClick={() => openDirectory('/' + parts.slice(0, index + 1).join('/'))}
+                        >
+                           {part}
+                        </button>
+                     </Fragment>
                   ))}
             </nav>
          </div>
          {comparison?.enabled && (
             <div className={reviewClasses.comparison}>
-               <span>
-                  {comparisonReady
-                     ? `Compared with ${review.query.data?.previousSnapshotId}`
-                     : review.query.data?.state === 'preparing'
-                       ? `Comparing snapshots · ${review.query.data.processedEntries?.toLocaleString() || 0} metadata entries · ${Math.floor((review.query.data.elapsedMs || 0) / 1000)}s`
-                       : review.query.data?.previousSnapshotId
-                         ? 'Selected previous snapshot: ' + review.query.data.previousSnapshotId
-                         : 'Not compared'}
+               <span className={reviewClasses.comparisonStatus}>
+                  {comparisonReady ? (
+                     <>
+                        Compared with <code>{review.query.data?.previousSnapshotId}</code>
+                     </>
+                  ) : review.query.data?.state === 'preparing' ? (
+                     `Comparing snapshots · ${review.query.data.processedEntries?.toLocaleString() || 0} metadata entries · ${Math.floor((review.query.data.elapsedMs || 0) / 1000)}s`
+                  ) : review.query.data?.previousSnapshotId ? (
+                     <>
+                        Selected previous snapshot: <code>{review.query.data.previousSnapshotId}</code>
+                     </>
+                  ) : (
+                     'Not compared'
+                  )}
                </span>
                {review.query.data?.state === 'preparing' ? (
-                  <button disabled={review.action.isPending} onClick={() => review.action.mutate('cancel')}>
+                  <button type="button" disabled={review.action.isPending} onClick={() => review.action.mutate('cancel')}>
                      Cancel comparison
                   </button>
                ) : (
-                  <button disabled={review.action.isPending} onClick={() => review.action.mutate('start')}>
+                  <button type="button" disabled={review.action.isPending} onClick={() => review.action.mutate('start')}>
                      {review.query.data?.state === 'failed' ? 'Retry comparison' : 'Compare with previous'}
                   </button>
                )}
@@ -325,10 +349,12 @@ function ManagedViewer({
                </label>
                {(review.query.isError || review.action.isError) && <span role="alert">Comparison unavailable. Ordinary browsing is available.</span>}
                {change === 'deleted' && comparisonReady && (
-                  <>
+                  <div className={reviewClasses.historicalNote}>
                      <strong>Historical results from the previous snapshot. Restore is unavailable here.</strong>
-                     <button onClick={() => comparison.onPrevious?.(review.query.data!.previousBackupId!)}>Browse previous snapshot</button>
-                  </>
+                     <button type="button" onClick={() => comparison.onPrevious?.(review.query.data!.previousBackupId!)}>
+                        Browse previous snapshot
+                     </button>
+                  </div>
                )}
             </div>
          )}

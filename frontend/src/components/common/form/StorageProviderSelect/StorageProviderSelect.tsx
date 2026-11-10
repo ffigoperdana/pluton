@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { FormField, Icon } from '../../..';
+import { onActivateKey } from '../../../../utils/keyboard';
 import classes from './StorageProviderSelect.module.scss';
 
 interface StorageProviderSelectProps {
@@ -28,7 +29,6 @@ const StorageProviderSelect = ({
    const [showDropDown, setShowDropDown] = useState(false);
    const [searchText, setSearchText] = useState('');
    const selectedItemIndex = options.length > 0 && fieldValue ? options.findIndex((x) => x.value === fieldValue) : null;
-   console.log('selectedItemIndex :', selectedItemIndex);
    const selectedItem = selectedItemIndex === -1 || selectedItemIndex === null ? null : options[selectedItemIndex || 0];
    const selectedItemLabel = selectedItem && selectedItem.label ? selectedItem.label : 'Select Storage Provider..';
    const selectedItemValue = selectedItem && selectedItem.value ? selectedItem.value : '';
@@ -62,7 +62,14 @@ const StorageProviderSelect = ({
                <span>
                   {selectedItemImage} {selectedItemLabel}
                </span>
-               <button className={classes.dropBtn}>
+               <button
+                  type="button"
+                  className={classes.dropBtn}
+                  aria-label={`${label || 'Storage provider'}: ${selectedItemLabel}`}
+                  aria-haspopup="listbox"
+                  aria-expanded={showDropDown}
+                  disabled={disabled}
+               >
                   <Icon type={showDropDown ? 'caret-up' : 'caret-down'} size={12} />
                </button>
             </div>
@@ -70,22 +77,32 @@ const StorageProviderSelect = ({
                <div>
                   <div className={classes.search}>
                      <Icon type="search" size={15} />
-                     <input placeholder="Search Storage Providers..." value={searchText} onChange={(e) => setSearchText(e.target.value)} />
+                     <input
+                        placeholder="Search Storage Providers..."
+                        aria-label="Search storage providers"
+                        value={searchText}
+                        onChange={(e) => setSearchText(e.target.value)}
+                     />
                      {searchText && (
-                        <button onClick={() => setSearchText('')}>
+                        <button type="button" aria-label="Clear search" onClick={() => setSearchText('')}>
                            <Icon type="close" size={15} />
                         </button>
                      )}
                   </div>
 
                   <div className={`${classes.lists} styled__scrollbar`}>
-                     <ul>
+                     <ul role="listbox" aria-label={label || 'Storage provider'}>
                         {optionsItems.length > 0 &&
                            optionsItems.map((item, indx) => {
                               return (
                                  <li
                                     key={indx}
+                                    role="option"
+                                    aria-selected={item.value === selectedItemValue}
+                                    aria-disabled={item.disabled || undefined}
+                                    tabIndex={item.disabled ? -1 : 0}
                                     onClick={() => !item.disabled && updateOption(item.value)}
+                                    onKeyDown={onActivateKey(() => !item.disabled && updateOption(item.value))}
                                     className={`${item.value === selectedItemValue ? classes.selectedItem : ''} ${item.disabled ? classes.disabledItem : ''}`}
                                  >
                                     {item.image && item.image}

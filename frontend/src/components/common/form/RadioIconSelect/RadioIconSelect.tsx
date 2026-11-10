@@ -1,5 +1,6 @@
 import Icon from '../../Icon/Icon';
 import FormField from '../FormField/FormField';
+import { onActivateKey } from '../../../../utils/keyboard';
 import classes from './RadioIconSelect.module.scss';
 
 interface RadioIconSelectProps {
@@ -27,24 +28,40 @@ const RadioIconSelect = ({
    onUpdate,
    onDisableClick,
 }: RadioIconSelectProps) => {
+   const groupLabel = label,
+      groupDisabled = disabled;
    return (
       <FormField type="radioIconSelect" label={label} classes={classes.radioIconField} hint={hint} inline={inline}>
          <div
+            role="radiogroup"
+            aria-label={groupLabel}
+            aria-disabled={groupDisabled || undefined}
             className={`${classes.radioIconFieldOptions} ${disabled ? classes.radioIconFieldOptionsDisabled : ''} ${showDescription ? classes.radioIconFieldOptionsDesc : ''} ${layout === 'list' ? classes.radioIconFieldList : ''}`}
          >
             {options.map((option) => {
                const { label, value, icon, description, disabled = false } = option;
+               // Contract: a disabled group is read-only (no onUpdate, no option prompts).
+               // A disabled option is never selected; it may only explain itself via onDisableClick.
+               const interactive = !groupDisabled && (!disabled || !!onDisableClick);
+               // Mouse and keyboard share this handler.
+               const choose = () => {
+                  if (groupDisabled) return;
+                  if (disabled) {
+                     onDisableClick?.(value);
+                     return;
+                  }
+                  onUpdate(value);
+               };
                return (
                   <div
                      key={value}
+                     role="radio"
+                     aria-checked={fieldValue === value}
+                     aria-disabled={disabled || groupDisabled || undefined}
+                     tabIndex={interactive ? 0 : -1}
                      className={`${classes.radioIconFieldOption} ${disabled ? classes.radioIconFieldDisabled : ''} ${fieldValue === value ? classes.radioIconFieldActive : ''}`}
-                     onClick={() => {
-                        if (disabled && onDisableClick) {
-                           onDisableClick(value);
-                        } else {
-                           onUpdate(value);
-                        }
-                     }}
+                     onClick={choose}
+                     onKeyDown={onActivateKey(choose)}
                      data-tooltip-id="appTooltip"
                      data-tooltip-content={description}
                      data-tooltip-place="top"

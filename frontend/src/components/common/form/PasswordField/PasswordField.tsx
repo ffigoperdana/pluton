@@ -63,7 +63,12 @@ const PasswordField = ({
             disabled={disabled}
          />
 
-         <button className={classes.viewPassBtn} onClick={() => setShowPassword(!showPassword)} type="button">
+         <button
+            aria-label={showPassword ? 'Hide password' : 'Show password'}
+            className={classes.viewPassBtn}
+            onClick={() => setShowPassword(!showPassword)}
+            type="button"
+         >
             <Icon type={showPassword ? 'eye-hide' : 'eye'} />
          </button>
       </FormField>

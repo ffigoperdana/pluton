@@ -1,5 +1,6 @@
 import Icon from '../../Icon/Icon';
 import FormField from '../FormField/FormField';
+import { onActivateKey } from '../../../../utils/keyboard';
 import classes from './Tristate.module.scss';
 
 type TristateProps = {
@@ -28,12 +29,17 @@ const Tristate = ({ label, description, customClasses = '', fieldValue = '', hin
          classes={`${classes.tristateField} ${customClasses}`}
       >
          <div className={classes.inputGroup}>
-            <ul className={classes.optionSelector}>
+            <ul className={classes.optionSelector} role="radiogroup" aria-label={label}>
                {sortedOptions.map((option) => (
                   <li
                      key={option.value}
+                     role="radio"
+                     aria-checked={fieldValue === option.value}
+                     aria-disabled={option.disabled || undefined}
+                     tabIndex={option.disabled ? -1 : 0}
                      className={`${classes.option} ${fieldValue === option.value ? classes.selected : ''} ${option.disabled ? classes.optionDisabled : ''}`}
                      onClick={() => !option.disabled && onUpdate(option.value)}
+                     onKeyDown={onActivateKey(() => !option.disabled && onUpdate(option.value))}
                   >
                      {fieldValue === option.value && <Icon type="check" size={12} />}
                      {option.label}

@@ -38,6 +38,7 @@ import DownloadPreparation from './DownloadPreparation';
 import SnapshotDetails from './SnapshotDetails';
 import SnapshotExplorerModal from '../SnapshotViewer/SnapshotExplorerModal';
 import type { ChangeFilter } from '../../../utils/snapshotReview';
+import { onActivateKey } from '../../../utils/keyboard';
 
 const DownloadLabel = ({ download, downloadBackup }: { download: Backup['download']; downloadBackup: () => void }) => {
    if (download?.status === 'started') {
@@ -260,13 +261,24 @@ const Backups = ({
                         <div>
                            <span
                               className={classes.editIcon}
+                              role="button"
+                              tabIndex={0}
+                              aria-label="Edit title and description"
                               onClick={() => setShowEditModal(snapshot)}
+                              onKeyDown={onActivateKey(() => setShowEditModal(snapshot))}
                               data-tooltip-id="htmlToolTip"
                               data-tooltip-html={`Edit Title & Description`}
                            >
                               <Icon type="edit" size={12} />
                            </span>
-                           <span className={classes.backupTitle} onClick={() => !isSync && setShowBackupEvents(id)}>
+                           <span
+                              className={classes.backupTitle}
+                              role={isSync ? undefined : 'button'}
+                              tabIndex={isSync ? undefined : 0}
+                              aria-label={isSync ? undefined : `Show events for ${title || `backup-${id}`}`}
+                              onKeyDown={isSync ? undefined : onActivateKey(() => setShowBackupEvents(id))}
+                              onClick={() => !isSync && setShowBackupEvents(id)}
+                           >
                               <Icon type={isSync ? 'sync' : 'box'} size={14} /> {title ? title : isSync ? `sync-${id}` : `backup-${id}`}{' '}
                            </span>
                            {description && (

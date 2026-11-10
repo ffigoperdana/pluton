@@ -245,6 +245,7 @@ const PlanScriptsSettings = ({
                                  </div>
                                  <div className={classes.scriptRemove}>
                                     <button
+                                       aria-label="Remove script"
                                        className={classes.removeScriptButton}
                                        onClick={() => {
                                           const updatedScripts = [...(scripts || [])];

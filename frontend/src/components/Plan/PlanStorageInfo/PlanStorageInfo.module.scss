@@ -18,7 +18,8 @@
          border: 1px solid var(--line-color);
       }
    }
-   &:hover .storageAction {
+   &:hover .storageAction,
+   &:focus-within .storageAction {
       opacity: 1;
    }
    .storageWithReplications {

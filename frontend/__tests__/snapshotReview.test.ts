@@ -177,7 +177,24 @@ test('Snapshot Details keeps absent values explicit, displays exact identities, 
       assert(text.includes('b'.repeat(64)));
       assert(text.includes('Asia/Jakarta'));
       assert(text.includes('0 Bytes') || text.includes('0 B'));
-      await ui.click('deleted');
+      const summary = ui.dom.window.document.querySelector('[aria-label="Change summary"]')!;
+      for (const label of ['Added files', 'Modified files', 'Deleted files', 'Unchanged files']) assert(summary.textContent!.includes(label));
+      const button = (label: string) => [...ui.dom.window.document.querySelectorAll('button')].find((b) => b.textContent === label)!;
+      // The flat path list is a secondary, collapsed disclosure and is only requested once opened.
+      assert(!calls.some((url) => url.includes('view=files')));
+      const disclosure = button('Detailed changes');
+      assert.equal(disclosure.getAttribute('aria-expanded'), 'false');
+      const region = ui.dom.window.document.getElementById(disclosure.getAttribute('aria-controls')!)!;
+      assert(region.hidden);
+      // One change-type selection drives both the browse action and the detailed list.
+      assert.equal(button('Added').getAttribute('aria-pressed'), 'true');
+      await ui.click('Detailed changes');
+      assert.equal(disclosure.getAttribute('aria-expanded'), 'true');
+      assert(!region.hidden);
+      await ui.until(() => calls.some((url) => url.includes('view=files') && url.includes('change=added')));
+      await ui.click('Deleted');
+      assert.equal(button('Deleted').getAttribute('aria-pressed'), 'true');
+      assert.equal(button('Added').getAttribute('aria-pressed'), 'false');
       await ui.until(() => calls.some((url) => url.includes('change=deleted')));
       await ui.until(() => ui.dom.window.document.body.textContent?.includes('Previous snapshot only'));
       await ui.click('Browse Changed Files');

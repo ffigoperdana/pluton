@@ -68,11 +68,12 @@ const SnapshotViewerFile = ({
             }
          }}
       >
-         <div className={classes.fileName}>
+         <div className={classes.fileName} title={typedFile.path || fileName}>
             {isDirectory ? <Icon type={'fm-directory'} size={16} /> : <FileIcon filename={fileName} />}{' '}
             {isDirectory && !historical ? (
                <button
                   type="button"
+                  className={classes.fileLabel}
                   onClick={(event) => {
                      event.stopPropagation();
                      onDirectoryClick(typedFile.path);
@@ -81,7 +82,7 @@ const SnapshotViewerFile = ({
                   {fileName}
                </button>
             ) : (
-               fileName
+               <span className={classes.fileLabel}>{fileName}</span>
             )}
          </div>
          <div className={classes.fileModifiedAt} title={formatDateTime(typedFile.modifiedAt)}>

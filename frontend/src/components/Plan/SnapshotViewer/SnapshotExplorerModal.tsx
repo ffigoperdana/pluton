@@ -27,16 +27,34 @@ export default function SnapshotExplorerModal(props: SnapshotViewerProps & { ini
    return (
       <Modal title="Browse Snapshot" stableLayout layout="explorer" closeModal={props.onClose}>
          <header className={classes.header}>
-            <strong>{value?.planName || props.planId}</strong>
-            <span>Backup ID: {backup.id}</span>
-            <code>Snapshot: {value?.snapshotId || 'Not recorded'}</code>
-            <span>{value ? formatHistoryDate(value.completed || value.started || undefined, value.timeZone) : 'Preparing metadata…'}</span>
-            <span>
-               {value?.statistics.logicalBytes == null ? 'Size: Not recorded' : formatBytes(value.statistics.logicalBytes)} ·{' '}
-               {value?.statistics.totalFiles == null ? 'Files: Not recorded' : `${value.statistics.totalFiles.toLocaleString()} files`}
-            </span>
+            <div className={classes.headerPrimary}>
+               <strong>{value?.planName || props.planId}</strong>
+               <span>{value ? formatHistoryDate(value.completed || value.started || undefined, value.timeZone) : 'Preparing metadata…'}</span>
+               <span>
+                  {value?.statistics.logicalBytes == null ? 'Size: Not recorded' : formatBytes(value.statistics.logicalBytes)} ·{' '}
+                  {value?.statistics.totalFiles == null ? 'Files: Not recorded' : `${value.statistics.totalFiles.toLocaleString()} files`}
+               </span>
+            </div>
+            <dl className={classes.identity}>
+               <div>
+                  <dt>Backup ID</dt>
+                  <dd>
+                     <code>{backup.id}</code>
+                  </dd>
+               </div>
+               <div>
+                  <dt>Snapshot</dt>
+                  <dd>
+                     <code>{value?.snapshotId || 'Not recorded'}</code>
+                  </dd>
+               </div>
+            </dl>
          </header>
-         {navigationError && <p role="alert">{navigationError}</p>}
+         {navigationError && (
+            <p role="alert" className={`${classes.alert} ${classes.inset}`}>
+               {navigationError}
+            </p>
+         )}
          <div className={classes.explorer}>
             <SnapshotViewer
                {...props}
@@ -52,7 +70,7 @@ export default function SnapshotExplorerModal(props: SnapshotViewerProps & { ini
          </div>
          <footer className={classes.footer}>
             <span>Historical snapshot · Restore uses the selected snapshot identity.</span>
-            <button type="button" onClick={props.onClose}>
+            <button type="button" className={classes.secondaryButton} onClick={props.onClose}>
                Close
             </button>
          </footer>
