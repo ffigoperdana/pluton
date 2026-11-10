@@ -9,6 +9,7 @@ import { configService } from '../../src/services/ConfigService';
  * No external endpoints or credentials; both servers are loopback in network-none Docker. */
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
@@ -24,6 +25,8 @@ assert.equal(
 	String(4 * 1024 ** 3)
 );
 const root = await fs.mkdtemp('/lab/replica-'),
+	caPath = path.join(root, 'ca.pem'),
+	keyPath = path.join(root, 'key.pem'),
 	source = path.join(root, 'source'),
 	repository = path.join(root, 'sftp', 'application'),
 	s3root = path.join(root, 's3');
@@ -54,9 +57,12 @@ const start = async (args: string[]) => {
 	return child;
 };
 try {
-	await fs.copyFile('/test-trust/ca.pem', path.join(root, 'ca.pem'));
-	await fs.chmod(path.join(root, 'ca.pem'), 0o444);
-	process.env.PLUTON_STORAGE_CA_FILE = path.join(root, 'ca.pem');
+	assert.deepEqual(await fs.readdir('/test-trust'), ['ca.pem']);
+	await fs.copyFile('/test-trust/ca.pem', caPath);
+	await fs.chmod(caPath, 0o444);
+	// The runner supplies the disposable TLS key through stdin. Keep it on private tmpfs.
+	await fs.writeFile(keyPath, readFileSync(0), { flag: 'wx', mode: 0o600 });
+	process.env.PLUTON_STORAGE_CA_FILE = caPath;
 	await fs.mkdir(source, { recursive: true });
 	await fs.mkdir(repository, { recursive: true });
 	await fs.mkdir(path.join(s3root, 'bucket-01'), { recursive: true });
@@ -123,9 +129,9 @@ try {
 		'--auth-key',
 		'synthetic-access-key,synthetic-secret-key',
 		'--cert',
-		'/test-trust/ca.pem',
+		caPath,
 		'--key',
-		'/test-trust/key.pem',
+		keyPath,
 		'--cache-dir',
 		path.join(root, 's3-cache'),
 	]);

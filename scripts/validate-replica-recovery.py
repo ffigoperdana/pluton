@@ -23,16 +23,25 @@ def run(image, openssl):
     name = "pluton-replica-" + uuid.uuid4().hex
     with tempfile.TemporaryDirectory(prefix="pluton-replica-trust-") as directory:
         trust = pathlib.Path(directory)
-        subprocess.run([openssl, "req", "-x509", "-newkey", "rsa:2048", "-days", "2", "-nodes", "-keyout", str(trust / "key.pem"), "-out", str(trust / "ca.pem"), "-subj", "/CN=replica-fixture", "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1", "-addext", "basicConstraints=critical,CA:TRUE"], capture_output=True, timeout=30, check=True)
-        args = ["docker", "run", "--rm", "--name", name, "--init", "--network", "none", "--read-only", "--user", "1000:1000", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--cpus", "2", "--memory", "4g", "--memory-swap", "4g", "--pids-limit", "128", "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m,uid=1000,gid=1000", "--tmpfs", "/lab:rw,nosuid,nodev,size=1g,uid=1000,gid=1000"]
-        for source, target in [(root / "backend/src", "/app/backend/src"), (root / "backend/__tests__", "/app/backend/__tests__"), (root / "backend/drizzle", "/reviewed/drizzle"), (trust, "/test-trust")]:
+        public = trust / "public"
+        public.mkdir()
+        certificate = public / "ca.pem"
+        private_key = trust / "key.pem"
+        subprocess.run([openssl, "req", "-x509", "-newkey", "rsa:2048", "-days", "2", "-nodes", "-keyout", str(private_key), "-out", str(certificate), "-subj", "/CN=replica-fixture", "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1", "-addext", "basicConstraints=critical,CA:TRUE"], capture_output=True, timeout=30, check=True)
+        # Docker mounts only the public directory. The fixture UID may differ from the runner.
+        public.chmod(0o755)
+        certificate.chmod(0o644)
+        private_key.chmod(0o600)
+        args = ["docker", "run", "--rm", "--interactive", "--name", name, "--init", "--network", "none", "--read-only", "--user", "1000:1000", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--cpus", "2", "--memory", "4g", "--memory-swap", "4g", "--pids-limit", "128", "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m,uid=1000,gid=1000", "--tmpfs", "/lab:rw,nosuid,nodev,size=1g,uid=1000,gid=1000"]
+        for source, target in [(root / "backend/src", "/app/backend/src"), (root / "backend/__tests__", "/app/backend/__tests__"), (root / "backend/drizzle", "/reviewed/drizzle"), (public, "/test-trust")]:
             args += ["--mount", "type=bind,source=" + str(source) + ",target=" + target + ",readonly"]
         args += ["-e", "NODE_ENV=test", "-e", "PLUTON_DATA_DIR=/lab/app", "-e", "USER_NAME=fixture-admin"]
         for key in ["ENCRYPTION_KEY", "SECRET", "APIKEY", "USER_PASSWORD"]:
             args += ["-e", key + "=" + uuid.uuid4().hex]
         args += ["--entrypoint", "node", image, "/app/backend/node_modules/tsx/dist/cli.mjs", "/app/backend/__tests__/integration/replicaRecovery.lab.ts"]
         try:
-            subprocess.run(args, timeout=300, check=True)
+            with private_key.open("rb") as key_input:
+                subprocess.run(args, stdin=key_input, timeout=300, check=True)
         finally:
             # The only mutable resource is this exact locally generated test name.
             subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=30, check=False)
