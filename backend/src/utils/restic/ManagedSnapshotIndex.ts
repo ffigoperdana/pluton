@@ -13,7 +13,11 @@ import {
 import { AppError } from '../AppError';
 import { managedSnapshotPath, assertManagedRestorePath } from '../managedSnapshotPath';
 import type { SnapShotFile } from '../../types/restic';
-import type { ManagedSnapshotNode } from './ManagedSftpRepositorySession';
+import {
+	ManagedRepositoryAccessError,
+	type ManagedSnapshotNode,
+	type RepositoryOperationDiagnostic,
+} from './ManagedSftpRepositorySession';
 
 export class SnapshotIndexError extends AppError {
 	constructor(
@@ -29,7 +33,8 @@ export class SnapshotIndexError extends AppError {
 			? 'metadata-invalid'
 			: code === 'cancelled'
 				? 'cancelled'
-				: 'unavailable'
+				: 'unavailable',
+		readonly diagnostic?: RepositoryOperationDiagnostic
 	) {
 		const messages = {
 			'index-resource-limit':
@@ -789,9 +794,17 @@ export class ManagedSnapshotIndexCache {
 				);
 			}
 			if ((error as { code?: string }).code === 'timeout')
-				throw new SnapshotIndexError('index-unavailable', 'timeout');
+				throw new SnapshotIndexError(
+					'index-unavailable',
+					'timeout',
+					error instanceof ManagedRepositoryAccessError ? error.diagnostic : undefined
+				);
 			if ((error as { code?: string }).code === 'cancelled')
-				throw new SnapshotIndexError('cancelled');
+				throw new SnapshotIndexError(
+					'cancelled',
+					'cancelled',
+					error instanceof ManagedRepositoryAccessError ? error.diagnostic : undefined
+				);
 			if ((error as { code?: string }).code === 'invalid-output') {
 				const reason = (error as { reason?: SnapshotIndexReason }).reason;
 				throw new SnapshotIndexError(

@@ -11,8 +11,13 @@ import {
    recoveryStatus,
    recoveryTone,
    recoveryLabel,
+   recoveryInProgress,
+   recoveryFailureAdvice,
+   type AssistedRecoveryDiagnostic,
    type AssistedRecoveryJob,
 } from '../../../utils/assistedRecovery';
+import { ElapsedTime } from '../../common/OperationProgress/OperationProgress';
+import { elapsedLabel } from '../../../utils/recoveryProgress';
 import classes from './AssistedRecovery.module.scss';
 
 interface Props {
@@ -32,6 +37,26 @@ async function request<T>(suffix: string, method = 'GET', body?: unknown, signal
       ...(body ? { body: JSON.stringify(body) } : {}),
    });
    return data.result;
+}
+function DiagnosticDetails({ diagnostic, showCode = false }: { diagnostic: AssistedRecoveryDiagnostic; showCode?: boolean }) {
+   return (
+      <span className={classes.diagnostic}>
+         Phase: {recoveryLabel(diagnostic.phase)} · Operation: {recoveryLabel(diagnostic.operation)} · Elapsed:{' '}
+         {elapsedLabel(Math.floor(diagnostic.elapsedMs / 1000))}
+         {showCode && (
+            <>
+               {' · Code: '}
+               <code>{diagnostic.failureCode}</code>
+            </>
+         )}
+         {diagnostic.timeoutCategory && (
+            <>
+               {' · Timeout: '}
+               {recoveryLabel(diagnostic.timeoutCategory)} <code>{diagnostic.timeoutCategory}</code>
+            </>
+         )}
+      </span>
+   );
 }
 export default function AssistedRecovery({ planId, backupId, manual = false, initialIncludes = [], onPrimaryReady, close }: Props) {
    const client = useQueryClient();
@@ -158,6 +183,7 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
    const intentMatches =
       manual || !job || (JSON.stringify([...job.includes].sort()) === JSON.stringify([...initialIncludes].sort()) && job.excludes.length === 0);
    const busy = start.isPending || approve.isPending || cancel.isPending || retryPrimary.isPending;
+   const active = job && recoveryInProgress(job);
    const error = jobs.error || start.error || approve.error || cancel.error || retryPrimary.error;
    return (
       <section aria-label="Assisted recovery" className={classes.recovery}>
@@ -189,9 +215,28 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
          )}
          {job && (
             <>
-               <p role="status" className={`${classes.status} ${classes[recoveryTone(job)]}`}>
-                  {recoveryStatus(job)}
-               </p>
+               <div className={`${classes.status} ${classes[recoveryTone(job)]}`}>
+                  {active && <span className={classes.spinner} data-recovery-spinner aria-hidden="true" />}
+                  <div>
+                     <div role="status" aria-live="polite" aria-atomic="true">
+                        {active && <strong>{recoveryLabel(job.phase)}</strong>}
+                        <p>{recoveryStatus(job)}</p>
+                        {job.status === 'checking' && <p>Closing this window does not cancel server work.</p>}
+                        {active && job.activity === 'awaiting-archive-output' && <p>Waiting for the repository read to produce archive data.</p>}
+                        {active && job.activity === 'validating-archive-output' && <p>Archive data received. Verifying snapshot entries.</p>}
+                     </div>
+                     {active && (
+                        <ElapsedTime
+                           start={
+                              job.activeSince ??
+                              (job.status === 'checking' ? job.createdAt : job.audit.find((event) => event.event === 'operator-approved')?.at)
+                           }
+                           running
+                           label="Elapsed"
+                        />
+                     )}
+                  </div>
+               </div>
                {!intentMatches && (
                   <p role="alert" className={classes.alert}>
                      This pending job has a different selection. Review and cancel it before checking the newly requested selection. Its old approval
@@ -218,6 +263,7 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
                            {recoveryLabel(job.primary.code)} <code>{job.primary.code}</code>
                         </>
                      )}
+                     {job.primary?.diagnostic && <DiagnosticDetails diagnostic={job.primary.diagnostic} />}
                   </dd>
                   <dt>Operation</dt>
                   <dd>{job.operation}</dd>
@@ -227,9 +273,13 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
                   <dd>{job.includes.length ? job.includes.join(', ') : 'Full snapshot'}</dd>
                </dl>
                {job.failureCode && (
-                  <p role="alert" className={classes.alert}>
-                     Diagnostic: {recoveryLabel(job.failureCode)} <code>{job.failureCode}</code>. No source switch will be retried automatically.
-                  </p>
+                  <div role="alert" className={classes.alert}>
+                     <p>
+                        Diagnostic: {recoveryLabel(job.failureCode)} <code>{job.failureCode}</code>.
+                     </p>
+                     {job.diagnostic && <DiagnosticDetails diagnostic={job.diagnostic} showCode={job.failureCode !== job.diagnostic.failureCode} />}
+                     <p>{recoveryFailureAdvice(job)}</p>
+                  </div>
                )}
                {!!job.candidates.length && (
                   <fieldset className={classes.replicas} disabled={busy || job.status !== 'awaiting-approval' || job.expired}>
@@ -256,6 +306,7 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
                                  )}
                               </span>
                            </label>
+                           {candidate.diagnostic && <DiagnosticDetails diagnostic={candidate.diagnostic} />}
                            {candidate.destinationSnapshotId && (
                               <p>
                                  Destination snapshot: <code>{candidate.destinationSnapshotId}</code>

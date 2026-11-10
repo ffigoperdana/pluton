@@ -1,6 +1,10 @@
 import type Database from 'better-sqlite3';
 import type { ReplicaRecoveryBinding } from '../services/VerifiedReplicaRecoveryService';
 import { AppError } from '../utils/AppError';
+import type {
+	ArchiveActivity,
+	RepositoryOperationDiagnostic,
+} from '../utils/restic/ManagedSftpRepositorySession';
 export type AssistedStatus =
 	| 'checking'
 	| 'awaiting-approval'
@@ -10,11 +14,23 @@ export type AssistedStatus =
 	| 'failed'
 	| 'cancelled'
 	| 'uncertain';
+export type AssistedRecoveryDiagnostic = {
+	phase: string;
+	operation: RepositoryOperationDiagnostic['operation'] | 'recovery-phase';
+	elapsedMs: number;
+	timeoutCategory?:
+		| RepositoryOperationDiagnostic['timeoutCategory']
+		| 'primary-check-deadline'
+		| 'replica-preflight-deadline'
+		| 'undetermined';
+	failureCode: string;
+};
 export type AssistedCandidate = {
 	replicationId: string;
 	position: number;
 	state: 'passed' | 'failed';
 	code?: string;
+	diagnostic?: AssistedRecoveryDiagnostic;
 	binding?: ReplicaRecoveryBinding;
 };
 export type AssistedPayload = {
@@ -23,9 +39,15 @@ export type AssistedPayload = {
 	sourceSnapshotId: string;
 	includes: string[];
 	excludes: string[];
-	primary?: { state: 'ready' | 'unavailable' | 'not-checked'; code?: string };
+	primary?: {
+		state: 'ready' | 'unavailable' | 'not-checked';
+		code?: string;
+		diagnostic?: AssistedRecoveryDiagnostic;
+	};
 	candidates: AssistedCandidate[];
 	selected?: string;
+	activity?: ArchiveActivity;
+	diagnostic?: AssistedRecoveryDiagnostic;
 };
 export type AssistedJob = {
 	id: string;

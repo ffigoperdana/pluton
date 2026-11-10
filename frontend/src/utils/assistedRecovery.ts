@@ -1,3 +1,10 @@
+export type AssistedRecoveryDiagnostic = {
+   phase: string;
+   operation: string;
+   timeoutCategory?: string;
+   elapsedMs: number;
+   failureCode: string;
+};
 export type AssistedRecoveryJob = {
    id: string;
    planId: string;
@@ -6,15 +13,19 @@ export type AssistedRecoveryJob = {
    status: 'checking' | 'awaiting-approval' | 'primary-ready' | 'running' | 'completed' | 'failed' | 'cancelled' | 'uncertain';
    phase: string;
    createdAt: number;
+   activeSince?: number;
+   activity?: 'awaiting-archive-output' | 'validating-archive-output';
+   diagnostic?: AssistedRecoveryDiagnostic;
    expiresAt: number;
    expired: boolean;
    sourceSnapshotId: string;
-   primary?: { state: 'ready' | 'unavailable' | 'not-checked'; code?: string };
+   primary?: { state: 'ready' | 'unavailable' | 'not-checked'; code?: string; diagnostic?: AssistedRecoveryDiagnostic };
    candidates: {
       replicationId: string;
       position: number;
       state: 'passed' | 'failed';
       code?: string;
+      diagnostic?: AssistedRecoveryDiagnostic;
       destinationSnapshotId?: string;
       replicaVerified: boolean;
       recoveryPreflight: string;
@@ -33,8 +44,9 @@ export type AssistedRecoveryJob = {
 export const recoveryActive = (job: AssistedRecoveryJob) => ['checking', 'awaiting-approval', 'running'].includes(job.status);
 /** Interrupted/cleanup-pending jobs are rediscovered, never replaced on mount. */
 export const recoveryBlocking = (job: AssistedRecoveryJob) => recoveryActive(job) || job.cleanupPending || job.status === 'uncertain';
+export const recoveryInProgress = (job: AssistedRecoveryJob) => job.status === 'checking' || job.status === 'running';
 export const recoveryPolling = (jobs: AssistedRecoveryJob[]) =>
-   jobs.some((job) => ['checking', 'running'].includes(job.status)) ? 3000 : jobs.some((job) => job.status === 'awaiting-approval') ? 15000 : false;
+   jobs.some(recoveryInProgress) ? 3000 : jobs.some((job) => job.status === 'awaiting-approval') ? 15000 : false;
 export const recoveryCanApprove = (job: AssistedRecoveryJob, replica: string, now = Date.now()) =>
    job.status === 'awaiting-approval' &&
    !job.expired &&
@@ -49,7 +61,7 @@ export function recoveryLabel(value?: string) {
 export type RecoveryTone = 'progress' | 'attention' | 'success' | 'error' | 'neutral';
 export function recoveryTone(job: AssistedRecoveryJob): RecoveryTone {
    if (job.cleanupPending && !recoveryActive(job)) return 'attention';
-   if (job.status === 'checking' || job.status === 'running') return 'progress';
+   if (recoveryInProgress(job)) return 'progress';
    if (job.status === 'awaiting-approval') return 'attention';
    if (job.status === 'completed' || job.status === 'primary-ready') return 'success';
    if (job.status === 'failed' || job.status === 'uncertain') return 'error';
@@ -73,6 +85,19 @@ export function recoveryStatus(job: AssistedRecoveryJob) {
       : job.status === 'cancelled'
         ? 'Recovery cancelled.'
         : 'Recovery stopped safely. Review the diagnostic before retrying.';
+}
+
+export function recoveryFailureAdvice(job: AssistedRecoveryJob) {
+   if (job.cleanupPending) return 'Review staging cleanup and discard this request before starting another.';
+   if (job.failureCode === 'tls-invalid' || job.failureCode === 'authentication-denied' || job.failureCode === 'wrong-password')
+      return 'Ask an operator to verify repository trust and access before checking again.';
+   const category = job.diagnostic?.timeoutCategory;
+   if (category === 'archive-consumer-idle') return 'Review Pluton resource usage and local archive processing before starting a new check.';
+   if (category === 'archive-exit-idle') return 'Review native process shutdown and Pluton resource usage before starting a new check.';
+   if (job.failureCode === 'timeout' || job.failureCode === 'network-unavailable' || category)
+      return 'Review the recorded phase and storage connectivity with an operator before starting a new check.';
+   if (job.failureCode === 'no-eligible-replica') return 'Review the diagnostics for each replica before starting a new check.';
+   return 'Review the recovery audit before starting a new check.';
 }
 
 /** UUID admission identity also works on supported LAN HTTP secure-random APIs. */

@@ -426,7 +426,8 @@ async function runManagedExport(
 	destination: Writable,
 	signal: AbortSignal,
 	compare = true,
-	observe?: (value: Partial<ExportPerformance>) => void
+	observe?: (value: Partial<ExportPerformance>) => void,
+	onFirstOutput?: () => void
 ): Promise<ManagedExportSummary> {
 	index.assertExportEntries(proof.mode);
 	if (compare && !proof.summary) throw new ManagedExportError('export-proof-missing');
@@ -468,7 +469,8 @@ async function runManagedExport(
 	const output = pipeline(pack, meter, destination, { end: false, signal });
 	void output.catch(error => input.destroy(error));
 	try {
-		await session.archive(proof.binding.snapshotId, input);
+		if (onFirstOutput) await session.archive(proof.binding.snapshotId, input, onFirstOutput);
+		else await session.archive(proof.binding.snapshotId, input);
 		input.end();
 		await finished(input);
 		reader.finish();
@@ -504,7 +506,8 @@ export async function prepareManagedExport(
 	index: ArchiveIndex,
 	session: ManagedRepositorySession,
 	proof: ManagedExportProof,
-	signal: AbortSignal
+	signal: AbortSignal,
+	onFirstOutput?: () => void
 ) {
 	if (proof.summary) return proof.summary;
 	return runManagedExport(
@@ -517,7 +520,9 @@ export async function prepareManagedExport(
 			},
 		}),
 		signal,
-		false
+		false,
+		undefined,
+		onFirstOutput
 	);
 }
 

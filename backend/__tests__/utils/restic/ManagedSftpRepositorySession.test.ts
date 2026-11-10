@@ -42,6 +42,7 @@ const node = {
 describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 	let responses: Array<{
 		stdout?: string | Buffer;
+		stderr?: string;
 		code?: number;
 		error?: boolean;
 		held?: boolean;
@@ -68,10 +69,58 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 			const work = new ManagedSftpRepositorySession().withSession(access, session =>
 				session.archive(id, destination)
 			);
-			const failed = expect(work).rejects.toMatchObject({ code: 'timeout' });
+			const failed = expect(work).rejects.toMatchObject({
+				code: 'timeout',
+				diagnostic: {
+					operation: 'archive-readback',
+					timeoutCategory: 'archive-first-output',
+					elapsedMs: expect.any(Number),
+				},
+			});
 			while (!expire) await new Promise<void>(resolve => setImmediate(resolve));
 			expire();
 			await failed;
+			expect(killProcessTree).toHaveBeenCalledWith(children[1], 'SIGKILL');
+			await expect(
+				fs.stat((spawn as jest.Mock).mock.calls[1][2].env.RCLONE_CONFIG)
+			).rejects.toMatchObject({ code: 'ENOENT' });
+		} finally {
+			timer.mockRestore();
+			destination.destroy();
+		}
+	});
+	it('distinguishes an idle native output stream after its first byte', async () => {
+		responses.push({ stdout: 'partial archive', held: true });
+		const original = global.setTimeout;
+		let expire: (() => void) | undefined;
+		const timer = jest.spyOn(global, 'setTimeout').mockImplementation(((
+			callback: any,
+			ms: number,
+			...args: any[]
+		) => {
+			if (ms === 10 * 60_000) expire = () => callback(...args);
+			return original(callback, ms, ...args);
+		}) as any);
+		const destination = new Writable({
+			write(_chunk, _encoding, done) {
+				done();
+			},
+		});
+		try {
+			const work = new ManagedSftpRepositorySession().withSession(access, session =>
+				session.archive(id, destination)
+			);
+			const failure = expect(work).rejects.toMatchObject({
+				code: 'timeout',
+				diagnostic: {
+					operation: 'archive-readback',
+					timeoutCategory: 'archive-output-idle',
+					elapsedMs: expect.any(Number),
+				},
+			});
+			while (!expire) await new Promise<void>(resolve => setImmediate(resolve));
+			expire();
+			await failure;
 			expect(killProcessTree).toHaveBeenCalledWith(children[1], 'SIGKILL');
 			await expect(
 				fs.stat((spawn as jest.Mock).mock.calls[1][2].env.RCLONE_CONFIG)
@@ -106,7 +155,9 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 			setImmediate(() => {
 				child.stderr.emit(
 					'data',
-					Buffer.from(`${access.options.pass} ${access.password} raw provider config`)
+					Buffer.from(
+						`${access.options.pass} ${access.password} raw provider config ${response.stderr || ''}`
+					)
 				);
 				if (response.error) child.emit('error', new Error(`${access.password} spawn failed`));
 				if (response.stdout) child.stdout.write(response.stdout);
@@ -139,6 +190,48 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 			'--contimeout',
 			'5s',
 		]);
+	});
+	it.each([
+		['dial tcp 192.0.2.10:443: i/o timeout', 'connection-timeout'],
+		['read tcp 192.0.2.10:443: i/o timeout', 'repository-io-timeout'],
+	])(
+		'records closed transport categories without returning provider data',
+		async (stderr, timeoutCategory) => {
+			responses.push({ code: 1, stderr });
+			const error = await new ManagedSftpRepositorySession()
+				.withSession(access, session => session.probe!())
+				.catch(error => error);
+			expect(error).toMatchObject({
+				code: 'network-unavailable',
+				diagnostic: {
+					operation: 'connection-probe',
+					timeoutCategory,
+					elapsedMs: expect.any(Number),
+				},
+			});
+			expect(JSON.stringify(error)).not.toContain(stderr);
+			expect(JSON.stringify(error)).not.toContain(access.password);
+		}
+	);
+	it('records a metadata command aborted by its caller deadline', async () => {
+		responses.push({ held: true });
+		const controller = new AbortController();
+		const work = new ManagedSftpRepositorySession().withSession(
+			access,
+			session => session.snapshot(id),
+			controller.signal
+		);
+		const failed = expect(work).rejects.toMatchObject({
+			code: 'timeout',
+			diagnostic: {
+				operation: 'snapshot-metadata',
+				timeoutCategory: 'caller-deadline',
+				elapsedMs: expect.any(Number),
+			},
+		});
+		while (children.length < 2) await new Promise<void>(resolve => setImmediate(resolve));
+		controller.abort(new DOMException('Synthetic deadline', 'TimeoutError'));
+		await failed;
 	});
 	it('keeps authentication failure ineligible when a deadline abort races a held request', async () => {
 		responses.push({ held: true });
@@ -359,7 +452,10 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 			const transfer = new ManagedSftpRepositorySession().withSession(access, session =>
 				session.streamFiles(id, () => undefined)
 			);
-			const failed = expect(transfer).rejects.toMatchObject({ code: 'timeout' });
+			const failed = expect(transfer).rejects.toMatchObject({
+				code: 'timeout',
+				diagnostic: { operation: 'snapshot-index', timeoutCategory: 'metadata-stream-deadline' },
+			});
 			while (!timeout) await new Promise<void>(resolve => setImmediate(resolve));
 			timeout();
 			await failed;
@@ -605,7 +701,13 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 					session => session.archive(id, destination),
 					controller.signal
 				);
-				const assertion = expect(download).rejects.toMatchObject({ code: category });
+				const assertion = expect(download).rejects.toMatchObject({
+					code: category,
+					diagnostic: {
+						operation: 'archive-readback',
+						timeoutCategory: category === 'timeout' ? 'archive-consumer-idle' : undefined,
+					},
+				});
 				await started;
 				await new Promise<void>(resolve => setImmediate(resolve)); // mock process has closed
 				if (category === 'cancelled') controller.abort();
