@@ -98,6 +98,64 @@ over Rclone and loopback S3, with one data pack held by a proxy. The watcher sho
 at zero I/O and CPU in `futex_wait_queue`, two `ESTABLISHED` Rclone connections with `rx0 tx0`, and
 a DNS failure for an unresolvable name on every sample.
 
+## Watcher result (12 Nov 2026): a retry loop, not a silent wait
+
+One replica recovery of a different snapshot ran with the watcher inside the Pluton container. The
+archive started about 95 s into the watch and its TAR output had already stopped by the first
+5-second sample. Until Pluton stopped it about 600 s later:
+
+- Restic made 12 attempts, spaced about 5, 10, 25, 40, 80, 60, 60, 65, 80, 55 and 65 s apart, which
+  is Restic's exponential retry backoff capped near one minute. Each attempt: Restic wrote about
+  370 bytes to Rclone and read about 15.4 KB back; Rclone read about 25.9 KB and wrote about 16.2 KB
+  (7.4 KB more read when it had to open a new TLS connection). No TAR output in between. Both
+  processes were otherwise idle.
+- Rclone always held an `ESTABLISHED` connection to an HCP node with empty queues and no
+  retransmissions. Idle connections closed after about a minute and later attempts used other
+  nodes; over the run, all four nodes were used and every attempt behaved the same.
+- DNS: 142 samples, no failures.
+
+**Proven:** the stall is a retry loop on one read. HCP answered every attempt.
+
+**From code, not yet observed:** in Restic 0.19.1 a backoff retry of a load happens only for a
+transfer-level failure: a status other than 200/206, a `Content-Length` different from the
+requested length, or a body shorter than requested
+([REST backend](https://github.com/restic/restic/blob/v0.19.1/internal/backend/rest/rest.go),
+[ReadAt](https://github.com/restic/restic/blob/v0.19.1/internal/backend/readerat.go)). Data that
+arrives complete but fails decryption is not retried this way; with `--no-cache` the command ends.
+Which failure and which pack range is printed on Restic's stderr, which Pluton discards.
+
+H4 (DNS) and H5 (a held response) do not explain this run. Remaining: a range request on the
+`rclone serve restic` path that returns an error or a short or mismatched response (H6), or a
+Restic-side condition that makes it request such a range (H2).
+
+## Serve-restic range sweep
+
+`scripts/diagnostics/serve-restic-range-sweep.mjs` reproduces the path Restic uses: it starts a
+private `rclone serve restic` on loopback (random basic-auth password, GET and HEAD only) in front
+of the replica, then:
+
+1. compares the pack size from listing (LIST) with the size from `HEAD`;
+2. reads the pack directly and checks it against its SHA-256 name, as the reference;
+3. reads the full pack through `serve restic`;
+4. sweeps Range reads of 24 KiB every 16 KiB across the whole pack, plus ranges ending at the last
+   byte, and compares status, `Content-Length`, length and bytes with the reference.
+
+It needs no Restic password. Run it like the probe (inside the container with
+`--credentials managed-export`, or in a temporary `--network host` container with typed keys):
+
+```sh
+docker exec -it <pluton-container> node /tmp/serve-restic-range-sweep.mjs --credentials managed-export --path <bucket>/<replica-prefix>
+```
+
+A failed range prints its offset, status, `Content-Length`, bytes received and whether the received
+prefix matches the stored bytes. If every range passes, the remaining step is a sanitized capture of
+Restic's stderr for archive operations, which needs a code change and a deploy.
+
+Local validation (`scripts/diagnostics/test/serve-restic-range-sweep.harness.sh`): a healthy loopback
+S3 passed every check (exit 0). A proxy reporting the pack 8 KiB smaller on `HEAD` was flagged
+(`LIST` and `HEAD` sizes differ, full GET through `serve restic` returned fewer bytes, exit 2).
+Rclone 1.75.1 did not shorten Range responses to the `HEAD` size in that fixture.
+
 ## What the probe does
 
 1. Lists the replica prefix (`rclone lsjson`).
