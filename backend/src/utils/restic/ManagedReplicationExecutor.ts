@@ -361,6 +361,8 @@ export class ManagedReplicationExecutor implements ManagedReplicationExecutorCon
 					throw new ManagedReplicationError('destination-configuration-invalid');
 				env[`RCLONE_CONFIG_DESTINATION_${key.toUpperCase()}`] = value;
 			}
+			// Artifact verification reads the replica by Range; never let it receive gzip bodies.
+			env.RCLONE_CONFIG_DESTINATION_USE_ACCEPT_ENCODING_GZIP = 'false';
 			for (const [key, value] of Object.entries(destination.environment || {})) {
 				if (!['SSL_CERT_FILE', 'RCLONE_CA_CERT'].includes(key) || !path.isAbsolute(value))
 					throw new ManagedReplicationError('destination-configuration-invalid');

@@ -1,5 +1,32 @@
 # Replica readback probe
 
+## Root cause (confirmed 12 Nov 2026)
+
+The Assisted Replica Recovery "archive stall" is a Restic retry loop caused by HCP returning a
+gzip-encoded body for a Range read that Rclone requested with `Accept-Encoding: gzip`.
+
+Production evidence, same pack and range (`bytes=2605056-2619015`, the last 13,960 bytes of the
+replica's 2,619,016-byte data pack), read through the same pinned Rclone 1.75.1 `serve restic` path
+Restic uses:
+
+| Rclone setting | Result | HCP response |
+| --- | --- | --- |
+| default (`Accept-Encoding: gzip` sent) | 0/3 correct; every time 206, stream cut after 2,875 bytes, bytes start with the gzip magic | `206`, `Content-Encoding: gzip`, `Content-Length: 13983`, `Content-Range: bytes 2605056-2619015/2619016` |
+| `use_accept_encoding_gzip = false` | 3/3 correct | identity body |
+
+Rclone 1.75.1 sends `Accept-Encoding: gzip` for provider `Other` and passes a gzip body through
+undecoded (`--s3-decompress` off). Restic therefore receives bytes that are not the requested range,
+rejects the load and retries with backoff; Pluton's inactivity watchdog stops it after ten minutes and
+reports `archive-output-idle`. The stored objects are intact (all hashes match), DNS and connections
+were healthy during the stall, and the watchdog, timeouts and consumer are not the cause.
+
+Not determined: why HCP compresses this range and not the other 169 ranges, the full object or the
+other tail ranges. Any Range read could be affected, so the fix must not depend on particular offsets.
+
+Fix: Pluton no longer requests gzip on any Rclone S3 session it builds for managed S3/HCP storage
+(`use_accept_encoding_gzip = false`), covering replica recovery, replication artifact verification
+and HCP storage operations. Details, tests and UAT: [HCP_RANGE_GZIP_FIX.md](HCP_RANGE_GZIP_FIX.md).
+
 A read-only diagnostic for the Assisted Replica Recovery stall described in
 [ASSISTED_RECOVERY_TIMEOUT_PROGRESS.md](ASSISTED_RECOVERY_TIMEOUT_PROGRESS.md). It reads every
 object of one S3 replica repository directly, outside Restic and outside Pluton's watchdog, and

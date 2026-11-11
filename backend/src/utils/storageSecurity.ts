@@ -205,7 +205,16 @@ export function storageRcloneOptions(
 			options[key] = String(value);
 		}
 	}
-	return { ...options, endpoint: endpoint.origin, env_auth: 'false', no_check_bucket: 'true' };
+	// Never request transfer compression. Restic data is already compressed and encrypted, and
+	// HCP was observed answering a Range GET with a gzip body that Rclone passed to Restic as
+	// the raw range; Restic then retried the load indefinitely (docs/HCP_RANGE_GZIP_FIX.md).
+	return {
+		...options,
+		endpoint: endpoint.origin,
+		env_auth: 'false',
+		no_check_bucket: 'true',
+		use_accept_encoding_gzip: 'false',
+	};
 }
 
 /** Standard bucket-root repositories overlap every child of the same authority. */

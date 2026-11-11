@@ -38,6 +38,7 @@ export class ManagedS3RecoverySession extends ManagedSftpRepositorySession {
 			'disable_http2',
 			'list_version',
 			'list_chunk',
+			'use_accept_encoding_gzip',
 		]);
 		const bad = (value: string) =>
 			typeof value !== 'string' ||
@@ -51,6 +52,8 @@ export class ManagedS3RecoverySession extends ManagedSftpRepositorySession {
 			!access.options.secret_access_key ||
 			access.options.env_auth === 'true' ||
 			access.options.force_path_style !== 'true' ||
+			(access.options.use_accept_encoding_gzip !== undefined &&
+				access.options.use_accept_encoding_gzip !== 'false') ||
 			!access.repositoryPath ||
 			access.repositoryPath.includes(String.fromCharCode(92)) ||
 			bad(access.repositoryPath) ||
@@ -73,10 +76,11 @@ export class ManagedS3RecoverySession extends ManagedSftpRepositorySession {
 	protected async connectionConfiguration(
 		access: ManagedSftpAccess
 	): Promise<{ contents: string; environment: NodeJS.ProcessEnv }> {
+		// A gzip Range response would reach Restic as the wrong bytes; see storageRcloneOptions.
 		return {
 			contents:
 				'[pluton]\n' +
-				Object.entries(access.options)
+				Object.entries({ ...access.options, use_accept_encoding_gzip: 'false' })
 					.map(([key, value]) => key + ' = ' + value)
 					.join('\n') +
 				'\n',

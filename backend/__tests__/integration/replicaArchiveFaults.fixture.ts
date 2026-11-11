@@ -7,6 +7,7 @@ import path from 'node:path';
 import { Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { setTimeout as delay } from 'node:timers/promises';
+import { gzipSync } from 'node:zlib';
 import { processManager } from '../../src/managers/ProcessManager';
 import { ManagedS3RecoverySession } from '../../src/utils/restic/ManagedS3RecoverySession';
 import {
@@ -16,6 +17,19 @@ import {
 } from '../../src/utils/restic/ManagedSftpRepositorySession';
 
 const TEST_IDLE_MS = 2000;
+
+/** Pluton before the gzip fix: Rclone's default Accept-Encoding: gzip on downloads. */
+class GzipRequestingSession extends ManagedS3RecoverySession {
+	protected async connectionConfiguration(access: ManagedSftpAccess) {
+		const configuration = await super.connectionConfiguration(access);
+		const contents = configuration.contents.replace(
+			'use_accept_encoding_gzip = false',
+			'use_accept_encoding_gzip = true'
+		);
+		assert.notEqual(contents, configuration.contents, 'fixture must re-enable gzip requests');
+		return { ...configuration, contents };
+	}
+}
 
 async function descendants(pid: number) {
 	const root = '/proc/' + pid + '/task';
@@ -67,8 +81,9 @@ export async function exerciseReplicaArchiveFaults(input: {
 		}
 	}
 	assert.ok(packs.size > 0, 'fixture must contain a data pack');
-	let mode: 'plain' | 'slow' | 'stall' = 'plain';
+	let mode: 'plain' | 'slow' | 'stall' | 'gzip-range' = 'plain';
 	let selectedReads = 0;
+	let gzipResponses = 0;
 	let announceHold: (() => void) | undefined;
 	const proxy = createServer({ cert, key: await fs.readFile(input.keyPath) }, (req, res) => {
 		if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -88,6 +103,31 @@ export async function exerciseReplicaArchiveFaults(input: {
 				agent: false,
 			},
 			source => {
+				if (
+					mode === 'gzip-range' &&
+					req.method === 'GET' &&
+					packs.has(object) &&
+					req.headers.range &&
+					/\bgzip\b/i.test(String(req.headers['accept-encoding'] || '')) &&
+					source.statusCode! < 300
+				) {
+					// As observed on HCP: a Range GET that accepts gzip gets a gzip body for that range.
+					const chunks: Buffer[] = [];
+					source.on('data', chunk => chunks.push(chunk));
+					source.on('error', () => res.destroy());
+					source.on('end', () => {
+						const body = gzipSync(Buffer.concat(chunks));
+						gzipResponses++;
+						res
+							.writeHead(source.statusCode!, {
+								...source.headers,
+								'content-encoding': 'gzip',
+								'content-length': String(body.length),
+							})
+							.end(body);
+					});
+					return;
+				}
 				res.writeHead(source.statusCode || 502, source.headers);
 				if (
 					req.method === 'GET' &&
@@ -128,10 +168,9 @@ export async function exerciseReplicaArchiveFaults(input: {
 		...input.access,
 		options: { ...input.access.options, endpoint: 'https://127.0.0.1:' + address.port },
 	};
-	const provider = new ManagedS3RecoverySession({
-		RCLONE_CA_CERT: input.caPath,
-		SSL_CERT_FILE: input.caPath,
-	});
+	const trust = { RCLONE_CA_CERT: input.caPath, SSL_CERT_FILE: input.caPath };
+	const provider = new ManagedS3RecoverySession(trust);
+	const gzipRequesting = new GzipRequestingSession(trust);
 	const temporaryRoot = await fs.mkdtemp(path.join(input.root, 'archive-fault-sessions-'));
 	const sentinel = path.join(temporaryRoot, 'keep-fixture.txt');
 	await fs.writeFile(sentinel, 'not a session workspace');
@@ -143,6 +182,7 @@ export async function exerciseReplicaArchiveFaults(input: {
 			signal?: AbortSignal;
 			onActivity?: ArchiveActivityObserver;
 			wrongPassword?: boolean;
+			session?: ManagedS3RecoverySession;
 		} = {}
 	) => {
 		const signal = AbortSignal.any([
@@ -153,7 +193,7 @@ export async function exerciseReplicaArchiveFaults(input: {
 		const access = options.wrongPassword
 			? { ...repository, password: repository.password + '-wrong' }
 			: repository;
-		const work = provider
+		const work = (options.session || provider)
 			.withSession(
 				access,
 				session => session.archive(input.snapshotId, sink, options.onActivity),
@@ -210,6 +250,38 @@ export async function exerciseReplicaArchiveFaults(input: {
 		console.log(
 			'PASS real slow S3 data-pack reads keep making archive progress past one idle window',
 			{ slowMs, bytes, selectedReads }
+		);
+
+		mode = 'gzip-range';
+		gzipResponses = 0;
+		await assert.rejects(read(sink(), { session: gzipRequesting }), (error: unknown) => {
+			if (!(error instanceof ManagedRepositoryAccessError)) return false;
+			const archive = error.diagnostic?.archive;
+			return (
+				error.code === 'timeout' &&
+				archive?.processAtStop === 'running' &&
+				archive.bytesReceived < bytes
+			);
+		});
+		assert.ok(gzipResponses > 0, 'gzip-requesting Rclone must receive gzip Range bodies');
+		await assertScratch();
+		console.log(
+			'PASS gzip Range bodies requested by default Rclone settings leave Restic retrying until the watchdog',
+			{ gzipResponses }
+		);
+		gzipResponses = 0;
+		let exact = 0;
+		await read(
+			sink(chunk => {
+				exact += chunk.length;
+			})
+		);
+		assert.equal(exact, bytes);
+		assert.equal(gzipResponses, 0, 'managed sessions must not request gzip Range bodies');
+		await assertScratch();
+		console.log(
+			'PASS managed S3 recovery sessions never request gzip, so the same server returns exact Range bytes',
+			{ bytes: exact }
 		);
 
 		mode = 'stall';

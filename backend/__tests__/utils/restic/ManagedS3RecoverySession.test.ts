@@ -38,6 +38,7 @@ describe('S3 read/staging-only credential and command boundary', () => {
 		'escape',
 		'backslash',
 		'path-style',
+		'gzip-transfer',
 	])('rejects unsafe %s configuration before spawn', async kind => {
 		const input = { ...access, options: { ...options } };
 		if (kind === 'http') input.options.endpoint = 'http://s3.example.internal';
@@ -53,6 +54,7 @@ describe('S3 read/staging-only credential and command boundary', () => {
 		if (kind === 'backslash')
 			input.repositoryPath = 'bucket-01' + String.fromCharCode(92) + 'managed';
 		if (kind === 'path-style') input.options.force_path_style = 'false';
+		if (kind === 'gzip-transfer') (input.options as any).use_accept_encoding_gzip = 'true';
 		await expect(
 			new ManagedS3RecoverySession().withSession(input, async () => {})
 		).rejects.toMatchObject({ code: 'configuration-invalid' });
@@ -99,7 +101,11 @@ describe('S3 read/staging-only credential and command boundary', () => {
 				GOMEMLIMIT: '256MiB',
 			});
 			file = opts.env.RCLONE_CONFIG;
-			expect(await fs.readFile(file, 'utf8')).toContain('secret_access_key = synthetic-secret');
+			const config = await fs.readFile(file, 'utf8');
+			expect(config).toContain('secret_access_key = synthetic-secret');
+			// Forced even though the caller did not pass it, and written exactly once.
+			expect(config.match(/^use_accept_encoding_gzip = false$/gm)).toHaveLength(1);
+			expect(config).not.toMatch(/use_accept_encoding_gzip = true/);
 			if (process.platform !== 'win32') {
 				expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
 				expect((await fs.stat(path.dirname(file))).mode & 0o777).toBe(0o700);

@@ -56,6 +56,7 @@ describe('HCP S3 protected storage boundary', () => {
 			configureProtectedStorageDatabase(sqlite);
 			const mirror = protectedStorageEnvironment(['snapshots', '--repo', 'rclone:mirror_01:fixture-bucket/pluton']);
 			expect(mirror.RCLONE_CONFIG_MIRROR_01_SECRET_ACCESS_KEY).toBe(plain.secret_access_key);
+			expect(mirror.RCLONE_CONFIG_MIRROR_01_USE_ACCEPT_ENCODING_GZIP).toBe('false');
 			expect(Object.keys(mirror).some(key => key.startsWith('RCLONE_CONFIG_AWS_01_'))).toBe(false);
 			const aws = protectedStorageEnvironment(['lsd', 'aws_01:fixture-bucket']);
 			expect(aws.RCLONE_CONFIG_AWS_01_PROVIDER).toBe('AWS');
@@ -123,11 +124,27 @@ describe('HCP S3 protected storage boundary', () => {
 			force_path_style: 'false',
 			env_auth: 'false',
 			no_check_bucket: 'true',
+			use_accept_encoding_gzip: 'false',
 		});
 		expect(options.v2_auth).toBeUndefined();
 		expect(options.hcp_mode).toBeUndefined();
 		expect(options.bucket).toBeUndefined();
 	});
+
+	it.each([undefined, true, 'true', false])(
+		'never requests gzip transfer encoding on managed sessions (stored setting %p)',
+		setting => {
+			const settings: Record<string, unknown> = { hcp_mode: true };
+			if (setting !== undefined) settings.use_accept_encoding_gzip = setting;
+			for (const type of ['s3compatible', 's3']) {
+				const options = storageRcloneOptions({ ...stored(plain, settings), type });
+				expect(options.use_accept_encoding_gzip).toBe('false');
+				expect(
+					rcloneRemoteEnvironment('mirror_01', options).RCLONE_CONFIG_MIRROR_01_USE_ACCEPT_ENCODING_GZIP
+				).toBe('false');
+			}
+		}
+	);
 
 	it('refuses missing credentials and user-controlled TLS/file credential settings', () => {
 		expect(() => storageRcloneOptions(stored({ ...plain, secret_access_key: '' }))).toThrow(
