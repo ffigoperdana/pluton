@@ -44,6 +44,60 @@ pending and there was no backpressure. The last sampled 5-second window showed z
 | H2 | Restic and Rclone `serve restic` misbehave on this blob layout | Yes, deterministic | Probe all OK, plus the same backup downloads fine from the primary |
 | H3 | Snapshot content (a special file) breaks `dump` | Partly | Normal TAR download of the same backup from the primary also stops |
 
+## Production result (12 Nov 2026)
+
+**Probe: every replica object is intact and readable.** The probe ran in a temporary container
+from the production image with host networking (reason below). 29/29 objects passed: `config`,
+one key, 22 snapshots, two index files and three data packs (2.50 MiB in total; one 2.50 MiB pack
+holds this snapshot's data). Every SHA-256 matched its object name and every Range read matched.
+The listing took 6 s and the first object 8.3 s to first byte; every later object took 0.2 to
+0.3 s. The cause of the two slow starts was not measured. **H1 is ruled out** for sequential reads
+over the host network.
+
+**New evidence: the container's name resolution fails from time to time.** Inside the Pluton
+container the tenant S3 hostname did not resolve at 17:33 and 17:38 UTC (`ENOTFOUND` from both the
+system resolver and a direct DNS query), while the host resolved it to four HCP node addresses and
+the container resolved it again later. The container forwards DNS to the host resolver, which
+lists one internal DNS server and two public resolvers on the same interface. Failures were
+observed outside the two stall windows; whether they coincide with a stall is not yet measured.
+
+**Why such a failure would look like a silent stall (from code).** Restic 0.19.1 retries a failed
+load with exponential backoff starting at one second and doubling
+([retry backend](https://github.com/restic/restic/blob/v0.19.1/internal/backend/retry/backend_retry.go)),
+and reports each retry only on stderr, which Pluton discards. Between attempts both processes sleep,
+which matches zero I/O and CPU in the sampled window.
+
+Updated hypotheses after the probe:
+
+| | Hypothesis | Decisive observation with the stall watcher |
+| --- | --- | --- |
+| H4 | From the container's bridge network, a new connection or its DNS lookup fails during the archive | Rclone has no open HCP connection, or one in `SYN_SENT`, and DNS failures appear around the stall |
+| H5 | HCP, or the path to one node, holds one response | Rclone keeps an `ESTABLISHED` connection with `rx0` and no reads for minutes |
+| H2 | Restic or Rclone stops reading although data arrived | An `ESTABLISHED` connection with a growing receive queue (`rx` above 0) while Rclone reads nothing |
+
+## Stall watcher
+
+`scripts/diagnostics/archive-stall-watch.mjs` runs inside the Pluton container next to a real
+recovery attempt. Every 5 seconds it records, for each `restic ... dump --archive` process and its
+Rclone child: I/O and CPU deltas, process state, and every Rclone TCP connection (remote node label
+or address, state, send and receive queue, retransmissions). It also resolves the S3 hostname
+through the container's DNS each interval. It only reads `/proc` and sends DNS queries; it never
+signals or attaches to a process. Start it first; it waits for the dump process.
+
+```sh
+docker exec -i <pluton-container> sh -c 'cat > /tmp/archive-stall-watch.mjs' < /tmp/archive-stall-watch.mjs
+docker exec -it <pluton-container> node /tmp/archive-stall-watch.mjs --duration 900 --show-ips
+```
+
+The hostname defaults to the host of `MANAGED_EXPORT_ENDPOINT`; use `--host <name>` otherwise.
+`--show-ips` prints node addresses, which the storage team needs; mask them before sharing publicly.
+Then run one replica recovery of the same snapshot in the UI and let it reach the stall.
+
+Local validation (`scripts/diagnostics/test/archive-stall-watch.harness.sh`): a real Restic dump
+over Rclone and loopback S3, with one data pack held by a proxy. The watcher showed Restic and Rclone
+at zero I/O and CPU in `futex_wait_queue`, two `ESTABLISHED` Rclone connections with `rx0 tx0`, and
+a DNS failure for an unresolvable name on every sample.
+
 ## What the probe does
 
 1. Lists the replica prefix (`rclone lsjson`).
