@@ -383,6 +383,17 @@ describe('durable assisted failover authorization and lifecycle', () => {
 									operation: 'archive-readback',
 									timeoutCategory: 'archive-output-idle',
 									elapsedMs: 600010,
+									archive: {
+										firstByteMs: 17,
+										bytesReceived: 8192,
+										lastOutputAgeMs: 600000,
+										consumerPending: false,
+										consumerBackpressured: false,
+										stdoutEnded: false,
+										processAtStop: 'running',
+										completion: 'signalled',
+										raw: 'synthetic-nested-secret',
+									},
 									raw: 'synthetic-private',
 								},
 							});
@@ -419,10 +430,25 @@ describe('durable assisted failover authorization and lifecycle', () => {
 					timeoutCategory: 'archive-output-idle',
 					elapsedMs: 600010,
 					failureCode: 'timeout',
+					archive: {
+						firstByteMs: 17,
+						bytesReceived: 8192,
+						lastOutputAgeMs: 600000,
+						processAtStop: 'running',
+						completion: 'signalled',
+					},
+				},
+				phaseTimingsMs: {
+					'approval-revalidation': expect.any(Number),
+					'staging-preparation': expect.any(Number),
+					'integrity-preparation': expect.any(Number),
+					'staging-cleanup': expect.any(Number),
 				},
 			});
 			expect(restored.activity).toBeUndefined();
-			expect(JSON.stringify(restored)).not.toMatch(/synthetic-private|synthetic cleanup secret/);
+			expect(JSON.stringify(restored)).not.toMatch(
+				/synthetic-private|synthetic-nested-secret|synthetic cleanup secret/
+			);
 			if (cleanupFails) {
 				const cancelled = await service.cancel('owner-01', job.id);
 				expect(cancelled).toMatchObject({ cleanupPending: false, diagnostic: restored.diagnostic });

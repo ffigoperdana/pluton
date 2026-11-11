@@ -14,6 +14,19 @@ export type AssistedStatus =
 	| 'failed'
 	| 'cancelled'
 	| 'uncertain';
+export const ASSISTED_TIMED_PHASES = [
+	'approval-revalidation',
+	'staging-preparation',
+	'snapshot-indexing',
+	'snapshot-validation',
+	'integrity-preparation',
+	'staged-restore',
+	'filesystem-validation',
+	'final-verification',
+	'staging-cleanup',
+] as const;
+export type AssistedPhaseTimings = Partial<Record<(typeof ASSISTED_TIMED_PHASES)[number], number>>;
+
 export type AssistedRecoveryDiagnostic = {
 	phase: string;
 	operation: RepositoryOperationDiagnostic['operation'] | 'recovery-phase';
@@ -24,6 +37,7 @@ export type AssistedRecoveryDiagnostic = {
 		| 'replica-preflight-deadline'
 		| 'undetermined';
 	failureCode: string;
+	archive?: RepositoryOperationDiagnostic['archive'];
 };
 export type AssistedCandidate = {
 	replicationId: string;
@@ -48,6 +62,7 @@ export type AssistedPayload = {
 	selected?: string;
 	activity?: ArchiveActivity;
 	diagnostic?: AssistedRecoveryDiagnostic;
+	phaseTimingsMs?: AssistedPhaseTimings;
 };
 export type AssistedJob = {
 	id: string;

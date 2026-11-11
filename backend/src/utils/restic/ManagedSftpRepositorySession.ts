@@ -56,10 +56,29 @@ export type RepositoryTimeoutCategory =
 
 export type ArchiveActivity = 'awaiting-archive-output' | 'validating-archive-output';
 
+export type ArchiveReadbackDiagnostic = {
+	firstByteMs?: number;
+	bytesReceived: number;
+	lastOutputAgeMs?: number;
+	consumerPending: boolean;
+	consumerPendingMs?: number;
+	consumerBackpressured: boolean;
+	stdoutEnded: boolean;
+	processAtStop: 'not-started' | 'running' | 'exited';
+	completion:
+		| 'not-started'
+		| 'clean-exit'
+		| 'nonzero-exit'
+		| 'signalled'
+		| 'spawn-error'
+		| 'unknown';
+};
+
 export type RepositoryOperationDiagnostic = {
 	operation: RepositoryOperation;
 	elapsedMs: number;
 	timeoutCategory?: RepositoryTimeoutCategory;
+	archive?: ArchiveReadbackDiagnostic;
 };
 
 const callerDeadline = (signal?: AbortSignal): 'caller-deadline' | undefined =>
@@ -596,16 +615,25 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		onFirstOutput?: () => void
 	): Promise<void> {
 		const began = performance.now();
+		const duration = (ms: number) => Math.min(24 * 60 * 60_000, Math.max(0, Math.round(ms)));
 		let timeoutCategory: RepositoryTimeoutCategory | undefined;
-		const archiveError = (code: RecoveryFailureCode) =>
+		const archiveError = (code: RecoveryFailureCode, archive: ArchiveReadbackDiagnostic) =>
 			new ManagedRepositoryAccessError(code, undefined, {
 				operation: 'archive-readback',
-				elapsedMs: Math.round(performance.now() - began),
+				elapsedMs: duration(performance.now() - began),
 				timeoutCategory,
+				archive,
 			});
 		if (signal?.aborted || destination.destroyed) {
 			timeoutCategory = callerDeadline(signal);
-			throw archiveError('cancelled');
+			throw archiveError('cancelled', {
+				bytesReceived: 0,
+				consumerPending: false,
+				consumerBackpressured: false,
+				stdoutEnded: false,
+				processAtStop: 'not-started',
+				completion: 'not-started',
+			});
 		}
 		const child = spawn(binary, args, {
 			env,
@@ -614,46 +642,82 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			detached: process.platform !== 'win32',
 			stdio: ['ignore', 'pipe', 'pipe'],
 		});
-		const processId = `managed-download-${crypto.randomUUID()}`;
+		const processId = 'managed-download-' + crypto.randomUUID();
 		let exitStatus: number | null = null,
 			exitSignal: string | null = null;
 		processManager.trackProcess(processId, child);
 		let failure: RecoveryFailureCode | undefined;
 		let hasClosed = false;
 		let pipelineFinished = false;
-		let receivedData = false;
+		let firstOutput: number | undefined;
+		let lastOutput: number | undefined;
+		let pendingWrite: number | undefined;
+		let bytesReceived = 0;
+		let completion: ArchiveReadbackDiagnostic['completion'] = 'unknown';
+		let stopped: ArchiveReadbackDiagnostic | undefined;
 		const transfer = new AbortController();
 		let timer: ReturnType<typeof setTimeout>;
+		// pipeline(end:false) only waits for stdout EOF, even with an outstanding
+		// destination write below its high water mark. End this forwarding stream
+		// instead, and wait for real write acknowledgements without closing the caller's sink.
+		const forwarding = new Writable({
+			highWaterMark: destination.writableHighWaterMark,
+			write(chunk, _encoding, done) {
+				pendingWrite = performance.now();
+				destination.write(chunk, error => {
+					pendingWrite = undefined;
+					done(error);
+				});
+			},
+		});
+		const observe = (): ArchiveReadbackDiagnostic => {
+			const now = performance.now();
+			return {
+				firstByteMs: firstOutput === undefined ? undefined : duration(firstOutput - began),
+				bytesReceived,
+				lastOutputAgeMs: lastOutput === undefined ? undefined : duration(now - lastOutput),
+				consumerPending: pendingWrite !== undefined || forwarding.writableLength > 0,
+				consumerPendingMs: pendingWrite === undefined ? undefined : duration(now - pendingWrite),
+				consumerBackpressured: forwarding.writableNeedDrain || destination.writableNeedDrain,
+				stdoutEnded: child.stdout?.readableEnded ?? false,
+				processAtStop:
+					completion === 'spawn-error'
+						? 'not-started'
+						: hasClosed || child.exitCode != null || child.signalCode != null
+							? 'exited'
+							: 'running',
+				completion,
+			};
+		};
 		const stop = (reason: RecoveryFailureCode, category?: RepositoryTimeoutCategory) => {
-			if (!failure) {
-				failure = reason;
-				timeoutCategory = category;
-			}
+			if (failure) return;
+			failure = reason;
+			timeoutCategory = category;
+			stopped = observe();
 			if (!hasClosed) killProcessTree(child, 'SIGKILL');
-			// Also interrupt a blocked destination after Restic's stdout has ended.
-			// Destroying only stdout cannot release that backpressure wait.
-			if (!pipelineFinished) {
-				transfer.abort();
-				// pipeline(end:false) deliberately leaves the consumer open.
-				// A failed/aborted TAR cannot be resumed or completed safely.
-				destination.destroy();
-			}
+			if (!pipelineFinished) transfer.abort();
+			// An interrupted archive cannot be completed or served safely.
+			destination.destroy();
 		};
 		const abort = () => stop('cancelled', callerDeadline(signal));
-		// Inactivity bound, not a tiny archive size or total-transfer-time limit.
+		const disconnected = () =>
+			stop(signal?.aborted ? 'cancelled' : 'stream-interrupted', callerDeadline(signal));
 		const activity = () => {
+			if (failure) return;
 			clearTimeout(timer);
 			timer = setTimeout(
 				() => {
+					const sample = observe();
 					let category: RepositoryTimeoutCategory = 'archive-first-output';
-					if (receivedData) {
-						if (pipelineFinished) category = 'archive-exit-idle';
-						else if (hasClosed || destination.writableNeedDrain) category = 'archive-consumer-idle';
+					if (firstOutput !== undefined) {
+						if (sample.consumerPending || sample.consumerBackpressured)
+							category = 'archive-consumer-idle';
+						else if (pipelineFinished || sample.stdoutEnded) category = 'archive-exit-idle';
 						else category = 'archive-output-idle';
 					}
 					stop('timeout', category);
 				},
-				receivedData ? 10 * 60_000 : 15_000
+				firstOutput === undefined ? 15_000 : 10 * 60_000
 			);
 			timer.unref();
 		};
@@ -662,24 +726,37 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 				exitStatus = code;
 				exitSignal = childSignal;
 				hasClosed = true;
+				if (completion !== 'spawn-error')
+					completion =
+						code === 0
+							? 'clean-exit'
+							: childSignal
+								? 'signalled'
+								: code === null
+									? 'unknown'
+									: 'nonzero-exit';
 				if (code !== 0)
-					failure ||=
+					stop(
 						code === 12
 							? 'wrong-password'
 							: code === 10
 								? 'repository-unavailable'
-								: 'archive-failed';
+								: 'archive-failed'
+					);
 				resolve();
 			});
 		});
 		child.on('error', () => {
-			failure ||= 'execution-failed';
+			completion = 'spawn-error';
+			stop('execution-failed');
 		});
 		child.stderr?.on('data', () => undefined); // never retain provider diagnostics
 		signal?.addEventListener('abort', abort, { once: true });
-		const dataActivity = () => {
-			const first = !receivedData;
-			receivedData = true;
+		const dataActivity = (chunk: Buffer) => {
+			const first = firstOutput === undefined;
+			lastOutput = performance.now();
+			firstOutput ??= lastOutput;
+			bytesReceived = Math.min(Number.MAX_SAFE_INTEGER, bytesReceived + chunk.length);
 			activity();
 			if (first) {
 				try {
@@ -691,31 +768,34 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		};
 		child.stdout?.on('data', dataActivity);
 		destination.on('drain', activity);
+		destination.on('close', disconnected);
+		destination.on('error', disconnected);
 		activity();
+		const diagnostic = () => ({ ...(stopped ?? observe()), completion });
 		try {
 			if (!child.stdout) throw new ManagedRepositoryAccessError('execution-failed');
-			// Backpressure propagates to Restic. No archive buffer or temporary TAR.
-			// Do not end HTTP at stdout EOF: first require a successful process exit.
-			await pipeline(child.stdout, destination, { end: false, signal: transfer.signal });
+			await pipeline(child.stdout, forwarding, { signal: transfer.signal });
 			pipelineFinished = true;
 			await closed;
-			if (failure) throw archiveError(failure);
 		} catch {
-			stop(signal?.aborted ? 'cancelled' : failure || 'stream-interrupted');
+			stop(signal?.aborted ? 'cancelled' : 'stream-interrupted', callerDeadline(signal));
 			await closed; // config cleanup must wait until Restic/Rclone have stopped
-			throw archiveError(failure || 'execution-failed');
 		} finally {
 			clearTimeout(timer!);
 			signal?.removeEventListener('abort', abort);
 			child.stdout?.removeListener('data', dataActivity);
 			destination.removeListener('drain', activity);
+			destination.removeListener('close', disconnected);
+			destination.removeListener('error', disconnected);
 			processManager.untrackProcess(processId);
 			try {
 				planLogger('download').info(
 					{
 						event: 'managed_native_archive',
-						elapsedMs: Math.round(performance.now() - began),
+						operation: 'archive-readback',
+						elapsedMs: duration(performance.now() - began),
 						timeoutCategory,
+						archive: diagnostic(),
 						exitStatus,
 						signal: exitSignal,
 						classification: failure || 'success',
@@ -728,6 +808,7 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 				/* Never log arguments, environment or provider output. */
 			}
 		}
+		if (failure) throw archiveError(failure, diagnostic());
 	}
 
 	private run(

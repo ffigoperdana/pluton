@@ -2,6 +2,8 @@ import crypto from 'crypto';
 import path from 'path';
 import {
 	AssistedRecoveryStore,
+	ASSISTED_TIMED_PHASES,
+	type AssistedPhaseTimings,
 	type AssistedPayload,
 	type AssistedJob,
 	type AssistedRecoveryDiagnostic,
@@ -39,6 +41,9 @@ export function assistedFailure(error: unknown): string {
 		return 'authorization-denied';
 	return 'unclassified-failure';
 }
+const elapsedMs = (duration: number) =>
+	Math.min(24 * 60 * 60_000, Math.max(0, Math.round(duration)));
+
 function recoveryDiagnostic(
 	error: unknown,
 	phase: string,
@@ -56,20 +61,26 @@ function recoveryDiagnostic(
 		if (phase === 'replica-check') timeoutCategory = 'replica-preflight-deadline';
 	}
 	const duration = native?.elapsedMs;
+	const archive = native?.archive;
 	return {
 		phase,
 		operation: native?.operation ?? 'recovery-phase',
-		elapsedMs: Math.min(
-			24 * 60 * 60_000,
-			Math.max(
-				0,
-				Math.round(
-					typeof duration === 'number' && Number.isFinite(duration)
-						? duration
-						: performance.now() - began
-				)
-			)
+		elapsedMs: elapsedMs(
+			typeof duration === 'number' && Number.isFinite(duration)
+				? duration
+				: performance.now() - began
 		),
+		archive: archive && {
+			firstByteMs: archive.firstByteMs,
+			bytesReceived: archive.bytesReceived,
+			lastOutputAgeMs: archive.lastOutputAgeMs,
+			consumerPending: archive.consumerPending,
+			consumerPendingMs: archive.consumerPendingMs,
+			consumerBackpressured: archive.consumerBackpressured,
+			stdoutEnded: archive.stdoutEnded,
+			processAtStop: archive.processAtStop,
+			completion: archive.completion,
+		},
 		timeoutCategory: timeoutCategory ?? (failureCode === 'timeout' ? 'undetermined' : undefined),
 		failureCode,
 	};
@@ -134,6 +145,7 @@ export class AssistedRecoveryService {
 						: undefined,
 			activity: row.status === 'running' ? row.payload.activity : undefined,
 			diagnostic: row.payload.diagnostic,
+			phaseTimingsMs: row.payload.phaseTimingsMs,
 			expiresAt: row.expiresAt,
 			expired: row.expiresAt <= this.now(),
 			sourceSnapshotId: row.payload.sourceSnapshotId,
@@ -372,8 +384,17 @@ export class AssistedRecoveryService {
 		const candidate = row.payload.candidates.find(c => c.replicationId === row.payload.selected)!;
 		let phase = row.phase;
 		let phaseBegan = performance.now();
+		const phaseTimingsMs: AssistedPhaseTimings = {};
+		const recordPhase = (now = performance.now()) => {
+			const known = ASSISTED_TIMED_PHASES.find(value => value === phase);
+			if (known) phaseTimingsMs[known] = elapsedMs((phaseTimingsMs[known] ?? 0) + now - phaseBegan);
+		};
 		const stage = (value: string, activity?: ArchiveActivity, event?: string) => {
-			if (phase !== value) phaseBegan = performance.now();
+			if (phase !== value) {
+				const now = performance.now();
+				recordPhase(now);
+				phaseBegan = now;
+			}
 			phase = value;
 			this.store.update(
 				row.id,
@@ -416,12 +437,14 @@ export class AssistedRecoveryService {
 					);
 					if (signal.aborted) throw new ManagedRepositoryAccessError('cancelled');
 					await this.policy(row.planId);
+					recordPhase();
 					this.store.update(
 						row.id,
 						['running'],
 						{
 							status: 'completed',
 							phase: 'integrity-verified',
+							payload: { ...row.payload, phaseTimingsMs },
 							cleanupPending: false,
 							stats: { files: result.stats.total_files, bytes: result.stats.total_bytes },
 						},
@@ -433,6 +456,8 @@ export class AssistedRecoveryService {
 			);
 		} catch (error) {
 			const diagnostic = recoveryDiagnostic(error, phase, phaseBegan);
+			recordPhase();
+			const cleanupStarted = performance.now();
 			let cleanupPending = false;
 			try {
 				await this.workspace.remove(row.id);
@@ -440,6 +465,7 @@ export class AssistedRecoveryService {
 			} catch {
 				cleanupPending = true;
 			}
+			phaseTimingsMs['staging-cleanup'] = elapsedMs(performance.now() - cleanupStarted);
 			const current = this.store.get(row.id);
 			if (current?.status === 'running')
 				this.store.update(
@@ -449,7 +475,7 @@ export class AssistedRecoveryService {
 						status: signal.aborted ? 'cancelled' : 'failed',
 						phase: 'recovery-stopped',
 						failureCode: signal.aborted ? 'cancelled' : diagnostic.failureCode,
-						payload: { ...row.payload, diagnostic },
+						payload: { ...row.payload, diagnostic, phaseTimingsMs },
 						cleanupPending,
 					},
 					'staged-recovery-failed'
