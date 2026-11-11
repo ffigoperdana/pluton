@@ -156,6 +156,36 @@ S3 passed every check (exit 0). A proxy reporting the pack 8 KiB smaller on `HEA
 (`LIST` and `HEAD` sizes differ, full GET through `serve restic` returned fewer bytes, exit 2).
 Rclone 1.75.1 did not shorten Range responses to the `HEAD` size in that fixture.
 
+**Production sweep (12 Nov 2026).** `LIST` and `HEAD` sizes matched (2,619,016 bytes) and the full
+GET through `serve restic` was correct. 169 of 170 Range reads passed. One failed every time it was
+tried in that run: `bytes=2605056-2619015`, the last 13,960 bytes of the pack. Status 206, the stream
+ended after 2,875 bytes, and those bytes did not match the stored object. Tail ranges of 1, 16, 512,
+4,096, 8,192, 15,360, 16,384, 24,576, 32,768 and 65,536 bytes passed.
+
+**Leading hypothesis (H7), from code and a fixture, not yet confirmed in production.** For provider
+`Other`, Rclone 1.75.1 sends `Accept-Encoding: gzip` on every GET, including Range GETs
+(`use_accept_encoding_gzip` defaults to true), and does not decompress a `Content-Encoding: gzip`
+body (`--s3-decompress` is off). It passes the compressed bytes on as if they were the requested range
+([s3 backend](https://github.com/rclone/rclone/blob/v1.75.1/backend/s3/s3.go)). If HCP gzip-encodes
+some Range responses, Restic receives wrong or short data, rejects it, and retries indefinitely. A
+fixture that gzips Range responses carrying `Accept-Encoding: gzip` reproduces the production
+signature (206, stream cut after 3,210 bytes, wrong bytes with the gzip magic), and the same range
+passes with `--accept-gzip off`.
+
+Decisive production check, read-only:
+
+```sh
+docker exec -it <pluton-container> node /tmp/serve-restic-range-sweep.mjs --credentials managed-export --path <bucket>/<replica-prefix> --range 2605056:13960 --repeat 3
+docker exec -it <pluton-container> node /tmp/serve-restic-range-sweep.mjs --credentials managed-export --path <bucket>/<replica-prefix> --range 2605056:13960 --repeat 3 --accept-gzip off
+```
+
+A failed range is read once more directly with header dumps. The output shows the request's
+`Accept-Encoding` and the response status, `Content-Length`, `Content-Range`, `Content-Encoding` and
+`Content-Type`, plus whether the received bytes start with the gzip magic. H7 is confirmed if the
+first command fails with `Content-Encoding: gzip` and the second passes. The fix would then be a
+scoped Rclone option for HCP-mode S3 sessions (`use_accept_encoding_gzip = false`), as a separate
+code change with tests.
+
 ## What the probe does
 
 1. Lists the replica prefix (`rclone lsjson`).

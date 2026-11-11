@@ -22,8 +22,15 @@ const USAGE = `Usage (inside the Pluton container, or a temporary container with
   --object <data/xx/id>   Pack to test (default: the largest data/ object).
   --step <bytes>          Distance between sweep offsets (default: 16384).
   --length <bytes>        Bytes per sweep request (default: 24576).
+  --range <offset>:<len>  Only test this one range (with --repeat) instead of the sweep.
+  --repeat <n>            Repetitions for --range (default: 3).
+  --accept-gzip on|off    Force rclone's Accept-Encoding: gzip on or off (default: rclone default).
   --region <name>  --ca <file>  --timeout <seconds>  --report <file>  --rclone <file>
-  --allow-loopback-http   Test fixtures only.`;
+  --allow-loopback-http   Test fixtures only.
+
+Every failed range is read once more directly with header dumps; only the status,
+Content-Length, Content-Range, Content-Encoding, Content-Type and a byte classification
+are printed.`;
 
 function fail(message) {
 	process.stderr.write(`\n${message}\n`);
@@ -34,6 +41,7 @@ function parseArgs(argv) {
 	const opts = {
 		credentials: 'prompt', region: '', ca: process.env.PLUTON_STORAGE_CA_FILE || '', object: '',
 		step: 16384, length: 24576, timeout: 60, report: '', rclone: '/usr/local/bin/rclone', allowLoopbackHttp: false,
+		range: undefined, repeat: 3, acceptGzip: '',
 	};
 	for (let i = 0; i < argv.length; i++) {
 		const flag = argv[i];
@@ -59,7 +67,15 @@ function parseArgs(argv) {
 		else if (flag === '--report') opts.report = value();
 		else if (flag === '--rclone') opts.rclone = value();
 		else if (flag === '--allow-loopback-http') opts.allowLoopbackHttp = true;
-		else if (flag === '-h' || flag === '--help') {
+		else if (flag === '--repeat') opts.repeat = int(1, 20);
+		else if (flag === '--accept-gzip') {
+			opts.acceptGzip = value();
+			if (!['on', 'off'].includes(opts.acceptGzip)) fail('--accept-gzip must be on or off');
+		} else if (flag === '--range') {
+			const match = /^(\d+):(\d+)$/.exec(value());
+			if (!match || Number(match[2]) < 1) fail('--range must look like <offset>:<length>');
+			opts.range = [Number(match[1]), Number(match[2])];
+		} else if (flag === '-h' || flag === '--help') {
 			process.stdout.write(USAGE + '\n');
 			process.exit(0);
 		} else fail(`Unknown option ${flag}\n\n${USAGE}`);
@@ -151,20 +167,23 @@ function request(port, auth, method, key, range, timeoutMs, agent) {
 			},
 			res => {
 				const chunks = [];
+				const headers = {
+					status: res.statusCode,
+					contentLength: res.headers['content-length'] === undefined ? undefined : Number(res.headers['content-length']),
+					contentRange: res.headers['content-range'],
+					contentEncoding: res.headers['content-encoding'],
+				};
+				let settled = false;
+				const settle = extra => {
+					if (settled) return;
+					settled = true;
+					resolve({ ...headers, body: Buffer.concat(chunks), ms: Math.round(performance.now() - started), ...extra });
+				};
 				res.on('data', chunk => chunks.push(chunk));
-				res.on('end', () =>
-					resolve({
-						status: res.statusCode,
-						contentLength: res.headers['content-length'] === undefined ? undefined : Number(res.headers['content-length']),
-						contentRange: res.headers['content-range'],
-						body: Buffer.concat(chunks),
-						complete: res.complete,
-						ms: Math.round(performance.now() - started),
-					})
-				);
-				res.on('error', error =>
-					resolve({ status: res.statusCode, body: Buffer.concat(chunks), error: error.code || 'response-error', ms: Math.round(performance.now() - started) })
-				);
+				res.on('end', () => settle(res.complete ? {} : { error: 'incomplete' }));
+				res.on('aborted', () => settle({ error: 'aborted' }));
+				res.on('error', error => settle({ error: error.code || 'response-error' }));
+				res.on('close', () => settle(res.complete ? {} : { error: 'closed-early' }));
 			}
 		);
 		req.on('timeout', () => req.destroy(Object.assign(new Error('timeout'), { code: 'TIMEOUT' })));
@@ -199,7 +218,20 @@ async function main() {
 		...(creds.token ? { RCLONE_CONFIG_PROBE_SESSION_TOKEN: creds.token } : {}),
 		...(opts.region ? { RCLONE_CONFIG_PROBE_REGION: opts.region } : {}),
 		...(opts.ca ? { SSL_CERT_FILE: opts.ca, RCLONE_CA_CERT: opts.ca } : {}),
+		...(opts.acceptGzip ? { RCLONE_CONFIG_PROBE_USE_ACCEPT_ENCODING_GZIP: opts.acceptGzip === 'on' ? 'true' : 'false' } : {}),
 	};
+	const redact = (() => {
+		const host = new URL(opts.endpoint).host;
+		const exact = [creds.secret, creds.id, creds.token, opts.endpoint, host, opts.path, opts.path.split('/')[0]].filter(v => v && v.length >= 3);
+		return text => {
+			let out = text;
+			for (const value of exact) out = out.split(value).join('<redacted>');
+			return out
+				.replace(/https?:\/\/\S+/g, '<url>')
+				.replace(/\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b/g, '<ip>')
+				.replace(/\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?\b/gi, '<host>');
+		};
+	})();
 	const network = ['--timeout', `${opts.timeout}s`, '--contimeout', '15s', '--low-level-retries', '1', '--retries', '1'];
 	const root = `probe:${opts.path}`;
 	let server;
@@ -211,19 +243,72 @@ async function main() {
 		cleanup();
 		process.exit(130);
 	});
-	const run = args =>
+	const run = (args, keepStderr = false) =>
 		new Promise(resolve => {
 			if (!['lsjson', 'cat'].includes(args[0])) throw new Error('refusing a non-read-only rclone command');
 			const child = spawn(opts.rclone, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
 			const chunks = [];
+			let stderr = '';
 			child.stdout.on('data', c => chunks.push(c));
-			child.stderr.on('data', () => undefined);
+			child.stderr.on('data', c => {
+				if (keepStderr && stderr.length < 4 * MiB) stderr += c.toString('utf8');
+			});
 			child.on('close', code => {
 				const buffer = Buffer.concat(chunks);
-				resolve({ code, out: buffer.toString('utf8'), buffer });
+				resolve({ code, out: buffer.toString('utf8'), buffer, stderr });
 			});
 		});
-	const report = { tool: TOOL, startedAt: new Date().toISOString(), settings: { step: opts.step, length: opts.length, ioTimeoutSeconds: opts.timeout } };
+	// Classify bytes without printing them: gzip magic, text-likeness and where (if
+	// anywhere) they occur in the stored object.
+	const classifyBytes = (body, reference) => {
+		const printable = body.length ? [...body.subarray(0, 4096)].filter(b => b === 9 || b === 10 || b === 13 || (b >= 32 && b < 127)).length / Math.min(body.length, 4096) : 0;
+		const probe = body.subarray(0, Math.min(64, body.length));
+		return {
+			bytes: body.length,
+			gzipMagic: body.length >= 2 && body[0] === 0x1f && body[1] === 0x8b,
+			textLike: printable > 0.95,
+			foundInStoredObjectAt: probe.length >= 16 ? reference.indexOf(probe) : undefined,
+			...(printable > 0.95 ? { textPreview: redact(body.subarray(0, 240).toString('utf8')).replace(/\s+/g, ' ') } : {}),
+		};
+	};
+	// Direct read of one range with header dumps; keeps only safe response facts.
+	const traceRange = async (key, offset, length, reference) => {
+		const result = await run(['cat', ...network, '--offset', String(offset), '--count', String(length), '-vv', '--dump', 'headers', `${root}/${key}`], true);
+		const responses = [];
+		let current;
+		let kind;
+		for (const line of result.stderr.split('\n')) {
+			const marker = /HTTP (REQUEST|RESPONSE) \(req 0x[0-9a-f]+\)/.exec(line);
+			if (marker) {
+				kind = marker[1];
+				if (kind === 'RESPONSE') responses.push((current = {}));
+				else current = undefined;
+				continue;
+			}
+			// Dumped header lines end in CR; strip it so the field patterns can anchor at the end.
+			const body = line.replace(/\r$/, '').replace(/^\S+ \S+ DEBUG : /, '');
+			if (kind === 'REQUEST' && /^Accept-Encoding:/i.test(body)) responses.acceptEncoding = body.split(':')[1].trim();
+			if (kind !== 'RESPONSE' || !current) continue;
+			const status = /^HTTP\/[\d.]+ (\d{3})/.exec(body);
+			if (status) current.status = Number(status[1]);
+			for (const [name, field] of [['Content-Length', 'contentLength'], ['Content-Range', 'contentRange'], ['Content-Encoding', 'contentEncoding'], ['Content-Type', 'contentType'], ['Transfer-Encoding', 'transferEncoding']]) {
+				const match = new RegExp(`^${name}:\\s*(.+)$`, 'i').exec(body);
+				if (match) current[field] = match[1].trim();
+			}
+		}
+		return {
+			exit: result.code,
+			requestAcceptEncoding: responses.acceptEncoding,
+			responses,
+			received: classifyBytes(result.buffer, reference),
+			matchesStored: result.buffer.equals(reference.subarray(offset, offset + length)),
+		};
+	};
+	const report = {
+		tool: TOOL,
+		startedAt: new Date().toISOString(),
+		settings: { step: opts.step, length: opts.length, ioTimeoutSeconds: opts.timeout, range: opts.range, repeat: opts.repeat, acceptGzip: opts.acceptGzip || 'rclone-default' },
+	};
 	const finish = code => {
 		report.finishedAt = new Date().toISOString();
 		const file = opts.report || path.join(os.tmpdir(), `pluton-range-sweep-${report.startedAt.replace(/[:.]/g, '-')}.json`);
@@ -309,10 +394,20 @@ async function main() {
 	);
 
 	const ranges = [];
-	for (let offset = 0; offset < target.size; offset += opts.step) ranges.push([offset, Math.min(opts.length, target.size - offset)]);
-	for (const tail of [1, 16, 512, 4096, 8192, 15360, 16384, 24576, 32768, 65536])
-		if (tail <= target.size) ranges.push([target.size - tail, tail]);
-	process.stdout.write(`Sweeping ${ranges.length} Range reads of ${opts.length} bytes every ${opts.step} bytes, plus tail ranges...\n`);
+	if (opts.range) {
+		if (opts.range[0] + opts.range[1] > target.size) {
+			process.stdout.write('--range lies beyond the end of the pack.\n');
+			finish(2);
+			return;
+		}
+		for (let i = 0; i < opts.repeat; i++) ranges.push(opts.range);
+		process.stdout.write(`Repeating bytes=${opts.range[0]}-${opts.range[0] + opts.range[1] - 1} ${opts.repeat} times (Accept-Encoding gzip: ${opts.acceptGzip || 'rclone default'})...\n`);
+	} else {
+		for (let offset = 0; offset < target.size; offset += opts.step) ranges.push([offset, Math.min(opts.length, target.size - offset)]);
+		for (const tail of [1, 16, 512, 4096, 8192, 15360, 16384, 24576, 32768, 65536])
+			if (tail <= target.size) ranges.push([target.size - tail, tail]);
+		process.stdout.write(`Sweeping ${ranges.length} Range reads of ${opts.length} bytes every ${opts.step} bytes, plus tail ranges (Accept-Encoding gzip: ${opts.acceptGzip || 'rclone default'})...\n`);
+	}
 	const failures = [];
 	let done = 0;
 	for (const [offset, length] of ranges) {
@@ -322,22 +417,42 @@ async function main() {
 		const ok = (res.status === 206 || res.status === 200) && res.body.length === length && res.contentLength === length && res.body.equals(expected);
 		if (!ok) {
 			const sameStart = res.body.length > 0 && res.body.equals(reference.subarray(offset, offset + res.body.length));
+			const received = classifyBytes(res.body, reference);
 			failures.push({
 				offset,
 				length,
 				status: res.status,
 				contentLength: res.contentLength,
 				contentRange: res.contentRange,
+				contentEncoding: res.contentEncoding,
 				bytes: res.body.length,
 				bytesMatchStoredObject: sameStart,
+				received,
 				error: res.error,
 				ms: res.ms,
 			});
-			process.stdout.write(`  FAIL ${range}: status ${res.status ?? res.error}, Content-Length ${res.contentLength}, received ${res.body.length}, prefix matches stored bytes: ${sameStart}\n`);
+			process.stdout.write(
+				`  FAIL ${range}: status ${res.status ?? '-'}, Content-Length ${res.contentLength ?? '-'}, received ${res.body.length}` +
+					`${res.error ? `, stream ${res.error}` : ''}, prefix matches stored bytes: ${sameStart}, gzip magic: ${received.gzipMagic}` +
+					`${received.foundInStoredObjectAt !== undefined ? `, found in stored object at: ${received.foundInStoredObjectAt}` : ''}\n`
+			);
 		}
 		if (++done % 40 === 0) process.stdout.write(`  ${done}/${ranges.length} done, ${failures.length} failed\n`);
 	}
 	report.sweep = { requests: ranges.length, failures };
+	const traced = new Set();
+	report.traces = [];
+	for (const failure of failures) {
+		const key = `${failure.offset}:${failure.length}`;
+		if (traced.has(key) || traced.size >= 3) continue;
+		traced.add(key);
+		process.stdout.write(`\nDirect read with header trace for bytes=${failure.offset}-${failure.offset + failure.length - 1}:\n`);
+		const trace = await traceRange(target.key, failure.offset, failure.length, reference);
+		report.traces.push({ offset: failure.offset, length: failure.length, ...trace });
+		process.stdout.write(`  request Accept-Encoding: ${trace.requestAcceptEncoding ?? '(none)'}\n`);
+		for (const response of trace.responses) process.stdout.write(`  response: ${JSON.stringify(response)}\n`);
+		process.stdout.write(`  received: ${JSON.stringify(trace.received)}, matches stored bytes: ${trace.matchesStored}, rclone exit ${trace.exit}\n`);
+	}
 	process.stdout.write(
 		`\nSummary: ${ranges.length - failures.length}/${ranges.length} range reads OK, ${failures.length} failed; ` +
 			`full GET through serve restic ${fullOk ? 'OK' : 'NOT OK'}; LIST ${target.size} vs HEAD ${headSize ?? 'n/a'}.\n`
