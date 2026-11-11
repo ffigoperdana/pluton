@@ -48,6 +48,55 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 		held?: boolean;
 	}>;
 	let children: any[];
+	it('keeps the watchdog armed for a final pending write smaller than the high water mark', async () => {
+		responses.push({ stdout: 'last' });
+		const original = global.setTimeout;
+		let expire: (() => void) | undefined;
+		const timer = jest.spyOn(global, 'setTimeout').mockImplementation(((
+			callback: any,
+			ms: number,
+			...args: any[]
+		) => {
+			if (ms === 10 * 60_000) expire = () => callback(...args);
+			return original(callback, ms, ...args);
+		}) as any);
+		let writing!: () => void;
+		let release!: () => void;
+		const began = new Promise<void>(resolve => {
+			writing = resolve;
+		});
+		const destination = new Writable({
+			highWaterMark: 1024,
+			write(_chunk, _encoding, done) {
+				release = done;
+				writing();
+			},
+		});
+		const work = new ManagedSftpRepositorySession().withSession(access, session =>
+			session.archive(id, destination)
+		);
+		const result = work.then(
+			() => 'resolved',
+			error => error
+		);
+		try {
+			await began;
+			await new Promise<void>(resolve => setImmediate(resolve));
+			await new Promise<void>(resolve => setImmediate(resolve));
+			expect(destination.writableNeedDrain).toBe(false);
+			expire!();
+			expect(await result).toMatchObject({
+				code: 'timeout',
+				diagnostic: { timeoutCategory: 'archive-consumer-idle' },
+			});
+			expect(killProcessTree).not.toHaveBeenCalled();
+		} finally {
+			timer.mockRestore();
+			release?.();
+			destination.destroy();
+			await result;
+		}
+	});
 	it('bounds archive startup separately from transfer inactivity and cleans credentials on first-byte timeout', async () => {
 		responses.push({ held: true });
 		const original = global.setTimeout;

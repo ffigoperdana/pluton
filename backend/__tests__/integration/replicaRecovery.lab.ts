@@ -17,6 +17,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Writable } from 'node:stream';
 import { replicaFixture } from '../fixtures/replicaRecovery.fixture';
+import { exerciseReplicaArchiveFaults } from './replicaArchiveFaults.fixture';
 import { ManagedReplicationExecutor } from '../../src/utils/restic/ManagedReplicationExecutor';
 import { storageRcloneOptions, trustEnvironment } from '../../src/utils/storageSecurity';
 import { restic, rclone, port, ready, hashTree } from './managedDownloadRecovery.helpers';
@@ -70,7 +71,17 @@ try {
 	await fs.mkdir(path.join(s3root, 'bucket-01'), { recursive: true });
 	await fs.mkdir(path.join(source, 'nested'));
 	await fs.writeFile(path.join(source, 'file.txt'), 'synthetic replica file\n');
-	await fs.writeFile(path.join(source, 'nested', 'data.bin'), crypto.randomBytes(4 * 1024 ** 2));
+	const dense = path.join(source, 'a-entries');
+	await fs.mkdir(dense);
+	for (let n = 0; n < 3200; n += 32)
+		await Promise.all(
+			Array.from({ length: 32 }, (_, i) =>
+				fs.writeFile(path.join(dense, String(n + i).padStart(4, '0')), '')
+			)
+		);
+	const data = path.join(source, 'nested');
+	for (let n = 0; n < 12; n++)
+		await fs.writeFile(path.join(data, 'file-' + n), crypto.randomBytes(384 * 1024));
 	await fs.symlink('file.txt', path.join(source, 'safe-link'));
 	const workspace = path.join(root, 'job'),
 		sqlPath = path.join(workspace, 'pluton', 'database', 'example.sql'),
@@ -241,7 +252,7 @@ try {
 	await new Promise<void>(resolve => sftp.once('close', () => resolve()));
 	for (const selection of [
 		[],
-		[source],
+		[data],
 		[path.join(source, 'file.txt')],
 		['/pluton/database/example.sql'],
 	]) {
@@ -263,8 +274,12 @@ try {
 			preflight.fingerprint
 		);
 		assert.equal(result.integrity, 'sha256-readback-and-restic-restore');
-		if (!selection.length || selection[0] === source)
+		if (!selection.length) {
+			assert.equal(result.stats.total_files, 3214);
 			assert.deepEqual(await hashTree(path.join(target, source.slice(1))), await hashTree(source));
+		} else if (selection[0] === data) {
+			assert.deepEqual(await hashTree(path.join(target, data.slice(1))), await hashTree(data));
+		}
 		if (!selection.length || selection[0] === '/pluton/database/example.sql')
 			assert.equal(
 				await fs.readFile(path.join(target, 'pluton/database/example.sql'), 'utf8'),
@@ -371,6 +386,21 @@ try {
 		process.env.PLUTON_STORAGE_CA_FILE = old;
 	}
 	console.log('PASS untrusted private CA fails closed');
+	await exerciseReplicaArchiveFaults({
+		root,
+		packRoot: path.join(s3root, f.replica.storagePath, 'data'),
+		port: s3Port,
+		caPath,
+		keyPath,
+		access: {
+			options: { ...storageRcloneOptions(f.storage), force_path_style: 'true' },
+			repositoryPath: f.replica.storagePath,
+			password,
+		},
+		snapshotId: copied.snapshotId,
+		signal,
+	});
+	assert.deepEqual(await hashTree(s3root), before);
 	console.log(
 		'PROFILE',
 		JSON.stringify({
