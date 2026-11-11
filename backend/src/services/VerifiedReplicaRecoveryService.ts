@@ -36,7 +36,8 @@ export type ReplicaRecoveryCode =
 	| 'destination-changed'
 	| 'repository-identity-mismatch'
 	| 'snapshot-identity-mismatch'
-	| 'approval-binding-changed';
+	| 'approval-binding-changed'
+	| 'cleanup-failed';
 export class ReplicaRecoveryError extends AppError {
 	constructor(readonly code: ReplicaRecoveryCode) {
 		super(409, 'Replica recovery refused (' + code + ').');
@@ -368,15 +369,28 @@ export class VerifiedReplicaRecoveryService {
 				return current();
 			}
 		);
-		try {
-			return await consume(recovery, pinned.binding);
-		} finally {
+		const release = async () => {
 			try {
 				await recovery.close();
 			} finally {
 				await this.cacheWorkspace.remove(operationId);
 			}
+		};
+		let result: T;
+		try {
+			result = await consume(recovery, pinned.binding);
+		} catch (error) {
+			// Preserve the readback failure. The coordinator separately verifies
+			// and records cleanup of the job-owned workspace.
+			await release().catch(() => undefined);
+			throw error;
 		}
+		try {
+			await release();
+		} catch {
+			throw new ReplicaRecoveryError('cleanup-failed');
+		}
+		return result;
 	}
 	async preflight(
 		backupId: string,

@@ -62,6 +62,13 @@ function recoveryDiagnostic(
 	}
 	const duration = native?.elapsedMs;
 	const archive = native?.archive;
+	const io = archive?.nativeIo;
+	const counters = (value?: NonNullable<typeof io>['restic']) =>
+		value && {
+			readBytes: value.readBytes,
+			writtenBytes: value.writtenBytes,
+			cpuTicks: value.cpuTicks,
+		};
 	return {
 		phase,
 		operation: native?.operation ?? 'recovery-phase',
@@ -80,6 +87,12 @@ function recoveryDiagnostic(
 			stdoutEnded: archive.stdoutEnded,
 			processAtStop: archive.processAtStop,
 			completion: archive.completion,
+			nativeIo: io && {
+				windowMs: io.windowMs,
+				sampleAgeMs: io.sampleAgeMs,
+				restic: counters(io.restic),
+				rclone: counters(io.rclone),
+			},
 		},
 		timeoutCategory: timeoutCategory ?? (failureCode === 'timeout' ? 'undetermined' : undefined),
 		failureCode,
@@ -405,7 +418,7 @@ export class AssistedRecoveryService {
 		};
 		try {
 			await this.policy(row.planId);
-			await this.replicas.withReplica(
+			const result = await this.replicas.withReplica(
 				row.backupId,
 				row.planId,
 				candidate.replicationId,
@@ -436,28 +449,36 @@ export class AssistedRecoveryService {
 						}
 					);
 					if (signal.aborted) throw new ManagedRepositoryAccessError('cancelled');
-					await this.policy(row.planId);
-					recordPhase();
-					this.store.update(
-						row.id,
-						['running'],
-						{
-							status: 'completed',
-							phase: 'integrity-verified',
-							payload: { ...row.payload, phaseTimingsMs },
-							cleanupPending: false,
-							stats: { files: result.stats.total_files, bytes: result.stats.total_bytes },
-						},
-						'staged-recovery-verified'
-					);
+					stage('staging-cleanup');
+					return result;
 				},
 				candidate.binding!.fingerprint,
 				row.id
+			);
+			await this.policy(row.planId);
+			if (signal.aborted) throw new ManagedRepositoryAccessError('cancelled');
+			recordPhase();
+			this.store.update(
+				row.id,
+				['running'],
+				{
+					status: 'completed',
+					phase: 'integrity-verified',
+					payload: { ...row.payload, phaseTimingsMs },
+					cleanupPending: false,
+					stats: { files: result.stats.total_files, bytes: result.stats.total_bytes },
+				},
+				'staged-recovery-verified'
 			);
 		} catch (error) {
 			const diagnostic = recoveryDiagnostic(error, phase, phaseBegan);
 			recordPhase();
 			const cleanupStarted = performance.now();
+			try {
+				this.store.update(row.id, ['running'], { phase: 'staging-cleanup', payload: row.payload });
+			} catch {
+				// A failed status write cannot prevent cleanup of the owned workspace.
+			}
 			let cleanupPending = false;
 			try {
 				await this.workspace.remove(row.id);
@@ -465,7 +486,9 @@ export class AssistedRecoveryService {
 			} catch {
 				cleanupPending = true;
 			}
-			phaseTimingsMs['staging-cleanup'] = elapsedMs(performance.now() - cleanupStarted);
+			phaseTimingsMs['staging-cleanup'] = elapsedMs(
+				(phaseTimingsMs['staging-cleanup'] ?? 0) + performance.now() - cleanupStarted
+			);
 			const current = this.store.get(row.id);
 			if (current?.status === 'running')
 				this.store.update(

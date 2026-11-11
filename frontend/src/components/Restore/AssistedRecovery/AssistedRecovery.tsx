@@ -9,6 +9,7 @@ import {
    recoveryCanApprove,
    recoveryPolling,
    recoveryStatus,
+   recoveryWorkDetail,
    recoveryTone,
    recoveryLabel,
    recoveryInProgress,
@@ -184,6 +185,7 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
       manual || !job || (JSON.stringify([...job.includes].sort()) === JSON.stringify([...initialIncludes].sort()) && job.excludes.length === 0);
    const busy = start.isPending || approve.isPending || cancel.isPending || retryPrimary.isPending;
    const active = job && recoveryInProgress(job);
+   const workDetail = job && recoveryWorkDetail(job);
    const error = jobs.error || start.error || approve.error || cancel.error || retryPrimary.error;
    return (
       <section aria-label="Assisted recovery" className={classes.recovery}>
@@ -222,8 +224,7 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
                         {active && <strong>{recoveryLabel(job.phase)}</strong>}
                         <p>{recoveryStatus(job)}</p>
                         {job.status === 'checking' && <p>Closing this window does not cancel server work.</p>}
-                        {active && job.activity === 'awaiting-archive-output' && <p>Waiting for the repository read to produce archive data.</p>}
-                        {active && job.activity === 'validating-archive-output' && <p>Archive data received. Verifying snapshot entries.</p>}
+                        {workDetail && <p>{workDetail}</p>}
                      </div>
                      {active && (
                         <ElapsedTime

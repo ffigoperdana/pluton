@@ -11,6 +11,7 @@ import { processManager } from '../../src/managers/ProcessManager';
 import { ManagedS3RecoverySession } from '../../src/utils/restic/ManagedS3RecoverySession';
 import {
 	ManagedRepositoryAccessError,
+	type ArchiveActivityObserver,
 	type ManagedSftpAccess,
 } from '../../src/utils/restic/ManagedSftpRepositorySession';
 
@@ -138,7 +139,11 @@ export async function exerciseReplicaArchiveFaults(input: {
 	const reads = new Set<Promise<void>>();
 	const read = (
 		sink: Writable,
-		options: { signal?: AbortSignal; first?: () => void; wrongPassword?: boolean } = {}
+		options: {
+			signal?: AbortSignal;
+			onActivity?: ArchiveActivityObserver;
+			wrongPassword?: boolean;
+		} = {}
 	) => {
 		const signal = AbortSignal.any([
 			input.signal,
@@ -151,7 +156,7 @@ export async function exerciseReplicaArchiveFaults(input: {
 		const work = provider
 			.withSession(
 				access,
-				session => session.archive(input.snapshotId, sink, options.first),
+				session => session.archive(input.snapshotId, sink, options.onActivity),
 				signal,
 				{ temporaryRoot, restoreTimeoutMs: 60 * 60_000 }
 			)
@@ -178,7 +183,11 @@ export async function exerciseReplicaArchiveFaults(input: {
 		ms?: number,
 		...args: unknown[]
 	) =>
-		nativeTimeout(callback, ms === 10 * 60_000 ? TEST_IDLE_MS : ms, ...args)) as typeof setTimeout;
+		nativeTimeout(
+			callback,
+			ms === 10 * 60_000 ? TEST_IDLE_MS : ms === 30_000 ? 250 : ms === 5_000 ? 200 : ms,
+			...args
+		)) as typeof setTimeout;
 	const track = processManager.trackProcess;
 	let child: ChildProcess | undefined;
 	processManager.trackProcess = function (id, proc) {
@@ -204,7 +213,7 @@ export async function exerciseReplicaArchiveFaults(input: {
 		);
 
 		mode = 'stall';
-		for (const cancel of [false, true]) {
+		for (const outcome of ['timeout', 'cancel', 'exit'] as const) {
 			let announceFirst!: () => void;
 			const firstOutput = new Promise<void>(resolve => {
 				announceFirst = resolve;
@@ -214,7 +223,14 @@ export async function exerciseReplicaArchiveFaults(input: {
 			});
 			const controller = new AbortController();
 			child = undefined;
-			const work = read(sink(), { signal: controller.signal, first: announceFirst }).then(
+			const activities: string[] = [];
+			const work = read(sink(), {
+				signal: controller.signal,
+				onActivity: activity => {
+					activities.push(activity);
+					announceFirst();
+				},
+			}).then(
 				() => undefined,
 				error => error
 			);
@@ -227,23 +243,45 @@ export async function exerciseReplicaArchiveFaults(input: {
 			assert.ok(pid, 'fixture must observe the Restic child');
 			const rcloneChildren = await descendants(pid);
 			assert.ok(rcloneChildren.length > 0, 'fixture must observe the Rclone descendant');
-			if (cancel) controller.abort();
+			if (outcome === 'cancel') controller.abort();
+			if (outcome === 'exit') assert.ok((child as ChildProcess | undefined)?.kill('SIGKILL'));
 			const failure: unknown = await work;
 			assert.ok(failure instanceof ManagedRepositoryAccessError);
-			assert.equal(failure.code, cancel ? 'cancelled' : 'timeout');
-			assert.equal(failure.diagnostic?.timeoutCategory, cancel ? undefined : 'archive-output-idle');
+			assert.equal(
+				failure.code,
+				outcome === 'cancel' ? 'cancelled' : outcome === 'exit' ? 'archive-failed' : 'timeout'
+			);
+			assert.equal(
+				failure.diagnostic?.timeoutCategory,
+				outcome === 'timeout' ? 'archive-output-idle' : undefined
+			);
 			const observation = failure.diagnostic?.archive;
-			assert.ok(observation && observation.bytesReceived > 0);
+			assert.ok(
+				observation &&
+					observation.bytesReceived >= 2 * 1024 ** 2 &&
+					observation.bytesReceived <= 2.5 * 1024 ** 2
+			);
 			assert.equal(observation.consumerPending, false);
-			assert.equal(observation.processAtStop, 'running');
+			assert.equal(observation.processAtStop, outcome === 'exit' ? 'exited' : 'running');
 			assert.equal(observation.completion, 'signalled');
-			if (!cancel) assert.ok(observation.lastOutputAgeMs! >= TEST_IDLE_MS - 30);
+			if (outcome === 'timeout') {
+				assert.ok(observation.lastOutputAgeMs! >= TEST_IDLE_MS - 30);
+				assert.deepEqual(activities, ['validating-archive-output', 'archive-output-paused']);
+				assert.ok(observation.nativeIo?.restic && observation.nativeIo.rclone);
+				assert.ok(
+					observation.nativeIo.windowMs > 0 && observation.nativeIo.sampleAgeMs < TEST_IDLE_MS
+				);
+				assert.equal(observation.nativeIo.rclone.readBytes, 0);
+				assert.equal(observation.nativeIo.rclone.writtenBytes, 0);
+			}
 			await assertReaped([pid, ...rcloneChildren]);
 			await assertScratch();
 			console.log(
-				cancel
+				outcome === 'cancel'
 					? 'PASS cancellation reaps Restic and Rclone and removes only the owned session directory'
-					: 'PASS real S3 data-pack response stall after first TAR output is classified as output idle',
+					: outcome === 'exit'
+						? 'PASS unexpected Restic exit after partial TAR closes the read and reaps Rclone'
+						: 'PASS real S3 data-pack response stall after roughly two MiB of TAR output',
 				observation
 			);
 		}

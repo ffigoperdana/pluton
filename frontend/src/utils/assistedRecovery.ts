@@ -14,7 +14,7 @@ export type AssistedRecoveryJob = {
    phase: string;
    createdAt: number;
    activeSince?: number;
-   activity?: 'awaiting-archive-output' | 'validating-archive-output';
+   activity?: 'awaiting-archive-output' | 'validating-archive-output' | 'archive-output-paused' | 'archive-consumer-pending' | 'archive-exit-pending';
    diagnostic?: AssistedRecoveryDiagnostic;
    expiresAt: number;
    expired: boolean;
@@ -80,11 +80,31 @@ export function recoveryStatus(job: AssistedRecoveryJob) {
       return 'Staged recovery passed file integrity verification. No database was imported and no live target was overwritten.';
    if (job.status === 'uncertain')
       return 'Recovery was interrupted. It will not restart automatically. Review staging and cancel before creating a fresh request.';
+   if (job.status === 'failed' && job.diagnostic?.timeoutCategory === 'archive-output-idle')
+      return 'Archive stream stalled. Recovery stopped after the inactivity limit.';
    return job.status === 'primary-ready'
       ? 'Primary SFTP is available. Continue the normal restore flow.'
       : job.status === 'cancelled'
         ? 'Recovery cancelled.'
         : 'Recovery stopped safely. Review the diagnostic before retrying.';
+}
+
+export function recoveryWorkDetail(job: AssistedRecoveryJob) {
+   if (job.status !== 'running') return undefined;
+   if (job.phase === 'filesystem-validation') return 'Verifying staged files against the archive.';
+   if (job.phase === 'staging-cleanup') return 'Cleaning up temporary recovery resources.';
+   switch (job.activity) {
+      case 'awaiting-archive-output':
+         return 'Waiting for the repository read to produce archive data.';
+      case 'validating-archive-output':
+         return 'Reading archive data and verifying snapshot entries.';
+      case 'archive-output-paused':
+         return 'No recent archive output. Pluton is still waiting for the repository read.';
+      case 'archive-consumer-pending':
+         return 'Waiting for local archive validation to finish processing data.';
+      case 'archive-exit-pending':
+         return 'Archive output ended. Waiting for the native process to finish.';
+   }
 }
 
 export function recoveryFailureAdvice(job: AssistedRecoveryJob) {

@@ -183,6 +183,40 @@ describe('durable assisted failover authorization and lifecycle', () => {
 			'verified'
 		);
 	});
+	it('keeps a staged result unverified until the replica session cleanup returns', async () => {
+		const job = await pending();
+		const implementation = replicas.withReplica.getMockImplementation()!;
+		let entered!: () => void;
+		let finish!: () => void;
+		const cleaning = new Promise<void>(resolve => {
+			entered = resolve;
+		});
+		const release = new Promise<void>(resolve => {
+			finish = resolve;
+		});
+		replicas.withReplica.mockImplementationOnce(async (...args) => {
+			await implementation(...args);
+			entered();
+			await release;
+			throw new ManagedRepositoryAccessError('cleanup-failed');
+		});
+		await service.approve('owner-01', job.id, 'replica-01');
+		await cleaning;
+		try {
+			expect(service.get('owner-01', job.id)).toMatchObject({
+				status: 'running',
+				phase: 'staging-cleanup',
+			});
+		} finally {
+			finish();
+			await service.settled(job.id);
+		}
+		expect(service.get('owner-01', job.id)).toMatchObject({
+			status: 'failed',
+			failureCode: 'cleanup-failed',
+			cleanupPending: false,
+		});
+	});
 	it('denies owner enumeration, selection, cancellation and approval across identities', async () => {
 		const job = await pending();
 		expect(service.list('owner-02', 'plan-01', 'backup-01')).toEqual([]);
@@ -392,6 +426,16 @@ describe('durable assisted failover authorization and lifecycle', () => {
 										stdoutEnded: false,
 										processAtStop: 'running',
 										completion: 'signalled',
+										nativeIo: {
+											windowMs: 5000,
+											sampleAgeMs: 23,
+											rclone: {
+												readBytes: 0,
+												writtenBytes: 0,
+												cpuTicks: 1,
+												raw: 'synthetic-process-detail',
+											},
+										},
 										raw: 'synthetic-nested-secret',
 									},
 									raw: 'synthetic-private',
@@ -436,6 +480,11 @@ describe('durable assisted failover authorization and lifecycle', () => {
 						lastOutputAgeMs: 600000,
 						processAtStop: 'running',
 						completion: 'signalled',
+						nativeIo: {
+							windowMs: 5000,
+							sampleAgeMs: 23,
+							rclone: { readBytes: 0, writtenBytes: 0, cpuTicks: 1 },
+						},
 					},
 				},
 				phaseTimingsMs: {
@@ -447,7 +496,7 @@ describe('durable assisted failover authorization and lifecycle', () => {
 			});
 			expect(restored.activity).toBeUndefined();
 			expect(JSON.stringify(restored)).not.toMatch(
-				/synthetic-private|synthetic-nested-secret|synthetic cleanup secret/
+				/synthetic-private|synthetic-nested-secret|synthetic-process-detail|synthetic cleanup secret/
 			);
 			if (cleanupFails) {
 				const cancelled = await service.cancel('owner-01', job.id);
