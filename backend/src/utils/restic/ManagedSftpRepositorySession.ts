@@ -13,6 +13,11 @@ import { getBinaryPath } from '../binaryPathResolver';
 import { killProcessTree } from '../processTree';
 import { processManager } from '../../managers/ProcessManager';
 import { planLogger } from '../logger';
+import {
+	archiveProcessWindow,
+	sampleArchiveProcesses,
+	type ArchiveProcessWindow,
+} from './archiveProcessObservation';
 
 export type RecoveryFailureCode =
 	| 'network-unavailable'
@@ -54,7 +59,13 @@ export type RepositoryTimeoutCategory =
 	| 'archive-exit-idle'
 	| 'caller-deadline';
 
-export type ArchiveActivity = 'awaiting-archive-output' | 'validating-archive-output';
+export type ArchiveActivity =
+	| 'awaiting-archive-output'
+	| 'validating-archive-output'
+	| 'archive-output-paused'
+	| 'archive-consumer-pending'
+	| 'archive-exit-pending';
+export type ArchiveActivityObserver = (activity: ArchiveActivity) => void;
 
 export type ArchiveReadbackDiagnostic = {
 	firstByteMs?: number;
@@ -72,6 +83,7 @@ export type ArchiveReadbackDiagnostic = {
 		| 'signalled'
 		| 'spawn-error'
 		| 'unknown';
+	nativeIo?: ArchiveProcessWindow;
 };
 
 export type RepositoryOperationDiagnostic = {
@@ -143,7 +155,7 @@ export interface ManagedRepositorySession {
 	): Promise<void>;
 	restore(id: string, selectedFiles: string[], stagingPath: string): Promise<ManagedRestoreSummary>;
 	/** Full snapshot TAR only; no client-controlled path, format or command. */
-	archive(id: string, destination: Writable, onFirstOutput?: () => void): Promise<void>;
+	archive(id: string, destination: Writable, onActivity?: ArchiveActivityObserver): Promise<void>;
 	/** Exact validated snapshot item only; files are raw, directories are TAR. */
 	dump?(id: string, itemPath: string, destination: Writable): Promise<void>;
 }
@@ -404,7 +416,7 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 						signal
 					);
 				},
-				archive: async (id, destination, onFirstOutput) => {
+				archive: async (id, destination, onActivity) => {
 					checkId(id);
 					await this.streamArchive(
 						restic,
@@ -419,7 +431,7 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 						resticEnvironment,
 						destination,
 						signal,
-						onFirstOutput
+						onActivity
 					);
 				},
 				identity: async () =>
@@ -612,7 +624,7 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		env: NodeJS.ProcessEnv,
 		destination: Writable,
 		signal?: AbortSignal,
-		onFirstOutput?: () => void
+		onActivity?: ArchiveActivityObserver
 	): Promise<void> {
 		const began = performance.now();
 		const duration = (ms: number) => Math.min(24 * 60 * 60_000, Math.max(0, Math.round(ms)));
@@ -655,6 +667,7 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		let bytesReceived = 0;
 		let completion: ArchiveReadbackDiagnostic['completion'] = 'unknown';
 		let stopped: ArchiveReadbackDiagnostic | undefined;
+		let nativeIo: ReturnType<typeof archiveProcessWindow>;
 		const transfer = new AbortController();
 		let timer: ReturnType<typeof setTimeout>;
 		// pipeline(end:false) only waits for stdout EOF, even with an outstanding
@@ -687,6 +700,12 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 							? 'exited'
 							: 'running',
 				completion,
+				nativeIo: nativeIo && {
+					windowMs: nativeIo.windowMs,
+					sampleAgeMs: duration(now - nativeIo.at),
+					restic: nativeIo.restic,
+					rclone: nativeIo.rclone,
+				},
 			};
 		};
 		const stop = (reason: RecoveryFailureCode, category?: RepositoryTimeoutCategory) => {
@@ -752,18 +771,59 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		});
 		child.stderr?.on('data', () => undefined); // never retain provider diagnostics
 		signal?.addEventListener('abort', abort, { once: true });
+		let reported: ArchiveActivity | undefined;
+		const report = (value: ArchiveActivity) => {
+			if (!onActivity || reported === value) return;
+			reported = value;
+			try {
+				onActivity(value);
+			} catch {
+				/* Progress reporting cannot interrupt archive verification. */
+			}
+		};
+		let quietTimer: ReturnType<typeof setTimeout> | undefined;
+		let previous: Awaited<ReturnType<typeof sampleArchiveProcesses>>;
+		let sampling = false;
+		let closedArchive = false;
+		const checkQuiet = () => {
+			if (failure || closedArchive) return;
+			const current = observe();
+			if (current.consumerPending || current.consumerBackpressured)
+				report('archive-consumer-pending');
+			else if (pipelineFinished || current.stdoutEnded) report('archive-exit-pending');
+			else {
+				report('archive-output-paused');
+				if (!sampling && child.pid !== undefined) {
+					const outputBeforeSample = lastOutput;
+					sampling = true;
+					void sampleArchiveProcesses(child.pid)
+						.then(sample => {
+							if (failure || closedArchive || hasClosed || outputBeforeSample !== lastOutput)
+								return;
+							nativeIo = sample && previous ? archiveProcessWindow(previous, sample) : undefined;
+							previous = sample;
+						})
+						.catch(() => {})
+						.finally(() => {
+							sampling = false;
+						});
+				}
+			}
+			quietTimer = setTimeout(checkQuiet, 5_000);
+			quietTimer.unref();
+		};
 		const dataActivity = (chunk: Buffer) => {
-			const first = firstOutput === undefined;
 			lastOutput = performance.now();
 			firstOutput ??= lastOutput;
 			bytesReceived = Math.min(Number.MAX_SAFE_INTEGER, bytesReceived + chunk.length);
 			activity();
-			if (first) {
-				try {
-					onFirstOutput?.();
-				} catch {
-					/* Progress reporting cannot interrupt archive verification. */
-				}
+			if (onActivity && !failure) {
+				report('validating-archive-output');
+				previous = undefined;
+				nativeIo = undefined;
+				clearTimeout(quietTimer);
+				quietTimer = setTimeout(checkQuiet, 30_000);
+				quietTimer.unref();
 			}
 		};
 		child.stdout?.on('data', dataActivity);
@@ -781,7 +841,9 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			stop(signal?.aborted ? 'cancelled' : 'stream-interrupted', callerDeadline(signal));
 			await closed; // config cleanup must wait until Restic/Rclone have stopped
 		} finally {
+			closedArchive = true;
 			clearTimeout(timer!);
+			clearTimeout(quietTimer);
 			signal?.removeEventListener('abort', abort);
 			child.stdout?.removeListener('data', dataActivity);
 			destination.removeListener('drain', activity);

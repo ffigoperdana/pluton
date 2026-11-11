@@ -508,8 +508,8 @@ export class RemoteRepositoryRecoveryService {
 						await this.verifySnapshot(context, session);
 						await this.assertCurrentContext(context);
 						stage('integrity-preparation', 'awaiting-archive-output');
-						await prepareManagedExport(index, session, proof, signal, () =>
-							stage('integrity-preparation', 'validating-archive-output')
+						await prepareManagedExport(index, session, proof, signal, activity =>
+							stage('integrity-preparation', activity)
 						);
 						await empty();
 						checkRecoveryCancellation(signal);

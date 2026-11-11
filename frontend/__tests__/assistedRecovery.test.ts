@@ -195,6 +195,17 @@ test('rediscovered active progress shows elapsed time and stops spinning on a di
       await ui.waitFor(() => /Waiting for the repository read to produce archive data/.test(content()), 'waiting for archive output');
       assert.ok(spinner());
       assert.equal(ui.dom.window.document.querySelector('progress'), null);
+      for (const [patch, message] of [
+         [{ phase: 'integrity-preparation', activity: 'validating-archive-output' }, /Reading archive data/],
+         [{ phase: 'integrity-preparation', activity: 'archive-output-paused' }, /No recent archive output/],
+         [{ phase: 'filesystem-validation' }, /Verifying staged files/],
+         [{ phase: 'staging-cleanup' }, /Cleaning up temporary recovery resources/],
+      ] as const) {
+         s.set([row({ status: 'running', ...patch } as Partial<AssistedRecoveryJob>)]);
+         await ui.click('Refresh recovery status');
+         await ui.waitFor(() => message.test(content()), String(message));
+         assert.ok(spinner());
+      }
       s.set([
          {
             ...row({ status: 'failed', phase: 'recovery-stopped', failureCode: 'timeout' }),
@@ -210,6 +221,7 @@ test('rediscovered active progress shows elapsed time and stops spinning on a di
       await ui.click('Refresh recovery status');
       await ui.waitFor(() => /archive-output-idle/.test(content()), 'safe failure diagnostic');
       assert.equal(spinner(), null);
+      assert.match(content(), /Archive stream stalled/);
       assert.match(content(), /Review.*storage/i);
       assert.ok(s.calls.every((call) => call.method === 'GET'));
    } finally {

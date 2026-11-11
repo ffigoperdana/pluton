@@ -5,7 +5,10 @@ import { finished, pipeline } from 'stream/promises';
 import tar from 'tar-stream';
 import { exportStreamTiming, type ExportPerformance } from '../managedExport/ExportPerformance';
 import { managedSnapshotPath } from '../managedSnapshotPath';
-import type { ManagedRepositorySession } from './ManagedSftpRepositorySession';
+import type {
+	ArchiveActivityObserver,
+	ManagedRepositorySession,
+} from './ManagedSftpRepositorySession';
 import type { ManagedSnapshotIndex } from './ManagedSnapshotIndex';
 import type { ManagedExportProof } from './ManagedExportProof';
 import {
@@ -427,7 +430,7 @@ async function runManagedExport(
 	signal: AbortSignal,
 	compare = true,
 	observe?: (value: Partial<ExportPerformance>) => void,
-	onFirstOutput?: () => void
+	onActivity?: ArchiveActivityObserver
 ): Promise<ManagedExportSummary> {
 	index.assertExportEntries(proof.mode);
 	if (compare && !proof.summary) throw new ManagedExportError('export-proof-missing');
@@ -469,7 +472,7 @@ async function runManagedExport(
 	const output = pipeline(pack, meter, destination, { end: false, signal });
 	void output.catch(error => input.destroy(error));
 	try {
-		if (onFirstOutput) await session.archive(proof.binding.snapshotId, input, onFirstOutput);
+		if (onActivity) await session.archive(proof.binding.snapshotId, input, onActivity);
 		else await session.archive(proof.binding.snapshotId, input);
 		input.end();
 		await finished(input);
@@ -507,7 +510,7 @@ export async function prepareManagedExport(
 	session: ManagedRepositorySession,
 	proof: ManagedExportProof,
 	signal: AbortSignal,
-	onFirstOutput?: () => void
+	onActivity?: ArchiveActivityObserver
 ) {
 	if (proof.summary) return proof.summary;
 	return runManagedExport(
@@ -522,7 +525,7 @@ export async function prepareManagedExport(
 		signal,
 		false,
 		undefined,
-		onFirstOutput
+		onActivity
 	);
 }
 

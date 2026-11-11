@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import tar from 'tar-stream';
 import { pipeline } from 'stream/promises';
 import { replicaFixture } from '../fixtures/replicaRecovery.fixture';
+import { RecoveryWorkspace } from '../../src/utils/recoveryWorkspace';
 import { ManagedRepositoryAccessError } from '../../src/utils/restic/ManagedSftpRepositorySession';
 
 jest.mock('../../src/utils/logger', () => ({
@@ -94,6 +95,31 @@ describe('verified replica recovery eligibility and isolated integrity', () => {
 	afterEach(async () => {
 		await fs.rm(root, { recursive: true, force: true });
 	});
+	it.each([false, true])(
+		'keeps cleanup separate from the readback result (readback failed: %s)',
+		async readFailed => {
+			const cleanup = jest
+				.spyOn(RecoveryWorkspace.prototype, 'remove')
+				.mockRejectedValueOnce(new Error('synthetic cleanup details'));
+			const readFailure = new ManagedRepositoryAccessError('timeout');
+			const result = f.service.withReplica(
+				'backup-01',
+				'plan-01',
+				'replica-01',
+				new AbortController().signal,
+				async () => {
+					if (readFailed) throw readFailure;
+					return 'verified';
+				}
+			);
+			try {
+				if (readFailed) await expect(result).rejects.toBe(readFailure);
+				else await expect(result).rejects.toMatchObject({ code: 'cleanup-failed' });
+			} finally {
+				cleanup.mockRestore();
+			}
+		}
+	);
 	it('validates destination config, copied original ID, tree, owners and SQL metadata without primary access or writes', async () => {
 		const proof = await f.service.preflight(
 			'backup-01',

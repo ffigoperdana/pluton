@@ -73,7 +73,7 @@ try {
 	await fs.writeFile(path.join(source, 'file.txt'), 'synthetic replica file\n');
 	const dense = path.join(source, 'a-entries');
 	await fs.mkdir(dense);
-	for (let n = 0; n < 3200; n += 32)
+	for (let n = 0; n < 4352; n += 32)
 		await Promise.all(
 			Array.from({ length: 32 }, (_, i) =>
 				fs.writeFile(path.join(dense, String(n + i).padStart(4, '0')), '')
@@ -275,7 +275,7 @@ try {
 		);
 		assert.equal(result.integrity, 'sha256-readback-and-restic-restore');
 		if (!selection.length) {
-			assert.equal(result.stats.total_files, 3214);
+			assert.equal(result.stats.total_files, 4366);
 			assert.deepEqual(await hashTree(path.join(target, source.slice(1))), await hashTree(source));
 		} else if (selection[0] === data) {
 			assert.deepEqual(await hashTree(path.join(target, data.slice(1))), await hashTree(data));
