@@ -45,6 +45,16 @@ describe('Managed replication fixed Restic executor', () => {
 		expect(JSON.stringify(calls.map(([, args]) => args))).not.toContain('synthetic-secret');
 		expect(calls.some(([, args]: any) => args.includes('unlock') || args.includes('forget') || args.includes('prune') || args.includes('purge'))).toBe(false);
 	});
+	it('never lets copy or Range-based artifact verification request gzip from the replica', async () => {
+		const f = fixture();
+		(f.destination.options as Record<string, string>).use_accept_encoding_gzip = 'true';
+		f.source.artifacts = [{ path: '/pluton/database/app-01.sql', bytes: 9, sha256: crypto.createHash('sha256').update('SELECT 1;').digest('hex') }];
+		await expect(f.run()).resolves.toMatchObject({ snapshotId: 'e'.repeat(64) });
+		const destinationCalls = f.command.mock.calls.filter(([binary, args]: any) => binary === 'restic' && args.includes('--repo') && args[args.indexOf('--repo') + 1].startsWith('rclone:destination:'));
+		expect(destinationCalls.some(([, args]: any) => args.includes('copy'))).toBe(true);
+		expect(destinationCalls.some(([, args]: any) => args.includes('dump'))).toBe(true);
+		for (const [, , env] of destinationCalls as any) expect(env.RCLONE_CONFIG_DESTINATION_USE_ACCEPT_ENCODING_GZIP).toBe('false');
+	});
 	it('durably declares initialization and identity before copying to an empty prefix', async () => {
 		const f = fixture(); f.absent(); await f.run({ initialization: 'uninitialized', repositoryConfigId: null });
 		expect(f.events).toEqual(['durable-init', 'init', 'durable-bind', 'copy']);

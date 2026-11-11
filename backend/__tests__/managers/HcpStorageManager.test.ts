@@ -33,11 +33,15 @@ describe('HCP existing namespace configuration', () => {
 		expect(configuration[0]).toEqual(
 			expect.arrayContaining(['no_check_bucket', 'true', 'force_path_style', 'false'])
 		);
+		const gzip = configuration[0].indexOf('use_accept_encoding_gzip');
+		expect(gzip).toBeGreaterThan(-1);
+		expect(configuration[0][gzip + 1]).toBe('false');
 		expect(configuration[0]).not.toContain('--obscure');
 		expect(verification[0]).toEqual(['lsd', 'mirror_01:fixture-bucket']);
 		expect(verification[1]).toMatchObject({
 			RCLONE_CONFIG_MIRROR_01_SECRET_ACCESS_KEY: credentials.secret_access_key,
 			RCLONE_CONFIG_MIRROR_01_SESSION_TOKEN: credentials.session_token,
+			RCLONE_CONFIG_MIRROR_01_USE_ACCEPT_ENCODING_GZIP: 'false',
 		});
 		expect(command.mock.calls.flatMap(call => call[0])).not.toContain('mkdir');
 	});

@@ -23,10 +23,9 @@ were healthy during the stall, and the watchdog, timeouts and consumer are not t
 Not determined: why HCP compresses this range and not the other 169 ranges, the full object or the
 other tail ranges. Any Range read could be affected, so the fix must not depend on particular offsets.
 
-Fix direction (separate change, not part of this branch): stop requesting gzip on every Rclone S3
-session Pluton builds for managed S3/HCP storage (`use_accept_encoding_gzip = false` in
-`storageRcloneOptions`), covering replica recovery, replication artifact verification and HCP storage
-operations, with regression tests including a gzip fault in the recovery lab.
+Fix: Pluton no longer requests gzip on any Rclone S3 session it builds for managed S3/HCP storage
+(`use_accept_encoding_gzip = false`), covering replica recovery, replication artifact verification
+and HCP storage operations. Details, tests and UAT: [HCP_RANGE_GZIP_FIX.md](HCP_RANGE_GZIP_FIX.md).
 
 A read-only diagnostic for the Assisted Replica Recovery stall described in
 [ASSISTED_RECOVERY_TIMEOUT_PROGRESS.md](ASSISTED_RECOVERY_TIMEOUT_PROGRESS.md). It reads every
