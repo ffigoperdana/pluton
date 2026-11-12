@@ -114,7 +114,7 @@ the host npm installation, or another production runtime.
 For NEW Agents, use the independently configured standalone distribution described
 in [AGENT_ENROLLMENT_DISTRIBUTION.md](AGENT_ENROLLMENT_DISTRIBUTION.md). The server
 requires a credential-free HTTPS Git repository URL, reviewed full immutable SHA,
-and expected Agent 0.7.0. It never defaults to this Server monorepo or moving main.
+and expected Agent version (0.7.0 or 0.7.1, matching that commit). It never defaults to this Server monorepo or moving main.
 
 1. In **Sources → Add Remote Machine**, review the name and authorization intent,
    create the one-time token and enter narrow planned initial source roots.

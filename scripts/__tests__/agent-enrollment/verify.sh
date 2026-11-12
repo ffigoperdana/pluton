@@ -25,7 +25,7 @@ python3 - <<'PY'
 import json
 from pathlib import Path
 p = Path('/tmp/enrollment-private/wrong-source/agent/package.json')
-v = json.loads(p.read_text()); v['version'] = '0.7.1'; p.write_text(json.dumps(v))
+v = json.loads(p.read_text()); v['version'] = '0.0.0-synthetic-mismatch'; p.write_text(json.dumps(v))
 PY
 git -C /tmp/enrollment-private/wrong-source -c user.name='Synthetic Test' -c user.email='test@example.invalid' commit -qam 'Synthetic incompatible package'
 git -C /tmp/enrollment-private/wrong-source push -q origin HEAD:refs/heads/synthetic-incompatible
@@ -50,7 +50,9 @@ python3 terminal.py
 [[ ! -e pluton-agent/backend && ! -e pluton-agent/frontend ]]
 test "$(git -C pluton-agent rev-parse HEAD)" = "$(cat expected-commit)"
 node=/opt/pluton-agent/runtime/bin/node
-[[ "$($node -v)" == v22.18.0 ]]
+expected_node=$(sed -n "s/^readonly NODE_VERSION='\(v[0-9.]*\)'$/\1/p" pluton-agent/installers/install-agent.sh)
+[[ -n "$expected_node" && "$($node -v)" == "$expected_node" ]]
+grep -F "AGENT_VERSION = \"$(cat expected-version)\"" /opt/pluton-agent/app/dist/inventory.js >/dev/null
 /opt/pluton-agent/bin/restic version | grep -F '0.19.1'
 /opt/pluton-agent/bin/rclone version | head -n 1 | grep -F '1.75.1'
 grep -Fx 'distribution=pluton-agent-standalone-v1' /opt/pluton-agent/.verified-install >/dev/null
@@ -75,7 +77,7 @@ for token in ['synthetic-expired-token', p.joinpath('token').read_text().strip()
         assert error.code == 401
 proof = json.loads(p.joinpath('proof.json').read_text())
 assert proof == {'enrollments':1, 'heartbeats':1, 'polls':0, 'expired':1, 'replayed':1}, proof
-print('PASS TLS refusal, token replay/expiry refusal, signed v0.7.0 capability/heartbeat, multiple roots with spaces, strict host boundary')
+print(f"PASS TLS refusal, token replay/expiry refusal, signed v{Path('expected-version').read_text().strip()} capability/heartbeat, multiple roots with spaces, strict host boundary")
 PY
 cd pluton-agent
 export PATH=/opt/pluton-agent/runtime/bin:$PATH

@@ -123,7 +123,7 @@ separate from the monorepo Agent. Source Access Validate retains its root-valida
 meaning; no remote recursive scan command is added.
 
 New standalone Agent enrollment distribution (configured HTTPS Git + immutable
-SHA + Agent 0.7.0) is described in
+SHA + Agent 0.7.0 or 0.7.1) is described in
 [AGENT_ENROLLMENT_DISTRIBUTION.md](AGENT_ENROLLMENT_DISTRIBUTION.md). It leaves
 legacy monorepo Agent installers/upgraders and existing identities unchanged.
 Focused utility/UI tests are `frontend/__tests__/agentEnrollment.test.ts` and

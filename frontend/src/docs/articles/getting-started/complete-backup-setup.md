@@ -89,7 +89,7 @@ port protokol Agent. Database client dan izin DB tidak dipasang oleh installer.
 
 Di **Sources → + Add Remote Machine**, buat token sekali pakai melalui sesi
 administrator privat. Pilih roots yang sempit, tinjau mode otorisasi, lalu ikuti
-**Copy installation commands** dari konfigurasi distribusi standalone yang telah direview. Operator server harus menetapkan repository HTTPS, full commit SHA dan versi 0.7.0 terlebih dahulu; lihat [enrollment](/docs/remote-agent/enrollment). Blok lengkap memverifikasi clone/pin/versi sebelum sudo. Bagian installer non-secret di checkout standalone tersebut:
+**Copy installation commands** dari konfigurasi distribusi standalone yang telah direview. Operator server harus menetapkan repository HTTPS, full commit SHA dan versi 0.7.0 atau 0.7.1 yang cocok dengan commit itu terlebih dahulu; lihat [enrollment](/docs/remote-agent/enrollment). Blok lengkap memverifikasi clone/pin/versi sebelum sudo. Bagian installer non-secret di checkout standalone tersebut:
 
 ```sh
 sudo bash install-agent.sh \

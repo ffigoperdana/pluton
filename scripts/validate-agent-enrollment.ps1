@@ -1,6 +1,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$AgentCheckout,
-    [Parameter(Mandatory = $true)][ValidatePattern('^[a-f0-9]{40}$')][string]$AgentCommit
+    [Parameter(Mandatory = $true)][ValidatePattern('^[a-f0-9]{40}$')][string]$AgentCommit,
+    # Must equal agent/package.json at that commit; the generated command refuses a mismatch before sudo.
+    [Parameter(Mandatory = $true)][ValidateSet('0.7.0', '0.7.1')][string]$AgentVersion
 )
 $ErrorActionPreference = 'Stop'
 $project = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -17,7 +19,7 @@ Copy-Item -Path (Join-Path $PSScriptRoot '__tests__/agent-enrollment/*') -Destin
 # Read-only Git export: no mutation or dependency installation in the Agent repository.
 & git -C $checkout bundle create (Join-Path $context 'agent.bundle') HEAD
 if ($LASTEXITCODE -ne 0) { throw 'Standalone Git bundle export failed.' }
-& node --experimental-strip-types (Join-Path $PSScriptRoot '__tests__/agent-enrollment/generate.mjs') $AgentCommit $context
+& node --experimental-strip-types (Join-Path $PSScriptRoot '__tests__/agent-enrollment/generate.mjs') $AgentCommit $context $AgentVersion
 if ($LASTEXITCODE -ne 0) { throw 'Command generation failed.' }
 try {
     & docker build --progress=plain --tag $image $context
