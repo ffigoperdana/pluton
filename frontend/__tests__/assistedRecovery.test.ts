@@ -2,7 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { recoveryRequestId, recoveryCanApprove, recoveryPolling, recoveryStatus, type AssistedRecoveryJob } from '../src/utils/assistedRecovery.ts';
+import {
+   recoveryRequestId,
+   recoveryCanApprove,
+   recoveryPolling,
+   recoveryStatus,
+   recoveryRetrySummary,
+   recoveryFailureAdvice,
+   type AssistedRecoveryJob,
+} from '../src/utils/assistedRecovery.ts';
 const require = createRequire(new URL('../package.json', import.meta.url)),
    backendRequire = createRequire(new URL('../../backend/package.json', import.meta.url));
 const React = require('react'),
@@ -198,6 +206,7 @@ test('rediscovered active progress shows elapsed time and stops spinning on a di
       for (const [patch, message] of [
          [{ phase: 'integrity-preparation', activity: 'validating-archive-output' }, /Reading archive data/],
          [{ phase: 'integrity-preparation', activity: 'archive-output-paused' }, /No recent archive output/],
+         [{ phase: 'integrity-preparation', activity: 'archive-backend-retrying' }, /Restic is retrying a repository read/],
          [{ phase: 'filesystem-validation' }, /Verifying staged files/],
          [{ phase: 'staging-cleanup' }, /Cleaning up temporary recovery resources/],
       ] as const) {
@@ -227,6 +236,66 @@ test('rediscovered active progress shows elapsed time and stops spinning on a di
    } finally {
       await ui.close();
    }
+});
+
+const retryDiagnostic = {
+   phase: 'integrity-preparation',
+   operation: 'archive-readback',
+   timeoutCategory: 'archive-backend-retrying',
+   elapsedMs: 600010,
+   failureCode: 'timeout',
+   archive: {
+      backendRetries: {
+         retryCount: 12,
+         gaveUpCount: 0,
+         recoveredCount: 0,
+         serverErrorCount: 12,
+         errorClasses: { 'unexpected-eof': 12 },
+         loads: [{ objectType: 'data', packPrefix: '00e0e0ca8b', length: 13960, offset: 2605056, attempts: 12, lastErrorClass: 'unexpected-eof' }],
+         lastRetryAfterMs: 61000,
+         lastServedBytes: 2875,
+         lastExpectedBytes: 13960,
+      },
+   },
+};
+
+test('a backend retry loop reads as retries with the retried object, not as a silent stall', async () => {
+   const failed = { ...row({ status: 'failed', phase: 'recovery-stopped', failureCode: 'timeout' }), diagnostic: retryDiagnostic } as AssistedRecoveryJob;
+   assert.equal(recoveryStatus(failed), 'Restic kept retrying a repository read. Recovery stopped after the inactivity limit.');
+   assert.match(recoveryFailureAdvice(failed), /retried repository object/);
+   const s = server([failed]);
+   const ui = await mount(s.fetcher);
+   const content = () => ui.dom.window.document.body.textContent || '';
+   try {
+      await ui.waitFor(() => /archive-backend-retrying/.test(content()), 'retry diagnostic');
+      assert.match(content(), /Restic kept retrying a repository read/);
+      assert.match(
+         content(),
+         /Restic retried a repository read 12 times · data pack 00e0e0ca8b at byte 2,605,056 \(13,960 bytes\) · last error: response ended early · server sent 2,875 of 13,960 bytes/
+      );
+      assert.doesNotMatch(content(), /Archive stream stalled/);
+   } finally {
+      await ui.close();
+   }
+});
+
+test('retry summary wording covers singular counts, HTTP status, give-ups and missing data', () => {
+   assert.equal(recoveryRetrySummary(undefined), undefined);
+   assert.equal(recoveryRetrySummary({ ...retryDiagnostic, archive: {} }), undefined);
+   const none = { ...retryDiagnostic.archive.backendRetries, retryCount: 0, serverErrorCount: 0, loads: [] };
+   assert.equal(recoveryRetrySummary({ ...retryDiagnostic, archive: { backendRetries: none } }), undefined);
+   const once = {
+      ...none,
+      retryCount: 1,
+      gaveUpCount: 1,
+      loads: [{ objectType: 'index', packPrefix: 'abcdef0123', attempts: 1, lastErrorClass: 'http-status', httpStatus: 503 }],
+      lastServedBytes: undefined,
+      lastExpectedBytes: undefined,
+   };
+   assert.equal(
+      recoveryRetrySummary({ ...retryDiagnostic, archive: { backendRetries: once } }),
+      'Restic retried a repository read 1 time · index pack abcdef0123 · last error: HTTP error (HTTP 503) · gave up 1 time'
+   );
 });
 
 test('GET rediscovery restores pending approval after refresh without creating or approving any job', async () => {

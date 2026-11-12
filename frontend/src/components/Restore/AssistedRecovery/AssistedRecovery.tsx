@@ -14,6 +14,7 @@ import {
    recoveryLabel,
    recoveryInProgress,
    recoveryFailureAdvice,
+   recoveryRetrySummary,
    type AssistedRecoveryDiagnostic,
    type AssistedRecoveryJob,
 } from '../../../utils/assistedRecovery';
@@ -40,23 +41,27 @@ async function request<T>(suffix: string, method = 'GET', body?: unknown, signal
    return data.result;
 }
 function DiagnosticDetails({ diagnostic, showCode = false }: { diagnostic: AssistedRecoveryDiagnostic; showCode?: boolean }) {
+   const retries = recoveryRetrySummary(diagnostic);
    return (
-      <span className={classes.diagnostic}>
-         Phase: {recoveryLabel(diagnostic.phase)} · Operation: {recoveryLabel(diagnostic.operation)} · Elapsed:{' '}
-         {elapsedLabel(Math.floor(diagnostic.elapsedMs / 1000))}
-         {showCode && (
-            <>
-               {' · Code: '}
-               <code>{diagnostic.failureCode}</code>
-            </>
-         )}
-         {diagnostic.timeoutCategory && (
-            <>
-               {' · Timeout: '}
-               {recoveryLabel(diagnostic.timeoutCategory)} <code>{diagnostic.timeoutCategory}</code>
-            </>
-         )}
-      </span>
+      <>
+         <span className={classes.diagnostic}>
+            Phase: {recoveryLabel(diagnostic.phase)} · Operation: {recoveryLabel(diagnostic.operation)} · Elapsed:{' '}
+            {elapsedLabel(Math.floor(diagnostic.elapsedMs / 1000))}
+            {showCode && (
+               <>
+                  {' · Code: '}
+                  <code>{diagnostic.failureCode}</code>
+               </>
+            )}
+            {diagnostic.timeoutCategory && (
+               <>
+                  {' · Timeout: '}
+                  {recoveryLabel(diagnostic.timeoutCategory)} <code>{diagnostic.timeoutCategory}</code>
+               </>
+            )}
+         </span>
+         {retries && <span className={classes.diagnostic}>{retries}</span>}
+      </>
    );
 }
 export default function AssistedRecovery({ planId, backupId, manual = false, initialIncludes = [], onPrimaryReady, close }: Props) {

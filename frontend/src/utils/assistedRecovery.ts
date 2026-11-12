@@ -1,9 +1,31 @@
+/** Closed server summary of Restic backend retries; it never carries provider text. */
+export type AssistedRecoveryBackendRetries = {
+   retryCount: number;
+   gaveUpCount: number;
+   recoveredCount: number;
+   serverErrorCount: number;
+   errorClasses: Partial<Record<string, number>>;
+   loads: {
+      objectType: string;
+      packPrefix: string;
+      length?: number;
+      offset?: number;
+      attempts: number;
+      lastErrorClass: string;
+      httpStatus?: number;
+   }[];
+   lastRetryAfterMs?: number;
+   lastServedBytes?: number;
+   lastExpectedBytes?: number;
+   truncated?: boolean;
+};
 export type AssistedRecoveryDiagnostic = {
    phase: string;
    operation: string;
    timeoutCategory?: string;
    elapsedMs: number;
    failureCode: string;
+   archive?: { backendRetries?: AssistedRecoveryBackendRetries };
 };
 export type AssistedRecoveryJob = {
    id: string;
@@ -14,7 +36,13 @@ export type AssistedRecoveryJob = {
    phase: string;
    createdAt: number;
    activeSince?: number;
-   activity?: 'awaiting-archive-output' | 'validating-archive-output' | 'archive-output-paused' | 'archive-consumer-pending' | 'archive-exit-pending';
+   activity?:
+      | 'awaiting-archive-output'
+      | 'validating-archive-output'
+      | 'archive-output-paused'
+      | 'archive-backend-retrying'
+      | 'archive-consumer-pending'
+      | 'archive-exit-pending';
    diagnostic?: AssistedRecoveryDiagnostic;
    expiresAt: number;
    expired: boolean;
@@ -80,6 +108,8 @@ export function recoveryStatus(job: AssistedRecoveryJob) {
       return 'Staged recovery passed file integrity verification. No database was imported and no live target was overwritten.';
    if (job.status === 'uncertain')
       return 'Recovery was interrupted. It will not restart automatically. Review staging and cancel before creating a fresh request.';
+   if (job.status === 'failed' && job.diagnostic?.timeoutCategory === 'archive-backend-retrying')
+      return 'Restic kept retrying a repository read. Recovery stopped after the inactivity limit.';
    if (job.status === 'failed' && job.diagnostic?.timeoutCategory === 'archive-output-idle')
       return 'Archive stream stalled. Recovery stopped after the inactivity limit.';
    return job.status === 'primary-ready'
@@ -100,6 +130,8 @@ export function recoveryWorkDetail(job: AssistedRecoveryJob) {
          return 'Reading archive data and verifying snapshot entries.';
       case 'archive-output-paused':
          return 'No recent archive output. Pluton is still waiting for the repository read.';
+      case 'archive-backend-retrying':
+         return 'Restic is retrying a repository read. Pluton keeps waiting up to the inactivity limit.';
       case 'archive-consumer-pending':
          return 'Waiting for local archive validation to finish processing data.';
       case 'archive-exit-pending':
@@ -112,12 +144,45 @@ export function recoveryFailureAdvice(job: AssistedRecoveryJob) {
    if (job.failureCode === 'tls-invalid' || job.failureCode === 'authentication-denied' || job.failureCode === 'wrong-password')
       return 'Ask an operator to verify repository trust and access before checking again.';
    const category = job.diagnostic?.timeoutCategory;
+   if (category === 'archive-backend-retrying')
+      return 'Review the retried repository object, its error class and the storage behavior with an operator before starting a new check.';
    if (category === 'archive-consumer-idle') return 'Review Pluton resource usage and local archive processing before starting a new check.';
    if (category === 'archive-exit-idle') return 'Review native process shutdown and Pluton resource usage before starting a new check.';
    if (job.failureCode === 'timeout' || job.failureCode === 'network-unavailable' || category)
       return 'Review the recorded phase and storage connectivity with an operator before starting a new check.';
    if (job.failureCode === 'no-eligible-replica') return 'Review the diagnostics for each replica before starting a new check.';
    return 'Review the recovery audit before starting a new check.';
+}
+
+const RETRY_ERROR_WORDS: Record<string, string> = {
+   'http-status': 'HTTP error',
+   'partial-read': 'wrong-size response',
+   'unexpected-eof': 'response ended early',
+   'stream-reset': 'stream reset',
+   timeout: 'timeout',
+   'connection-reset': 'connection reset',
+   'dns-not-found': 'host not found (DNS)',
+   tls: 'TLS or certificate error',
+   'not-found': 'object not found',
+   other: 'other error',
+};
+
+/** One sentence from the closed retry summary, or undefined when Restic reported no retries. */
+export function recoveryRetrySummary(diagnostic?: AssistedRecoveryDiagnostic) {
+   const retries = diagnostic?.archive?.backendRetries;
+   if (!retries || retries.retryCount + retries.gaveUpCount + retries.serverErrorCount === 0) return undefined;
+   const parts = [`Restic retried a repository read ${retries.retryCount} ${retries.retryCount === 1 ? 'time' : 'times'}`];
+   const load = retries.loads[retries.loads.length - 1];
+   if (load) {
+      const where =
+         load.offset !== undefined && load.length !== undefined ? ` at byte ${load.offset.toLocaleString('en-US')} (${load.length.toLocaleString('en-US')} bytes)` : '';
+      parts.push(`${load.objectType} pack ${load.packPrefix}${where}`);
+      parts.push(`last error: ${RETRY_ERROR_WORDS[load.lastErrorClass] || recoveryLabel(load.lastErrorClass)}${load.httpStatus ? ` (HTTP ${load.httpStatus})` : ''}`);
+   }
+   if (retries.gaveUpCount) parts.push(`gave up ${retries.gaveUpCount} ${retries.gaveUpCount === 1 ? 'time' : 'times'}`);
+   if (retries.lastServedBytes !== undefined && retries.lastExpectedBytes !== undefined)
+      parts.push(`server sent ${retries.lastServedBytes.toLocaleString('en-US')} of ${retries.lastExpectedBytes.toLocaleString('en-US')} bytes`);
+   return parts.join(' · ');
 }
 
 /** UUID admission identity also works on supported LAN HTTP secure-random APIs. */

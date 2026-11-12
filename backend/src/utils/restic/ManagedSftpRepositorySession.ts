@@ -18,6 +18,7 @@ import {
 	sampleArchiveProcesses,
 	type ArchiveProcessWindow,
 } from './archiveProcessObservation';
+import { ArchiveBackendRetries, type ArchiveBackendRetrySummary } from './archiveBackendRetries';
 
 export type RecoveryFailureCode =
 	| 'network-unavailable'
@@ -55,6 +56,7 @@ export type RepositoryTimeoutCategory =
 	| 'native-restore-deadline'
 	| 'archive-first-output'
 	| 'archive-output-idle'
+	| 'archive-backend-retrying'
 	| 'archive-consumer-idle'
 	| 'archive-exit-idle'
 	| 'caller-deadline';
@@ -63,6 +65,7 @@ export type ArchiveActivity =
 	| 'awaiting-archive-output'
 	| 'validating-archive-output'
 	| 'archive-output-paused'
+	| 'archive-backend-retrying'
 	| 'archive-consumer-pending'
 	| 'archive-exit-pending';
 export type ArchiveActivityObserver = (activity: ArchiveActivity) => void;
@@ -84,6 +87,8 @@ export type ArchiveReadbackDiagnostic = {
 		| 'spawn-error'
 		| 'unknown';
 	nativeIo?: ArchiveProcessWindow;
+	/** Closed summary of Restic/Rclone backend retries; never raw stderr. */
+	backendRetries?: ArchiveBackendRetrySummary;
 };
 
 export type RepositoryOperationDiagnostic = {
@@ -668,6 +673,11 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		let completion: ArchiveReadbackDiagnostic['completion'] = 'unknown';
 		let stopped: ArchiveReadbackDiagnostic | undefined;
 		let nativeIo: ReturnType<typeof archiveProcessWindow>;
+		// Restic reports backend retries only on stderr. Keep a closed summary, never the text.
+		const retries = new ArchiveBackendRetries();
+		const retryingSinceOutput = () =>
+			retries.lastEventAt !== undefined &&
+			(lastOutput === undefined || retries.lastEventAt > lastOutput);
 		const transfer = new AbortController();
 		let timer: ReturnType<typeof setTimeout>;
 		// pipeline(end:false) only waits for stdout EOF, even with an outstanding
@@ -685,7 +695,9 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		});
 		const observe = (): ArchiveReadbackDiagnostic => {
 			const now = performance.now();
+			const backendRetries = retries.snapshot();
 			return {
+				...(backendRetries ? { backendRetries } : {}),
 				firstByteMs: firstOutput === undefined ? undefined : duration(firstOutput - began),
 				bytesReceived,
 				lastOutputAgeMs: lastOutput === undefined ? undefined : duration(now - lastOutput),
@@ -734,6 +746,13 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 						else if (pipelineFinished || sample.stdoutEnded) category = 'archive-exit-idle';
 						else category = 'archive-output-idle';
 					}
+					// Waiting for output while Restic reports failed backend requests is a
+					// retry loop, not a silent read.
+					if (
+						(category === 'archive-output-idle' || category === 'archive-first-output') &&
+						retryingSinceOutput()
+					)
+						category = 'archive-backend-retrying';
 					stop('timeout', category);
 				},
 				firstOutput === undefined ? 15_000 : 10 * 60_000
@@ -742,6 +761,7 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		};
 		const closed = new Promise<void>(resolve => {
 			child.once('close', (code, childSignal) => {
+				retries.end();
 				exitStatus = code;
 				exitSignal = childSignal;
 				hasClosed = true;
@@ -769,7 +789,9 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			completion = 'spawn-error';
 			stop('execution-failed');
 		});
-		child.stderr?.on('data', () => undefined); // never retain provider diagnostics
+		// Provider text is parsed into closed categories and discarded; it is never retained.
+		const stderrData = (chunk: Buffer) => retries.write(chunk);
+		child.stderr?.on('data', stderrData);
 		signal?.addEventListener('abort', abort, { once: true });
 		let reported: ArchiveActivity | undefined;
 		const report = (value: ArchiveActivity) => {
@@ -792,7 +814,7 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 				report('archive-consumer-pending');
 			else if (pipelineFinished || current.stdoutEnded) report('archive-exit-pending');
 			else {
-				report('archive-output-paused');
+				report(retryingSinceOutput() ? 'archive-backend-retrying' : 'archive-output-paused');
 				if (!sampling && child.pid !== undefined) {
 					const outputBeforeSample = lastOutput;
 					sampling = true;
@@ -831,7 +853,11 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 		destination.on('close', disconnected);
 		destination.on('error', disconnected);
 		activity();
-		const diagnostic = () => ({ ...(stopped ?? observe()), completion });
+		// The stop snapshot keeps its timing; retries reported while the tree was stopping are added.
+		const diagnostic = (): ArchiveReadbackDiagnostic => {
+			const backendRetries = retries.snapshot();
+			return { ...(stopped ?? observe()), completion, ...(backendRetries ? { backendRetries } : {}) };
+		};
 		try {
 			if (!child.stdout) throw new ManagedRepositoryAccessError('execution-failed');
 			await pipeline(child.stdout, forwarding, { signal: transfer.signal });
@@ -846,6 +872,7 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 			clearTimeout(quietTimer);
 			signal?.removeEventListener('abort', abort);
 			child.stdout?.removeListener('data', dataActivity);
+			child.stderr?.removeListener('data', stderrData);
 			destination.removeListener('drain', activity);
 			destination.removeListener('close', disconnected);
 			destination.removeListener('error', disconnected);

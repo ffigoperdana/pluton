@@ -69,6 +69,7 @@ function recoveryDiagnostic(
 			writtenBytes: value.writtenBytes,
 			cpuTicks: value.cpuTicks,
 		};
+	const retries = archive?.backendRetries;
 	return {
 		phase,
 		operation: native?.operation ?? 'recovery-phase',
@@ -92,6 +93,26 @@ function recoveryDiagnostic(
 				sampleAgeMs: io.sampleAgeMs,
 				restic: counters(io.restic),
 				rclone: counters(io.rclone),
+			},
+			backendRetries: retries && {
+				retryCount: retries.retryCount,
+				gaveUpCount: retries.gaveUpCount,
+				recoveredCount: retries.recoveredCount,
+				serverErrorCount: retries.serverErrorCount,
+				errorClasses: { ...retries.errorClasses },
+				loads: retries.loads.map(load => ({
+					objectType: load.objectType,
+					packPrefix: load.packPrefix,
+					length: load.length,
+					offset: load.offset,
+					attempts: load.attempts,
+					lastErrorClass: load.lastErrorClass,
+					httpStatus: load.httpStatus,
+				})),
+				lastRetryAfterMs: retries.lastRetryAfterMs,
+				lastServedBytes: retries.lastServedBytes,
+				lastExpectedBytes: retries.lastExpectedBytes,
+				truncated: retries.truncated,
 			},
 		},
 		timeoutCategory: timeoutCategory ?? (failureCode === 'timeout' ? 'undetermined' : undefined),

@@ -436,6 +436,28 @@ describe('durable assisted failover authorization and lifecycle', () => {
 												raw: 'synthetic-process-detail',
 											},
 										},
+										backendRetries: {
+											retryCount: 12,
+											gaveUpCount: 0,
+											recoveredCount: 0,
+											serverErrorCount: 12,
+											errorClasses: { 'unexpected-eof': 12 },
+											loads: [
+												{
+													objectType: 'data',
+													packPrefix: '00e0e0ca8b',
+													length: 13960,
+													offset: 2605056,
+													attempts: 12,
+													lastErrorClass: 'unexpected-eof',
+													raw: 'synthetic-retry-load-secret',
+												},
+											],
+											lastRetryAfterMs: 61000,
+											lastServedBytes: 2875,
+											lastExpectedBytes: 13960,
+											raw: 'synthetic-retry-secret',
+										},
 										raw: 'synthetic-nested-secret',
 									},
 									raw: 'synthetic-private',
@@ -485,6 +507,24 @@ describe('durable assisted failover authorization and lifecycle', () => {
 							sampleAgeMs: 23,
 							rclone: { readBytes: 0, writtenBytes: 0, cpuTicks: 1 },
 						},
+						backendRetries: {
+							retryCount: 12,
+							serverErrorCount: 12,
+							errorClasses: { 'unexpected-eof': 12 },
+							loads: [
+								{
+									objectType: 'data',
+									packPrefix: '00e0e0ca8b',
+									length: 13960,
+									offset: 2605056,
+									attempts: 12,
+									lastErrorClass: 'unexpected-eof',
+								},
+							],
+							lastRetryAfterMs: 61000,
+							lastServedBytes: 2875,
+							lastExpectedBytes: 13960,
+						},
 					},
 				},
 				phaseTimingsMs: {
@@ -496,7 +536,7 @@ describe('durable assisted failover authorization and lifecycle', () => {
 			});
 			expect(restored.activity).toBeUndefined();
 			expect(JSON.stringify(restored)).not.toMatch(
-				/synthetic-private|synthetic-nested-secret|synthetic-process-detail|synthetic cleanup secret/
+				/synthetic-private|synthetic-nested-secret|synthetic-process-detail|synthetic cleanup secret|synthetic-retry/
 			);
 			if (cleanupFails) {
 				const cancelled = await service.cancel('owner-01', job.id);
