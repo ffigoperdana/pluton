@@ -26,6 +26,10 @@ $mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospa
    display: grid;
    gap: 12px;
 }
+.note {
+   font-size: 0.75rem;
+   color: var(--content-text-color-light);
+}
 .detail {
    display: block;
    margin-top: 4px;

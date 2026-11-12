@@ -55,6 +55,14 @@ const PlanRelocationModal = ({ planId, planTitle, currentPath, close, onBindingC
    const sftpStorages = (Array.isArray(storageList) ? (storageList as { id: string; name: string; type: string }[]) : []).filter(
       (storage) => storage.type === 'sftp',
    );
+   const currentStorageId = overview.data?.current.storageId || '';
+   // The Select shows its first option when empty; choose a real default, preferring another Storage.
+   const preferredStorageId = (sftpStorages.find((storage) => storage.id !== currentStorageId) || sftpStorages[0])?.id || '';
+   const overviewLoaded = !!overview.data;
+   useEffect(() => {
+      // Wait for the plan's current Storage, or the default could be the current one.
+      if (!storageId && preferredStorageId && overviewLoaded) setStorageId(preferredStorageId);
+   }, [storageId, preferredStorageId, overviewLoaded]);
    const busy = action.isPending;
    const run = (input: Parameters<typeof action.mutate>[0]) =>
       action.mutate(input, {
@@ -157,8 +165,8 @@ const PlanRelocationModal = ({ planId, planTitle, currentPath, close, onBindingC
             {confirming === 'switch' && relocation.actions.switch && (
                <div className={classes.confirm}>
                   <p>
-                     Switch the plan to {location(relocation.destination)}? Pluton rechecks both copies first. Backup history, restores and
-                     mirror receipts move with the plan. {relocation.planWasActive ? 'The plan resumes afterwards.' : 'The plan stays paused.'}
+                     Switch the plan to {location(relocation.destination)}? Pluton rechecks both copies first. Backup history and mirror receipts
+                     move with the plan. {relocation.planWasActive ? 'The plan resumes afterwards.' : 'The plan stays paused.'}
                   </p>
                   <div className={classes.actions}>
                      <button type="button" className={classes.primary} disabled={busy} onClick={() => run({ action: 'switch', id: relocation.id })}>
@@ -216,6 +224,7 @@ const PlanRelocationModal = ({ planId, planTitle, currentPath, close, onBindingC
                      label={`Type the plan name (${planTitle}) to confirm`}
                      fieldValue={confirmTitle}
                      onUpdate={setConfirmTitle}
+                     inline={false}
                      full
                   />
                   <div className={classes.actions}>
@@ -295,8 +304,12 @@ const PlanRelocationModal = ({ planId, planTitle, currentPath, close, onBindingC
                         description="An empty folder on the destination. The same path as today is fine on a different Storage."
                         fieldValue={storagePath}
                         onUpdate={setStoragePath}
+                        inline={false}
                         full
                      />
+                     {storageId && storageId === currentStorageId && (
+                        <p className={classes.note}>This is the plan's current Storage. Choose a different folder that is not inside the current one.</p>
+                     )}
                   </div>
                   <div className={classes.actions}>
                      <button

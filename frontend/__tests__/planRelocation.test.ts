@@ -98,12 +98,13 @@ const compiled = { exports: {} };
 new Function('require', 'module', 'exports', bundle.outputFiles[0].text)(require, compiled, compiled.exports);
 const Dialog = (compiled.exports as any).default;
 
-async function mount(responses: (url: string, init: RequestInit) => { status: number; body: unknown }) {
+type Reply = { status: number; body: unknown };
+async function mount(responses: (url: string, init: RequestInit) => Reply | Promise<Reply>) {
    const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.internal' });
    const calls: { url: string; method: string; body?: string }[] = [];
    const fetcher = async (url: string, init: RequestInit = {}) => {
       calls.push({ url: String(url), method: init.method || 'GET', body: init.body as string | undefined });
-      const reply = String(url).includes('/storages')
+      const reply = await (String(url).includes('/storages')
          ? {
               status: 200,
               body: {
@@ -115,7 +116,7 @@ async function mount(responses: (url: string, init: RequestInit) => { status: nu
                  ],
               },
            }
-         : responses(String(url), init);
+         : responses(String(url), init));
       return new Response(JSON.stringify(reply.body), { status: reply.status, headers: { 'content-type': 'application/json' } });
    };
    const globals = ['window', 'document', 'navigator', 'HTMLElement', 'Event', 'fetch', 'IS_REACT_ACT_ENVIRONMENT'];
@@ -228,12 +229,22 @@ test('a failed copy explains the closed code and phase, then offers a new move',
       actions: { cancel: false, switch: false, revert: false, deleteSource: false },
       audit: [{ at: 1, event: 'failed', code: 'destination-hash-mismatch', phase: 'hash-verification' }],
    });
-   const view = await mount(() => ({ status: 200, body: { success: true, result: overview([failed], true) } }));
+   // The relocation overview arrives after the Storage list, as it can in a browser.
+   const view = await mount(async (_url, init) =>
+      init.method === 'POST'
+         ? { status: 202, body: { success: true, result: relocation({ status: 'copying', phase: 'copying' }) } }
+         : (await new Promise((resolve) => setTimeout(resolve, 50)),
+           { status: 200, body: { success: true, result: overview([failed], true) } }),
+   );
    try {
       await view.waitFor(() => view.button('Pause plan and copy'), 'start form');
       assert.match(view.text(), /Last move: Failed/);
       assert.match(view.text(), /damaged/);
-      assert.equal(view.button('Pause plan and copy')!.disabled, true);
+      // The default destination is an SFTP Storage other than the current one.
+      await view.click('Pause plan and copy');
+      const post = view.calls.find((call) => call.method === 'POST')!;
+      assert.equal(post.url, 'https://example.internal/api/plan-relocations');
+      assert.deepEqual(JSON.parse(post.body!), { planId: 'plan-01', storageId: 'storage-02', storagePath: 'managed/app-01' });
    } finally {
       await view.close();
    }
