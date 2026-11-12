@@ -44,6 +44,7 @@ import { parseBackupHistoryQuery } from '../utils/backupHistoryQuery';
 import { assertStorageRemovalScope } from '../utils/storageRemovalScope';
 import { validateReplicationSettings } from '../utils/managedReplicationPolicy';
 import type { ManagedReplicationStore } from '../stores/ManagedReplicationStore';
+import type { PlanRepositoryRelocationStore } from '../stores/PlanRepositoryRelocationStore';
 import { canonicalS3RepositoryIdentity, isS3Storage } from '../utils/storageSecurity';
 
 /**
@@ -64,7 +65,8 @@ export class PlanService {
 		protected restoreStore: RestoreStore,
 		private readonly remoteBackupService?: RemoteBackupService,
 		private readonly recoveryTests?: Pick<RecoveryTestStore, 'assertPlanRemovable'>,
-		private readonly managedReplications?: ManagedReplicationStore
+		private readonly managedReplications?: ManagedReplicationStore,
+		private readonly relocations?: Pick<PlanRepositoryRelocationStore, 'activeForPlan'>
 	) {
 		this.scheduleReconciler = new ScheduleReconciler(
 			this.localAgent,
@@ -307,12 +309,21 @@ export class PlanService {
 		return createdPlan;
 	}
 
+	/** A plan whose repository is being moved keeps its binding and schedule frozen. */
+	private assertNotRelocating(planId: string, message: string) {
+		if (this.relocations?.activeForPlan(planId)) throw new AppError(409, message);
+	}
+
 	/**
 	 * Updates a plan's configuration and its underlying schedule.
 	 */
 	public async updatePlan(planId: string, planData: Partial<Plan>): Promise<Plan> {
 		validateReplicationSettings(planData.settings?.replication);
 		this.managedReplications?.assertPlanIdle(planId);
+		this.assertNotRelocating(
+			planId,
+			'Plan settings are locked while its repository is being moved to another Storage.'
+		);
 		const currentPlan = await this.planStore.getById(planId);
 		if (!currentPlan) {
 			throw new NotFoundError('Plan not found.');
@@ -514,6 +525,10 @@ export class PlanService {
 	private async removePlan(planId: string, removeRemoteData: boolean) {
 		const plan = await this.planStore.getById(planId);
 		if (!plan) throw new NotFoundError('Plan not found.');
+		this.assertNotRelocating(
+			planId,
+			'Finish or cancel the repository relocation of this plan before removing it.'
+		);
 		this.planStore.assertNoRetainedDatabaseRestores({ planId });
 		this.managedReplications?.assertPlanIdle(planId);
 		if (
@@ -622,6 +637,10 @@ export class PlanService {
 		if (this.removingPlans.has(planId)) throw new AppError(409, 'Plan removal is in progress.');
 		const plan = await this.planStore.getById(planId);
 		if (!plan) throw new NotFoundError(`Plan with ID ${planId} not found.`);
+		this.assertNotRelocating(
+			planId,
+			'Backups resume after the repository relocation of this plan finishes.'
+		);
 
 		if (await this.planStore.hasActiveBackups(planId)) {
 			throw new AppError(500, 'A backup is already in progress for this plan.');
@@ -695,6 +714,10 @@ export class PlanService {
 	public async resumeBackup(planId: string): Promise<void> {
 		const plan = await this.planStore.getById(planId);
 		if (!plan) throw new NotFoundError(`Plan with ID ${planId} not found.`);
+		this.assertNotRelocating(
+			planId,
+			'The plan resumes automatically after its repository relocation finishes.'
+		);
 		if (RemoteBackupService.isRemoteFilesystemPlan(plan)) {
 			const resumed = await this.requireRemoteBackupService().resumePlan(planId);
 			if (!resumed) throw new AppError(500, 'Failed to resume remote backup plan.');

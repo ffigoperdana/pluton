@@ -96,6 +96,17 @@ export class ManagedExportService {
 		if (!exportProofValid(proof, c)) throw new TemporaryExportError('security-capability-missing');
 		return proof!;
 	}
+	/** Archive work that still reads the plan's primary repository (relocation guard). */
+	hasActiveForPlan(planId: string) {
+		return this.store
+			.all()
+			.some(
+				job =>
+					(!job.kind || job.kind === 'archive') &&
+					job.binding?.planId === planId &&
+					['queued', 'validating', 'exporting', 'uploading', 'verifying'].includes(job.state)
+			);
+	}
 	/** Local configuration/journal reads only: opening a UI never probes HCP. */
 	async readiness(owner: string) {
 		try {

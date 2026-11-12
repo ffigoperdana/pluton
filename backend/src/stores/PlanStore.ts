@@ -652,6 +652,21 @@ export class PlanStore {
 			.from(retainedManagedRepositories)
 			.all())
 			references.push({ ...retained, planId: null, kind: 'retained' });
+		// Copies kept by repository relocation: the previous location until it is
+		// deleted, and job-owned destinations that did not become live.
+		for (const kept of this.db.all<{ id: string; storageId: string; storagePath: string }>(sql`
+			SELECT id, source_storage_id AS storageId, source_storage_path AS storagePath
+			FROM plan_repository_relocations WHERE status='switched'
+			UNION ALL
+			SELECT id, destination_storage_id, destination_storage_path
+			FROM plan_repository_relocations WHERE status NOT IN ('switched','source-deleted')`))
+			references.push({
+				storageId: kept.storageId,
+				storagePath: kept.storagePath,
+				planId: null,
+				kind: 'retained',
+				relocationId: kept.id,
+			});
 		return references;
 	}
 

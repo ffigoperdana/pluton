@@ -1,4 +1,8 @@
 import { AssistedRecoveryStore } from './stores/AssistedRecoveryStore';
+import { PlanRepositoryRelocationStore } from './stores/PlanRepositoryRelocationStore';
+import { PlanRepositoryRelocationService } from './services/PlanRepositoryRelocationService';
+import { PlanRepositoryRelocationController } from './controllers/PlanRepositoryRelocationController';
+import { createPlanRelocationRouter } from './routes/planRelocations';
 import { AssistedRecoveryService } from './services/AssistedRecoveryService';
 import { VerifiedReplicaRecoveryService } from './services/VerifiedReplicaRecoveryService';
 import { AssistedRecoveryController } from './controllers/AssistedRecoveryController';
@@ -266,6 +270,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	new DownloadEventListener(localBackupAgent, backupStore);
 
 	// Main Application Services
+	const relocationStore = new PlanRepositoryRelocationStore(sqlite);
 	const planService = new PlanService(
 		localPlanAgent,
 		planStore,
@@ -275,7 +280,20 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		restoreStore,
 		remoteBackupService,
 		recoveryTestStore,
-		managedReplicationStore
+		managedReplicationStore,
+		relocationStore
+	);
+	const relocationService = new PlanRepositoryRelocationService(
+		relocationStore,
+		planStore,
+		remoteManagedRepositoryStore,
+		storageStore,
+		remoteBackupService,
+		{
+			pause: planId => planService.pauseBackup(planId),
+			resume: planId => planService.resumeBackup(planId),
+		},
+		planId => managedExportService?.hasActiveForPlan(planId) ?? false
 	);
 	const backupService = new BackupService(
 		localBackupAgent,
@@ -482,6 +500,10 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		'/api/assisted-recovery',
 		createAssistedRecoveryRouter(new AssistedRecoveryController(assistedRecoveryService))
 	);
+	app.use(
+		'/api/plan-relocations',
+		createPlanRelocationRouter(new PlanRepositoryRelocationController(relocationService))
+	);
 	app.use('/api/settings', createSettingsRouter(settingsController));
 	app.use('/api/notifications', createNotificationRouter(notificationStore));
 	app.use('/api/legacy-repositories', createLegacyRepositoryRouter(legacyRepositoryController));
@@ -516,6 +538,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	await databaseRestoreService.recoverInterrupted();
 	await managedReplicationService.recoverInterrupted();
 	await managedExportService?.recoverInterrupted();
+	await relocationService.recoverInterrupted();
 
 	// Reconcile CronManager schedules with the database (fixes drift on restart)
 	try {
@@ -577,6 +600,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 			await recoveryTestService.shutdown();
 			await databaseRestoreService.shutdown();
 			await assistedRecoveryService.shutdown();
+			await relocationService.shutdown();
 			await remoteRecoveryService.close();
 		},
 	};
