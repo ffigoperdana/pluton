@@ -15,11 +15,14 @@ import type { StorageStore } from '../stores/StorageStore';
 import type { RemoteManagedRepositoryStore } from '../stores/RemoteManagedRepositoryStore';
 import {
 	isSubsetOf,
-	locationsOverlap,
 	RelocationError,
 	validateRelocationPath,
 	type RelocationFailureCode,
 } from '../utils/relocation/repositoryInventory';
+import {
+	StorageLocationAliases,
+	type StorageLocation,
+} from '../utils/relocation/storageLocationAliases';
 import {
 	SftpRepositoryTransfer,
 	type RepositoryTransferProvider,
@@ -65,7 +68,7 @@ export class PlanRepositoryRelocationService {
 		private readonly store: PlanRepositoryRelocationStore,
 		private readonly plans: Pick<PlanStore, 'getById' | 'getStorageRemovalReferences'>,
 		private readonly repositories: Pick<RemoteManagedRepositoryStore, 'getByPlanId'>,
-		private readonly storages: Pick<StorageStore, 'getById'>,
+		private readonly storages: Pick<StorageStore, 'getById' | 'getAll'>,
 		private readonly access: Pick<RemoteBackupService, 'getSftpRecoveryOptions'>,
 		private readonly planState: RelocationPlanState,
 		private readonly exportsBusy: (planId: string) => boolean = () => false,
@@ -118,15 +121,13 @@ export class PlanRepositoryRelocationService {
 		if (!destination || destination.type !== 'sftp')
 			throw new AppError(400, 'The destination must be an SFTP Storage.');
 		const source = { storageId: repository.storageId, storagePath: repository.storagePath };
-		if (
-			destination.id === source.storageId &&
-			locationsOverlap(source.storagePath, storagePath)
-		)
+		const aliases = await this.locationAliases();
+		if (aliases.overlaps(source, { storageId: destination.id, storagePath }))
 			throw new AppError(
 				400,
-				'The destination must not be the current repository location or inside/around it.'
+				'The destination must not be the current repository location or inside/around it (also through another Storage for the same SFTP server).'
 			);
-		await this.assertDestinationAvailable(repository.id, destination.id, storagePath);
+		await this.assertDestinationAvailable(aliases, repository.id, destination.id, storagePath);
 		if (this.exportsBusy(plan.id))
 			throw new AppError(409, 'Wait for the running Reliable Download export of this plan to finish.');
 		const now = Date.now();
@@ -471,23 +472,33 @@ export class PlanRepositoryRelocationService {
 			);
 	}
 
-	private async assertDestinationAvailable(repositoryId: string, storageId: string, storagePath: string) {
+	/**
+	 * Storage records are compared by SFTP server, not only by ID: two records for
+	 * the same host and port reach the same files.
+	 */
+	private async locationAliases() {
+		return new StorageLocationAliases((await this.storages.getAll()) || []);
+	}
+
+	private async assertDestinationAvailable(
+		aliases: StorageLocationAliases,
+		repositoryId: string,
+		storageId: string,
+		storagePath: string
+	) {
+		const destination: StorageLocation = { storageId, storagePath };
 		for (const reference of await this.plans.getStorageRemovalReferences())
-			if (
-				!reference.relocationId &&
-				reference.storageId === storageId &&
-				locationsOverlap(reference.storagePath, storagePath)
-			)
+			if (!reference.relocationId && aliases.overlaps(reference, destination))
 				throw new AppError(
 					409,
-					'The destination overlaps a repository, mirror or retained copy already stored there.'
+					'The destination overlaps a repository, mirror or retained copy already stored on that SFTP server.'
 				);
 		for (const location of this.store.retainedLocations()) {
-			if (location.storageId !== storageId || !locationsOverlap(location.storagePath, storagePath))
-				continue;
+			if (!aliases.overlaps(location, destination)) continue;
 			const retry =
 				location.role === 'relocation-destination' &&
 				location.repositoryId === repositoryId &&
+				location.storageId === storageId &&
 				location.storagePath === storagePath;
 			if (!retry)
 				throw new AppError(
@@ -500,22 +511,15 @@ export class PlanRepositoryRelocationService {
 	private async assertPreviousLocationRemovable(relocation: PlanRepositoryRelocation) {
 		const previous = relocation.source;
 		validateRelocationPath(previous.storagePath);
+		const aliases = await this.locationAliases();
 		for (const reference of await this.plans.getStorageRemovalReferences())
-			if (
-				!reference.relocationId &&
-				reference.storageId === previous.storageId &&
-				locationsOverlap(reference.storagePath, previous.storagePath)
-			)
+			if (!reference.relocationId && aliases.overlaps(reference, previous))
 				throw new AppError(
 					409,
 					'The previous location overlaps a live repository, mirror or retained copy. Delete it manually after review.'
 				);
 		for (const location of this.store.retainedLocations())
-			if (
-				location.relocationId !== relocation.id &&
-				location.storageId === previous.storageId &&
-				locationsOverlap(location.storagePath, previous.storagePath)
-			)
+			if (location.relocationId !== relocation.id && aliases.overlaps(location, previous))
 				throw new AppError(
 					409,
 					'The previous location overlaps a copy kept by another repository relocation.'
