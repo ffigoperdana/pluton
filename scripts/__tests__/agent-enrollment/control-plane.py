@@ -12,6 +12,8 @@ from pathlib import Path
 private = Path('/tmp/enrollment-private')
 secret = secrets.token_hex(32)
 token = private.joinpath('token').read_text().strip()
+# Written by generate.mjs next to this file: the reviewed distribution version under test.
+expected_version = Path(__file__).resolve().parent.joinpath('expected-version').read_text().strip()
 proof = {'enrollments': 0, 'heartbeats': 0, 'polls': 0, 'expired': 0, 'replayed': 0}
 nonces = set()
 
@@ -34,7 +36,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 if proof['enrollments']:
                     proof['replayed'] += 1
                     raise ValueError('replayed')
-                assert body['inventory']['agentVersion'] == '0.7.0'
+                assert body['inventory']['agentVersion'] == expected_version
                 assert body['inventory']['capabilities']['backupExclusionsVersion'] == 1
                 # Identity-bound Source Access is first reported after enrollment.
                 assert 'sourceAccess' not in body['inventory']
@@ -50,7 +52,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 signature = base64.b64encode(hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).digest()).decode()
                 assert hmac.compare_digest(signature, self.headers['x-pluton-agent-signature'])
                 nonces.add(nonce)
-                assert body['agentVersion'] == '0.7.0' and body['capabilities']['backupExclusionsVersion'] == 1
+                assert body['agentVersion'] == expected_version and body['capabilities']['backupExclusionsVersion'] == 1
                 assert body['capabilities']['sourceAccessVersion'] == 1
                 report = body['sourceAccess']
                 assert report['authorizationMode'] == 'host-approved'

@@ -51,6 +51,7 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
    const parsedRoots = parseSourceRoots(allowedRoots);
    const hasValidSourceRoots = !parsedRoots.error;
    const delegated = parseSourceRoots(delegationScope);
+   const expectedAgentVersion = enrollment?.distribution?.version;
    let installCommand = '';
    let commandError = '';
    if (enrollment && hasValidSourceRoots && !expired) {
@@ -291,8 +292,9 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
                )}
                <pre className={classes.command}>systemctl is-active pluton-agent.service{'\n'}systemctl status --no-pager pluton-agent.service</pre>
                <p className={classes.help}>
-                  Refresh Sources and confirm this Agent is Online with version 0.7.0 and its reported capabilities. Planned roots do not authorize
-                  backup by themselves. Existing monorepo Agents keep their existing reviewed upgrade path.
+                  Refresh Sources and confirm this Agent is Online{expectedAgentVersion ? ` with version ${expectedAgentVersion}` : ''} and its
+                  reported capabilities. Planned roots do not authorize backup by themselves. Existing monorepo Agents keep their existing reviewed
+                  upgrade path.
                </p>
                {revokeError && (
                   <p className={classes.error} role="alert">

@@ -10,12 +10,15 @@ export type AgentDistribution = {
 const quote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'";
 const hasControl = (value: string) => Array.from(value).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127);
 
+/** Same reviewed allowlist as backend/src/utils/agentDistribution.ts; keep both in sync. */
+export const SUPPORTED_AGENT_INSTALL_VERSIONS: readonly string[] = ['0.7.0', '0.7.1'];
+
 /** Validate again at the rendering boundary; an older/misconfigured Server has no fallback. */
 export function buildStandaloneAgentCommand(distribution: AgentDistribution | undefined, serverUrl: string, roots: string[]): string {
    if (
       !distribution ||
       distribution.contract !== 'pluton-agent-standalone-v1' ||
-      distribution.version !== '0.7.0' ||
+      !SUPPORTED_AGENT_INSTALL_VERSIONS.includes(distribution.version) ||
       !/^[a-f0-9]{40}$/.test(distribution.commit) ||
       /^0+$/.test(distribution.commit)
    )

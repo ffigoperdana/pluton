@@ -11,6 +11,14 @@ const hasControl = (value: string) =>
 		character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127
 	);
 
+/**
+ * Reviewed standalone Agent releases that new installations may pin. The value must
+ * equal agent/package.json and AGENT_VERSION at AGENT_INSTALL_COMMIT: the generated
+ * command verifies that on the host before sudo. Keep in sync with
+ * frontend/src/utils/agentEnrollment.ts. Existing Agents are not affected.
+ */
+export const SUPPORTED_AGENT_INSTALL_VERSIONS: readonly string[] = ['0.7.0', '0.7.1'];
+
 /** Public installation metadata only. Never pass Git credentials or enrollment secrets. */
 export function agentDistribution(config: DistributionConfig) {
 	const {
@@ -22,7 +30,7 @@ export function agentDistribution(config: DistributionConfig) {
 	const unavailable = () =>
 		new AppError(
 			503,
-			'Standalone Agent distribution is unavailable. Configure a credential-free HTTPS Git repository, reviewed full commit SHA and supported Agent version (0.7.0).'
+			`Standalone Agent distribution is unavailable. Configure a credential-free HTTPS Git repository, reviewed full commit SHA and supported Agent version (${SUPPORTED_AGENT_INSTALL_VERSIONS.join(' or ')}).`
 		);
 	if (
 		!repositoryUrl ||
@@ -51,7 +59,8 @@ export function agentDistribution(config: DistributionConfig) {
 		!commit ||
 		!/^[a-f0-9]{40}$/.test(commit) ||
 		/^0+$/.test(commit) ||
-		version !== '0.7.0'
+		!version ||
+		!SUPPORTED_AGENT_INSTALL_VERSIONS.includes(version)
 	)
 		throw unavailable();
 	if (

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildStandaloneAgentCommand, type AgentDistribution } from '../src/utils/agentEnrollment.ts';
+import { buildStandaloneAgentCommand, SUPPORTED_AGENT_INSTALL_VERSIONS, type AgentDistribution } from '../src/utils/agentEnrollment.ts';
 
 const distribution: AgentDistribution = {
    repositoryUrl: 'https://git.example.internal/agents/pluton-agent.git',
@@ -33,6 +33,18 @@ test('complete fail-fast clone/pin/version/install block uses standalone root in
    assert.ok(script.indexOf('git checkout') < script.indexOf('sudo bash'));
 });
 
+test('the reviewed version allowlist matches the server and is the exact value verified on the host', () => {
+   assert.deepEqual(SUPPORTED_AGENT_INSTALL_VERSIONS, ['0.7.0', '0.7.1']);
+   for (const version of SUPPORTED_AGENT_INSTALL_VERSIONS) {
+      const script = generate({ ...distribution, version });
+      // The pinned package.json version and runtime AGENT_VERSION must both equal this argument before sudo.
+      assert.ok(script.includes(`  python3 - '${version}' <<'PLUTON_AGENT_VERSION'`), version);
+      assert.match(script, /package\.get\('version'\) != sys\.argv\[1\]/);
+      assert.match(script, /runtime\[1\] != sys\.argv\[1\]/);
+      assert.ok(script.indexOf(`'${version}'`) < script.indexOf('sudo bash'), version);
+   }
+});
+
 test('unconfigured, old server, moving refs, incompatible versions and unsafe distribution fail closed', () => {
    assert.throws(() => buildStandaloneAgentCommand(undefined, 'https://example.internal', ['/srv/example-app']));
    for (const patch of [
@@ -40,7 +52,7 @@ test('unconfigured, old server, moving refs, incompatible versions and unsafe di
       { commit: 'main' },
       { commit: 'a'.repeat(12) },
       { commit: '0'.repeat(40) },
-      { version: '0.8.0' },
+      ...['', '0.8.0', '0.7.2', '0.6.9', '0.7', '0.7.1-dev', 'v0.7.1', ' 0.7.1', "0.7.1'", 'latest'].map((version) => ({ version })),
       { contract: 'old-monorepo' },
       ...[
          'http://example.internal/a.git',

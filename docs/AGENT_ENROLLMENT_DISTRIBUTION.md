@@ -16,7 +16,7 @@ Set explicitly through the existing operator-controlled environment mechanism:
 | --- | --- |
 | `AGENT_INSTALL_REPOSITORY_URL` | Credential-free HTTPS Git `.git` URL, including private organization repositories. No embedded user/password, query, fragment, shell/control characters or ref. |
 | `AGENT_INSTALL_COMMIT` | Full lowercase 40-character SHA of the reviewed standalone source available in that repository. No tag, branch or abbreviated SHA. |
-| `AGENT_INSTALL_VERSION` | `0.7.0`, the currently reviewed standalone installer/protocol contract. Future versions require compatibility review. |
+| `AGENT_INSTALL_VERSION` | `0.7.0` or `0.7.1`, the reviewed standalone releases. It must equal `agent/package.json` and `AGENT_VERSION` at `AGENT_INSTALL_COMMIT`; the generated command refuses a mismatch on the host before sudo. Other versions require compatibility review and a server change ([0.7.1 allowlist](AGENT_DISTRIBUTION_0_7_1.md)). |
 | `AGENT_INSTALL_CA_FILE` | Optional absolute PEM CA path already provisioned securely on the **Agent host** and readable by its service user. It does not configure Git trust. |
 | `AGENT_SERVER_URL` | Optional existing Agent origin override; the generated new installation requires HTTPS. Existing explicitly approved HTTP Agent transport is not changed. |
 
