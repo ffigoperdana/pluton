@@ -51,6 +51,9 @@ const PlanReplicationSettings = ({
    const settings = replication || defaultReplication;
    const maxReplications = Math.min(MAX_REPLICATION_DESTINATIONS, maxReplicationsProp ?? MAX_REPLICATION_DESTINATIONS);
    const validationError = replicationSettingsError(settings, { storageId: primaryStorageId, storagePath: primaryStoragePath || '' }, managedAgent);
+   /** Either failover policy needs at least one S3 replica; the server re-validates identity and ownership. */
+   const failoverReplicas =
+      settings.storages.length > 0 && settings.storages.every((storage) => ['s3', 's3compatible'].includes(storage.storageType));
 
    /** Check if a storage+path combination already exists in committed or temp storages */
    const isDuplicateStorage = useCallback(
@@ -192,23 +195,25 @@ const PlanReplicationSettings = ({
                            Recovery source policy
                            <select
                               value={settings.recoveryPolicy || 'primary-only'}
-                              onChange={(event) => onUpdate({ ...settings, recoveryPolicy: event.target.value as 'primary-only' | 'assisted' })}
+                              onChange={(event) =>
+                                 onUpdate({ ...settings, recoveryPolicy: event.target.value as 'primary-only' | 'assisted' | 'automatic' })
+                              }
                            >
                               <option value="primary-only">Primary Only (default)</option>
-                              <option
-                                 value="assisted"
-                                 disabled={
-                                    !settings.storages.length ||
-                                    settings.storages.some((storage) => !['s3', 's3compatible'].includes(storage.storageType))
-                                 }
-                              >
+                              <option value="assisted" disabled={!failoverReplicas}>
                                  Assisted Failover (optional, recommended with verified replicas)
+                              </option>
+                              <option value="automatic" disabled={!failoverReplicas}>
+                                 Automatic Failover (verified replica chosen automatically)
                               </option>
                            </select>
                         </label>
                         <p>
-                           Prefer primary SFTP. A verified S3 replica requires your explicit approval and restores only into isolated staging.
-                           Database import keeps its existing separate approval.
+                           {settings.recoveryPolicy === 'automatic'
+                              ? 'Recovery starts on the primary SFTP. If it is unreachable, Pluton continues automatically with the first replica that passes identity and integrity checks, restoring only into isolated staging. Selecting this does not prove a replica is recoverable, and nothing is restored to production or imported into a database automatically.'
+                              : settings.recoveryPolicy === 'assisted'
+                                ? 'Prefer primary SFTP. A verified S3 replica requires your explicit approval and restores only into isolated staging. Database import keeps its existing separate approval.'
+                                : 'Recovery uses the primary SFTP only. Choose a failover policy to allow verified S3 replicas as a recovery source.'}
                         </p>
                      </fieldset>
                   )}

@@ -29,6 +29,8 @@ export interface SnapshotViewerProps {
    isSync?: boolean;
    stagingOnly?: boolean;
    assisted?: boolean;
+   /** Failover policy behind `assisted`; automatic still restores only into staging. */
+   recoveryPolicy?: 'assisted' | 'automatic';
    mirrors?: BackupMirror[];
    onClose: () => void;
    replicationId?: string;

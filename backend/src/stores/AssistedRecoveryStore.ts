@@ -47,8 +47,23 @@ export type AssistedCandidate = {
 	diagnostic?: AssistedRecoveryDiagnostic;
 	binding?: ReplicaRecoveryBinding;
 };
+/** How the recovery source was chosen; automatic choices keep every attempt for audit. */
+export type AssistedSourceSelection = {
+	mode: 'operator' | 'automatic';
+	/** Classified primary failure that allowed failover (automatic only). */
+	reason?: string;
+	attempts: {
+		replicationId: string;
+		position: number;
+		outcome: 'selected' | 'failed';
+		code?: string;
+		at: number;
+	}[];
+};
 export type AssistedPayload = {
 	planName?: string;
+	/** Plan recovery policy when the job was requested. */
+	policy?: 'assisted' | 'automatic';
 	mode: 'prefer-primary' | 'manual-replica';
 	sourceSnapshotId: string;
 	includes: string[];
@@ -60,6 +75,7 @@ export type AssistedPayload = {
 	};
 	candidates: AssistedCandidate[];
 	selected?: string;
+	selection?: AssistedSourceSelection;
 	activity?: ArchiveActivity;
 	diagnostic?: AssistedRecoveryDiagnostic;
 	phaseTimingsMs?: AssistedPhaseTimings;
@@ -183,20 +199,22 @@ export class AssistedRecoveryStore {
 		patch: Partial<
 			Pick<AssistedJob, 'status' | 'phase' | 'payload' | 'cleanupPending' | 'failureCode' | 'stats'>
 		>,
-		event?: string
+		event?: string,
+		eventCode?: string
 	): AssistedJob {
 		return this.db
 			.transaction(() => {
 				const row = this.get(id);
 				if (!row || !from.includes(row.status)) throw conflict();
 				const next = { ...row, ...patch, updatedAt: Date.now() };
+				const code = eventCode ?? patch.failureCode;
 				if (event)
 					next.audit = [
 						...row.audit,
 						{
 							at: next.updatedAt,
 							event,
-							...(patch.failureCode ? { code: patch.failureCode } : {}),
+							...(code ? { code } : {}),
 						},
 					].slice(-50);
 				this.db
@@ -240,16 +258,125 @@ export class AssistedRecoveryStore {
 						.get()
 				)
 					throw conflict();
+				const candidate = row.payload.candidates.find(c => c.replicationId === replicationId)!;
 				return this.update(
 					id,
 					['awaiting-approval'],
 					{
 						status: 'running',
 						phase: 'approval-revalidation',
-						payload: { ...row.payload, selected: replicationId },
+						payload: {
+							...row.payload,
+							selected: replicationId,
+							selection: {
+								mode: 'operator',
+								attempts: [
+									{ replicationId, position: candidate.position, outcome: 'selected', at: now },
+								],
+							},
+						},
 						cleanupPending: true,
 					},
 					'operator-approved'
+				);
+			})
+			.immediate();
+	}
+	/** Automatic Failover: the operator's explicit start authorizes exactly one source switch.
+	 * Same CAS and capacity rules as operator approval, consumed once from 'checking'. */
+	autoApprove(id: string, replicationId: string, reason: string, now = Date.now()) {
+		return this.db
+			.transaction(() => {
+				const row = this.get(id);
+				if (
+					!row ||
+					row.status !== 'checking' ||
+					row.payload.mode !== 'prefer-primary' ||
+					row.payload.policy !== 'automatic' ||
+					row.payload.selection ||
+					row.expiresAt <= now ||
+					!row.payload.candidates.some(
+						c => c.replicationId === replicationId && c.state === 'passed' && c.binding
+					)
+				)
+					throw conflict();
+				if (
+					this.db
+						.prepare(
+							"SELECT 1 FROM assisted_recovery_jobs WHERE id<>? AND (status='running' OR (cleanup_pending=1 AND status IN ('uncertain','failed','cancelled')))"
+						)
+						.get(id)
+				)
+					throw conflict();
+				const candidate = row.payload.candidates.find(c => c.replicationId === replicationId)!;
+				return this.update(
+					id,
+					['checking'],
+					{
+						status: 'running',
+						phase: 'approval-revalidation',
+						payload: {
+							...row.payload,
+							selected: replicationId,
+							selection: {
+								mode: 'automatic',
+								reason,
+								attempts: [
+									{ replicationId, position: candidate.position, outcome: 'selected', at: now },
+								],
+							},
+						},
+						cleanupPending: true,
+					},
+					'automatic-source-selected',
+					reason
+				);
+			})
+			.immediate();
+	}
+	/** Automatic Failover only: after a transport failure and a clean workspace, move to the
+	 * next verified replica that has not been attempted. Never for operator-approved jobs. */
+	advanceAutomatic(id: string, failedCode: string, now = Date.now()) {
+		return this.db
+			.transaction(() => {
+				const row = this.get(id);
+				const selection = row?.payload.selection;
+				if (!row || row.status !== 'running' || selection?.mode !== 'automatic') throw conflict();
+				const attempted = new Set(selection.attempts.map(attempt => attempt.replicationId));
+				const next = row.payload.candidates.find(
+					c => c.state === 'passed' && c.binding && !attempted.has(c.replicationId)
+				);
+				if (!next) throw conflict();
+				const attempts = selection.attempts.map(attempt =>
+					attempt.replicationId === row.payload.selected
+						? { ...attempt, outcome: 'failed' as const, code: failedCode }
+						: attempt
+				);
+				return this.update(
+					id,
+					['running'],
+					{
+						phase: 'approval-revalidation',
+						payload: {
+							...row.payload,
+							activity: undefined,
+							selected: next.replicationId,
+							selection: {
+								...selection,
+								attempts: [
+									...attempts,
+									{
+										replicationId: next.replicationId,
+										position: next.position,
+										outcome: 'selected',
+										at: now,
+									},
+								],
+							},
+						},
+					},
+					'automatic-failover-next-replica',
+					failedCode
 				);
 			})
 			.immediate();

@@ -179,6 +179,77 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 			destination.destroy();
 		}
 	});
+	it('reports a Restic backend retry loop after output instead of a silent idle stream', async () => {
+		responses.push({ stdout: 'partial archive', held: true });
+		const original = global.setTimeout;
+		let expire: (() => void) | undefined;
+		const timer = jest.spyOn(global, 'setTimeout').mockImplementation(((
+			callback: any,
+			ms: number,
+			...args: any[]
+		) => {
+			if (ms === 10 * 60_000) expire = () => callback(...args);
+			return original(callback, ms, ...args);
+		}) as any);
+		const destination = new Writable({
+			write(_chunk, _encoding, done) {
+				done();
+			},
+		});
+		try {
+			const work = new ManagedSftpRepositorySession().withSession(access, session =>
+				session.archive(id, destination)
+			);
+			const failure = work.then(
+				() => undefined,
+				error => error
+			);
+			while (!expire) await new Promise<void>(resolve => setImmediate(resolve));
+			await new Promise<void>(resolve => setImmediate(resolve));
+			children[1].stderr.emit(
+				'data',
+				Buffer.from(
+					// The fixture's provider text above has no newline; Restic always ends its lines.
+					`\nLoad(<data/00e0e0ca8b>, 13960, 2605056) returned error, retrying after 1.5s: Get "https://tenant.example.internal/bucket-01?sig=${access.password}": unexpected EOF\n` +
+						"rclone: 2026/11/12 01:02:03 ERROR : data/00/00e0e0ca8b: Didn't finish writing GET request (wrote 2875/13960 bytes): stream error\n"
+				)
+			);
+			expire();
+			const error = await failure;
+			expect(error).toMatchObject({
+				code: 'timeout',
+				diagnostic: {
+					operation: 'archive-readback',
+					timeoutCategory: 'archive-backend-retrying',
+					archive: {
+						processAtStop: 'running',
+						backendRetries: {
+							retryCount: 1,
+							serverErrorCount: 1,
+							loads: [
+								{
+									objectType: 'data',
+									packPrefix: '00e0e0ca8b',
+									length: 13960,
+									offset: 2605056,
+									attempts: 1,
+									lastErrorClass: 'unexpected-eof',
+								},
+							],
+							lastServedBytes: 2875,
+							lastExpectedBytes: 13960,
+						},
+					},
+				},
+			});
+			const serialized = JSON.stringify(error.diagnostic);
+			for (const value of [access.password, access.options.pass, 'tenant.example.internal', 'bucket-01', 'raw provider'])
+				expect(serialized).not.toContain(value);
+		} finally {
+			timer.mockRestore();
+			destination.destroy();
+		}
+	});
 	beforeEach(() => {
 		jest.clearAllMocks();
 		responses = [{ stdout: 'Obscured_synthetic-value\n', code: 0 }];

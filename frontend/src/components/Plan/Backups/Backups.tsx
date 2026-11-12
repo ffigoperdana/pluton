@@ -117,6 +117,10 @@ const Backups = ({
    };
    replicationSettings: Plan['settings']['replication'];
 }) => {
+   const failoverPolicy =
+      replicationSettings?.recoveryPolicy === 'assisted' || replicationSettings?.recoveryPolicy === 'automatic'
+         ? replicationSettings.recoveryPolicy
+         : undefined;
    const [showSnapOptions, setShowSnapOptions] = useState<false | string>(false);
    const [showDeleteModal, setShowDeleteModal] = useState<Backup | false>(false);
    const [showRestoreModal, setShowRestoreModal] = useState<Backup | false>(false);
@@ -547,7 +551,8 @@ const Backups = ({
                backupId={showRestoreModal.id}
                deviceId={deviceId}
                stagingOnly={isRemoteManaged}
-               assisted={replicationSettings?.recoveryPolicy === 'assisted'}
+               assisted={failoverPolicy !== undefined}
+               recoveryPolicy={failoverPolicy}
                planStorage={storage}
                mirrors={
                   !isRemoteManaged &&
@@ -636,7 +641,8 @@ const Backups = ({
                planId={planId}
                isSync={isSync}
                stagingOnly={isRemoteManaged}
-               assisted={replicationSettings?.recoveryPolicy === 'assisted'}
+               assisted={failoverPolicy !== undefined}
+               recoveryPolicy={failoverPolicy}
                onClose={() => setShowSnapshotViewer(false)}
                mirrors={!isRemoteManaged && replicationSettings?.enabled ? showSnapshotViewer.mirrors : undefined}
                primaryStorage={!isRemoteManaged && replicationSettings?.enabled ? storage : undefined}

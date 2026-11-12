@@ -114,12 +114,12 @@ const MirrorDetails = ({ mirrors = [], replicationSettings, managedAgent, backup
             </div>
             {managedAgent && (
                <div className={classes.recovery}>
-                  {replicationSettings?.recoveryPolicy === 'assisted' ? (
-                     <AssistedRecovery planId={planId} backupId={backupId} manual />
+                  {replicationSettings?.recoveryPolicy === 'assisted' || replicationSettings?.recoveryPolicy === 'automatic' ? (
+                     <AssistedRecovery planId={planId} backupId={backupId} manual policy={replicationSettings.recoveryPolicy} />
                   ) : (
                      <p className={classes.note}>
-                        This plan uses Primary Only. Enable Assisted Failover in plan settings to authorize isolated replica recovery. Native database
-                        import retains its separate approval.
+                        This plan uses Primary Only. Enable Assisted or Automatic Failover in plan settings to authorize isolated replica recovery.
+                        Native database import retains its separate approval.
                      </p>
                   )}
                </div>

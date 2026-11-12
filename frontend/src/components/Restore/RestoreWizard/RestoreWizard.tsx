@@ -21,10 +21,21 @@ interface RestoreWizardProps {
    mirrors?: Backup['mirrors'];
    stagingOnly?: boolean;
    assisted?: boolean;
+   recoveryPolicy?: 'assisted' | 'automatic';
    close: () => void;
 }
 
-const RestoreWizard = ({ backupId, planId, deviceId, mirrors, planStorage, stagingOnly = false, assisted = false, close }: RestoreWizardProps) => {
+const RestoreWizard = ({
+   backupId,
+   planId,
+   deviceId,
+   mirrors,
+   planStorage,
+   stagingOnly = false,
+   assisted = false,
+   recoveryPolicy,
+   close,
+}: RestoreWizardProps) => {
    const [step, setStep] = useState(1);
    const [primaryReady, setPrimaryReady] = useState(false);
    const [restoreSettings, setRestoreSettings] = useState<RestoreSettings>({
@@ -67,7 +78,14 @@ const RestoreWizard = ({ backupId, planId, deviceId, mirrors, planStorage, stagi
                   </button>
                </div>
                <div className={classes.assistedBody}>
-                  <AssistedRecovery planId={planId} backupId={backupId} onPrimaryReady={() => setPrimaryReady(true)} close={close} />
+                  <AssistedRecovery
+                     planId={planId}
+                     backupId={backupId}
+                     policy={recoveryPolicy}
+                     requireStart={recoveryPolicy === 'automatic'}
+                     onPrimaryReady={() => setPrimaryReady(true)}
+                     close={close}
+                  />
                </div>
             </div>
          </div>

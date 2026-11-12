@@ -201,20 +201,23 @@ export function validateReplicationSettings(
 	};
 	if (
 		value.recoveryPolicy !== undefined &&
-		!['primary-only', 'assisted'].includes(value.recoveryPolicy as string)
+		!['primary-only', 'assisted', 'automatic'].includes(value.recoveryPolicy as string)
 	)
 		throw new AppError(400, 'Invalid recovery source policy.');
+	const failover =
+		value.recoveryPolicy === 'automatic'
+			? 'Automatic Failover'
+			: value.recoveryPolicy === 'assisted'
+				? 'Assisted Failover'
+				: undefined;
 	if (
-		value.recoveryPolicy === 'assisted' &&
+		failover &&
 		scope &&
 		(scope.sourceType !== 'device' || scope.sourceId === 'main' || scope.method !== 'backup')
 	)
-		throw new AppError(400, 'Assisted Failover requires a managed remote filesystem backup.');
-	if (
-		value.recoveryPolicy === 'assisted' &&
-		(!value.enabled || !Array.isArray(value.storages) || !value.storages.length)
-	)
-		throw new AppError(400, 'Assisted Failover requires enabled compatible replicas.');
+		throw new AppError(400, `${failover} requires a managed remote filesystem backup.`);
+	if (failover && (!value.enabled || !Array.isArray(value.storages) || !value.storages.length))
+		throw new AppError(400, `${failover} requires enabled compatible replicas.`);
 	if (
 		typeof value.enabled !== 'boolean' ||
 		(value.concurrent !== undefined && typeof value.concurrent !== 'boolean') ||

@@ -254,20 +254,32 @@ export async function exerciseReplicaArchiveFaults(input: {
 
 		mode = 'gzip-range';
 		gzipResponses = 0;
-		await assert.rejects(read(sink(), { session: gzipRequesting }), (error: unknown) => {
-			if (!(error instanceof ManagedRepositoryAccessError)) return false;
-			const archive = error.diagnostic?.archive;
-			return (
-				error.code === 'timeout' &&
-				archive?.processAtStop === 'running' &&
-				archive.bytesReceived < bytes
-			);
-		});
+		const gzipFailure: unknown = await read(sink(), { session: gzipRequesting }).then(
+			() => undefined,
+			error => error
+		);
+		assert.ok(gzipFailure instanceof ManagedRepositoryAccessError);
+		assert.equal(gzipFailure.code, 'timeout');
+		const gzipArchive = gzipFailure.diagnostic?.archive;
+		assert.ok(gzipArchive && gzipArchive.processAtStop === 'running' && gzipArchive.bytesReceived < bytes);
 		assert.ok(gzipResponses > 0, 'gzip-requesting Rclone must receive gzip Range bodies');
+		// Restic's stderr retries now surface as a closed summary and a distinct category.
+		assert.equal(gzipFailure.diagnostic?.timeoutCategory, 'archive-backend-retrying');
+		const backendRetries = gzipArchive.backendRetries;
+		assert.ok(backendRetries && backendRetries.retryCount > 0, 'Restic retries must be summarized');
+		// The gzip body is longer than the declared range: a wrong-size response, not "other".
+		assert.ok((backendRetries.errorClasses['partial-read'] ?? 0) > 0, 'gzip ranges must classify as wrong-size');
+		assert.ok(
+			backendRetries.loads.some(
+				load => load.objectType === 'data' && [...packs].some(name => name.startsWith(load.packPrefix))
+			),
+			'the summary must name a gzip-faulted data pack'
+		);
+		assert.doesNotMatch(JSON.stringify(gzipFailure.diagnostic), /127\.0\.0\.1|https?:|password|secret/i);
 		await assertScratch();
 		console.log(
 			'PASS gzip Range bodies requested by default Rclone settings leave Restic retrying until the watchdog',
-			{ gzipResponses }
+			{ gzipResponses, backendRetries }
 		);
 		gzipResponses = 0;
 		let exact = 0;

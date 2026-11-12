@@ -303,3 +303,56 @@ $mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospa
    font-weight: 600;
    color: var(--content-title-color);
 }
+/* Automatic Failover progression: server-derived states only, no progress percentages. */
+.steps {
+   display: grid;
+   gap: 4px;
+   margin: 0;
+   padding: 0;
+   list-style: none;
+   li {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--content-text-color-light);
+      &::before {
+         content: '';
+         flex: 0 0 8px;
+         height: 8px;
+         border-radius: 50%;
+         border: 1px solid var(--line-color);
+      }
+   }
+   .done {
+      color: var(--content-title-color);
+      &::before {
+         background: var(--success-text-color);
+         border-color: var(--success-text-color);
+      }
+   }
+   .active {
+      color: var(--content-title-color);
+      font-weight: 600;
+      &::before {
+         background: var(--primary-color);
+         border-color: var(--primary-color);
+      }
+   }
+   .failed {
+      color: var(--error-text-color);
+      &::before {
+         background: var(--error-text-color);
+         border-color: var(--error-text-color);
+      }
+   }
+}
+@media (prefers-reduced-motion: no-preference) {
+   .steps .active::before {
+      animation: step-pulse 1.6s ease-in-out infinite;
+   }
+}
+@keyframes step-pulse {
+   50% {
+      opacity: 0.45;
+   }
+}

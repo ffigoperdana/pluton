@@ -46,6 +46,7 @@ export default function ManagedSnapshotViewer(props: ManagedViewerProps) {
 /** Only the current page is retained. Managed metadata never enters Dexie. */
 function ManagedViewer({
    assisted = false,
+   recoveryPolicy,
    backup,
    planId,
    onClose,
@@ -501,6 +502,7 @@ function ManagedViewer({
                   planId={planId}
                   backupId={backup.id}
                   initialIncludes={[assistedFile.path]}
+                  policy={recoveryPolicy}
                   onPrimaryReady={() => performRestore(assistedFile)}
                />
             </Modal>
