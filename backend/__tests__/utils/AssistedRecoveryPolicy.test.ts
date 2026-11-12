@@ -23,33 +23,41 @@ describe('opt-in recovery source policy validation', () => {
 			})
 		).not.toThrow();
 	});
-	it.each(['automatic', 'unsafe', true, null])('rejects unsupported policy %s', recoveryPolicy => {
+	it.each(['auto', 'unsafe', 'Automatic', true, null])('rejects unsupported policy %s', recoveryPolicy => {
 		expect(() => validateReplicationSettings({ ...replicas, recoveryPolicy })).toThrow(
 			'Invalid recovery source policy'
 		);
 	});
-	it.each([{ enabled: false }, { storages: [] }])('requires enabled replicas %j', patch => {
-		expect(() => validateReplicationSettings({ ...replicas, ...patch })).toThrow(
-			'requires enabled'
-		);
-	});
-	it.each([
-		{ sourceType: 'device', sourceId: 'main', method: 'backup' },
-		{ sourceType: 'local', sourceId: 'app-01', method: 'backup' },
-		{ sourceType: 'device', sourceId: 'app-01', method: 'sync' },
-	])('refuses unsupported plan scope %j', scope => {
-		expect(() => validateReplicationSettings(replicas, scope)).toThrow('managed remote filesystem');
-	});
-	it('accepts the managed scope and preserves policy through JSON schema validation', () => {
-		expect(() =>
-			validateReplicationSettings(replicas, {
-				sourceType: 'device',
-				sourceId: 'app-01',
-				method: 'backup',
-			})
-		).not.toThrow();
-		expect(planUpdateSchema.parse({ settings: { replication: replicas } }).settings).toMatchObject({
-			replication: { recoveryPolicy: 'assisted' },
+	describe.each([
+		['assisted', 'Assisted Failover'],
+		['automatic', 'Automatic Failover'],
+	])('%s policy', (recoveryPolicy, label) => {
+		const settings = { ...replicas, recoveryPolicy };
+		it.each([{ enabled: false }, { storages: [] }])('requires enabled replicas %j', patch => {
+			expect(() => validateReplicationSettings({ ...settings, ...patch })).toThrow(
+				`${label} requires enabled`
+			);
+		});
+		it.each([
+			{ sourceType: 'device', sourceId: 'main', method: 'backup' },
+			{ sourceType: 'local', sourceId: 'app-01', method: 'backup' },
+			{ sourceType: 'device', sourceId: 'app-01', method: 'sync' },
+		])('refuses unsupported plan scope %j', scope => {
+			expect(() => validateReplicationSettings(settings, scope)).toThrow(
+				`${label} requires a managed remote filesystem`
+			);
+		});
+		it('accepts the managed scope and preserves policy through JSON schema validation', () => {
+			expect(() =>
+				validateReplicationSettings(settings, {
+					sourceType: 'device',
+					sourceId: 'app-01',
+					method: 'backup',
+				})
+			).not.toThrow();
+			expect(planUpdateSchema.parse({ settings: { replication: settings } }).settings).toMatchObject({
+				replication: { recoveryPolicy },
+			});
 		});
 	});
 });

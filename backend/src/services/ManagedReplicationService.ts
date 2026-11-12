@@ -62,10 +62,13 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 		const replication = plan.settings.replication;
 		if (!replication) return;
 		if (
-			replication.recoveryPolicy === 'assisted' &&
+			(replication.recoveryPolicy === 'assisted' || replication.recoveryPolicy === 'automatic') &&
 			(plan.sourceType !== 'device' || plan.sourceId === 'main' || plan.method !== 'backup')
 		)
-			throw new AppError(400, 'Assisted Failover requires a managed remote filesystem backup.');
+			throw new AppError(
+				400,
+				`${replication.recoveryPolicy === 'automatic' ? 'Automatic' : 'Assisted'} Failover requires a managed remote filesystem backup.`
+			);
 		if (!Array.isArray(replication.storages) || replication.storages.length > 2)
 			throw new AppError(400, 'Managed Agent plans support at most two replica destinations.');
 		if (!replication.enabled) return;

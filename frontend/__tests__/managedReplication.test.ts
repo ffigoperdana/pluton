@@ -39,6 +39,16 @@ test('enabled destination setup rejects missing storage/path, duplicates and pri
    assert.match(replicationSettingsError({ ...settings(2), storages: [destination(1), destination(1)] }, primary, true)!, /different repository path/);
 });
 
+test('Automatic Failover is opt-in, needs managed replicas and never accepts unknown policies', () => {
+   assert.equal(replicationSettingsError({ ...settings(1), recoveryPolicy: 'automatic' }, primary, true), undefined);
+   assert.equal(replicationSettingsError({ ...settings(2), recoveryPolicy: 'assisted' }, primary, true), undefined);
+   assert.match(replicationSettingsError({ ...settings(1), recoveryPolicy: 'automatic' }, primary, false)!, /Automatic Failover requires/);
+   assert.match(replicationSettingsError({ ...settings(0), recoveryPolicy: 'automatic' }, primary, true)!, /Automatic Failover requires/);
+   assert.match(replicationSettingsError({ ...settings(1), enabled: false, recoveryPolicy: 'automatic' }, primary, true)!, /Automatic Failover requires/);
+   assert.match(replicationSettingsError({ ...settings(1), recoveryPolicy: 'auto' as any }, primary, true)!, /Invalid recovery source policy/);
+   assert.equal(replicationSettingsError(settings(1), primary, true), undefined);
+});
+
 test('primary success never implies complete redundancy; missing destination results remain pending', () => {
    const completed = { ...destination(1), status: 'completed' as const };
    assert.equal(mirrorSummary([completed], 1).incomplete, false);

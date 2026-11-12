@@ -15,6 +15,8 @@ import {
    recoveryInProgress,
    recoveryFailureAdvice,
    recoveryRetrySummary,
+   recoveryDecision,
+   recoverySteps,
    type AssistedRecoveryDiagnostic,
    type AssistedRecoveryJob,
 } from '../../../utils/assistedRecovery';
@@ -27,6 +29,10 @@ interface Props {
    backupId: string;
    manual?: boolean;
    initialIncludes?: string[];
+   /** Plan recovery source policy; the server enforces it independently. */
+   policy?: 'assisted' | 'automatic';
+   /** Wait for an explicit "Start recovery" instead of checking on open. */
+   requireStart?: boolean;
    onPrimaryReady?: () => void;
    close?: () => void;
 }
@@ -64,7 +70,16 @@ function DiagnosticDetails({ diagnostic, showCode = false }: { diagnostic: Assis
       </>
    );
 }
-export default function AssistedRecovery({ planId, backupId, manual = false, initialIncludes = [], onPrimaryReady, close }: Props) {
+export default function AssistedRecovery({
+   planId,
+   backupId,
+   manual = false,
+   initialIncludes = [],
+   policy = 'assisted',
+   requireStart = false,
+   onPrimaryReady,
+   close,
+}: Props) {
    const client = useQueryClient();
    const [epoch, setEpoch] = useState(() => createTemporaryId());
    const key = ['assisted-recovery', planId, backupId, epoch];
@@ -89,7 +104,10 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
       refetchOnWindowFocus: true,
       refetchInterval: (query) => (query.state.error ? false : recoveryPolling(query.state.data || [])),
    });
-   const job = jobs.data?.find((row) => row.id === jobId) || jobs.data?.find(recoveryBlocking) || jobs.data?.[0];
+   const latestJob = jobs.data?.find((row) => row.id === jobId) || jobs.data?.find(recoveryBlocking) || jobs.data?.[0];
+   // An explicit-start dialog never presents an earlier job as the current recovery.
+   const awaitingStart = requireStart && !manual && !jobId && !jobs.data?.some(recoveryBlocking);
+   const job = awaitingStart ? undefined : latestJob;
    const update = (row: AssistedRecoveryJob) => {
       setJobId(row.id);
       client.setQueryData<AssistedRecoveryJob[]>(key, (old) => [row, ...(old || []).filter((item) => item.id !== row.id)]);
@@ -140,8 +158,11 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
       let disposed = false;
       queueMicrotask(() => {
          if (disposed || manual || !jobs.isSuccess || automaticCheck.current) return;
-         automaticCheck.current = true;
          const active = jobs.data.find(recoveryBlocking);
+         // An Automatic Failover recovery may restore from a replica without another click,
+         // so it starts only from an explicit operator action, never from opening the dialog.
+         if (requireStart && !active) return;
+         automaticCheck.current = true;
          if (active) setJobId(active.id);
          else start.mutate('prefer-primary');
       });
@@ -191,16 +212,26 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
    const busy = start.isPending || approve.isPending || cancel.isPending || retryPrimary.isPending;
    const active = job && recoveryInProgress(job);
    const workDetail = job && recoveryWorkDetail(job);
+   const steps = job && job.policy === 'automatic' && job.primary && job.primary.state !== 'not-checked' ? recoverySteps(job) : [];
+   const decision = job && recoveryDecision(job);
    const error = jobs.error || start.error || approve.error || cancel.error || retryPrimary.error;
+   const beginRecovery = () => {
+      automaticCheck.current = true;
+      start.mutate('prefer-primary');
+   };
    return (
       <section aria-label="Assisted recovery" className={classes.recovery}>
          <header className={classes.head}>
             <h4>
                {job?.primary?.state === 'unavailable'
-                  ? 'Primary Repository Unavailable'
+                  ? job.policy === 'automatic'
+                     ? 'Primary Repository Unavailable · Automatic Failover'
+                     : 'Primary Repository Unavailable'
                   : manual
                     ? 'Manual Verified Replica Recovery'
-                    : 'Checking Recovery Sources'}
+                    : policy === 'automatic'
+                      ? 'Automatic Failover Recovery'
+                      : 'Checking Recovery Sources'}
             </h4>
             <p className={classes.context}>
                Plan: {job?.planName || planId} · Backup: <code>{backupId}</code>
@@ -220,6 +251,18 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
                Loading owner-authorized recovery history…
             </p>
          )}
+         {awaitingStart && (
+            <div className={classes.manual}>
+               <p className={classes.note}>
+                  This plan uses Automatic Failover. Pluton checks the primary SFTP first and opens the normal restore when it is available. If
+                  the primary is unreachable, Pluton continues automatically with the first S3 replica that passes identity and integrity checks,
+                  restoring only into isolated staging. No database is imported and no live target is overwritten.
+               </p>
+               <button type="button" className={classes.primary} disabled={busy || jobs.isPending || !!jobs.error} onClick={beginRecovery}>
+                  Start recovery
+               </button>
+            </div>
+         )}
          {job && (
             <>
                <div className={`${classes.status} ${classes[recoveryTone(job)]}`}>
@@ -235,7 +278,10 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
                         <ElapsedTime
                            start={
                               job.activeSince ??
-                              (job.status === 'checking' ? job.createdAt : job.audit.find((event) => event.event === 'operator-approved')?.at)
+                              (job.status === 'checking'
+                                 ? job.createdAt
+                                 : job.audit.find((event) => event.event === 'operator-approved' || event.event === 'automatic-source-selected')
+                                      ?.at)
                            }
                            running
                            label="Elapsed"
@@ -243,6 +289,15 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
                      )}
                   </div>
                </div>
+               {steps.length > 0 && (
+                  <ol className={classes.steps} aria-label="Recovery progress">
+                     {steps.map((step, index) => (
+                        <li key={index} className={classes[step.state]} data-step-state={step.state}>
+                           {step.label}
+                        </li>
+                     ))}
+                  </ol>
+               )}
                {!intentMatches && (
                   <p role="alert" className={classes.alert}>
                      This pending job has a different selection. Review and cancel it before checking the newly requested selection. Its old approval
@@ -277,6 +332,12 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
                   <dd>{job.target}</dd>
                   <dt>Selection</dt>
                   <dd>{job.includes.length ? job.includes.join(', ') : 'Full snapshot'}</dd>
+                  {job.policy === 'automatic' && (
+                     <>
+                        <dt>Policy</dt>
+                        <dd>Automatic Failover</dd>
+                     </>
+                  )}
                </dl>
                {job.failureCode && (
                   <div role="alert" className={classes.alert}>
@@ -335,6 +396,7 @@ export default function AssistedRecovery({ planId, backupId, manual = false, ini
                      discarded.
                   </p>
                )}
+               {decision && <p className={classes.note}>{decision}</p>}
                <div className={classes.actions}>
                   {job.status === 'awaiting-approval' && (
                      <button

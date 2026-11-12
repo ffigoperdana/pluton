@@ -134,7 +134,7 @@ export interface PlanReplicationStorage {
 }
 
 export interface PlanReplicationSettings {
-   recoveryPolicy?: 'primary-only' | 'assisted';
+   recoveryPolicy?: 'primary-only' | 'assisted' | 'automatic';
    enabled: boolean;
    concurrent: boolean;
    storages: PlanReplicationStorage[];

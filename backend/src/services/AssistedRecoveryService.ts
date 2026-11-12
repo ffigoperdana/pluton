@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import path from 'path';
+import { planLogger } from '../utils/logger';
 import {
 	AssistedRecoveryStore,
 	ASSISTED_TIMED_PHASES,
@@ -43,6 +44,23 @@ export function assistedFailure(error: unknown): string {
 }
 const elapsedMs = (duration: number) =>
 	Math.min(24 * 60 * 60_000, Math.max(0, Math.round(duration)));
+/** Failures that mean "this source could not be read", never "this source is wrong". */
+const AUTOMATIC_RETRY_FAILURES = new Set(['network-unavailable', 'timeout']);
+/** Source decisions go to the existing restore log with closed fields only. */
+function logSourceDecision(
+	job: AssistedJob,
+	event: 'automatic-source-selected' | 'automatic-failover-next-replica' | 'automatic-failover-blocked',
+	fields: { position?: number; code?: string }
+) {
+	try {
+		planLogger('restore', job.planId, job.backupId).info(
+			{ event: `assisted_recovery_${event.replace(/-/g, '_')}`, jobId: job.id, ...fields },
+			'Assisted recovery source decision.'
+		);
+	} catch {
+		/* Logging never changes a recovery decision. */
+	}
+}
 
 function recoveryDiagnostic(
 	error: unknown,
@@ -141,13 +159,14 @@ export class AssistedRecoveryService {
 	}
 	private async policy(planId: string) {
 		const plan = await this.plans.getById(planId);
+		const recoveryPolicy = plan?.settings.replication?.recoveryPolicy;
 		if (
 			!plan ||
 			plan.sourceType !== 'device' ||
 			plan.sourceId === 'main' ||
 			plan.method !== 'backup' ||
 			!plan.settings.replication?.enabled ||
-			plan.settings.replication.recoveryPolicy !== 'assisted' ||
+			(recoveryPolicy !== 'assisted' && recoveryPolicy !== 'automatic') ||
 			!plan.settings.replication.storages.length ||
 			plan.settings.replication.storages.length > 2
 		)
@@ -155,7 +174,7 @@ export class AssistedRecoveryService {
 				409,
 				'This plan uses Primary Only. Enable Assisted Failover with compatible replicas first.'
 			);
-		return plan;
+		return { plan, recoveryPolicy };
 	}
 	private owned(owner: string, id: string) {
 		const row = this.store.get(id);
@@ -175,8 +194,23 @@ export class AssistedRecoveryService {
 				row.status === 'checking'
 					? row.createdAt
 					: row.status === 'running'
-						? row.audit.find(event => event.event === 'operator-approved')?.at
+						? row.audit.find(
+								event =>
+									event.event === 'operator-approved' || event.event === 'automatic-source-selected'
+							)?.at
 						: undefined,
+			policy: row.payload.policy ?? 'assisted',
+			sourceSelection: row.payload.selection && {
+				mode: row.payload.selection.mode,
+				reason: row.payload.selection.reason,
+				attempts: row.payload.selection.attempts.map(attempt => ({
+					replicationId: attempt.replicationId,
+					position: attempt.position,
+					outcome: attempt.outcome,
+					code: attempt.code,
+					at: attempt.at,
+				})),
+			},
 			activity: row.status === 'running' ? row.payload.activity : undefined,
 			diagnostic: row.payload.diagnostic,
 			phaseTimingsMs: row.payload.phaseTimingsMs,
@@ -230,7 +264,7 @@ export class AssistedRecoveryService {
 			!/^[-a-zA-Z0-9]{36}$/.test(input.requestKey)
 		)
 			throw new AppError(400, 'Invalid recovery request identity.');
-		const plan = await this.policy(input.planId);
+		const { plan, recoveryPolicy } = await this.policy(input.planId);
 		const binding = await this.primary.testBinding(input.backupId, input.planId); // SQLite only, primary may be offline
 		for (const items of [input.includes, input.excludes]) {
 			if (!Array.isArray(items) || items.length > 1024)
@@ -243,6 +277,7 @@ export class AssistedRecoveryService {
 		}
 		const payload: AssistedPayload = {
 			planName: plan.title || plan.id,
+			policy: recoveryPolicy,
 			mode: input.mode,
 			sourceSnapshotId: binding.snapshotId,
 			includes: [...new Set(input.includes)].sort(),
@@ -292,7 +327,7 @@ export class AssistedRecoveryService {
 		let phase = row.phase;
 		let payload = row.payload;
 		try {
-			const plan = await this.policy(row.planId);
+			const { plan } = await this.policy(row.planId);
 			let primary: NonNullable<AssistedJob['payload']['primary']> = { state: 'not-checked' };
 			if (row.payload.mode === 'prefer-primary') {
 				try {
@@ -332,7 +367,8 @@ export class AssistedRecoveryService {
 				row.id,
 				['checking'],
 				{ phase: 'replica-check', payload },
-				primary.state === 'unavailable' ? 'primary-unavailable' : 'manual-replica-requested'
+				primary.state === 'unavailable' ? 'primary-unavailable' : 'manual-replica-requested',
+				primary.code
 			);
 			for (const [position, replica] of plan.settings.replication!.storages.entries()) {
 				if (signal.aborted) throw new ManagedRepositoryAccessError('cancelled');
@@ -369,9 +405,46 @@ export class AssistedRecoveryService {
 				if (signal.aborted) throw new ManagedRepositoryAccessError('cancelled');
 				this.store.update(row.id, ['checking'], { payload }, 'replica-eligibility-checked');
 			}
-			await this.policy(row.planId);
+			const current = await this.policy(row.planId);
 			await this.replicas.cleanup(row.id);
 			const eligible = payload.candidates.some(c => c.state === 'passed');
+			const first = payload.candidates.find(c => c.state === 'passed');
+			// Automatic Failover: only after an eligible primary outage, only while the plan is still
+			// Automatic, and only for a replica that passed every identity/integrity preflight.
+			if (
+				first &&
+				primary.state === 'unavailable' &&
+				primary.code &&
+				row.payload.mode === 'prefer-primary' &&
+				row.payload.policy === 'automatic' &&
+				current.recoveryPolicy === 'automatic'
+			) {
+				let approved: AssistedJob;
+				try {
+					approved = this.store.autoApprove(row.id, first.replicationId, primary.code, this.now());
+					logSourceDecision(approved, 'automatic-source-selected', {
+						position: first.position,
+						code: primary.code,
+					});
+				} catch {
+					logSourceDecision(row, 'automatic-failover-blocked', { code: primary.code });
+					this.store.update(
+						row.id,
+						['checking'],
+						{
+							status: 'failed',
+							phase: 'automatic-failover-blocked',
+							cleanupPending: false,
+							payload,
+							failureCode: 'automatic-failover-blocked',
+						},
+						'recovery-refused'
+					);
+					return;
+				}
+				await this.execute(approved, signal);
+				return;
+			}
 			this.store.update(
 				row.id,
 				['checking'],
@@ -414,8 +487,8 @@ export class AssistedRecoveryService {
 		this.launch(id, signal => this.execute(approved, signal));
 		return this.view(approved);
 	}
-	private async execute(row: AssistedJob, signal: AbortSignal) {
-		const candidate = row.payload.candidates.find(c => c.replicationId === row.payload.selected)!;
+	private async execute(initial: AssistedJob, signal: AbortSignal) {
+		let row = initial;
 		let phase = row.phase;
 		let phaseBegan = performance.now();
 		const phaseTimingsMs: AssistedPhaseTimings = {};
@@ -437,6 +510,30 @@ export class AssistedRecoveryService {
 				event
 			);
 		};
+		// Bounded by the number of verified candidates (at most two). Operator-approved jobs
+		// make exactly one attempt; only Automatic Failover advances after a transport failure.
+		for (;;) {
+			const outcome = await this.attempt(row, signal, stage, recordPhase, phaseTimingsMs, () => ({
+				phase,
+				phaseBegan,
+			}));
+			if (outcome === 'done') return;
+			row = outcome;
+			phase = row.phase;
+			phaseBegan = performance.now();
+		}
+	}
+	/** One staged recovery from the selected replica. Returns 'done' on a terminal state, or the
+	 * advanced job when Automatic Failover moved to the next verified replica. */
+	private async attempt(
+		row: AssistedJob,
+		signal: AbortSignal,
+		stage: (value: string, activity?: ArchiveActivity, event?: string) => void,
+		recordPhase: (now?: number) => void,
+		phaseTimingsMs: AssistedPhaseTimings,
+		current: () => { phase: string; phaseBegan: number }
+	): Promise<'done' | AssistedJob> {
+		const candidate = row.payload.candidates.find(c => c.replicationId === row.payload.selected)!;
 		try {
 			await this.policy(row.planId);
 			const result = await this.replicas.withReplica(
@@ -491,7 +588,9 @@ export class AssistedRecoveryService {
 				},
 				'staged-recovery-verified'
 			);
+			return 'done';
 		} catch (error) {
+			const { phase, phaseBegan } = current();
 			const diagnostic = recoveryDiagnostic(error, phase, phaseBegan);
 			recordPhase();
 			const cleanupStarted = performance.now();
@@ -510,20 +609,57 @@ export class AssistedRecoveryService {
 			phaseTimingsMs['staging-cleanup'] = elapsedMs(
 				(phaseTimingsMs['staging-cleanup'] ?? 0) + performance.now() - cleanupStarted
 			);
-			const current = this.store.get(row.id);
-			if (current?.status === 'running')
+			const failureCode = signal.aborted ? 'cancelled' : diagnostic.failureCode;
+			// Automatic Failover may move on only after a transport-class failure, with this
+			// replica's partial staging verifiably removed. Identity, integrity, authentication,
+			// TLS and unknown failures stop the job; the next source never sees partial output.
+			if (
+				!signal.aborted &&
+				!cleanupPending &&
+				row.payload.selection?.mode === 'automatic' &&
+				AUTOMATIC_RETRY_FAILURES.has(failureCode)
+			) {
+				try {
+					const advanced = this.store.advanceAutomatic(row.id, failureCode, this.now());
+					logSourceDecision(advanced, 'automatic-failover-next-replica', {
+						position: advanced.payload.candidates.find(
+							c => c.replicationId === advanced.payload.selected
+						)?.position,
+						code: failureCode,
+					});
+					return advanced;
+				} catch {
+					// No untried verified replica, or the job changed: fall through to a terminal failure.
+				}
+			}
+			const selection = row.payload.selection && {
+				...row.payload.selection,
+				attempts: row.payload.selection.attempts.map(attempt =>
+					attempt.replicationId === row.payload.selected && attempt.outcome === 'selected'
+						? { ...attempt, outcome: 'failed' as const, code: failureCode }
+						: attempt
+				),
+			};
+			const latest = this.store.get(row.id);
+			if (latest?.status === 'running')
 				this.store.update(
 					row.id,
 					['running'],
 					{
 						status: signal.aborted ? 'cancelled' : 'failed',
 						phase: 'recovery-stopped',
-						failureCode: signal.aborted ? 'cancelled' : diagnostic.failureCode,
-						payload: { ...row.payload, diagnostic, phaseTimingsMs },
+						failureCode,
+						payload: {
+							...row.payload,
+							...(selection ? { selection } : {}),
+							diagnostic,
+							phaseTimingsMs,
+						},
 						cleanupPending,
 					},
 					'staged-recovery-failed'
 				);
+			return 'done';
 		}
 	}
 	async cancel(owner: string, id: string) {

@@ -10,9 +10,11 @@ export function replicationSettingsError(
    managedAgent = false,
 ): string | undefined {
    if (!settings) return;
-   if (settings.recoveryPolicy && !['primary-only', 'assisted'].includes(settings.recoveryPolicy)) return 'Invalid recovery source policy.';
+   if (settings.recoveryPolicy && !['primary-only', 'assisted', 'automatic'].includes(settings.recoveryPolicy)) return 'Invalid recovery source policy.';
    if (settings.recoveryPolicy === 'assisted' && (!managedAgent || !settings.enabled || !settings.storages.length))
       return 'Assisted Failover requires enabled compatible managed Agent replicas.';
+   if (settings.recoveryPolicy === 'automatic' && (!managedAgent || !settings.enabled || !settings.storages.length))
+      return 'Automatic Failover requires enabled compatible managed Agent replicas.';
    if (settings.storages.length > MAX_REPLICATION_DESTINATIONS) return 'A backup plan supports at most two replication destinations.';
    if (!settings.enabled) return;
    if (!settings.storages.length) return 'Select at least one replication destination, or disable replication.';

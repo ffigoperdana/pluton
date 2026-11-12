@@ -165,7 +165,8 @@ export interface PlanReplicationStorage {
 }
 
 export interface PlanReplicationSettings {
-	recoveryPolicy?: 'primary-only' | 'assisted';
+	/** Recovery source policy. Missing means primary-only; automatic still restores only to staging. */
+	recoveryPolicy?: 'primary-only' | 'assisted' | 'automatic';
 	enabled: boolean;
 	concurrent: boolean;
 	storages: PlanReplicationStorage[];

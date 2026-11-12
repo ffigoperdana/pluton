@@ -68,6 +68,30 @@ export type AssistedRecoveryJob = {
    failureCode?: string;
    stats?: { files: number; bytes: number };
    audit: { at: number; event: string; code?: string }[];
+   /** Plan policy when the job was requested (older jobs report 'assisted'). */
+   policy?: 'assisted' | 'automatic';
+   /** How the recovery source was chosen; absent until a source is selected. */
+   sourceSelection?: {
+      mode: 'operator' | 'automatic';
+      reason?: string;
+      attempts: { replicationId: string; position: number; outcome: 'selected' | 'failed'; code?: string; at: number }[];
+   };
+};
+/** Failures Pluton never answers by switching sources. */
+const SECURITY_STOPS = new Set([
+   'authentication-denied',
+   'authorization-denied',
+   'tls-invalid',
+   'wrong-password',
+   'configuration-invalid',
+   'repository-unavailable',
+   'source-binding-invalid',
+   'approval-binding-changed',
+   'repository-identity-mismatch',
+]);
+const replicaName = (job: AssistedRecoveryJob, replicationId?: string) => {
+   const position = job.candidates.find((candidate) => candidate.replicationId === replicationId)?.position;
+   return position ? `S3 Replica ${position}` : 'the selected replica';
 };
 export const recoveryActive = (job: AssistedRecoveryJob) => ['checking', 'awaiting-approval', 'running'].includes(job.status);
 /** Interrupted/cleanup-pending jobs are rediscovered, never replaced on mount. */
@@ -101,11 +125,25 @@ export function recoveryStatus(job: AssistedRecoveryJob) {
       return job.expired || job.expiresAt <= Date.now()
          ? 'Approval expired. Cancel this request and check again.'
          : 'Awaiting your approval. No restore has started.';
-   if (job.status === 'checking') return 'Checking the exact snapshot and authorized repositories. No restore has started.';
+   const automatic = job.sourceSelection?.mode === 'automatic';
+   if (job.status === 'checking')
+      return job.policy === 'automatic'
+         ? 'Checking the primary repository first. Automatic Failover continues with a verified replica only if the primary is unreachable. No restore has started.'
+         : 'Checking the exact snapshot and authorized repositories. No restore has started.';
    if (job.status === 'running')
-      return 'Recovering from the approved replica into isolated staging. Closing this window does not cancel server work.';
+      return automatic
+         ? `Automatic failover in progress: recovering from ${replicaName(job, job.selected)} into isolated staging. Closing this window does not cancel server work.`
+         : 'Recovering from the approved replica into isolated staging. Closing this window does not cancel server work.';
    if (job.status === 'completed')
-      return 'Staged recovery passed file integrity verification. No database was imported and no live target was overwritten.';
+      return automatic
+         ? `Automatic failover succeeded. The staged recovery from ${replicaName(job, job.selected)} passed file integrity verification. No database was imported and no live target was overwritten.`
+         : 'Staged recovery passed file integrity verification. No database was imported and no live target was overwritten.';
+   if (job.status === 'failed' && job.failureCode === 'no-eligible-replica')
+      return 'No eligible replica found. Recovery stopped safely and nothing was restored.';
+   if (job.status === 'failed' && job.failureCode === 'automatic-failover-blocked')
+      return 'Automatic failover did not start: another recovery holds the execution slot or the request expired. Nothing was restored.';
+   if (job.status === 'failed' && job.failureCode && SECURITY_STOPS.has(job.failureCode))
+      return 'Recovery stopped due to a security or identity restriction. Pluton does not switch sources for this kind of failure.';
    if (job.status === 'uncertain')
       return 'Recovery was interrupted. It will not restart automatically. Review staging and cancel before creating a fresh request.';
    if (job.status === 'failed' && job.diagnostic?.timeoutCategory === 'archive-backend-retrying')
@@ -152,6 +190,69 @@ export function recoveryFailureAdvice(job: AssistedRecoveryJob) {
       return 'Review the recorded phase and storage connectivity with an operator before starting a new check.';
    if (job.failureCode === 'no-eligible-replica') return 'Review the diagnostics for each replica before starting a new check.';
    return 'Review the recovery audit before starting a new check.';
+}
+
+/** Which source was used and why, from the server's recorded decision. */
+export function recoveryDecision(job: AssistedRecoveryJob) {
+   const selection = job.sourceSelection;
+   if (!selection) return undefined;
+   const used = selection.attempts.filter((attempt) => attempt.outcome === 'selected').at(-1);
+   const failed = selection.attempts.filter((attempt) => attempt.outcome === 'failed');
+   const parts = [
+      selection.mode === 'automatic'
+         ? `Recovery source: ${used ? `S3 Replica ${used.position}` : 'none'}, chosen automatically after the primary was ${recoveryLabel(selection.reason || 'unavailable').toLowerCase()}`
+         : `Recovery source: ${used ? `S3 Replica ${used.position}` : 'none'}, approved by the operator`,
+   ];
+   for (const attempt of failed) parts.push(`S3 Replica ${attempt.position} failed: ${recoveryLabel(attempt.code || 'unknown').toLowerCase()}`);
+   return parts.join(' · ') + '.';
+}
+
+export type RecoveryStep = { label: string; state: 'done' | 'active' | 'failed' | 'pending' };
+const VERIFYING_PHASES = new Set(['filesystem-validation', 'final-verification']);
+/** Automatic Failover progression derived only from server state; no inferred progress. */
+export function recoverySteps(job: AssistedRecoveryJob): RecoveryStep[] {
+   const steps: RecoveryStep[] = [];
+   const primaryState = job.primary?.state;
+   const checkingPrimary = job.status === 'checking' && job.phase === 'primary-check';
+   steps.push({ label: 'Checking primary repository', state: checkingPrimary ? 'active' : primaryState ? 'done' : 'pending' });
+   if (primaryState === 'ready') {
+      steps.push({ label: 'Primary repository available', state: 'done' });
+      return steps;
+   }
+   if (primaryState !== 'unavailable') return steps;
+   steps.push({ label: `Primary repository unavailable (${recoveryLabel(job.primary?.code || 'unavailable').toLowerCase()})`, state: 'done' });
+   steps.push({ label: 'Failover initiated', state: 'done' });
+   for (const candidate of job.candidates)
+      steps.push({
+         label:
+            candidate.state === 'passed'
+               ? `S3 Replica ${candidate.position} verified`
+               : `S3 Replica ${candidate.position} rejected (${recoveryLabel(candidate.code || 'unavailable').toLowerCase()})`,
+         state: candidate.state === 'passed' ? 'done' : 'failed',
+      });
+   if (job.status === 'checking') {
+      steps.push({ label: `Checking S3 Replica ${job.candidates.length + 1}`, state: 'active' });
+      return steps;
+   }
+   if (job.failureCode === 'no-eligible-replica') {
+      steps.push({ label: 'No eligible replica found', state: 'failed' });
+      return steps;
+   }
+   for (const attempt of job.sourceSelection?.attempts || []) {
+      const current = attempt.outcome === 'selected';
+      const recovering = job.status === 'running' && current && !VERIFYING_PHASES.has(job.phase);
+      steps.push({
+         label: `Recovering from S3 Replica ${attempt.position}${attempt.outcome === 'failed' ? ` (${recoveryLabel(attempt.code || 'failed').toLowerCase()})` : ''}`,
+         state: attempt.outcome === 'failed' ? 'failed' : recovering ? 'active' : job.status === 'completed' || VERIFYING_PHASES.has(job.phase) ? 'done' : job.status === 'running' ? 'active' : 'failed',
+      });
+   }
+   if (!job.sourceSelection) return steps;
+   const verifying = job.status === 'running' && VERIFYING_PHASES.has(job.phase);
+   steps.push({ label: 'Verifying restored files', state: verifying ? 'active' : job.status === 'completed' ? 'done' : 'pending' });
+   if (job.status === 'completed') steps.push({ label: 'Integrity verified', state: 'done' });
+   else if (job.status === 'failed' || job.status === 'cancelled' || job.status === 'uncertain')
+      steps.push({ label: job.status === 'cancelled' ? 'Recovery cancelled' : 'Recovery failed', state: 'failed' });
+   return steps;
 }
 
 const RETRY_ERROR_WORDS: Record<string, string> = {

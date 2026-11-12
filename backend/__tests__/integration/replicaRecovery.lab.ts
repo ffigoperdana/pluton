@@ -241,6 +241,13 @@ try {
 	await assisted.settled(healthy.id);
 	assert.equal(assisted.get('owner-01', healthy.id).status, 'primary-ready');
 	console.log('PASS healthy primary uses normal recovery without replica approval');
+	f.plan.settings.replication.recoveryPolicy = 'automatic';
+	const healthyAutomatic = await assisted.start('owner-01', intent());
+	await assisted.settled(healthyAutomatic.id);
+	assert.equal(assisted.get('owner-01', healthyAutomatic.id).status, 'primary-ready');
+	assert.equal(assisted.get('owner-01', healthyAutomatic.id).sourceSelection, undefined);
+	f.plan.settings.replication.recoveryPolicy = 'assisted';
+	console.log('PASS Automatic Failover prefers a healthy real primary without touching any replica');
 	const before = await hashTree(s3root);
 	const preflight = await f.service.preflight('backup-01', 'plan-01', 'replica-01', signal);
 	assert.equal(preflight.sourceSnapshotId, input.snapshotId);
@@ -354,6 +361,39 @@ try {
 	assert.equal(await fs.readFile(path.join(staged, 'pluton/database/example.sql'), 'utf8'), sql);
 	assert.deepEqual(await hashTree(s3root), before);
 	await assisted.cancel('owner-01', pending.id);
+	// Automatic Failover on the same real outage: the operator's start is the only action; the
+	// server selects the first verified replica and verifies staging without a second approval.
+	f.plan.settings.replication.recoveryPolicy = 'automatic';
+	const automaticJob = await assisted.start('owner-01', intent());
+	await assisted.settled(automaticJob.id);
+	const automatic = assisted.get('owner-01', automaticJob.id);
+	assert.equal(automatic.status, 'completed');
+	assert.equal(automatic.phase, 'integrity-verified');
+	assert.equal(automatic.policy, 'automatic');
+	assert.equal(automatic.primary?.code, 'network-unavailable');
+	assert.equal(automatic.selected, 'replica-01');
+	assert.equal(automatic.sourceSelection?.mode, 'automatic');
+	assert.equal(automatic.sourceSelection?.reason, 'network-unavailable');
+	assert.ok(automatic.audit.some(event => event.event === 'automatic-source-selected'));
+	assert.ok(!automatic.audit.some(event => event.event === 'operator-approved'));
+	const automaticStaged = path.join(root, 'assisted-stage', 'run-' + automaticJob.id, 'files');
+	assert.deepEqual(
+		await hashTree(path.join(automaticStaged, source.slice(1))),
+		await hashTree(source)
+	);
+	assert.equal(
+		await fs.readFile(path.join(automaticStaged, 'pluton/database/example.sql'), 'utf8'),
+		sql
+	);
+	assert.deepEqual(await hashTree(s3root), before, 'Automatic Failover must not mutate the replica');
+	await assisted.cancel('owner-01', automaticJob.id);
+	assert.equal(assisted.get('owner-01', automaticJob.id).cleanupPending, false);
+	await assert.rejects(fs.stat(path.join(root, 'assisted-stage', 'run-' + automaticJob.id)));
+	f.plan.settings.replication.recoveryPolicy = 'assisted';
+	console.log(
+		'PASS real Automatic Failover: primary outage, automatic verified replica selection, staged SHA256 integrity and explicit cleanup',
+		{ files: automatic.stats?.files, bytes: automatic.stats?.bytes }
+	);
 	await assisted.shutdown();
 	await primary.close();
 	sqlite.close();

@@ -7,6 +7,9 @@ replica of an encrypted remote SFTP Restic repository. Existing plans remain
 **Primary Only**. Enable **Assisted Failover** explicitly under Edit → Replication
 → Recovery & Failover, with one or two compatible replicas. No schedule, source
 Agent, replication destination, retention or Reliable Download setting changes.
+**Automatic Failover** uses this same job, preflight and staging path but selects
+the first verified replica without a second approval after an explicit operator
+start; see [AUTOMATIC_FAILOVER.md](AUTOMATIC_FAILOVER.md).
 
 Supported and exercised: isolated full-snapshot, directory, single-file and
 recorded SQL-artifact staging; Restic decryption, per-file SHA-256 readback,

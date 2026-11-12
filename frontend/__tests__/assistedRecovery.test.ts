@@ -9,6 +9,8 @@ import {
    recoveryStatus,
    recoveryRetrySummary,
    recoveryFailureAdvice,
+   recoveryDecision,
+   recoverySteps,
    type AssistedRecoveryJob,
 } from '../src/utils/assistedRecovery.ts';
 const require = createRequire(new URL('../package.json', import.meta.url)),
@@ -69,7 +71,7 @@ const row = (patch: Partial<AssistedRecoveryJob> = {}): AssistedRecoveryJob => (
    audit: [],
    ...patch,
 });
-async function mount(fetcher: typeof fetch, manual = true, strict = false, initialIncludes: string[] = []) {
+async function mount(fetcher: typeof fetch, manual = true, strict = false, initialIncludes: string[] = [], extra: Record<string, unknown> = {}) {
    const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.internal' });
    const globals = ['window', 'document', 'navigator', 'HTMLElement', 'Event', 'fetch', 'IS_REACT_ACT_ENVIRONMENT', 'BroadcastChannel'];
    const previous = new Map(globals.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
@@ -110,6 +112,7 @@ async function mount(fetcher: typeof fetch, manual = true, strict = false, initi
             backupId: 'backup-01',
             manual,
             initialIncludes,
+            ...extra,
             onPrimaryReady: () => {
                primaryReady++;
                setHandoffs((value: number) => value + 1);
@@ -296,6 +299,133 @@ test('retry summary wording covers singular counts, HTTP status, give-ups and mi
       recoveryRetrySummary({ ...retryDiagnostic, archive: { backendRetries: once } }),
       'Restic retried a repository read 1 time · index pack abcdef0123 · last error: HTTP error (HTTP 503) · gave up 1 time'
    );
+});
+
+const replicaCandidates = [
+   {
+      replicationId: 'replica-01',
+      position: 1,
+      state: 'passed' as const,
+      destinationSnapshotId: 'd'.repeat(64),
+      replicaVerified: true,
+      recoveryPreflight: 'passed',
+      recoveryTested: false,
+   },
+   {
+      replicationId: 'replica-02',
+      position: 2,
+      state: 'passed' as const,
+      destinationSnapshotId: 'e'.repeat(64),
+      replicaVerified: true,
+      recoveryPreflight: 'passed',
+      recoveryTested: true,
+   },
+];
+const automaticCompleted = (): AssistedRecoveryJob =>
+   row({
+      status: 'completed',
+      phase: 'integrity-verified',
+      policy: 'automatic',
+      primary: { state: 'unavailable', code: 'network-unavailable' },
+      candidates: replicaCandidates,
+      selected: 'replica-02',
+      sourceSelection: {
+         mode: 'automatic',
+         reason: 'network-unavailable',
+         attempts: [
+            { replicationId: 'replica-01', position: 1, outcome: 'failed', code: 'timeout', at: Date.now() - 2000 },
+            { replicationId: 'replica-02', position: 2, outcome: 'selected', at: Date.now() - 1000 },
+         ],
+      },
+      stats: { files: 22, bytes: 4851462 },
+   });
+
+test('Automatic Failover waits for an explicit start, then reports the automatic source decision and progression', async () => {
+   const s = server([]);
+   const ui = await mount(s.fetcher, false, false, [], { policy: 'automatic', requireStart: true });
+   const content = () => ui.dom.window.document.body.textContent || '';
+   try {
+      await ui.waitFor(() => ui.button('Start recovery'), 'explicit start');
+      assert.match(content(), /continues automatically with the first S3 replica that passes identity and integrity checks/);
+      assert.ok(s.calls.every((call) => call.method === 'GET'), 'opening the dialog must not start a recovery');
+      await ui.click('Start recovery');
+      await ui.waitFor(() => s.calls.some((call) => call.method === 'POST'), 'start request');
+      assert.equal(s.calls.find((call) => call.method === 'POST')!.body.mode, 'prefer-primary');
+      s.set([automaticCompleted()]);
+      await ui.click('Refresh recovery status');
+      await ui.waitFor(() => /Automatic failover succeeded/.test(content()), 'automatic success');
+      assert.match(content(), /staged recovery from S3 Replica 2 passed file integrity verification/);
+      assert.match(
+         content(),
+         /Recovery source: S3 Replica 2, chosen automatically after the primary was network unavailable · S3 Replica 1 failed: timeout\./
+      );
+      assert.match(content(), /Verified: 22 files · 4,851,462 bytes/);
+      const steps = [...ui.dom.window.document.querySelectorAll('[data-step-state]')].map(
+         (item: any) => `${item.getAttribute('data-step-state')}:${item.textContent}`,
+      );
+      assert.deepEqual(steps, [
+         'done:Checking primary repository',
+         'done:Primary repository unavailable (network unavailable)',
+         'done:Failover initiated',
+         'done:S3 Replica 1 verified',
+         'done:S3 Replica 2 verified',
+         'failed:Recovering from S3 Replica 1 (timeout)',
+         'done:Recovering from S3 Replica 2',
+         'done:Verifying restored files',
+         'done:Integrity verified',
+      ]);
+      assert.equal(ui.button('Continue with S3 Replica'), undefined);
+      assert.ok(ui.button('Discard staged result'));
+   } finally {
+      await ui.close();
+   }
+});
+
+test('Automatic Failover progression reflects only server state', () => {
+   const base = { policy: 'automatic' as const, candidates: [] as AssistedRecoveryJob['candidates'] };
+   const states = (job: AssistedRecoveryJob) => recoverySteps(job).map((step) => `${step.state}:${step.label}`);
+   assert.deepEqual(states(row({ ...base, status: 'checking', phase: 'primary-check', primary: undefined })), ['active:Checking primary repository']);
+   assert.deepEqual(states(row({ ...base, status: 'primary-ready', phase: 'primary-ready', primary: { state: 'ready' } })), [
+      'done:Checking primary repository',
+      'done:Primary repository available',
+   ]);
+   assert.deepEqual(
+      states(row({ ...base, status: 'checking', phase: 'replica-check', primary: { state: 'unavailable', code: 'timeout' }, candidates: [{ ...replicaCandidates[0], state: 'failed', code: 'replica-unverified' }] })),
+      [
+         'done:Checking primary repository',
+         'done:Primary repository unavailable (timeout)',
+         'done:Failover initiated',
+         'failed:S3 Replica 1 rejected (replica unverified)',
+         'active:Checking S3 Replica 2',
+      ],
+   );
+   assert.deepEqual(
+      states(row({ ...base, status: 'failed', phase: 'no-eligible-replica', failureCode: 'no-eligible-replica', primary: { state: 'unavailable', code: 'network-unavailable' } })).slice(-1),
+      ['failed:No eligible replica found'],
+   );
+   const verifying = row({
+      ...automaticCompleted(),
+      status: 'running',
+      phase: 'filesystem-validation',
+      stats: undefined,
+      selected: 'replica-01',
+      sourceSelection: { mode: 'automatic', reason: 'timeout', attempts: [{ replicationId: 'replica-01', position: 1, outcome: 'selected', at: 1 }] },
+   });
+   assert.deepEqual(states(verifying).slice(-2), ['done:Recovering from S3 Replica 1', 'active:Verifying restored files']);
+   assert.match(recoveryStatus(verifying), /Automatic failover in progress: recovering from S3 Replica 1/);
+});
+
+test('final automatic states read distinctly and decisions name the operator when approved manually', () => {
+   const failed = (failureCode: string) => row({ status: 'failed', phase: 'check-failed', failureCode, policy: 'automatic' });
+   assert.equal(recoveryStatus(failed('no-eligible-replica')), 'No eligible replica found. Recovery stopped safely and nothing was restored.');
+   assert.match(recoveryStatus(failed('tls-invalid')), /security or identity restriction/);
+   assert.match(recoveryStatus(failed('authentication-denied')), /does not switch sources/);
+   assert.match(recoveryStatus(failed('automatic-failover-blocked')), /did not start/);
+   assert.equal(
+      recoveryDecision(row({ sourceSelection: { mode: 'operator', attempts: [{ replicationId: 'replica-01', position: 1, outcome: 'selected', at: 1 }] } })),
+      'Recovery source: S3 Replica 1, approved by the operator.',
+   );
+   assert.equal(recoveryDecision(row()), undefined);
 });
 
 test('GET rediscovery restores pending approval after refresh without creating or approving any job', async () => {
