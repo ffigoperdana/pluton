@@ -16,6 +16,7 @@ import PlanProgress from '../../components/Plan/PlanProgress/PlanProgress';
 import PlanBackups from '../../components/Plan/PlanBackups/PlanBackups';
 import PlanIntegrity from '../../components/Plan/PlanIntegrity/PlanIntegrity';
 import PlanRepair from '../../components/Plan/PlanRepair/PlanRepair';
+import PlanRelocationModal from '../../components/Plan/PlanRelocation/PlanRelocationModal';
 import { PlanVerifiedResult } from '../..';
 import { getBackupIconName } from '../../utils';
 
@@ -23,6 +24,7 @@ const PlanSingle = () => {
    const [showMoreOptions, setShowMoreOptions] = useState(false);
    const [showIntegrityModal, setShowIntegrityModal] = useState(false);
    const [showRepoRepair, setShowRepoRepair] = useState('');
+   const [showRelocationModal, setShowRelocationModal] = useState(false);
    const { id } = useParams();
 
    const EditPlanModal = useComponentOverride('EditPlan', EditPlan);
@@ -73,6 +75,8 @@ const PlanSingle = () => {
       const prune = settings.prune;
       const snapshotsCount = stats.snapshots?.length || 0;
       const isSync = method === 'sync';
+      // Only managed Remote Agent backup plans can move their repository (server enforces it too).
+      const remoteManaged = method === 'backup' && plan.sourceType === 'device' && plan.sourceId !== 'main';
 
       return (
          <div className={classes.planSingle}>
@@ -176,7 +180,24 @@ const PlanSingle = () => {
                }
             />
             <div className={classes.planContent}>
-               <PlanStats plan={plan} isSync={isSync} lastBackupItem={lastBackupItem} />
+               <PlanStats
+                  plan={plan}
+                  isSync={isSync}
+                  lastBackupItem={lastBackupItem}
+                  storageAction={
+                     remoteManaged ? (
+                        <button
+                           type="button"
+                           aria-label="Move repository to another Storage"
+                           data-tooltip-id="htmlToolTip"
+                           data-tooltip-content="Move repository to another Storage"
+                           onClick={() => setShowRelocationModal(true)}
+                        >
+                           <Icon size={12} type="arrow-right" />
+                        </button>
+                     ) : undefined
+                  }
+               />
                <PlanProgress
                   plan={plan}
                   isBackupPending={isBackupPending}
@@ -189,6 +210,15 @@ const PlanSingle = () => {
             </div>
 
             {/* Action Modals */}
+            {showRelocationModal && (
+               <PlanRelocationModal
+                  planId={id}
+                  planTitle={title}
+                  currentPath={plan.storagePath || ''}
+                  close={() => setShowRelocationModal(false)}
+                  onBindingChanged={refetchPlan}
+               />
+            )}
             {showPruneModal && (
                <PlanPruneModal
                   planId={id}

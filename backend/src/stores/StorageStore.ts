@@ -28,6 +28,22 @@ export class StorageStore {
 		const sqlite = this.db.$client;
 		if (next) assertExportStorageUpdate(sqlite, storageId, next);
 		if (
+			sqlite
+				.prepare(
+					"SELECT 1 FROM sqlite_master WHERE type='table' AND name='plan_repository_relocations'"
+				)
+				.get() &&
+			sqlite
+				.prepare(
+					"SELECT 1 FROM plan_repository_relocations WHERE (source_storage_id=? OR destination_storage_id=?) AND status IN ('copying','verifying','ready') LIMIT 1"
+				)
+				.get(storageId, storageId)
+		)
+			throw new AppError(
+				409,
+				'Storage is used by an active repository relocation. Finish or cancel it before editing or removing the Storage.'
+			);
+		if (
 			!sqlite
 				.prepare(
 					"SELECT 1 FROM sqlite_master WHERE type='table' AND name='managed_replication_jobs'"

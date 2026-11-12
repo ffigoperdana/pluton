@@ -7,6 +7,8 @@ export type StorageRemovalReference = {
 	planId: string | null;
 	replicationId?: string;
 	kind: 'primary' | 'replica' | 'legacy' | 'retained';
+	/** Set for copies kept by a plan repository relocation. */
+	relocationId?: string;
 };
 
 function normalized(value: string): string {
