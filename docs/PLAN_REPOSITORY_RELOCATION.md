@@ -238,6 +238,20 @@ disabled, once deadlocked on renaming an upload. The lab therefore restarts both
 after every out-of-band disk edit. The deadlock led to the stall watchdog above. A real OpenSSH
 server has neither behaviour, but this was not verified against OpenSSH.
 
+### 6.2 Local browser walkthrough
+
+A disposable local preview (image built from this branch, `127.0.0.1` only, synthetic plan and
+two loopback `rclone serve sftp` servers inside the container) was driven in a browser, dark theme:
+the Move button appears on the Storage box of a Remote Agent plan; copy and verification
+progress; verified summary (15 files, 22.9 MiB, 3 snapshots); switch confirmation; plan page then
+shows the new Storage and an old backup is browsable from it; Move back; a second move reusing the
+reverted destination; after one successful backup at the new location Move back is hidden and
+Delete previous copy is enabled only after typing the plan name; the previous folder is removed and
+the live repository keeps all four snapshots. The walkthrough found three dialog issues, fixed in
+`fix(ui): default Move destination to another SFTP Storage`: the Storage select displayed a choice
+while none was set (start button disabled), the default could be the current Storage when the
+Storage list loaded first, and the switch confirmation wrongly said restore history moves.
+
 ## 7. Operator UAT
 
 Use placeholders: `NEW_SFTP_HOST`, `NEW_SFTP_PORT`, `PLAN_NAME`. Start with a small plan.
@@ -287,4 +301,4 @@ until **Switch**, so its scheduled backups in that window are skipped.
   stays protected as a retained location and must be removed manually.
 - In-flight browse or download sessions started before a switch keep reading the previous copy until
   they finish (harmless: identical content).
-- Not verified: a real OpenSSH SFTP server, the dialog in a browser (dark/light), hosted CI.
+- Not verified: a real OpenSSH SFTP server, the light theme, hosted CI.
