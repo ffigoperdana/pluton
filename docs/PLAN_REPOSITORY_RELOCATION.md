@@ -74,8 +74,10 @@ text. The closed code list is `RelocationFailureCode` in `backend/src/utils/relo
   initialized repository whose record matches the plan.
 - Destination is an SFTP Storage. The path is a concrete folder: not empty, not `/` or `.`, no `..`,
   no backslash or control characters, not starting with `-`.
-- Destination does not overlap the current location (same Storage), any plan/mirror/legacy/retained
-  repository, or any copy kept by another relocation.
+- Destination does not overlap the current location, any plan/mirror/legacy/retained repository,
+  or any copy kept by another relocation. Locations are compared **per SFTP server**, not only per
+  Storage record (see "Same server through two Storage records" below). A retry must use the exact
+  same Storage record and path.
 - Destination folder is empty, **or** it holds an earlier failed/cancelled/reverted attempt of the
   same repository whose files are a subset of the source (retry). Rclone `.partial` temporaries are
   removed in that case only.
@@ -120,6 +122,21 @@ Allowed while no successful backup exists at the new location that the switch di
 failed backup does not block, so moving back stays possible if the Agent cannot reach the new
 server). Pluton first proves the previous copy is unchanged (listing digest and repository ID), then
 moves back exactly the rows and receipts the switch moved.
+
+### Same server through two Storage records
+
+Two SFTP Storage records can point to the same server (same host and port), for example one
+created only for a test. Comparing Storage IDs alone would then miss a repository reached through
+the other record. Every relocation overlap check (current location, destination, delete previous
+copy) therefore uses `StorageLocationAliases` (`backend/src/utils/relocation/storageLocationAliases.ts`):
+
+- records with the same host (case-insensitive) and port (default 22) are the same server;
+- absolute paths on that server are compared for any user (conservative: a chrooted user may in
+  fact be isolated; that only causes a refusal);
+- relative paths are compared for the same user, and also as `/home/<user>/<path>`
+  (`/root/<path>` for root), the usual SFTP start folder;
+- a different host name for the same machine (DNS name versus IP) is not resolved and therefore not
+  detected. Keep one Storage record per SFTP server.
 
 ### Delete previous copy
 
@@ -210,6 +227,10 @@ API (session-authenticated administrator):
 | `git diff --check` | clean |
 | Docker lab `py -3 scripts/validate-plan-relocation.py pluton-s3-readback-verified:local` | PASS, three consecutive runs |
 
+Same-server hardening (13 Nov 2026, branch `claude/relocation-sftp-alias-guard`): alias unit tests 5/5,
+three new service scenarios (fail without the change, pass with it), full backend suite 236/236
+suites, 4,942 passed, 4 skipped; backend lint and `tsc` pass; Docker lab PASS.
+
 ### 6.1 Docker lab
 
 One network-none container (`--read-only`, UID 1000, 2 CPU, 4 GiB), two `rclone serve sftp`
@@ -293,6 +314,9 @@ until **Switch**, so its scheduled backups in that window are skipped.
 - SFTP to SFTP only; S3/HCP mirrors are not primary locations and are not moved.
 - The copy passes through the Pluton server (SFTP → server → SFTP); not a server-to-server transfer.
 - Throughput and duration on production infrastructure are not measured.
+- Same-server detection compares host and port as written in the Storage; a DNS name and an IP of the
+  same machine are treated as different servers, and a home folder other than `/home/<user>` is not
+  known.
 - SFTP host keys are not pinned (same as all existing Pluton SFTP access); the transfer uses only
   `host`, `port`, `user`, `pass`.
 - Deleting the previous copy removes the whole previous folder after the proofs in section 3; files

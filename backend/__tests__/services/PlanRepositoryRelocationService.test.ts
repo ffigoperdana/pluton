@@ -199,6 +199,11 @@ describe('plan repository relocation service', () => {
 			{
 				getById: async (id: string) =>
 					(sqlite.prepare('SELECT id,name,type FROM storages WHERE id=?').get(id) as any) || null,
+				getAll: async () =>
+					(sqlite.prepare('SELECT id,name,type,settings FROM storages').all() as any[]).map(row => ({
+						...row,
+						settings: row.settings ? JSON.parse(row.settings) : null,
+					})),
 			},
 			{
 				getSftpRecoveryOptions: async (storageId: string) => ({
@@ -470,6 +475,54 @@ describe('plan repository relocation service', () => {
 		expect(failed.status).toBe('failed');
 		expect(failed.failureCode).toBe('server-restarted');
 		expect(plan().active).toBe(1);
+	});
+
+	describe('with a second Storage record for the same SFTP server', () => {
+		beforeEach(() => {
+			const settings = JSON.stringify({ host: '192.0.2.10', port: '22', user: 'fixture-user' });
+			context.sqlite.prepare("UPDATE storages SET settings=? WHERE id='storage-01'").run(settings);
+			context.sqlite
+				.prepare("INSERT INTO storages(id,name,type,settings) VALUES('storage-alias','Same server','sftp',?)")
+				.run(settings);
+		});
+
+		it('refuses the current location reached through the other record', async () => {
+			await expect(start({ storageId: 'storage-alias', storagePath: 'managed/fixture' })).rejects.toMatchObject({
+				statusCode: 400,
+			});
+			await expect(start({ storageId: 'storage-alias', storagePath: 'managed/fixture/inner' })).rejects.toThrow(
+				'same SFTP server'
+			);
+			expect(store.listForPlan('plan-01')).toEqual([]);
+			expect(pause).not.toHaveBeenCalled();
+		});
+
+		it("refuses another plan's repository reached through the other record", async () => {
+			context.sqlite.exec(`
+				INSERT INTO plans(id,title,source_id,source_type,method,storage_id,storage_path,source_config,settings)
+				VALUES('plan-02','Other','app-01','device','backup','storage-01','managed/other','{}','{}');
+			`);
+			await expect(start({ storageId: 'storage-alias', storagePath: 'managed/other/x' })).rejects.toMatchObject({
+				statusCode: 409,
+			});
+			// A separate folder on the same server is still allowed.
+			const started = await start({ storageId: 'storage-alias', storagePath: 'managed/elsewhere' });
+			expect(started.status).toBe('copying');
+		});
+
+		it('refuses to delete a previous copy that holds a live repository reached through the other record', async () => {
+			const started = await start();
+			await service.idle();
+			await service.switch(started.id);
+			await service.idle();
+			successfulBackupAtNewLocation();
+			context.sqlite.exec(`
+				INSERT INTO plans(id,title,source_id,source_type,method,storage_id,storage_path,source_config,settings)
+				VALUES('plan-03','Nested','app-01','device','backup','storage-alias','managed/fixture/nested','{}','{}');
+			`);
+			await expect(service.deleteSourceCopy(started.id, 'Fixture')).rejects.toThrow('overlaps a live repository');
+			expect(transfer.calls).not.toContain('purge');
+		});
 	});
 
 	it('protects kept copies from other relocations', async () => {
