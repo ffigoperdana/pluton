@@ -17,11 +17,12 @@ import PlanBackups from '../../components/Plan/PlanBackups/PlanBackups';
 import PlanIntegrity from '../../components/Plan/PlanIntegrity/PlanIntegrity';
 import PlanRepair from '../../components/Plan/PlanRepair/PlanRepair';
 import PlanRelocationModal from '../../components/Plan/PlanRelocation/PlanRelocationModal';
+import { useExclusiveMenu } from '../../hooks/useExclusiveMenu';
 import { PlanVerifiedResult } from '../..';
 import { getBackupIconName } from '../../utils';
 
 const PlanSingle = () => {
-   const [showMoreOptions, setShowMoreOptions] = useState(false);
+   const { open: showMoreOptions, setOpen: setShowMoreOptions, ref: moreOptionsRef } = useExclusiveMenu<HTMLDivElement>();
    const [showIntegrityModal, setShowIntegrityModal] = useState(false);
    const [showRepoRepair, setShowRepoRepair] = useState('');
    const [showRelocationModal, setShowRelocationModal] = useState(false);
@@ -115,66 +116,80 @@ const PlanSingle = () => {
                         <button className={classes.actionBtn} onClick={() => setShowEditModal(true)}>
                            <Icon size={14} type="edit-settings" /> Edit
                         </button>
-                        <button
-                           aria-label="More plan actions"
-                           aria-expanded={showMoreOptions}
-                           className={`${classes.actionBtn} ${classes.actionMoreBtn}`}
-                           onClick={() => setShowMoreOptions(!showMoreOptions)}
-                        >
-                           <Icon size={14} type="dots-vertical" />
-                        </button>
+                        {/* display: contents keeps the menu's existing layout; the ref only scopes outside clicks. */}
+                        <div ref={moreOptionsRef} style={{ display: 'contents' }}>
+                           <button
+                              aria-label="More plan actions"
+                              aria-expanded={showMoreOptions}
+                              className={`${classes.actionBtn} ${classes.actionMoreBtn}`}
+                              onClick={() => setShowMoreOptions(!showMoreOptions)}
+                           >
+                              <Icon size={14} type="dots-vertical" />
+                           </button>
 
-                        {showMoreOptions && (
-                           <ul className={classes.moreOptions}>
-                              <li
-                                 className={classes.actionBtn}
-                                 onClick={() => {
-                                    setShowPruneModal(true);
-                                    setShowMoreOptions(false);
-                                 }}
-                              >
-                                 <Icon size={14} type="prune" /> Clean Up
-                              </li>
-                              {!isSync && (
+                           {showMoreOptions && (
+                              <ul className={classes.moreOptions}>
                                  <li
                                     className={classes.actionBtn}
                                     onClick={() => {
-                                       setShowUnlockModal(true);
+                                       setShowPruneModal(true);
                                        setShowMoreOptions(false);
                                     }}
                                  >
-                                    <Icon size={14} type="unlock" /> Unlock
+                                    <Icon size={14} type="prune" /> Clean Up
                                  </li>
-                              )}
-                              <li
-                                 className={classes.actionBtn}
-                                 onClick={() => {
-                                    setShowIntegrityModal(true);
-                                    setShowMoreOptions(false);
-                                 }}
-                              >
-                                 <Icon size={14} type="integrity" /> Check Integrity
-                              </li>
-                              <li
-                                 className={classes.actionBtn}
-                                 onClick={() => {
-                                    setShowLogsModal(true);
-                                    setShowMoreOptions(false);
-                                 }}
-                              >
-                                 <Icon size={14} type="logs" /> View Logs
-                              </li>
-                              <li
-                                 className={classes.actionBtn}
-                                 onClick={() => {
-                                    setShowDeleteModal(true);
-                                    setShowMoreOptions(false);
-                                 }}
-                              >
-                                 <Icon size={14} type="trash" /> Remove
-                              </li>
-                           </ul>
-                        )}
+                                 {!isSync && (
+                                    <li
+                                       className={classes.actionBtn}
+                                       onClick={() => {
+                                          setShowUnlockModal(true);
+                                          setShowMoreOptions(false);
+                                       }}
+                                    >
+                                       <Icon size={14} type="unlock" /> Unlock
+                                    </li>
+                                 )}
+                                 <li
+                                    className={classes.actionBtn}
+                                    onClick={() => {
+                                       setShowIntegrityModal(true);
+                                       setShowMoreOptions(false);
+                                    }}
+                                 >
+                                    <Icon size={14} type="integrity" /> Check Integrity
+                                 </li>
+                                 <li
+                                    className={classes.actionBtn}
+                                    onClick={() => {
+                                       setShowLogsModal(true);
+                                       setShowMoreOptions(false);
+                                    }}
+                                 >
+                                    <Icon size={14} type="logs" /> View Logs
+                                 </li>
+                                 {remoteManaged && (
+                                    <li
+                                       className={classes.actionBtn}
+                                       onClick={() => {
+                                          setShowRelocationModal(true);
+                                          setShowMoreOptions(false);
+                                       }}
+                                    >
+                                       <Icon size={14} type="arrow-right" /> Move Repository
+                                    </li>
+                                 )}
+                                 <li
+                                    className={classes.actionBtn}
+                                    onClick={() => {
+                                       setShowDeleteModal(true);
+                                       setShowMoreOptions(false);
+                                    }}
+                                 >
+                                    <Icon size={14} type="trash" /> Remove
+                                 </li>
+                              </ul>
+                           )}
+                        </div>
                      </div>
                   </>
                }

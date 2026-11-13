@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useExclusiveMenu } from '../../../hooks/useExclusiveMenu';
 import { toast } from 'react-toastify';
 import { NavLink } from 'react-router';
 import { Plan } from '../../../@types/plans';
@@ -38,7 +38,7 @@ const PlanItem = ({ plan, layout = 'list' }: PlanItemProps) => {
    } = plan;
 
    const { interval = { type: 'daily', time: '10:00AM' }, encryption = false, compression = false } = settings;
-   const [showSettings, setShowSettings] = useState(false);
+   const { open: showSettings, setOpen: setShowSettings, ref: menuRef } = useExclusiveMenu<HTMLDivElement>();
 
    const isStorageSource = plan.sourceType === 'storage';
    const { data: storageData } = useGetStorages();
@@ -114,6 +114,7 @@ const PlanItem = ({ plan, layout = 'list' }: PlanItemProps) => {
 
    return (
       <div
+         ref={menuRef}
          key={id}
          className={`${classes.plan} ${layout === 'grid' ? classes.planGrid : classes.planList} ${verified && verified.hasError ? classes.planHasError : ''}`}
       >

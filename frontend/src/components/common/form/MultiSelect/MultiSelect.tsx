@@ -3,6 +3,7 @@ import classes from './MultiSelect.module.scss';
 import Icon from '../../Icon/Icon';
 import FormField from '../FormField/FormField';
 import { onActivateKey } from '../../../../utils/keyboard';
+import { useExclusiveMenu } from '../../../../hooks/useExclusiveMenu';
 
 type MultiMultiSelectOptionType = {
    id?: string;
@@ -44,7 +45,7 @@ const MultiSelect = ({
    search = false,
    onUpdate,
 }: MultiSelectProps) => {
-   const [showDropDown, setShowDropDown] = useState(false);
+   const { open: showDropDown, setOpen: setShowDropDown, ref: dropdownRef } = useExclusiveMenu<HTMLDivElement>();
    const [searchText, setSearchText] = useState('');
 
    const selectedItems = options.filter((item) => fieldValue.includes(item.value));
@@ -71,7 +72,7 @@ const MultiSelect = ({
          inline={false}
          classes={`${classes.multiSelectField} ${customClasses} ${size === 'large' ? classes.multiSelectFieldLarge : ''} ${showDropDown ? classes.multiSelectFieldOpen : ''} ${error ? classes.fieldHasError : ''} ${full ? classes.multiSelectFieldFull : ''} ${disabled ? classes.multiSelectFieldDisabled : ''}`}
       >
-         <div className={classes.dropdown}>
+         <div ref={dropdownRef} className={classes.dropdown}>
             <div className={classes.selected} onClick={() => setShowDropDown(!disabled ? !showDropDown : false)}>
                <span>
                   {title ? (

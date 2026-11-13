@@ -34,6 +34,7 @@ import recoveryClasses from '../RecoveryTesting/RecoveryTesting.module.scss';
 import { backupStatistics, statisticHelp } from '../../../utils/backupStatistics';
 import { displayTimeZone, formatHistoryDate, historyIsoDate } from '../../../utils/backupHistory';
 import BackupRowMenu from './BackupRowMenu';
+import { useExclusiveMenuState } from '../../../hooks/useExclusiveMenu';
 import DownloadPreparation from './DownloadPreparation';
 import SnapshotDetails from './SnapshotDetails';
 import SnapshotExplorerModal from '../SnapshotViewer/SnapshotExplorerModal';
@@ -122,6 +123,7 @@ const Backups = ({
          ? replicationSettings.recoveryPolicy
          : undefined;
    const [showSnapOptions, setShowSnapOptions] = useState<false | string>(false);
+   useExclusiveMenuState(!!showSnapOptions, () => setShowSnapOptions(false));
    const [showDeleteModal, setShowDeleteModal] = useState<Backup | false>(false);
    const [showRestoreModal, setShowRestoreModal] = useState<Backup | false>(false);
    const [showBackupEvents, setShowBackupEvents] = useState<false | string>(false);
