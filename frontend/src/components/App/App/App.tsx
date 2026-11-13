@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { Outlet } from 'react-router';
 import { Tooltip } from 'react-tooltip';
-import { Slide, ToastContainer } from 'react-toastify';
+import { Slide, ToastContainer, toast } from 'react-toastify';
 import SideNav from '../SideNav/SideNav';
 import { API_URL } from '../../../utils/constants';
 import AppContent from '../AppContent/AppContent';
@@ -10,6 +10,9 @@ import { useTheme } from '../../../context/ThemeContext';
 import { usePwaAutoUpdate } from '../../../hooks/usePwaAutoUpdate';
 import { useGetSettings } from '../../../services/settings';
 import { validThemeSetting } from '../../../utils/theme';
+import { keepErrorToastsOpen, TOAST_AUTO_CLOSE_MS, TOAST_LIMIT } from '../../../utils/toastDefaults';
+
+keepErrorToastsOpen(toast);
 
 function App() {
    console.log('API_URL :', API_URL);
@@ -47,7 +50,15 @@ function App() {
             <Tooltip id="appTooltip" style={{ padding: '3px 8px', fontSize: '11px' }} />
             <Tooltip id="hintTooltip" style={{ padding: '3px 8px', fontSize: '12px', maxWidth: '250px' }} />
             <Tooltip id="htmlToolTip" className="tooltipBorderd" classNameArrow="tooltipBorderdArrow" style={{ maxWidth: '250px' }} />
-            <ToastContainer position="bottom-center" hideProgressBar={true} transition={Slide} theme={theme} autoClose={false} />
+            <ToastContainer
+               position="bottom-center"
+               hideProgressBar={true}
+               transition={Slide}
+               theme={theme}
+               autoClose={TOAST_AUTO_CLOSE_MS}
+               limit={TOAST_LIMIT}
+               newestOnTop
+            />
          </div>
       </div>
    );

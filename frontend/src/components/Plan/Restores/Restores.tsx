@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { useExclusiveMenuState } from '../../../hooks/useExclusiveMenu';
 import { toast } from 'react-toastify';
 import { useQueryClient } from '@tanstack/react-query';
 import Icon from '../../common/Icon/Icon';
@@ -25,6 +26,8 @@ const Restores = ({
    restores: RestoreSlim[];
 }) => {
    const [showSnapOptions, setShowSnapOptions] = useState<false | string>(false);
+   const openRowRef = useRef<HTMLDivElement>(null);
+   useExclusiveMenuState(!!showSnapOptions, () => setShowSnapOptions(false), openRowRef);
    const [previewRestore, setPreviewRestore] = useState<false | RestoreSlim>(false);
    const [showDeleteModal, setShowDeleteModal] = useState<RestoreSlim | false>(false);
    const [showRestoreEvents, setShowRestoreEvents] = useState<false | string>(false);
@@ -68,6 +71,7 @@ const Restores = ({
                   return (
                      <div
                         key={id}
+                        ref={showSnapOptions === id ? openRowRef : undefined}
                         className={`${classes.backupsTableRow} ${showSnapOptions && showSnapOptions === id ? classes.backupsTableRowActive : ''}`}
                      >
                         <div className={classes.restoreTitle} onClick={() => !isSync && setShowRestoreEvents(id)}>

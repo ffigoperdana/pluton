@@ -3,6 +3,7 @@ import classes from './DeviceItem.module.scss';
 import { NavLink, useNavigate } from 'react-router';
 import { Device } from '../../../@types/devices';
 import { useState } from 'react';
+import { useExclusiveMenu } from '../../../hooks/useExclusiveMenu';
 import { getOSIcon } from '../../../utils/helpers';
 import EditDevice from '../EditDevice/EditDevice';
 
@@ -12,7 +13,7 @@ interface DeviceItemProps {
 }
 
 const DeviceItem = ({ device, layout }: DeviceItemProps) => {
-   const [showSettings, setShowSettings] = useState(false);
+   const { open: showSettings, setOpen: setShowSettings, ref: menuRef } = useExclusiveMenu<HTMLDivElement>();
    const [showEditModal, setShowEditModal] = useState(false);
    const navigate = useNavigate();
    const { id, versions, name, isRemote, plans = [], os = 'linux', type, status, connected } = device;
@@ -22,7 +23,7 @@ const DeviceItem = ({ device, layout }: DeviceItemProps) => {
    const osIcon = getOSIcon(os || 'linux');
 
    return (
-      <div key={id} className={`${classes.device} ${layout === 'grid' ? classes.deviceGrid : classes.list}`}>
+      <div key={id} ref={menuRef} className={`${classes.device} ${layout === 'grid' ? classes.deviceGrid : classes.list}`}>
          <div className={classes.leftContent}>
             <div className={classes.deviceType}>
                {!isPlutonServer && (

@@ -10,6 +10,7 @@ import { useDeleteStorage, useVerifyStorage } from '../../../services/storage';
 import ActionModal from '../../common/ActionModal/ActionModal';
 import StorageFileBrowser from '../StorageFileBrowser/StorageFileBrowser';
 import { useComponentOverride } from '../../../context/ComponentOverrideContext';
+import { useExclusiveMenu } from '../../../hooks/useExclusiveMenu';
 
 interface StorageItemProps {
    storage: Storage;
@@ -17,7 +18,7 @@ interface StorageItemProps {
 }
 
 const StorageItem = ({ storage, layout }: StorageItemProps) => {
-   const [showSettings, setShowSettings] = useState(false);
+   const { open: showSettings, setOpen: setShowSettings, ref: menuRef } = useExclusiveMenu<HTMLDivElement>();
    const [showEditModal, setShowEditModal] = useState(false);
    const [showDeleteModal, setShowDeleteModal] = useState(false);
    const [showVerifyModal, setShowVerifyModal] = useState(false);
@@ -46,6 +47,7 @@ const StorageItem = ({ storage, layout }: StorageItemProps) => {
    return (
       <div
          key={id}
+         ref={menuRef}
          className={`${classes.storage} ${layout === 'grid' ? classes.storageGrid : classes.storageList} ${showEditModal || showDeleteModal || showVerifyModal ? classes.storageEditing : ''}`}
       >
          <div className={classes.leftContent}>

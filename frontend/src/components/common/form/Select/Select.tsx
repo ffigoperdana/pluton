@@ -3,6 +3,7 @@ import classes from './Select.module.scss';
 import Icon from '../../Icon/Icon';
 import FormField from '../FormField/FormField';
 import { onActivateKey } from '../../../../utils/keyboard';
+import { useExclusiveMenu } from '../../../../hooks/useExclusiveMenu';
 
 type SelectOptionType = {
    id?: string;
@@ -45,7 +46,7 @@ const Select = ({
    search = false,
    onUpdate,
 }: SelectProps) => {
-   const [showDropDown, setShowDropDown] = useState(false);
+   const { open: showDropDown, setOpen: setShowDropDown, ref: dropdownRef } = useExclusiveMenu<HTMLDivElement>();
    const [searchText, setSearchText] = useState('');
 
    const selectedItemIndex = options.length > 0 && fieldValue ? options.findIndex((x) => x.value === fieldValue) : null;
@@ -73,7 +74,7 @@ const Select = ({
          inline={inline}
          classes={`${classes.selectField} ${classes[size]} ${full ? classes.selectFieldFull : ''} ${customClasses} ${error ? classes.fieldHasError : ''}`}
       >
-         <div className={`${classes.dropdown} ${disabled ? classes.dropdownDisabled : ''}`}>
+         <div ref={dropdownRef} className={`${classes.dropdown} ${disabled ? classes.dropdownDisabled : ''}`}>
             <div className={classes.selected} onClick={() => setShowDropDown(!disabled ? !showDropDown : false)}>
                <span>
                   {selectedItemImage} {selectedItemIcon && <Icon type={selectedItemIcon} size={13} />} {selectedItemLabel}
