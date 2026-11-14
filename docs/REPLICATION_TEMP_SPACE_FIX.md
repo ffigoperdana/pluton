@@ -41,8 +41,9 @@ only `df` shows the usage.
 
 ### Temporary space (`ManagedReplicationExecutor.copy`)
 
-- Each copy creates `<app temp>/replication/job-XXXXXX` (`appPaths.getTempDir()`, on Linux
-  `/data/pluton`, the data volume; mode 0700 parent), sets `TMPDIR` for every Restic/Rclone call of
+- Each copy creates `<data dir>/tmp/replication/job-XXXXXX` (`replicationTempRoot()`, which is
+  `appPaths.getDataDir()`; in Docker `/data/tmp/replication` on the data volume; mode 0700 parent;
+  see section 10 for the first, wrong root), sets `TMPDIR` for every Restic/Rclone call of
   that copy, and removes the directory afterwards, also after a failure or cancellation.
 - If the directory cannot be created the job fails with `workspace-unavailable` before any command.
 - The copy reuses one environment for its source checks instead of building a second one; the
@@ -147,7 +148,7 @@ Retry. Removing a replica row and adding the same folder again is refused
 
 Image rollback only. The old image writes temporary packs to `/tmp` again, so larger replications
 fail again with `execution-failed`. Nothing is stored that the old image cannot read; an interrupted
-copy leaves at most an empty `job-*` directory under `/data/pluton/replication`.
+copy leaves at most an empty `job-*` directory under `/data/tmp/replication`.
 
 ## 8. Limitations
 
@@ -185,3 +186,34 @@ Tests: the helper's cases; a rendered managed plan in edit mode does not change 
 shows the notice, keeps everything on **Keep Replication On**, and on **Turn Off Replication** sends
 one update with `enabled: false`, `primary-only` and the same destination rows (fails on the previous
 component); a new plan toggles off immediately without a dialog.
+
+## 10. Correction after the first deploy (15 Nov 2026)
+
+The first version of this fix (PR #85) put the workspace under `appPaths.getTempDir()`. That is wrong
+in Docker: `isLinuxInstalledRuntime()` is false in the container, so `getTempDir()` falls back to
+`os.tmpdir()` and returns `/tmp/pluton`, the same 64 MiB tmpfs. Section 3 claimed `/data/pluton`;
+that was a misreading of `AppPaths`. The replica lab did not catch it because the lab container's
+`/tmp` is 256 MiB.
+
+Production after deploying PR #85: the affected mirror showed attempt 3 with the new closed code
+`no-space-left` instead of `execution-failed`, so the diagnostics worked and pointed at the cause.
+
+Fix: `replicationTempRoot()` returns `path.join(appPaths.getDataDir(), 'tmp', 'replication')`.
+
+Evidence:
+- In the built image with `NODE_ENV=production`, `IS_DOCKER=true`, `PLUTON_DATA_DIR=/data`,
+  `appPaths.getTempDir()` prints `/tmp/pluton` (the bug).
+- The same settings with the corrected source (`--read-only`, 64 MiB `/tmp`) print
+  `replicationTempRoot = /data/tmp/replication`.
+- New unit test: the default root equals `<data dir>/tmp/replication` and is not inside
+  `getTempDir()`.
+- Replication suites 81 passed (1 Linux-only skip); replica recovery lab 18/18 PASS on the corrected
+  source; backend `tsc` and ESLint on the changed file pass.
+- The Restic reproduction in section 2 already showed that the same copy succeeds when `TMPDIR` is on
+  the data disk.
+
+Operator check after the next deploy: during a Retry, `df -k /tmp` inside the container stays near 0,
+and `ls /data/tmp/replication` shows one `job-*` directory while the copy runs.
+
+Other features that use `getTempDir()` in Docker also land on the 64 MiB tmpfs; they were not
+changed here.
