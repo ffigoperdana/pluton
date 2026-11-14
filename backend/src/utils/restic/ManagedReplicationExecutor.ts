@@ -1,15 +1,52 @@
 import { spawn } from 'child_process';
 import crypto from 'crypto';
+import fs from 'fs/promises';
 import path from 'path';
 import { z } from 'zod';
 import { getBinaryPath } from '../binaryPathResolver';
+import { appPaths } from '../AppPaths';
 import { processManager } from '../../managers/ProcessManager';
 import { fullSnapshotId, type ManagedSftpAccess } from './ManagedSftpRepositorySession';
+import {
+	ArchiveBackendRetries,
+	classifyBackendError,
+	type ArchiveBackendRetrySummary,
+} from './archiveBackendRetries';
 import type { DatabaseArtifact } from '../../types/remoteLifecycle';
 
+/** Fixed workflow steps; recorded with a failure so an operator knows where a job stopped. */
+export type ReplicationStep =
+	| 'workspace'
+	| 'credentials'
+	| 'source-config'
+	| 'source-snapshot'
+	| 'source-artifact'
+	| 'destination-config'
+	| 'destination-list'
+	| 'destination-init'
+	| 'copy'
+	| 'destination-snapshot'
+	| 'destination-artifact';
+
+/** Closed, bounded facts about a failure. Never contains provider text, paths or secrets. */
+export type ReplicationFailureDetail = {
+	step?: ReplicationStep;
+	exitCode?: number | null;
+	signal?: string | null;
+	backend?: Pick<
+		ArchiveBackendRetrySummary,
+		'retryCount' | 'gaveUpCount' | 'serverErrorCount' | 'errorClasses'
+	> & { httpStatus?: number };
+};
+
 export class ManagedReplicationError extends Error {
-	constructor(public readonly code: string) {
+	readonly detail: ReplicationFailureDetail;
+	constructor(
+		public readonly code: string,
+		detail: ReplicationFailureDetail = {}
+	) {
 		super(`Managed replication failed (${code}).`);
+		this.detail = { ...detail };
 	}
 }
 
@@ -61,43 +98,163 @@ const configSchema = z.object({ id: fullSnapshotId });
 const hasControlCharacters = (value: string) =>
 	Array.from(value).some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127);
 
+/** Counts and closed classes of backend retries in a bounded stderr window; no text survives. */
+export function backendSummary(diagnostic: string): ReplicationFailureDetail['backend'] {
+	const parser = new ArchiveBackendRetries();
+	parser.write(diagnostic);
+	parser.end();
+	const summary = parser.snapshot();
+	if (!summary) return undefined;
+	const httpStatus = [...summary.loads].reverse().find(load => load.httpStatus)?.httpStatus;
+	return {
+		retryCount: summary.retryCount,
+		gaveUpCount: summary.gaveUpCount,
+		serverErrorCount: summary.serverErrorCount,
+		errorClasses: summary.errorClasses,
+		...(httpStatus ? { httpStatus } : {}),
+	};
+}
+
+/**
+ * Closed codes for failures that the credential, TLS and permission checks do not recognise.
+ * Restic prints the decisive reason on its final `Fatal:` line; only a fixed code leaves here.
+ */
+export function unclassifiedFailureCode(
+	exitCode: number | null,
+	diagnostic: string,
+	exitSignal?: string | null
+): string {
+	const text = diagnostic;
+	if (/no space left on device/i.test(text)) return 'no-space-left';
+	if (/out of memory|cannot allocate memory/i.test(text)) return 'memory-exhausted';
+	if (exitCode === null && exitSignal) return 'process-killed';
+	if (/not found in snapshot|cannot dump file/i.test(text)) return 'snapshot-path-missing';
+	if (/no matching ID found|unable to find snapshot/i.test(text)) return 'snapshot-unavailable';
+	if (/repository is already locked|unable to create lock/i.test(text)) return 'repository-locked';
+	if (/refresh(?:ing)? (?:the )?lock|lock[^\r\n]{0,40}refresh/i.test(text))
+		return 'lock-refresh-failed';
+	if (
+		/ciphertext verification failed|(?:pack|blob)[^\r\n]{0,160}(?:damaged|corrupt)|hash mismatch/i.test(
+			text
+		)
+	)
+		return 'repository-data-damaged';
+	if (
+		/unknown (?:shorthand )?flag|unknown command|accepts (?:at most |between )?\d+ arg|requires (?:at least|exactly) \d+ arg/i.test(
+			text
+		)
+	)
+		return 'restic-arguments-rejected';
+	if (/no such host|server misbehaving/i.test(text)) return 'storage-dns-failed';
+	if (/connection refused|no route to host|network is unreachable/i.test(text))
+		return 'storage-unreachable';
+	if (/ssh: handshake failed|unable to authenticate|no supported methods remain/i.test(text))
+		return 'storage-authentication-failed';
+	if (/permission denied/i.test(text)) return 'storage-permission-denied';
+	const decisive =
+		text
+			.split(/\r?\n/)
+			.filter(line => /Fatal:|ERROR :|\) failed: /.test(line))
+			.pop() ?? text;
+	if (/broken pipe/i.test(decisive)) return 'storage-connection-interrupted';
+	const { errorClass, httpStatus } = classifyBackendError(decisive);
+	switch (errorClass) {
+		case 'timeout':
+			return 'storage-timeout';
+		case 'connection-reset':
+		case 'stream-reset':
+		case 'unexpected-eof':
+			return 'storage-connection-interrupted';
+		case 'partial-read':
+			return 'storage-partial-read';
+		case 'dns-not-found':
+			return 'storage-dns-failed';
+		case 'not-found':
+			return 'storage-object-missing';
+		case 'tls':
+			return 'storage-tls-failed';
+		case 'http-status':
+			return httpStatus !== undefined && httpStatus >= 500
+				? 'storage-server-error'
+				: 'storage-request-rejected';
+		default:
+			return 'execution-failed';
+	}
+}
+
 /** A fixed server-only workflow. Never executes repair, unlock, prune or purge. */
 export class ManagedReplicationExecutor implements ManagedReplicationExecutorContract {
+	/**
+	 * `tempRoot` holds one private directory per copy. Restic writes every pack it uploads to a
+	 * temporary file first (`restic-temp-pack-*`, up to 16 MiB each, several in flight), so the
+	 * container's small `/tmp` tmpfs cannot be used for a large copy.
+	 */
+	constructor(private readonly options: { tempRoot?: string } = {}) {}
+
 	async inspectSource(
 		source: ReplicationSource,
 		signal?: AbortSignal
 	): Promise<ReplicationSourceProof> {
 		this.assertSource(source);
-		const env = await this.environment(source.access, undefined, signal);
-		const repositoryConfigId = this.parse(
-			configSchema,
-			await this.restic('source', source.access.repositoryPath, ['cat', 'config'], env, signal)
-		).id;
-		const rows = this.parse(
-			z.array(snapshotSchema),
-			await this.restic(
+		const env = await this.at('credentials', () =>
+			this.environment(source.access, undefined, signal)
+		);
+		return this.inspectSourceWith(source, env, signal);
+	}
+
+	private async inspectSourceWith(
+		source: ReplicationSource,
+		env: NodeJS.ProcessEnv,
+		signal?: AbortSignal
+	): Promise<ReplicationSourceProof> {
+		const repositoryConfigId = await this.at('source-config', async () =>
+			this.parse(
+				configSchema,
+				await this.restic('source', source.access.repositoryPath, ['cat', 'config'], env, signal)
+			)
+		);
+		const rows = await this.at('source-snapshot', async () => {
+			const listed = this.parse(
+				z.array(snapshotSchema),
+				await this.restic(
+					'source',
+					source.access.repositoryPath,
+					['snapshots', source.snapshotId],
+					env,
+					signal
+				)
+			);
+			if (listed.length !== 1 || listed[0].id !== source.snapshotId)
+				throw new ManagedReplicationError('snapshot-unavailable');
+			this.assertSnapshot(source, listed[0]);
+			return listed;
+		});
+		await this.at('source-artifact', () =>
+			this.verifyArtifacts(
+				source,
 				'source',
 				source.access.repositoryPath,
-				['snapshots', source.snapshotId],
+				source.snapshotId,
 				env,
 				signal
 			)
 		);
-		if (rows.length !== 1 || rows[0].id !== source.snapshotId)
-			throw new ManagedReplicationError('snapshot-unavailable');
-		this.assertSnapshot(source, rows[0]);
-		await this.verifyArtifacts(
-			source,
-			'source',
-			source.access.repositoryPath,
-			source.snapshotId,
-			env,
-			signal
-		);
-		return { repositoryConfigId, snapshot: rows[0] };
+		return { repositoryConfigId: repositoryConfigId.id, snapshot: rows[0] };
 	}
 
 	async copy(input: Parameters<ManagedReplicationExecutorContract['copy']>[0]) {
+		const workspace = await this.at('workspace', () => this.createWorkspace());
+		try {
+			return await this.copyWith(input, workspace);
+		} finally {
+			await fs.rm(workspace, { recursive: true, force: true }).catch(() => undefined);
+		}
+	}
+
+	private async copyWith(
+		input: Parameters<ManagedReplicationExecutorContract['copy']>[0],
+		workspace: string
+	) {
 		const { source, proof, destination, state, signal } = input;
 		this.assertSource(source);
 		this.assertSnapshot(source, proof.snapshot);
@@ -113,16 +270,22 @@ export class ManagedReplicationExecutor implements ManagedReplicationExecutorCon
 			!fullSnapshotId.safeParse(state.repositoryConfigId).success
 		)
 			throw new ManagedReplicationError('destination-unowned');
-		const env = await this.environment(source.access, destination, signal);
-		const actualSource = await this.inspectSource(source, signal);
+		const env = await this.at('credentials', () =>
+			this.environment(source.access, destination, signal)
+		);
+		env.TMPDIR = workspace;
+		if (process.platform === 'win32') env.TEMP = env.TMP = workspace;
+		const actualSource = await this.inspectSourceWith(source, env, signal);
 		if (JSON.stringify(actualSource) !== JSON.stringify(proof))
 			throw new ManagedReplicationError('source-binding-changed');
-		let repositoryConfigId: string;
-		try {
-			repositoryConfigId = this.parse(
+		const destinationConfig = async () =>
+			this.parse(
 				configSchema,
 				await this.restic('destination', destination.repositoryPath, ['cat', 'config'], env, signal)
 			).id;
+		let repositoryConfigId: string;
+		try {
+			repositoryConfigId = await this.at('destination-config', destinationConfig);
 		} catch (error) {
 			if (
 				!(error instanceof ManagedReplicationError) ||
@@ -132,31 +295,33 @@ export class ManagedReplicationExecutor implements ManagedReplicationExecutorCon
 			)
 				throw error;
 			// A missing config alone is not ownership: refuse any pre-existing objects.
-			const listing = await this.command(
-				'rclone',
-				['lsf', `destination:${destination.repositoryPath}`, '--max-depth', '1'],
-				env,
-				signal
+			const listing = await this.at('destination-list', () =>
+				this.command(
+					'rclone',
+					['lsf', `destination:${destination.repositoryPath}`, '--max-depth', '1'],
+					env,
+					signal
+				)
 			);
-			if (listing.trim()) throw new ManagedReplicationError('destination-not-empty');
+			if (listing.trim())
+				throw new ManagedReplicationError('destination-not-empty', { step: 'destination-list' });
 			await input.beginInitialization(); // durable BEFORE any destination mutation
-			await this.restic(
-				'destination',
-				destination.repositoryPath,
-				[
-					'init',
-					'--from-repo',
-					`rclone:source:${source.access.repositoryPath}`,
-					'--copy-chunker-params',
-				],
-				env,
-				signal,
-				true
+			await this.at('destination-init', () =>
+				this.restic(
+					'destination',
+					destination.repositoryPath,
+					[
+						'init',
+						'--from-repo',
+						`rclone:source:${source.access.repositoryPath}`,
+						'--copy-chunker-params',
+					],
+					env,
+					signal,
+					true
+				)
 			);
-			repositoryConfigId = this.parse(
-				configSchema,
-				await this.restic('destination', destination.repositoryPath, ['cat', 'config'], env, signal)
-			).id;
+			repositoryConfigId = await this.at('destination-config', destinationConfig);
 			await input.bindRepository(repositoryConfigId); // durable BEFORE copy
 		}
 		if (state.repositoryConfigId !== repositoryConfigId && state.repositoryConfigId !== null)
@@ -167,46 +332,53 @@ export class ManagedReplicationExecutor implements ManagedReplicationExecutorCon
 			if (!this.initializedInThisCall.has(env))
 				throw new ManagedReplicationError('destination-unowned');
 		}
-		await this.restic(
-			'destination',
-			destination.repositoryPath,
-			['copy', '--from-repo', `rclone:source:${source.access.repositoryPath}`, source.snapshotId],
-			env,
-			signal,
-			true
-		);
-		const copies = this.parse(
-			z.array(snapshotSchema),
-			await this.restic(
+		await this.at('copy', () =>
+			this.restic(
 				'destination',
 				destination.repositoryPath,
-				[
-					'snapshots',
-					'--tag',
-					`pluton-plan-${source.planId}`,
-					'--tag',
-					`pluton-backup-${source.backupId}`,
-				],
+				['copy', '--from-repo', `rclone:source:${source.access.repositoryPath}`, source.snapshotId],
+				env,
+				signal,
+				true
+			)
+		);
+		const matched = await this.at('destination-snapshot', async () => {
+			const copies = this.parse(
+				z.array(snapshotSchema),
+				await this.restic(
+					'destination',
+					destination.repositoryPath,
+					[
+						'snapshots',
+						'--tag',
+						`pluton-plan-${source.planId}`,
+						'--tag',
+						`pluton-backup-${source.backupId}`,
+					],
+					env,
+					signal
+				)
+			);
+			const found = copies.filter(
+				snapshot =>
+					(snapshot.id === source.snapshotId || snapshot.original === source.snapshotId) &&
+					snapshot.tree === proof.snapshot.tree &&
+					JSON.stringify([...snapshot.paths].sort()) ===
+						JSON.stringify([...proof.snapshot.paths].sort())
+			);
+			if (found.length !== 1) throw new ManagedReplicationError('destination-snapshot-unverified');
+			this.assertSnapshot(source, found[0], false);
+			return found;
+		});
+		await this.at('destination-artifact', () =>
+			this.verifyArtifacts(
+				source,
+				'destination',
+				destination.repositoryPath,
+				matched[0].id,
 				env,
 				signal
 			)
-		);
-		const matched = copies.filter(
-			snapshot =>
-				(snapshot.id === source.snapshotId || snapshot.original === source.snapshotId) &&
-				snapshot.tree === proof.snapshot.tree &&
-				JSON.stringify([...snapshot.paths].sort()) ===
-					JSON.stringify([...proof.snapshot.paths].sort())
-		);
-		if (matched.length !== 1) throw new ManagedReplicationError('destination-snapshot-unverified');
-		this.assertSnapshot(source, matched[0], false);
-		await this.verifyArtifacts(
-			source,
-			'destination',
-			destination.repositoryPath,
-			matched[0].id,
-			env,
-			signal
 		);
 		return { snapshotId: matched[0].id, repositoryConfigId };
 	}
@@ -454,23 +626,48 @@ export class ManagedReplicationExecutor implements ManagedReplicationExecutorCon
 			child.stderr?.on('data', (chunk: Buffer) => {
 				diagnostic = Buffer.concat([diagnostic, chunk]).subarray(-32 * 1024);
 			});
-			child.once('close', async code => {
+			child.once('close', async (code, exitSignal) => {
 				clearTimeout(timer);
 				signal?.removeEventListener('abort', abort);
 				// Do not release a durable repository claim before all descendants stop.
 				if (process.platform !== 'win32' && child.pid && !(await this.stopDescendants(child.pid)))
 					failure = 'execution-uncertain';
 				processManager.untrackProcess(key);
-				if (failure || code !== 0)
+				if (failure || code !== 0) {
+					const text = diagnostic.toString();
 					reject(
-						new ManagedReplicationError(failure || this.failureCode(code, diagnostic.toString()))
+						new ManagedReplicationError(failure || this.failureCode(code, text, exitSignal), {
+							exitCode: code,
+							signal: exitSignal,
+							backend: backendSummary(text),
+						})
 					);
-				else resolve(output.trim());
+				} else resolve(output.trim());
 			});
 		});
 	}
 
-	private failureCode(exitCode: number | null, diagnostic: string) {
+	/** Records the fixed step on a failure that does not carry one yet. */
+	private async at<T>(step: ReplicationStep, run: () => Promise<T>): Promise<T> {
+		try {
+			return await run();
+		} catch (error) {
+			if (error instanceof ManagedReplicationError && !error.detail.step) error.detail.step = step;
+			throw error;
+		}
+	}
+
+	private async createWorkspace(): Promise<string> {
+		const root = this.options.tempRoot ?? path.join(appPaths.getTempDir(), 'replication');
+		try {
+			await fs.mkdir(root, { recursive: true, mode: 0o700 });
+			return await fs.mkdtemp(path.join(root, 'job-'));
+		} catch {
+			throw new ManagedReplicationError('workspace-unavailable');
+		}
+	}
+
+	private failureCode(exitCode: number | null, diagnostic: string, exitSignal?: string | null) {
 		if (exitCode === 12) return 'wrong-password';
 		if (
 			/x509|certificate (?:verify|verification|signed|is not|has expired)|tls handshake|hostname.*(?:mismatch|certificate)/i.test(
@@ -491,11 +688,9 @@ export class ManagedReplicationExecutor implements ManagedReplicationExecutorCon
 			return 'retention-denied';
 		if (/AccessDenied|Forbidden|(?:status|http|response)[^\r\n]{0,20}\b403\b/i.test(diagnostic))
 			return 'storage-access-denied';
-		return exitCode === 10
-			? 'repository-unavailable'
-			: exitCode === 11
-				? 'repository-locked'
-				: 'execution-failed';
+		if (exitCode === 10) return 'repository-unavailable';
+		if (exitCode === 11) return 'repository-locked';
+		return unclassifiedFailureCode(exitCode, diagnostic, exitSignal);
 	}
 
 	/** A failed process-group check retains the durable lock; no PID/age guess. */
