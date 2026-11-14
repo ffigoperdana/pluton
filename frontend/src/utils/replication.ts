@@ -49,3 +49,30 @@ export function mirrorStatusLabel(status: BackupMirror['status']) {
 export function hasPendingMirrors(backups: { mirrors?: BackupMirror[] }[]) {
    return backups.some((backup) => backup.mirrors?.some((mirror) => mirror.status === 'pending' || mirror.status === 'started'));
 }
+
+/**
+ * Turning replication off on a saved plan that has replicas changes more than the toggle shows,
+ * so it is confirmed first. A new plan, or one without replicas, toggles directly.
+ */
+export function needsReplicationOffConfirmation(
+   settings: Pick<PlanReplicationSettings, 'enabled' | 'storages'> | undefined,
+   nextEnabled: boolean,
+   savedPlan: boolean,
+): boolean {
+   return savedPlan && !!settings?.enabled && !nextEnabled && settings.storages.length > 0;
+}
+
+/** What turning replication off does, in the order an operator needs it. */
+export function replicationOffNotice(managedAgent: boolean): string[] {
+   return [
+      'New backups are no longer copied to the replica storages.',
+      'Copies already in the replicas stay where they are. Nothing is deleted.',
+      ...(managedAgent
+         ? [
+              'Recovery & Failover returns to Primary Only. Turning replication on again does not bring back Assisted or Automatic Failover; choose it again.',
+              'Turning replication off and on does not retry failed copies. Use Retry in Mirror Details instead.',
+              'Saving is refused while a copy is still pending or running.',
+           ]
+         : []),
+   ];
+}

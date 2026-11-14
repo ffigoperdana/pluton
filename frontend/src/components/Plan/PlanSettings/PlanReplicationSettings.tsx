@@ -9,7 +9,12 @@ import ActionModal from '../../common/ActionModal/ActionModal';
 import { useDeleteReplicationStorage } from '../../../services';
 import { toast } from 'react-toastify';
 import { nanoid } from 'nanoid';
-import { MAX_REPLICATION_DESTINATIONS, replicationSettingsError } from '../../../utils/replication';
+import {
+   MAX_REPLICATION_DESTINATIONS,
+   needsReplicationOffConfirmation,
+   replicationOffNotice,
+   replicationSettingsError,
+} from '../../../utils/replication';
 import DeleteDependencyNotice from '../../common/ActionModal/DeleteDependencyNotice';
 
 interface PlanReplicationSettingsProps {
@@ -46,6 +51,7 @@ const PlanReplicationSettings = ({
    const [tempStorages, setTempStorages] = useState<PlanReplicationStorage[]>([]);
    const [removeStorageData, setRemoveStorageData] = useState<boolean>(false);
    const [showRemoveModal, setShowRemoveModal] = useState<boolean | PlanReplicationStorage>(false);
+   const [confirmOff, setConfirmOff] = useState(false);
 
    const deleteStorageMutation = useDeleteReplicationStorage();
    const settings = replication || defaultReplication;
@@ -72,8 +78,16 @@ const PlanReplicationSettings = ({
       [settings.storages, tempStorages],
    );
 
-   const updateEnabled = (enabled: boolean) => {
+   const applyEnabled = (enabled: boolean) => {
       onUpdate({ ...settings, enabled, ...(!enabled && { recoveryPolicy: 'primary-only' }) });
+   };
+
+   const updateEnabled = (enabled: boolean) => {
+      if (needsReplicationOffConfirmation(settings, enabled, isEditing && !!planID)) {
+         setConfirmOff(true);
+         return;
+      }
+      applyEnabled(enabled);
    };
 
    const updateConcurrent = (concurrent: boolean) => {
@@ -352,6 +366,33 @@ const PlanReplicationSettings = ({
             )}
          </div>
 
+         {confirmOff && (
+            <ActionModal
+               title="Turn Off Replication?"
+               message={
+                  <div>
+                     <ul className={mirrorClasses.offNotice}>
+                        {replicationOffNotice(managedAgent).map((line) => (
+                           <li key={line}>{line}</li>
+                        ))}
+                     </ul>
+                     <p>The change takes effect when you save the plan.</p>
+                  </div>
+               }
+               closeModal={() => setConfirmOff(false)}
+               width="440px"
+               secondaryAction={{ title: 'Keep Replication On', action: () => setConfirmOff(false) }}
+               primaryAction={{
+                  title: 'Turn Off Replication',
+                  type: 'danger',
+                  isPending: false,
+                  action: () => {
+                     applyEnabled(false);
+                     setConfirmOff(false);
+                  },
+               }}
+            />
+         )}
          {showRemoveModal && (
             <ActionModal
                title="Detach Replication Destination"

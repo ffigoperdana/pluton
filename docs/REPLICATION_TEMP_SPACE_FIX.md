@@ -93,6 +93,10 @@ No database migration, no API change, no Agent or `.env`/Compose change.
 - `backend/__tests__/utils/ManagedReplicationExecutor.test.ts`
 - `backend/__tests__/utils/ManagedReplicationProcess.test.ts`
 - `backend/__tests__/services/ManagedReplicationService.test.ts`
+- `frontend/src/utils/replication.ts`
+- `frontend/src/components/Plan/PlanSettings/PlanReplicationSettings.tsx`
+- `frontend/src/components/Plan/PlanSettings/PlanReplicationSettings.module.scss`
+- `frontend/__tests__/managedReplication.test.ts`
 - `docs/REPLICATION_TEMP_SPACE_FIX.md`
 
 ## 5. Validation (15 Nov 2026, Windows, Node 24.16.0)
@@ -104,6 +108,8 @@ No database migration, no API change, no Agent or `.env`/Compose change.
 | Backend `tsc --noEmit`, ESLint on changed files | pass |
 | Docker reproduction (Restic 0.19.1, 64 MiB `/tmp`, throttled upload) | old behaviour fails with ENOSPC; `TMPDIR` on disk succeeds, `check` clean |
 | Replica recovery lab `scripts/validate-replica-recovery.py` (new source mounted) | 18/18 PASS |
+| Frontend tests `node --experimental-strip-types --test frontend/__tests__/*.test.ts` | 490/490 |
+| Frontend `tsc -b` | pass (full frontend ESLint still fails to load its config, the known `eslint-config-prettier` baseline) |
 
 New tests: the copy's private `TMPDIR` is used by every call and removed after success and failure;
 `workspace-unavailable` stops before any command; the failing step is recorded for every command;
@@ -151,3 +157,31 @@ copy leaves at most an empty `job-*` directory under `/data/pluton/replication`.
   `execution-failed`, now with its step, exit code and backend counts in the log.
 - Other server-side Restic writers (self-backup of the Pluton host, plans on device `main`) were not
   changed in this fix.
+
+## 9. Confirmation when replication is turned off
+
+Operator question after the incident: turning replication off showed no warning, although it changes
+more than the toggle suggests. Edit Plan now asks first when a saved plan that has replica
+destinations is switched off (`needsReplicationOffConfirmation`). A new plan, or one without
+destinations, toggles directly as before. The dialog lists (`replicationOffNotice`):
+
+- new backups are no longer copied to the replica storages;
+- copies already in the replicas stay where they are, nothing is deleted;
+- managed plans only: Recovery & Failover returns to Primary Only and is not restored by turning
+  replication on again; turning replication off and on does not retry failed copies (use Retry in
+  Mirror Details); saving is refused while a copy is pending or running
+  (`managed_replication_plan_binding` trigger);
+- the change takes effect when the plan is saved.
+
+**Keep Replication On** leaves everything unchanged; **Turn Off Replication** applies exactly the
+previous toggle behaviour (`enabled: false`, policy `primary-only`, destination rows and their
+replication IDs kept, so turning it on again continues in the same replica folders).
+
+No replica deletion was added. Deleting a managed replica stays unavailable on purpose (offsite copy,
+irreversible, HCP retention can make it partial); if needed it should be a separate, explicit action
+on detaching a destination, with a typed confirmation and owned-prefix checks.
+
+Tests: the helper's cases; a rendered managed plan in edit mode does not change on the first toggle,
+shows the notice, keeps everything on **Keep Replication On**, and on **Turn Off Replication** sends
+one update with `enabled: false`, `primary-only` and the same destination rows (fails on the previous
+component); a new plan toggles off immediately without a dialog.

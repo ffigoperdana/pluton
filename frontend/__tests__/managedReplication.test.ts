@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { hasPendingMirrors, mirrorSummary, replicationSettingsError } from '../src/utils/replication.ts';
+import { hasPendingMirrors, mirrorSummary, needsReplicationOffConfirmation, replicationOffNotice, replicationSettingsError } from '../src/utils/replication.ts';
 import type { PlanReplicationSettings } from '../src/@types/plans.ts';
 
 const require = createRequire(new URL('../package.json', import.meta.url));
@@ -150,6 +150,55 @@ test('actual replica removal defaults to detach/retain and preserved HTTP409 poi
       await view.rerender();
       assert.equal(view.dom.window.document.querySelector('[role="alert"] a')!.getAttribute('href'), '/database-restores');
       assert.equal(view.submissions.length, 1);
+   } finally { await view.cleanup(); }
+});
+
+test('turning replication off asks first only for a saved plan that has replicas', () => {
+   assert.equal(needsReplicationOffConfirmation(settings(1), false, true), true);
+   assert.equal(needsReplicationOffConfirmation(settings(1), false, false), false);
+   assert.equal(needsReplicationOffConfirmation({ enabled: true, storages: [] }, false, true), false);
+   assert.equal(needsReplicationOffConfirmation(settings(1), true, true), false);
+   assert.equal(needsReplicationOffConfirmation({ ...settings(1), enabled: false }, false, true), false);
+   assert.equal(needsReplicationOffConfirmation(undefined, false, true), false);
+   const managed = replicationOffNotice(true).join('\n');
+   assert.match(managed, /no longer copied/);
+   assert.match(managed, /Nothing is deleted/);
+   assert.match(managed, /returns to Primary Only/);
+   assert.match(managed, /does not retry failed copies/);
+   assert.doesNotMatch(replicationOffNotice(false).join('\n'), /Primary Only|Retry/);
+});
+
+test('actual toggle-off of a saved managed plan waits for confirmation and keeps the replica rows', async () => {
+   const updates: PlanReplicationSettings[] = [];
+   const replication = { ...settings(1), recoveryPolicy: 'automatic' as const };
+   const view = await fixture(Settings, { replication, primaryStorageId: primary.storageId, deviceId: 'main', managedAgent: true, isEditing: true, planID: 'plan-01', onUpdate: (next: PlanReplicationSettings) => updates.push(next) });
+   const toggle = () => view.dom.window.document.querySelector<HTMLInputElement>('input[aria-label="Enable Replication"]')!;
+   try {
+      await act(async () => toggle().click());
+      assert.equal(updates.length, 0);
+      assert.match(view.text(), /Nothing is deleted/);
+      assert.match(view.text(), /returns to Primary Only/);
+      await act(async () => view.button('Keep Replication On').click());
+      assert.equal(updates.length, 0);
+      assert.doesNotMatch(view.text(), /Nothing is deleted/);
+      await act(async () => toggle().click());
+      await act(async () => view.button('Turn Off Replication').click());
+      assert.equal(updates.length, 1);
+      assert.equal(updates[0].enabled, false);
+      assert.equal(updates[0].recoveryPolicy, 'primary-only');
+      assert.deepEqual(updates[0].storages, replication.storages);
+      assert.doesNotMatch(view.text(), /Nothing is deleted/);
+   } finally { await view.cleanup(); }
+});
+
+test('actual toggle-off while creating a plan applies at once without a dialog', async () => {
+   const updates: PlanReplicationSettings[] = [];
+   const view = await fixture(Settings, { replication: settings(1), primaryStorageId: primary.storageId, deviceId: 'main', managedAgent: true, onUpdate: (next: PlanReplicationSettings) => updates.push(next) });
+   try {
+      await act(async () => view.dom.window.document.querySelector<HTMLInputElement>('input[aria-label="Enable Replication"]')!.click());
+      assert.equal(updates.length, 1);
+      assert.equal(updates[0].enabled, false);
+      assert.doesNotMatch(view.text(), /Nothing is deleted/);
    } finally { await view.cleanup(); }
 });
 
