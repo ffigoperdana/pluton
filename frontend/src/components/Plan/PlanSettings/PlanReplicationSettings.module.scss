@@ -150,3 +150,12 @@
    background: var(--error-bg-color);
    color: var(--error-text-color);
 }
+
+.offNotice {
+   margin: 0 0 12px;
+   padding-left: 18px;
+   display: flex;
+   flex-direction: column;
+   gap: 6px;
+   line-height: 1.45;
+}

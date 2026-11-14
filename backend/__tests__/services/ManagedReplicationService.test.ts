@@ -3,6 +3,10 @@ import { ManagedReplicationService } from '../../src/services/ManagedReplication
 import { ManagedReplicationError } from '../../src/utils/restic/ManagedReplicationExecutor';
 import { AppError } from '../../src/utils/AppError';
 import { storageRcloneOptions } from '../../src/utils/storageSecurity';
+import { serverLogger } from '../../src/utils/logger';
+
+// Assert the structured job log without routing it through the suite's real Pino transport.
+jest.mock('../../src/utils/logger', () => ({ serverLogger: { info: jest.fn(), warn: jest.fn() } }));
 
 jest.mock('../../src/utils/storageSecurity', () => ({
 	isHcpMode: jest.requireActual('../../src/utils/storageSecurity').isHcpMode,
@@ -100,6 +104,33 @@ describe('Managed Agent server replication', () => {
 		expect(f.backup).toMatchObject({ status: 'completed', success: true });
 		expect(f.backup.mirrors.map((mirror: any) => mirror.status)).toEqual(['failed', 'completed']);
 		expect(f.rows[1].destinationSnapshotId).toBe('e'.repeat(64));
+	});
+	it('logs the failed step and closed facts of a replica job without provider text or credentials', async () => {
+		const f = fixture();
+		const warn = serverLogger.warn as jest.Mock;
+		warn.mockClear();
+		f.executor.copy.mockRejectedValueOnce(
+			new ManagedReplicationError('no-space-left', { step: 'copy', exitCode: 1, signal: null })
+		);
+		await f.service.enqueueBackup('backup-01'); await f.service.tick();
+		expect(f.rows[0]).toMatchObject({ status: 'failed', lastErrorCode: 'no-space-left' });
+		const [fields] = warn.mock.calls.find(([entry]) => entry.event === 'managed_replication_job_failed');
+		expect(fields).toMatchObject({ jobId: f.rows[0].id, planId: 'plan-01', backupId: 'backup-01', replicationId: 'replica-01', attempt: 1, code: 'no-space-left', step: 'copy', exitCode: 1 });
+		expect(fields.durationMs).toEqual(expect.any(Number));
+		expect(JSON.stringify(warn.mock.calls)).not.toMatch(/synthetic-(?:pass|secret|key|repository-password)|example\.internal|bucket-01|managed\/plan-01/);
+	});
+	it('logs only the error type for an unexpected failure and a completion with its duration', async () => {
+		const f = fixture();
+		const warn = serverLogger.warn as jest.Mock;
+		const info = serverLogger.info as jest.Mock;
+		warn.mockClear(); info.mockClear();
+		f.executor.copy.mockRejectedValueOnce(new TypeError('synthetic private detail /srv/example-app'));
+		await f.service.enqueueBackup('backup-01'); await f.service.tick();
+		const [fields] = warn.mock.calls.find(([entry]) => entry.event === 'managed_replication_job_failed');
+		expect(fields).toMatchObject({ code: 'execution-failed', step: 'unrecorded', errorType: 'TypeError' });
+		expect(JSON.stringify(fields)).not.toContain('synthetic private detail');
+		await f.service.retryFailed('backup-01'); await f.service.tick();
+		expect(info.mock.calls.some(([entry]) => entry.event === 'managed_replication_job_completed' && entry.attempt === 2 && typeof entry.durationMs === 'number')).toBe(true);
 	});
 	it('retains a second destination admission failure beside durable state and supports explicit recovery', async () => {
 		const f = fixture(); f.plan.settings.replication.storages.push(replica('02'));

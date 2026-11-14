@@ -28,7 +28,14 @@ import {
 } from '../utils/restic/ManagedReplicationExecutor';
 import { fullSnapshotId } from '../utils/restic/ManagedSftpRepositorySession';
 import { lifecycleDatabases, parseRemoteLifecycle } from '../utils/remoteLifecycle';
+import { serverLogger } from '../utils/logger';
 import type { BackupMirror } from '../types/backups';
+
+/** The class name of an unexpected error, never its message. */
+const errorType = (error: unknown) => {
+	const name = error instanceof Error ? error.constructor.name : typeof error;
+	return /^[A-Za-z]{1,40}$/.test(name) ? name : 'unknown';
+};
 
 export interface ManagedReplicationCompletionHook {
 	validatePlan(plan: Plan | NewPlan): Promise<void>;
@@ -223,6 +230,7 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 			const token = crypto.randomBytes(32).toString('hex');
 			const job = await this.jobs.claim(pending.id, token);
 			if (!job) continue;
+			const startedAt = Date.now();
 			const controller = new AbortController();
 			const timer = setTimeout(() => controller.abort('timeout'), 30 * 60_000);
 			timer.unref();
@@ -291,6 +299,14 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 					status: 'completed',
 					destinationSnapshotId: copied.snapshotId,
 				});
+				serverLogger?.info(
+					{
+						event: 'managed_replication_job_completed',
+						...this.jobLogFields(job),
+						durationMs: Date.now() - startedAt,
+					},
+					'Managed replication job completed'
+				);
 			} catch (error) {
 				const failure = this.code(error);
 				// A timeout cannot prove termination: retain the durable fence when the
@@ -311,6 +327,21 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 								: 'failed',
 					failureCode: code,
 				});
+				const detail = error instanceof ManagedReplicationError ? error.detail : undefined;
+				serverLogger?.warn(
+					{
+						event: 'managed_replication_job_failed',
+						...this.jobLogFields(job),
+						code,
+						step: detail?.step ?? 'unrecorded',
+						...(detail && 'exitCode' in detail ? { exitCode: detail.exitCode } : {}),
+						...(detail?.signal ? { signal: detail.signal } : {}),
+						...(detail?.backend ? { backend: detail.backend } : {}),
+						...(error instanceof ManagedReplicationError ? {} : { errorType: errorType(error) }),
+						durationMs: Date.now() - startedAt,
+					},
+					'Managed replication job failed'
+				);
 			} finally {
 				clearTimeout(timer);
 				this.active.delete(job.id);
@@ -503,6 +534,16 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 			);
 		}
 		await this.backups.update(backupId, { mirrors });
+	}
+	/** Identifiers only: no storage names, paths, endpoints or credentials. */
+	private jobLogFields(job: ManagedReplicationJob) {
+		return {
+			jobId: job.id,
+			planId: job.planId,
+			backupId: job.backupId,
+			replicationId: job.replicationId,
+			attempt: job.attempts,
+		};
 	}
 	private details(row: ManagedReplicationJob) {
 		return {

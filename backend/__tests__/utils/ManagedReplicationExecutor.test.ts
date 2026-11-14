@@ -1,4 +1,7 @@
 import crypto from 'crypto';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { ManagedReplicationExecutor, ManagedReplicationError, type ReplicationSource } from '../../src/utils/restic/ManagedReplicationExecutor';
 
 jest.mock('../../src/utils/binaryPathResolver', () => ({ getBinaryPath: (name: string) => `/synthetic/bin/${name}` }));
@@ -10,7 +13,8 @@ function fixture() {
 	const snapshot = { id: snapshotId, tree: sourceTree, tags: ['pluton-plan-plan-01', 'pluton-backup-backup-01'], paths: ['/srv/example-app'] };
 	const proof = { repositoryConfigId: 'c'.repeat(64), snapshot };
 	const destination = { options: { type: 's3', endpoint: 'https://s3.example.internal', access_key_id: 'synthetic-access', secret_access_key: 'synthetic-secret', no_check_bucket: 'true' }, repositoryPath: 'bucket-01/owned-prefix', environment: { RCLONE_CA_CERT: '/operator/ca.pem' } };
-	const executor = new ManagedReplicationExecutor();
+	const tempRoot = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'pluton-replication-test-')), 'replication');
+	const executor = new ManagedReplicationExecutor({ tempRoot });
 	let existing = true;
 	let initialized = false;
 	const events: string[] = [];
@@ -32,7 +36,7 @@ function fixture() {
 	const beginInitialization = jest.fn(async () => { events.push('durable-init'); });
 	const bindRepository = jest.fn(async () => { events.push('durable-bind'); });
 	const run = (state: any = { initialization: 'ready', repositoryConfigId: 'd'.repeat(64) }, signal?: AbortSignal) => executor.copy({ source, proof, destination, state, beginInitialization, bindRepository, signal });
-	return { executor, source, snapshot, proof, destination, command, events, beginInitialization, bindRepository, run, absent: () => { existing = false; } };
+	return { executor, source, snapshot, proof, destination, command, events, beginInitialization, bindRepository, run, tempRoot, absent: () => { existing = false; } };
 }
 
 describe('Managed replication fixed Restic executor', () => {
@@ -110,6 +114,47 @@ describe('Managed replication fixed Restic executor', () => {
 		const f = fixture(); const previous = f.command.getMockImplementation()!;
 		f.command.mockImplementation(async (...args: any[]) => args[1].includes('snapshots') && args[1].includes('rclone:destination:bucket-01/owned-prefix') ? JSON.stringify([{ ...f.snapshot, id: 'e'.repeat(64), original: 'f'.repeat(64) }]) : previous(...args));
 		await expect(f.run()).rejects.toMatchObject({ code: 'destination-snapshot-unverified' });
+	});
+	it('gives every Restic call of a copy a private temporary directory outside /tmp and removes it afterwards', async () => {
+		const f = fixture();
+		await f.run();
+		const copy = f.command.mock.calls.find(([, args]: any) => args.includes('copy'))!;
+		const workspace = (copy[2] as NodeJS.ProcessEnv).TMPDIR!;
+		expect(path.dirname(workspace)).toBe(f.tempRoot);
+		expect(path.basename(workspace)).toMatch(/^job-/);
+		for (const [, , env] of f.command.mock.calls as any) expect(env.TMPDIR).toBe(workspace);
+		expect(fs.existsSync(workspace)).toBe(false);
+		expect(fs.readdirSync(f.tempRoot)).toEqual([]);
+	});
+	it('removes the temporary directory when the copy fails', async () => {
+		const f = fixture(); const previous = f.command.getMockImplementation()!;
+		f.command.mockImplementation(async (...args: any[]) => { if (args[1].includes('copy')) throw new ManagedReplicationError('no-space-left'); return previous(...args); });
+		await expect(f.run()).rejects.toMatchObject({ code: 'no-space-left', detail: { step: 'copy' } });
+		expect(fs.readdirSync(f.tempRoot)).toEqual([]);
+	});
+	it('refuses to start when the temporary directory cannot be created', async () => {
+		const f = fixture();
+		fs.mkdirSync(path.dirname(f.tempRoot), { recursive: true });
+		fs.writeFileSync(f.tempRoot, 'not a directory');
+		await expect(f.run()).rejects.toMatchObject({ code: 'workspace-unavailable', detail: { step: 'workspace' } });
+		expect(f.command).not.toHaveBeenCalled();
+	});
+	it.each([
+		['cat', 'source', 'source-config'],
+		['snapshots', 'source', 'source-snapshot'],
+		['dump', 'source', 'source-artifact'],
+		['cat', 'destination', 'destination-config'],
+		['snapshots', 'destination', 'destination-snapshot'],
+		['dump', 'destination', 'destination-artifact'],
+	])('records the failing step when %s on the %s repository fails', async (command, side, step) => {
+		const f = fixture(); const previous = f.command.getMockImplementation()!;
+		f.source.artifacts = [{ path: '/pluton/database/fixture.sql', bytes: 9, sha256: crypto.createHash('sha256').update('SELECT 1;').digest('hex') }];
+		f.command.mockImplementation(async (...args: any[]) => {
+			const repo = args[1].includes('--repo') ? args[1][args[1].indexOf('--repo') + 1] : '';
+			if (args[1].includes(command) && repo.startsWith(`rclone:${side}:`)) throw new ManagedReplicationError('execution-failed', { exitCode: 1 });
+			return previous(...args);
+		});
+		await expect(f.run()).rejects.toMatchObject({ code: 'execution-failed', detail: { step, exitCode: 1 } });
 	});
 	it('cancels without a copy', async () => {
 		const f = fixture(); const controller = new AbortController(); controller.abort();
