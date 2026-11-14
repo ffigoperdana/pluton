@@ -2,7 +2,8 @@ import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { ManagedReplicationExecutor, ManagedReplicationError, type ReplicationSource } from '../../src/utils/restic/ManagedReplicationExecutor';
+import { ManagedReplicationExecutor, ManagedReplicationError, replicationTempRoot, type ReplicationSource } from '../../src/utils/restic/ManagedReplicationExecutor';
+import { appPaths } from '../../src/utils/AppPaths';
 
 jest.mock('../../src/utils/binaryPathResolver', () => ({ getBinaryPath: (name: string) => `/synthetic/bin/${name}` }));
 
@@ -125,6 +126,11 @@ describe('Managed replication fixed Restic executor', () => {
 		for (const [, , env] of f.command.mock.calls as any) expect(env.TMPDIR).toBe(workspace);
 		expect(fs.existsSync(workspace)).toBe(false);
 		expect(fs.readdirSync(f.tempRoot)).toEqual([]);
+	});
+	it('places the default temporary root on the data volume, never under the app temp directory', () => {
+		// In Docker appPaths.getTempDir() is /tmp/pluton, the container's 64 MiB tmpfs.
+		expect(replicationTempRoot()).toBe(path.join(appPaths.getDataDir(), 'tmp', 'replication'));
+		expect(path.relative(appPaths.getTempDir(), replicationTempRoot()).startsWith('..')).toBe(true);
 	});
 	it('removes the temporary directory when the copy fails', async () => {
 		const f = fixture(); const previous = f.command.getMockImplementation()!;

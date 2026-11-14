@@ -98,6 +98,14 @@ const configSchema = z.object({ id: fullSnapshotId });
 const hasControlCharacters = (value: string) =>
 	Array.from(value).some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127);
 
+/**
+ * Restic's temporary packs live on the persistent data volume. `appPaths.getTempDir()` is not
+ * used: in Docker it resolves to `/tmp/pluton`, the container's 64 MiB tmpfs.
+ */
+export function replicationTempRoot(): string {
+	return path.join(appPaths.getDataDir(), 'tmp', 'replication');
+}
+
 /** Counts and closed classes of backend retries in a bounded stderr window; no text survives. */
 export function backendSummary(diagnostic: string): ReplicationFailureDetail['backend'] {
 	const parser = new ArchiveBackendRetries();
@@ -658,7 +666,7 @@ export class ManagedReplicationExecutor implements ManagedReplicationExecutorCon
 	}
 
 	private async createWorkspace(): Promise<string> {
-		const root = this.options.tempRoot ?? path.join(appPaths.getTempDir(), 'replication');
+		const root = this.options.tempRoot ?? replicationTempRoot();
 		try {
 			await fs.mkdir(root, { recursive: true, mode: 0o700 });
 			return await fs.mkdtemp(path.join(root, 'job-'));
