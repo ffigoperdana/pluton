@@ -154,7 +154,7 @@ adalah referensi izin, one-time command dan audit.
 
 ## 5. Register primary storage dan pastikan isolasinya
 
-Managed Agent backup memakai **SFTP primary**, bukan Local/S3 langsung. Standard
+Managed Agent backup memakai **SFTP primary** (atau S3 primary untuk Agent 0.8.0 yang melaporkan dukungan S3; lihat [S3 sebagai repository primer](/docs/backup-plans/managed-agent)), bukan Local. Panduan ini memakai SFTP. Standard
 server filesystem backup mendukung provider lain sesuai [storage](/docs/storage).
 Siapkan akun backup khusus, kapasitas/kuota, folder baru/empty dedicated, dan
 akses dari **Agent serta server**. Tidak perlu shell admin untuk akun tersebut.

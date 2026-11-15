@@ -91,13 +91,13 @@ artifact snapshot dan hasil recovery secara terpisah.
 
 ## S3 sebagai repository primer (Agent 0.8.0)
 
-Plan Managed Agent dapat memakai storage **AWS S3** atau **S3 Compatible Storage** sebagai repository primer bila Agent mesin itu versi 0.8.0 atau lebih baru dan melaporkan dukungan S3. Agent menulis snapshot langsung ke S3 dari host-nya sendiri; data tidak melewati server Pluton. Untuk Agent lama, pilihan S3 tidak muncul pada **Backup Destination*** dan formulir menjelaskan alasannya. Server juga menolak mengantrekan backup plan S3 bila Agent tidak lagi melaporkan dukungan itu.
+Plan Managed Agent dapat memakai storage **AWS S3** atau **S3 Compatible Storage** sebagai repository primer bila Agent mesin itu versi 0.8.0 atau lebih baru dan melaporkan dukungan S3. Agent menulis snapshot langsung ke S3 dari host-nya sendiri; data tidak melewati server Pluton. Untuk Agent lama, pilihan S3 tidak muncul pada **Backup Destination*** dan formulir menjelaskan alasannya. Server juga menolak mengantrekan backup plan S3 bila Agent tidak lagi melaporkan dukungan itu. Perbarui server lebih dulu sebelum memasang atau meng-upgrade Agent ke 0.8.0.
 
 1. Siapkan storage dengan endpoint HTTPS. Untuk S3 compatible atau endpoint non-AWS, aktifkan **HCP / pre-existing namespace mode** seperti pada [panduan HCP](/docs/storage/hcp). `env_auth` tidak didukung.
 2. Isi prefix khusus plan di dalam bucket, misalnya `agents/app-01`. Root bucket ditolak. Prefix tidak boleh berada di dalam, di atas, atau sama dengan repository primer maupun replika plan lain.
 3. Pada backup pertama Agent menolak inisialisasi bila prefix sudah berisi objek. Pilih prefix baru; jangan mengosongkan prefix yang mungkin milik plan lain.
 
-Untuk setiap backup, Agent menerima kunci S3 milik storage primer plan ini dalam bentuk tersegel dan tidak pernah menerima kunci replika. Bila beberapa plan memakai kredensial S3 yang sama, host Agent yang disusupi dapat membaca dan menghapus data plan lain dalam namespace itu. Replikasi dari primer S3 belum tersedia pada tahap ini, sehingga **Enable Replication** dinonaktifkan dan **Move Repository** tidak ditampilkan. Browse, Download, Restore ke staging, Recovery Testing dan pemulihan artifact database membaca primer S3 melalui server.
+Untuk setiap backup, Agent menerima kunci S3 milik storage primer plan ini dalam bentuk tersegel dan tidak pernah menerima kunci replika. Pada payload versi 5, password repository, kunci storage, dan password database dikirim ke Agent dalam bentuk terenkripsi (tersegel). Bila beberapa plan memakai kredensial S3 yang sama, host Agent yang disusupi dapat membaca dan menghapus data plan lain dalam namespace itu. Replikasi dari primer S3 belum tersedia pada tahap ini, sehingga **Enable Replication** dinonaktifkan dan **Move Repository** tidak ditampilkan. Browse, Download, Restore ke staging, Recovery Testing dan pemulihan artifact database membaca primer S3 melalui server.
 
 ## Salinan S3 opsional
 

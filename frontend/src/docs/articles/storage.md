@@ -12,7 +12,7 @@ Sebelum mengisi formulir, tentukan dari mana backup dijalankan. Pilihan storage 
 | Backup dari Managed Agent | SFTP dengan subset konfigurasi yang didukung | 0–2 tujuan S3/S3 Compatible Storage, disalin oleh server |
 | Membaca repository lama | Melalui Legacy Repositories, bukan plan baru | Tidak menjadi bagian lifecycle managed |
 
-SFTP primer untuk Managed Agent boleh dilayani oleh VM Pluton. Artinya agent tetap mengakses layanan SFTP melalui jaringan; memilih storage Local tidak menggantikan layanan tersebut. Replika S3 dapat memberikan pemisahan lokasi jika berada pada infrastruktur yang berbeda. Kredensial S3 replika hanya digunakan server dan tidak diberikan kepada agent.
+SFTP primer untuk Managed Agent boleh dilayani oleh VM Pluton (primer S3 untuk Agent 0.8.0 tidak memakai layanan ini). Artinya agent tetap mengakses layanan SFTP melalui jaringan; memilih storage Local tidak menggantikan layanan tersebut. Replika S3 dapat memberikan pemisahan lokasi jika berada pada infrastruktur yang berbeda. Kredensial S3 replika hanya digunakan server dan tidak diberikan kepada agent.
 
 ## Pemilihan praktis
 
@@ -33,6 +33,6 @@ Repository Restic yang sudah berisi backup lama tidak didaftarkan sebagai manage
 
 ## Saat konfigurasi gagal
 
-Periksa jenis storage yang dipilih, field wajib, alamat, dan izin akun pada lokasi yang sebenarnya. Nama storage yang berhasil dibuat tidak membuktikan semua opsi provider akan didukung Managed Agent. Form remote hanya menawarkan SFTP primer dan menolak pengaturan yang tidak didukung di backend.
+Periksa jenis storage yang dipilih, field wajib, alamat, dan izin akun pada lokasi yang sebenarnya. Nama storage yang berhasil dibuat tidak membuktikan semua opsi provider akan didukung Managed Agent. Form remote menawarkan SFTP primer, dan S3 primer hanya untuk Agent 0.8.0 yang melaporkan dukungan S3, serta menolak pengaturan yang tidak didukung di backend.
 
 Jangan menaruh password atau access key pada nama storage, path, tiket, atau screenshot. Kredensial provider dan password repository mempunyai fungsi berbeda; mengganti salah satunya secara acak dapat membuat akses yang masih valid menjadi hilang. Pelajari [isolasi dan keamanan storage](/docs/storage/security) sebelum menambahkan data penting.

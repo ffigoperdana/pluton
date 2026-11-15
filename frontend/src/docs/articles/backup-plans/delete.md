@@ -30,8 +30,8 @@ Record yang tampak sudah dihapus belum tentu cukup jika cleanup belum verified, 
 | --- | --- |
 | Standar, toggle mati / `removeData=false` | Jadwal, plan, dan riwayat terkait dihapus; data storage dipertahankan sesuai permintaan |
 | Standar, toggle aktif / `removeData=true` | Server memeriksa scope, lalu mencoba menghapus repository primer serta replika yang diikutkan konfigurasi replikasi aktif |
-| Managed Agent, toggle mati / `removeData=false` | Metadata plan/riwayat dihapus; repository primer SFTP dan replika managed tetap disimpan |
-| Managed Agent, toggle aktif / `removeData=true` | Repository primer SFTP dan replika managed tetap disimpan; opsi ini tidak melakukan penghapusan fisik pada mode managed |
+| Managed Agent, toggle mati / `removeData=false` | Metadata plan/riwayat dihapus; repository primer dan replika managed tetap disimpan |
+| Managed Agent, toggle aktif / `removeData=true` | Repository primer dan replika managed tetap disimpan; opsi ini tidak melakukan penghapusan fisik pada mode managed |
 
 Pada Managed Agent, backend mempertahankan informasi akses repository sebelum menghapus record plan yang aktif. Pesan hasil menyebut data dipertahankan untuk cleanup manual. Data yang tersisa tidak berarti plan atau riwayat lama dapat langsung dibuka lagi di UI. Jangan menghapus kunci/config aplikasi hanya karena plan sudah hilang.
 
