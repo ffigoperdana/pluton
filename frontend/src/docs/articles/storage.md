@@ -9,7 +9,7 @@ Sebelum mengisi formulir, tentukan dari mana backup dijalankan. Pilihan storage 
 | Alur | Storage primer | Salinan tambahan |
 | --- | --- | --- |
 | Backup filesystem pada host Pluton | Local, SFTP, atau S3 sesuai konfigurasi provider | Mengikuti dukungan replikasi alur standar |
-| Backup dari Managed Agent | SFTP dengan subset konfigurasi yang didukung | 0–2 tujuan S3/S3 Compatible Storage, disalin oleh server |
+| Backup dari Managed Agent | SFTP dengan subset konfigurasi yang didukung, atau S3 untuk Agent 0.8.0 yang mendukungnya | 0–2 tujuan S3/S3 Compatible Storage, disalin oleh server |
 | Membaca repository lama | Melalui Legacy Repositories, bukan plan baru | Tidak menjadi bagian lifecycle managed |
 
 SFTP primer untuk Managed Agent boleh dilayani oleh VM Pluton (primer S3 untuk Agent 0.8.0 tidak memakai layanan ini). Artinya agent tetap mengakses layanan SFTP melalui jaringan; memilih storage Local tidak menggantikan layanan tersebut. Replika S3 dapat memberikan pemisahan lokasi jika berada pada infrastruktur yang berbeda. Kredensial S3 replika hanya digunakan server dan tidak diberikan kepada agent.

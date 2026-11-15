@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)][string]$AgentCheckout,
     [Parameter(Mandatory = $true)][ValidatePattern('^[a-f0-9]{40}$')][string]$AgentCommit,
     # Must equal agent/package.json at that commit; the generated command refuses a mismatch before sudo.
-    [Parameter(Mandatory = $true)][ValidateSet('0.7.0', '0.7.1')][string]$AgentVersion
+    [Parameter(Mandatory = $true)][ValidateSet('0.7.0', '0.7.1', '0.8.0')][string]$AgentVersion
 )
 $ErrorActionPreference = 'Stop'
 $project = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
