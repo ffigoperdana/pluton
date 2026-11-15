@@ -6,9 +6,9 @@ Contoh penggunaan: aplikasi fiktif berada pada `app-01` di `/srv/example-app`, s
 
 ## Komunikasi
 
-Agent menghubungi Pluton secara outbound untuk heartbeat, mengambil pekerjaan, dan mengirim progress serta hasil. Browser administrator berkomunikasi dengan server. Untuk data backup, agent mengakses SFTP primer yang dipilih plan; server juga perlu mengakses primer untuk verifikasi dan pekerjaan lanjutan.
+Agent menghubungi Pluton secara outbound untuk heartbeat, mengambil pekerjaan, dan mengirim progress serta hasil. Browser administrator berkomunikasi dengan server. Untuk data backup, agent mengakses repository primer (SFTP, atau S3 untuk Agent 0.8.0) yang dipilih plan; server juga perlu mengakses primer untuk verifikasi dan pekerjaan lanjutan.
 
-Layanan SFTP dapat berada di VM Pluton bila operator menyediakannya. Pada mode ini primer tetap bertipe SFTP. Salinan opsional ke S3/HCP dikerjakan oleh server sesudah snapshot diverifikasi, dan kredensial S3 tidak dikirim ke agent.
+Layanan SFTP dapat berada di VM Pluton bila operator menyediakannya. Pada mode ini primer tetap bertipe SFTP. Salinan opsional ke S3/HCP dikerjakan oleh server sesudah snapshot diverifikasi, dan kredensial replika tidak pernah dikirim ke agent. Agent hanya menerima kunci S3 milik plan yang primernya S3, dalam bentuk tersegel per backup.
 
 ## Menyiapkan mesin
 
@@ -35,6 +35,6 @@ Saat memperbarui, simpan catatan revision/build yang dipasang. Label **Agent ver
 
 ## Batas support
 
-Jalur installer yang diuji adalah Linux Debian/Ubuntu x86_64 dengan systemd. Primer Managed Agent hanya SFTP dengan konfigurasi yang dibatasi. Arbitrary shell/script, agent prune, dan pemulihan langsung dari mirror managed belum tersedia.
+Jalur installer yang diuji adalah Linux Debian/Ubuntu x86_64 dengan systemd. Primer Managed Agent adalah SFTP dengan konfigurasi yang dibatasi, atau S3 untuk Agent 0.8.0 yang melaporkan dukungan S3. Arbitrary shell/script, agent prune, dan pemulihan langsung dari mirror managed belum tersedia.
 
 Jika mesin OFFLINE atau capability tidak sesuai, gunakan [diagnostik agent](/docs/remote-agent/troubleshooting). Jangan melakukan re-enrollment atau menghapus state sebagai langkah pemecahan masalah pertama.

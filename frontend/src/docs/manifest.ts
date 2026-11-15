@@ -57,7 +57,7 @@ export const docCategories: DocCategory[] = [
       evidence: ["frontend/src/components/Plan/PlanForm/PlanFormNav.tsx","backend/src/services/PlanService.ts","backend/src/stores/PlanStore.ts","agent/src/resticParent.ts"],
       articles: [
          page("backup-plans", "Membuat Backup Plan untuk folder pada host Pluton"),
-         page("backup-plans/managed-agent", "Membuat plan Managed Agent dengan SFTP primer", "operator-setup"),
+         page("backup-plans/managed-agent", "Membuat plan Managed Agent dengan SFTP atau S3 primer", "operator-setup"),
          page("backup-plans/schedule-retention", "Mengatur jadwal, retensi, dan percobaan ulang backup"),
          page("backup-plans/history", "Menjalankan Backup Now dan membaca riwayat backup"),
          page("backup-plans/advanced", "Menyesuaikan pengaturan lanjutan setelah backup dasar berhasil"),

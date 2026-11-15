@@ -201,3 +201,10 @@ test('documentation document boundary preserves fragments and avoids old service
    assert(config.includes('navigateFallbackDenylist'));
    assert(config.includes('^\\/docs'));
 });
+
+test('Managed Agent guide documents the S3 primary boundary', () => {
+   const guide = index.find((item) => item.slug === 'backup-plans/managed-agent')!;
+   assert.equal(guide.title, 'Membuat plan Managed Agent dengan SFTP atau S3 primer');
+   for (const term of ['S3 sebagai repository primer', 'Agent 0.8.0', 'Root bucket ditolak', 'tersegel', 'Enable Replication', 'Move Repository'])
+      assert(guide.markdown.includes(term), term);
+});
