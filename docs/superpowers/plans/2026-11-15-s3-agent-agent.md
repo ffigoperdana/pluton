@@ -17,7 +17,8 @@
 - Capabilities (spec 10.1), added to `AgentCapabilities` in `agent/src/types.ts`: `repositoryBackends: ["sftp", "s3"]` (array of `'sftp'`/`'s3'`, 1 to 2 entries, no duplicates, must contain `'sftp'`) and `backupPayloadVersion: 5` (literal). An Agent that omits them is treated as `['sftp']` and payload version 4.
 - Payload version 5 (spec 10.2): `version: 5`, optional `lifecycle` (unchanged), `backupId`, `planId`, `sourcePath`, `excludes`, `sourceDiagnosticsVersion: 1` (sent exactly as today and must be accepted in version 5), `repository: { remoteName: "pluton", path, initialize }` (path is the SFTP directory, or `bucket/prefix` for S3), `rclone: { type: "sftp" | "s3", options }`, `sealed: { alg: "A256GCM", kid: "pluton-agent-command-secrets-v1", nonce: <base64, 12 bytes>, ciphertext: <base64>, tag: <base64, 16 bytes> }`. `repositoryPassword` is not a top-level field in version 5. The payload carries no trust or CA setting (spec 6.1 point 2); the Agent uses only its own `PLUTON_AGENT_STORAGE_CA_FILE`, and any trust-like key or field is refused as unknown.
 - Allowed plain options (spec 10.2): SFTP `host`, `port`, `user`; S3 `provider`, `endpoint`, `region`, `location_constraint`, `acl`, `force_path_style` (must be `"true"`), `use_accept_encoding_gzip` (must be `"false"`), `no_check_bucket`. The S3 `endpoint` must be an `https://` origin. Plain options never contain `pass`, `access_key_id`, `secret_access_key` or a repository password; such a payload is refused. Unknown keys are refused.
-- Sealed plaintext (spec 10.3): UTF-8 JSON `{"repositoryPassword": string, "rclone": {"pass"?: string, "access_key_id"?: string, "secret_access_key"?: string}}`; SFTP carries `pass`, S3 carries both keys.
+- Sealed plaintext (spec 10.3, amended in `3d241ea`): UTF-8 JSON `{"repositoryPassword": string, "rclone": {"pass"?: string, "access_key_id"?: string, "secret_access_key"?: string}, "lifecycle"?: {"database"?: string, "databases"?: {"<databaseId>": string}}}`; SFTP carries `pass`, S3 carries both keys.
+- Database passwords (spec 10.3, decision of 15 November 2026): in version 5 the plain `lifecycle` carries no `password` in any database entry. The password of `lifecycle.database` (lifecycle shape version 1) is sealed as `lifecycle.database`; each `lifecycle.databases[]` password is sealed under its `databaseId` in `lifecycle.databases`. The sealed `lifecycle` key is present only when the payload has a lifecycle with at least one database. The Agent restores each password into a copy of its entry before use and never modifies the signed payload object. A version 5 payload is refused when a plain database entry carries `password`, when a database has no sealed password, or when a sealed password has no matching database. Database passwords keep the lifecycle parser's rule (1 to 1024 characters, no NUL; tabs and newlines are valid). Versions 1 to 4 keep plain passwords.
 - Sealing key: `HKDF-SHA256(ikm = UTF-8 bytes of the per-Agent secret, salt = empty, info = "pluton-agent-command-secrets-v1", length = 32)`. Cipher: AES-256-GCM, 12-byte nonce, 16-byte tag. Additional data: UTF-8 of `"pluton-agent-command-secrets-v1\n" + commandId + "\n" + leaseToken`. The command HMAC still covers the whole payload including `sealed` (unchanged `verifyCommandDetailed`).
 - Test vector (spec 10.4), used verbatim by the unit tests and `contracts/v0.8.0.json`: secret `synthetic-agent-secret-0123456789abcdef`, commandId `cmd-synthetic-01`, leaseToken `0123456789abcdef0123456789abcdef0123456789abcdef`, derived key `1f35dc3e9cf013165a2353883369bbfa7edd62b56072b3413c8074e2ffb93fac`, nonce `AAECAwQFBgcICQoL`, plaintext `{"repositoryPassword":"synthetic-repository-password-01","rclone":{"access_key_id":"SYNTHETICKEY01","secret_access_key":"synthetic-secret-key-01"}}`, ciphertext `jh0qetVE17GJz08s3DXhomumBqDIVOhzX3A4LgVFJeiH9JSKr4qR7OowvN0duifn639ReyzbjXGWiSEWAaymlLJKNnxwbrP+vLmuRdk9vI+wuUG8cJhENnxGV0LXHElNyPLQME0jaSjTfM7T0n9LTBr7V76enQuphACHq53aFDwiyFLa5p/2ML2748FcdivP43U+`, tag `pUKJ+stiEzlyVi8BFN6biQ==`. Changing any byte of ciphertext, tag, nonce, command ID or lease token must make opening fail. (Verified with Node crypto while writing this plan.)
 - Payload versions 1 to 4 are unchanged and remain SFTP-only.
@@ -72,7 +73,7 @@ Where the sealing inputs come from (verified at `4c2c3f3`): `runtime.ts:89` load
 - Produces (exported from `agent/src/sealedSecrets.ts`):
   - `export const COMMAND_SECRETS_LABEL = "pluton-agent-command-secrets-v1"`
   - `export type CommandSealContext = { secret: string; commandId: string; leaseToken: string }`
-  - `export type SealedCommandSecrets = { repositoryPassword: string; rclone: Partial<Record<"pass" | "access_key_id" | "secret_access_key", string>> }`
+  - `export type SealedCommandSecrets = { repositoryPassword: string; rclone: Partial<Record<"pass" | "access_key_id" | "secret_access_key", string>>; lifecycle?: { database?: string; databases?: Record<string, string> } }`
   - `export class SealedSecretsError extends Error` (message `The sealed command secrets are invalid.`)
   - `export function deriveCommandSecretsKey(secret: string): Buffer`
   - `export function commandSecretsAdditionalData(commandId: string, leaseToken: string): Buffer`
@@ -414,6 +415,69 @@ test("sealed: refuses plaintext outside the closed secret shape", () => {
     },
   );
 });
+
+test("sealed: opens optional database passwords for both lifecycle shapes and refuses malformed ones", () => {
+  const base = {
+    repositoryPassword: "synthetic-repository-password-01",
+    rclone: { pass: "synthetic-sftp-password-01" },
+  };
+  const open = (lifecycle: unknown) =>
+    openSealedCommandSecrets(
+      sealForTest(JSON.stringify({ ...base, lifecycle }), crypto.randomBytes(12)),
+      context,
+    );
+  assert.deepEqual(open({ database: "synthetic-db-password-01" }).lifecycle, {
+    database: "synthetic-db-password-01",
+  });
+  // MySQL/MariaDB passwords may contain tabs and newlines; only NUL is refused.
+  assert.deepEqual(
+    open({
+      databases: {
+        db_one: "synthetic-db-password-01",
+        db_two: "synthetic-db\tpassword\n02",
+      },
+    }).lifecycle,
+    {
+      databases: {
+        db_one: "synthetic-db-password-01",
+        db_two: "synthetic-db\tpassword\n02",
+      },
+    },
+  );
+  assert.equal(
+    openSealedCommandSecrets(sealed, context).lifecycle,
+    undefined,
+    "The 10.4 vector carries no lifecycle.",
+  );
+  for (const lifecycle of [
+    {},
+    "synthetic-db-password-01",
+    [],
+    { databases: {} },
+    { databases: ["synthetic-db-password-01"] },
+    { databases: { "not-a-database-id": "synthetic-db-password-01" } },
+    { databases: { db_one: "" } },
+    { databases: { db_one: 7 } },
+    { database: "" },
+    { database: "synthetic\u0000password" },
+    { database: "x".repeat(1025) },
+    { database: null },
+    { password: "synthetic-db-password-01" },
+    {
+      databases: Object.fromEntries(
+        Array.from({ length: 9 }, (_, index) => [
+          `db_entry${index}`,
+          "synthetic-db-password-01",
+        ]),
+      ),
+    },
+  ])
+    assert.throws(
+      () => open(lifecycle),
+      SealedSecretsError,
+      JSON.stringify(lifecycle),
+    );
+});
 ```
 
 - [ ] **Step 6: Run the test to verify it fails**
@@ -443,6 +507,9 @@ const NONCE_BYTES = 12;
 const TAG_BYTES = 16;
 const MAX_CIPHERTEXT_BYTES = 64 * 1024;
 const MAX_SECRET_LENGTH = 16_384;
+/** Same limits as the lifecycle parser: 1 to 1024 characters, at most 8 databases. */
+const MAX_DATABASE_PASSWORD_LENGTH = 1_024;
+const MAX_SEALED_DATABASES = 8;
 const SEALED_RCLONE_KEYS = ["pass", "access_key_id", "secret_access_key"] as const;
 type SealedRcloneKey = (typeof SEALED_RCLONE_KEYS)[number];
 
@@ -457,6 +524,8 @@ export type CommandSealContext = {
 export type SealedCommandSecrets = {
   repositoryPassword: string;
   rclone: Partial<Record<SealedRcloneKey, string>>;
+  /** Database passwords: `database` for lifecycle shape 1, `databases` keyed by databaseId. */
+  lifecycle?: { database?: string; databases?: Record<string, string> };
 };
 
 /** One closed refusal for every malformed, tampered, misbound or wrong-key field. */
@@ -535,6 +604,48 @@ function sealedRcloneKey(name: string): name is SealedRcloneKey {
   return (SEALED_RCLONE_KEYS as readonly string[]).includes(name);
 }
 
+/** The lifecycle parser's password rule: tabs and newlines are valid, NUL is not. */
+function databasePassword(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    !value ||
+    value.length > MAX_DATABASE_PASSWORD_LENGTH ||
+    value.includes("\0")
+  )
+    throw new SealedSecretsError();
+  return value;
+}
+
+/** Sealed database passwords (S3 design 10.3); present only when the payload has databases. */
+function sealedLifecycle(
+  value: unknown,
+): NonNullable<SealedCommandSecrets["lifecycle"]> {
+  if (!plainObject(value)) throw new SealedSecretsError();
+  const names = Object.keys(value);
+  if (
+    !names.length ||
+    names.some((name) => name !== "database" && name !== "databases")
+  )
+    throw new SealedSecretsError();
+  const result: NonNullable<SealedCommandSecrets["lifecycle"]> = {};
+  if (value.database !== undefined)
+    result.database = databasePassword(value.database);
+  if (value.databases !== undefined) {
+    if (!plainObject(value.databases)) throw new SealedSecretsError();
+    const entries = Object.entries(value.databases);
+    if (!entries.length || entries.length > MAX_SEALED_DATABASES)
+      throw new SealedSecretsError();
+    const databases: Record<string, string> = {};
+    for (const [databaseId, password] of entries) {
+      if (!/^db_[A-Za-z0-9_-]{1,64}$/.test(databaseId))
+        throw new SealedSecretsError();
+      databases[databaseId] = databasePassword(password);
+    }
+    result.databases = databases;
+  }
+  return result;
+}
+
 function decrypt(
   context: CommandSealContext,
   nonce: Buffer,
@@ -594,7 +705,10 @@ export function openSealedCommandSecrets(
     );
     if (
       !plainObject(value) ||
-      !exactKeys(value, ["repositoryPassword", "rclone"]) ||
+      !(
+        exactKeys(value, ["repositoryPassword", "rclone"]) ||
+        exactKeys(value, ["repositoryPassword", "rclone", "lifecycle"])
+      ) ||
       !plainObject(value.rclone)
     )
       throw new SealedSecretsError();
@@ -603,7 +717,13 @@ export function openSealedCommandSecrets(
       if (!sealedRcloneKey(name)) throw new SealedSecretsError();
       rclone[name] = secretValue(entry);
     }
-    return { repositoryPassword: secretValue(value.repositoryPassword), rclone };
+    return {
+      repositoryPassword: secretValue(value.repositoryPassword),
+      rclone,
+      ...(value.lifecycle !== undefined
+        ? { lifecycle: sealedLifecycle(value.lifecycle) }
+        : {}),
+    };
   } catch {
     throw new SealedSecretsError();
   } finally {
@@ -619,7 +739,7 @@ pnpm build && node --test --test-reporter=spec agent/dist/sealedSecrets.test.js
 bash tmp/linux-run.sh 'cd agent && node --test --test-reporter=spec dist/sealedSecrets.test.js'
 ```
 
-Expected (both, Windows and Linux): six `✔ sealed: ...` lines, `ℹ tests 6`, `ℹ pass 6`, `ℹ fail 0`.
+Expected (both, Windows and Linux): seven `✔ sealed: ...` lines, `ℹ tests 7`, `ℹ pass 7`, `ℹ fail 0`.
 
 - [ ] **Step 9: Record the source change and commit**
 
@@ -647,7 +767,7 @@ Expected: the helper prints two lines `agent/src/sealedSecrets...ts <64 hex>`; `
 - Produces:
   - `export function parseBackupFilesystemPayload(value: Record<string, unknown>, commandSeal?: CommandSealContext): BackupFilesystemPayload`
   - `BackupFilesystemPayload.version: 1 | 2 | 3 | 4 | 5`, `BackupFilesystemPayload.rclone.type: "sftp" | "s3"`
-  - Internal: `validateSftpPlainOptions(value: unknown): Record<string, string>`, `validateS3PlainOptions(value: unknown): Record<string, string>`, `validateS3RepositoryPath(value: unknown): string`, `openVersion5Secrets(type: "sftp" | "s3", optionsValue: unknown, sealedValue: unknown, commandSeal: CommandSealContext | undefined): { repositoryPassword: string; options: Record<string, string> }`
+  - Internal: `validateSftpPlainOptions(value: unknown): Record<string, string>`, `validateS3PlainOptions(value: unknown): Record<string, string>`, `validateS3RepositoryPath(value: unknown): string`, `openVersion5Secrets(type: "sftp" | "s3", optionsValue: unknown, sealedValue: unknown, commandSeal: CommandSealContext | undefined): { repositoryPassword: string; options: Record<string, string>; lifecycle: SealedCommandSecrets["lifecycle"] }`, `withSealedDatabasePasswords(lifecycleValue: unknown, sealed: SealedCommandSecrets["lifecycle"]): unknown` (returns a copy of the plain lifecycle with each database password restored; never mutates the signed payload)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1126,34 +1246,171 @@ test("payload v5: keeps the version 4 exclusion grammar and the optional lifecyc
     ).lifecycle?.version,
     1,
   );
+});
+
+/** A version 2 lifecycle database entry without its password (sealed in version 5). */
+const databaseEntry = {
+  databaseId: "db_one",
+  engine: "mysql",
+  host: "127.0.0.1",
+  port: 3306,
+  tls: "local",
+  database: "example_db",
+  username: "backup_reader",
+  dumpFilename: "app.sql",
+  timeoutSeconds: 60,
+  maxDumpBytes: 4 * 1024 * 1024,
+  includeRoutines: false,
+  includeEvents: false,
+};
+
+function s3SealedWithDatabases(lifecycle: unknown) {
+  return sealForTest({
+    repositoryPassword: "synthetic-repository-password-01",
+    rclone: {
+      access_key_id: "SYNTHETICKEY01",
+      secret_access_key: "synthetic-secret-key-01",
+    },
+    lifecycle,
+  });
+}
+
+test("payload v5: database passwords are sealed per lifecycle shape and restored before use", () => {
+  const twoDatabases = {
+    version: 2,
+    databases: [
+      databaseEntry,
+      {
+        ...databaseEntry,
+        databaseId: "db_two",
+        database: "example_db2",
+        dumpFilename: "two.sql",
+      },
+    ],
+  };
+  const parsed = parseBackupFilesystemPayload(
+    {
+      ...s3Version5Payload,
+      lifecycle: twoDatabases,
+      sealed: s3SealedWithDatabases({
+        databases: {
+          db_one: "synthetic-db-password-01",
+          db_two: "synthetic-db\tpassword\n02",
+        },
+      }),
+    },
+    sealContext,
+  );
+  assert.equal(parsed.lifecycle?.version, 2);
+  assert.deepEqual(
+    parsed.lifecycle?.databases?.map((db) => [db.databaseId, db.password]),
+    [
+      ["db_one", "synthetic-db-password-01"],
+      ["db_two", "synthetic-db\tpassword\n02"],
+    ],
+  );
+  assert.ok(
+    twoDatabases.databases.every((db) => !("password" in db)),
+    "The signed payload object must not be modified.",
+  );
+  const { databaseId: _databaseId, ...singleDatabase } = databaseEntry;
   assert.equal(
     parseBackupFilesystemPayload(
+      {
+        ...sftpVersion5Payload(),
+        lifecycle: { version: 1, database: singleDatabase },
+        sealed: sealForTest({
+          repositoryPassword: validPayload.repositoryPassword,
+          rclone: { pass: validPayload.rclone.options.pass },
+          lifecycle: { database: "synthetic-db-password-01" },
+        }),
+      },
+      sealContext,
+    ).lifecycle?.database?.password,
+    "synthetic-db-password-01",
+  );
+  const refusals: [Record<string, unknown>, RegExp][] = [
+    [
       {
         ...s3Version5Payload,
         lifecycle: {
           version: 2,
-          databases: [
-            {
-              databaseId: "db_one",
-              engine: "mysql",
-              host: "127.0.0.1",
-              port: 3306,
-              tls: "local",
-              database: "example_db",
-              username: "backup_reader",
-              password: "synthetic-db-password-01",
-              dumpFilename: "app.sql",
-              timeoutSeconds: 60,
-              maxDumpBytes: 4 * 1024 * 1024,
-              includeRoutines: false,
-              includeEvents: false,
-            },
-          ],
+          databases: [{ ...databaseEntry, password: "synthetic-plaintext" }],
         },
+        sealed: s3SealedWithDatabases({
+          databases: { db_one: "synthetic-db-password-01" },
+        }),
       },
-      sealContext,
-    ).lifecycle?.version,
-    2,
+      /database passwords must be sealed/,
+    ],
+    [
+      {
+        ...s3Version5Payload,
+        lifecycle: twoDatabases,
+        sealed: s3SealedWithDatabases({
+          databases: { db_one: "synthetic-db-password-01" },
+        }),
+      },
+      /no sealed password/,
+    ],
+    [{ ...s3Version5Payload, lifecycle: twoDatabases }, /no sealed password/],
+    [
+      {
+        ...s3Version5Payload,
+        lifecycle: twoDatabases,
+        sealed: s3SealedWithDatabases({ database: "synthetic-db-password-01" }),
+      },
+      /no sealed password/,
+    ],
+    [
+      {
+        ...s3Version5Payload,
+        lifecycle: twoDatabases,
+        sealed: s3SealedWithDatabases({
+          databases: {
+            db_one: "synthetic-db-password-01",
+            db_two: "synthetic-db-password-02",
+            db_three: "synthetic-db-password-03",
+          },
+        }),
+      },
+      /no matching database/,
+    ],
+    [
+      {
+        ...s3Version5Payload,
+        sealed: s3SealedWithDatabases({ database: "synthetic-db-password-01" }),
+      },
+      /no matching database/,
+    ],
+    [
+      {
+        ...s3Version5Payload,
+        lifecycle: {
+          version: 1,
+          preHook: { id: "prepare", args: [], timeoutSeconds: 5 },
+        },
+        sealed: s3SealedWithDatabases({ database: "synthetic-db-password-01" }),
+      },
+      /no matching database/,
+    ],
+  ];
+  for (const [candidate, message] of refusals)
+    assert.throws(
+      () => parseBackupFilesystemPayload(candidate, sealContext),
+      message,
+    );
+  // Versions 1 to 4 keep the plain password unchanged.
+  assert.equal(
+    parseBackupFilesystemPayload({
+      ...validPayload,
+      version: 3,
+      lifecycle: {
+        version: 2,
+        databases: [{ ...databaseEntry, password: "synthetic-db-password-01" }],
+      },
+    }).lifecycle?.databases?.[0].password,
+    "synthetic-db-password-01",
   );
 });
 ```
@@ -1175,6 +1432,7 @@ import {
   openSealedCommandSecrets,
   SealedSecretsError,
   type CommandSealContext,
+  type SealedCommandSecrets,
 } from "./sealedSecrets.js";
 ```
 
@@ -1310,7 +1568,11 @@ function openVersion5Secrets(
   optionsValue: unknown,
   sealedValue: unknown,
   commandSeal: CommandSealContext | undefined,
-): { repositoryPassword: string; options: Record<string, string> } {
+): {
+  repositoryPassword: string;
+  options: Record<string, string>;
+  lifecycle: SealedCommandSecrets["lifecycle"];
+} {
   const plain =
     type === "s3"
       ? validateS3PlainOptions(optionsValue)
@@ -1327,6 +1589,7 @@ function openVersion5Secrets(
     return {
       repositoryPassword: secrets.repositoryPassword,
       options: { ...plain, pass },
+      lifecycle: secrets.lifecycle,
     };
   }
   if (!access_key_id || !secret_access_key || pass !== undefined)
@@ -1334,7 +1597,51 @@ function openVersion5Secrets(
   return {
     repositoryPassword: secrets.repositoryPassword,
     options: { ...plain, access_key_id, secret_access_key },
+    lifecycle: secrets.lifecycle,
   };
+}
+
+/**
+ * Version 5 database passwords travel sealed (S3 design 10.3). Restore each one
+ * into a copy of its plain lifecycle entry; the signed payload object is never
+ * modified. A plain password, a database without a sealed password or a sealed
+ * password without a matching database refuses the command.
+ */
+function withSealedDatabasePasswords(
+  lifecycleValue: unknown,
+  sealed: SealedCommandSecrets["lifecycle"],
+): unknown {
+  const unmatched = new Map(Object.entries(sealed?.databases ?? {}));
+  let singleUnmatched = sealed?.database !== undefined;
+  const restore = (entry: unknown, password: string | undefined) => {
+    const database = asRecord(entry, "Database configuration");
+    if (Object.hasOwn(database, "password"))
+      throw new Error("Version 5 database passwords must be sealed.");
+    if (password === undefined)
+      throw new Error("A database has no sealed password.");
+    return { ...database, password };
+  };
+  let restored: unknown = lifecycleValue;
+  if (lifecycleValue !== undefined) {
+    const lifecycle = asRecord(lifecycleValue, "Lifecycle configuration");
+    const copy: Record<string, unknown> = { ...lifecycle };
+    if (lifecycle.database !== undefined) {
+      copy.database = restore(lifecycle.database, sealed?.database);
+      singleUnmatched = false;
+    }
+    if (Array.isArray(lifecycle.databases))
+      copy.databases = lifecycle.databases.map((entry) => {
+        const databaseId = asRecord(entry, "Database configuration").databaseId;
+        const password =
+          typeof databaseId === "string" ? unmatched.get(databaseId) : undefined;
+        if (typeof databaseId === "string") unmatched.delete(databaseId);
+        return restore(entry, password);
+      });
+    restored = copy;
+  }
+  if (singleUnmatched || unmatched.size)
+    throw new Error("A sealed database password has no matching database.");
+  return restored;
 }
 ```
 
@@ -1398,12 +1705,15 @@ export function parseBackupFilesystemPayload(
     512,
   );
   if (password.length < 20) throw new Error("Repository password is invalid.");
+  const lifecycleInput = opened
+    ? withSealedDatabasePasswords(value.lifecycle, opened.lifecycle)
+    : value.lifecycle;
   const lifecycle =
     value.version === 1 ||
     ((value.version === 4 || value.version === 5) &&
-      value.lifecycle === undefined)
+      lifecycleInput === undefined)
       ? undefined
-      : parseBackupLifecycle(value.lifecycle);
+      : parseBackupLifecycle(lifecycleInput);
   if (
     lifecycle &&
     (value.version === 2 || value.version === 3) &&
@@ -1447,7 +1757,7 @@ pnpm build && node --test --test-reporter=spec --test-name-pattern="^payload v5:
 bash tmp/linux-run.sh 'cd agent && node --test --test-reporter=spec dist/backupFilesystem.test.js 2>&1 | tail -n 8'
 ```
 
-Expected: Windows shows nine `✔ payload v5: ...` lines and `ℹ fail 0`. Linux runs the whole file (existing SFTP tests unchanged) and ends with `ℹ fail 0`.
+Expected: Windows shows ten `✔ payload v5: ...` lines and `ℹ fail 0`. Linux runs the whole file (existing SFTP tests unchanged) and ends with `ℹ fail 0`.
 
 - [ ] **Step 5: Record and commit**
 
@@ -1918,14 +2228,49 @@ const sealContext = {
   leaseToken: "0123456789abcdef0123456789abcdef0123456789abcdef",
 };
 
-/** Turn a version 2/3 SFTP payload into the equivalent sealed version 5 payload. */
+/**
+ * Turn a version 2/3 SFTP payload into the equivalent sealed version 5 payload:
+ * the repository password, the SFTP password and every database password move
+ * into `sealed` (S3 design 10.3); the plain lifecycle keeps no `password`.
+ */
 function sealedVersion5(payload: Record<string, unknown>): Record<string, unknown> {
-  const { repositoryPassword, rclone, ...rest } = payload;
+  const { repositoryPassword, rclone, lifecycle, ...rest } = payload;
   const { type, options } = rclone as {
     type: string;
     options: Record<string, string>;
   };
   const { pass, ...plain } = options;
+  const source = lifecycle as
+    | {
+        database?: Record<string, unknown>;
+        databases?: Record<string, unknown>[];
+      }
+    | undefined;
+  const withoutPassword = (entry: Record<string, unknown>) => {
+    const { password: _password, ...remainder } = entry;
+    return remainder;
+  };
+  const plainLifecycle = source
+    ? {
+        ...source,
+        ...(source.database ? { database: withoutPassword(source.database) } : {}),
+        ...(source.databases
+          ? { databases: source.databases.map(withoutPassword) }
+          : {}),
+      }
+    : undefined;
+  const sealedLifecycle = source?.database
+    ? { database: source.database.password as string }
+    : source?.databases?.length
+      ? {
+          databases: Object.fromEntries(
+            source.databases.map((entry) => [
+              entry.databaseId as string,
+              entry.password as string,
+            ]),
+          ),
+        }
+      : undefined;
   const label = "pluton-agent-command-secrets-v1";
   const key = Buffer.from(
     crypto.hkdfSync(
@@ -1947,11 +2292,19 @@ function sealedVersion5(payload: Record<string, unknown>): Record<string, unknow
     ),
   );
   const ciphertext = Buffer.concat([
-    cipher.update(JSON.stringify({ repositoryPassword, rclone: { pass } }), "utf8"),
+    cipher.update(
+      JSON.stringify({
+        repositoryPassword,
+        rclone: { pass },
+        ...(sealedLifecycle ? { lifecycle: sealedLifecycle } : {}),
+      }),
+      "utf8",
+    ),
     cipher.final(),
   ]);
   return {
     ...rest,
+    ...(plainLifecycle ? { lifecycle: plainLifecycle } : {}),
     version: 5,
     rclone: { type, options: plain },
     sealed: {
@@ -1974,6 +2327,10 @@ executionTest(
         payload: sealedVersion5(f.input.payload),
         commandSeal: sealContext,
       };
+      assert.ok(
+        !JSON.stringify(input.payload.lifecycle).includes("password"),
+        "Version 5 database passwords travel only sealed",
+      );
       const result = await executeFilesystemBackup(input);
       const replay = await executeFilesystemBackup(input);
       assert.equal(replay.snapshotId, result.snapshotId);
@@ -2008,7 +2365,7 @@ executionTest(
 bash tmp/linux-run.sh 'cd agent && node --test --test-reporter=spec --test-name-pattern="^payload v5" dist/backupFilesystem.test.js dist/backupLifecycle.test.js'
 ```
 
-Expected: the nine Task 2 `payload v5:` parse tests pass; `✖ payload v5: follows version 3 source rules ...` (the excluded run does not reject because no scan runs) and `✖ payload v5 with a version 2 lifecycle binds ...` (replay `lifecycle.databases` is `undefined`); `ℹ fail 2`.
+Expected: the ten Task 2 `payload v5:` parse tests pass; `✖ payload v5: follows version 3 source rules ...` (the excluded run does not reject because no scan runs) and `✖ payload v5 with a version 2 lifecycle binds ...` (replay `lifecycle.databases` is `undefined`); `ℹ fail 2`.
 
 - [ ] **Step 3: Implement the version mapping**
 
@@ -4132,7 +4489,7 @@ Expected: no `--check` output; commit succeeds.
 
 **Interfaces:**
 - Consumes: the lab's existing `run`, `port`, `nativePids`, `secret`, `records`, `journal`, `current`, `completions`, `forbidden`, `serverUrl`, `source`, `root`, `agentSecret`, `repoPassword`, `dbPassword`, `runOnce`, `saveIdentity`, `fork`, `fileURLToPath`; `rclone serve s3` (`--auth-key`, `--cert`, `--key`) from the pinned Rclone 1.75.1; Agent `config.storageCaFile` (Task 6).
-- Produces: image paths `/app/fixture-tls/ca.pem` (root-owned, mode 0644, for `PLUTON_AGENT_STORAGE_CA_FILE`) and `/app/fixture-tls-server/{server.pem,server-key.pem}` (owned by 10001); lab case records `s3-healthy`, `s3-untrusted-ca`, `s3-wrong-key`, `s3-non-empty`, `s3-tampered-seal`.
+- Produces: image paths `/app/fixture-tls/ca.pem` (root-owned, mode 0644, for `PLUTON_AGENT_STORAGE_CA_FILE`) and `/app/fixture-tls-server/{server.pem,server-key.pem}` (owned by 10001); lab case records `s3-healthy`, `s3-untrusted-ca`, `s3-wrong-key`, `s3-non-empty`, `s3-tampered-seal`. The S3 commands seal the MySQL password as `lifecycle.databases.db_fixture` and their plain lifecycle carries no `password`, so `s3-healthy` proves a real dump with a password restored from `sealed`.
 
 - [ ] **Step 1: Write the failing lab cases**
 
@@ -4272,9 +4629,12 @@ Replace with:
 				});
 				const commandId = `command-s3-${i}`;
 				const leaseToken = secret();
+				// Version 5 seals the database password too (S3 design 10.3); the plain
+				// lifecycle entry below carries no `password`.
 				const sealed = sealSecrets(commandId, leaseToken, {
 					repositoryPassword: repoPassword,
 					rclone: { access_key_id: s3AccessKey, secret_access_key: item.secretKey },
+					lifecycle: { databases: { db_fixture: dbPassword } },
 				});
 				if (item.tamper) {
 					const bytes = Buffer.from(sealed.ciphertext, 'base64');
@@ -4318,7 +4678,6 @@ Replace with:
 									tls: 'local',
 									database: 'example_db',
 									username: 'backup_reader',
-									password: dbPassword,
 									dumpFilename: 'app.sql',
 									timeoutSeconds: 60,
 									maxDumpBytes: 4 * 1024 ** 2,
@@ -4329,6 +4688,7 @@ Replace with:
 						},
 					},
 				};
+				assert(!JSON.stringify(current.payload).includes(dbPassword), 'The v5 payload must not carry the DB password in plain text.');
 				current.signature = crypto
 					.createHmac('sha256', agentSecret)
 					.update(
@@ -4725,7 +5085,12 @@ Agent first, then server.
 
 `BACKUP_FILESYSTEM` payload version 5 may name `rclone.type` `sftp` or `s3`. Every
 secret (repository password, SFTP `pass`, S3 `access_key_id` and
-`secret_access_key`) is inside `sealed`: HKDF-SHA256 over the per-Agent secret
+`secret_access_key`, and every database password, sealed as `lifecycle.database`
+for lifecycle shape 1 or under its `databaseId` in `lifecycle.databases`) is
+inside `sealed`; the plain lifecycle carries no `password`. The Agent restores
+each database password into its entry before use and refuses a payload with a
+plain database password, a database without a sealed password or a sealed
+password without a database. Sealing uses HKDF-SHA256 over the per-Agent secret
 with info `pluton-agent-command-secrets-v1`, AES-256-GCM with a 12-byte nonce and
 16-byte tag, and additional data made of that label, the command ID and the lease
 token separated by newlines. Plain options never contain those keys; such a
@@ -4768,7 +5133,12 @@ Pluton server. Existing SFTP plans and payload versions 1 to 4 are unchanged.
   `pluton-agent-command-secrets-v1`) and AES-256-GCM, with the command ID and lease
   token as additional data. The runtime passes `identity.secret`, `command.id` and
   `command.leaseToken`, the same values that verified the command HMAC. Opening
-  happens during `payload-validation`, before any file is written.
+  happens during `payload-validation`, before any file is written. The sealed
+  field carries the repository password, the SFTP password or both S3 keys, and
+  every database password (`lifecycle.database` for lifecycle shape 1, or
+  `lifecycle.databases` keyed by `databaseId`); the Agent restores each database
+  password into a copy of its lifecycle entry and refuses a plain database
+  password, a database without a sealed password or an unmatched sealed password.
 - **Payload version 5** (`agent/src/backupFilesystem.ts`): `rclone.type` `sftp` or
   `s3`; S3 plain options `provider`, `endpoint` (HTTPS origin), `region`,
   `location_constraint`, `acl`, `force_path_style` (`true`),
@@ -4799,15 +5169,17 @@ The S3 key is the shared HCP user (risk accepted by the operator on 15 November
 namespace. The key is sealed on the wire, so HTTP Agent traffic on the LAN does not
 expose it; it exists only in Agent memory and the temporary 0600 configuration
 during one backup and is never logged or persisted (completion receipts carry no
-secrets). The sealing key differs from the HMAC key, and a sealed field cannot be
-replayed into another command or lease. The Agent never receives replica keys.
+secrets). Database passwords are sealed the same way in version 5, so no secret
+of a version 5 command crosses the network in plain text. The sealing key differs
+from the HMAC key, and a sealed field cannot be replayed into another command or
+lease. The Agent never receives replica keys.
 
 ## Tests
 
 | Check | Command | Result |
 | --- | --- | --- |
-| Sealing vector and every single-byte/character mutation | `node --test agent/dist/sealedSecrets.test.js` | PASS (Windows and Ubuntu) |
-| Payload v5 parsing and allowlists | `backupFilesystem.test.js`, `payload v5:` tests | PASS |
+| Sealing vector, every single-byte/character mutation, sealed database passwords | `node --test agent/dist/sealedSecrets.test.js` | PASS (Windows and Ubuntu) |
+| Payload v5 parsing, allowlists and database password restore/refusals | `backupFilesystem.test.js`, `payload v5:` tests | PASS |
 | Runtime binding to secret, command ID and lease token | `sealedCommandRuntime.test.js` | PASS (Ubuntu) |
 | v5 keeps version 3/4 source rules | `backupFilesystem.test.js`, `backupLifecycle.test.js` | PASS (Ubuntu) |
 | S3 config, CA, access check, empty target, classification | `backupFilesystem.test.js`, `S3:` tests | PASS (Ubuntu) |
@@ -4941,6 +5313,7 @@ Coverage (spec point → task):
 - 6.2.1 version 5 allowlist, HTTPS endpoint, `force_path_style=true`, `use_accept_encoding_gzip=false`, unknown keys refused → Task 2 (`payload v5: S3 options are allowlisted...`).
 - 10.2 `sourceDiagnosticsVersion` sent as today and accepted in version 5, and 6.1 point 2 (no trust or CA setting in the payload) → Task 2 (`payload v5: accepts sourceDiagnosticsVersion as today and refuses any trust setting in the payload`); the signed command in `contracts/v0.8.0.json` follows the updated 10.2 example including `sourceDiagnosticsVersion: 1` (Task 8).
 - 6.2.2 sealed secrets opened before any file, tampering/wrong key refused, merged into options, plaintext refused → Tasks 1, 2, 3 (`sealed runtime: ... refused before any backup file is written`), lab `s3-tampered-seal`.
+- 10.3 database passwords (amended in `3d241ea`): optional sealed `lifecycle: { database?, databases?: { <databaseId>: string } }` validated in Task 1 (`sealed: opens optional database passwords ...`); restored into copies of the plain entries and refused on a plain `password`, a missing sealed password or an unmatched sealed password in Task 2 (`payload v5: database passwords are sealed per lifecycle shape ...`); versions 1 to 4 keep plain passwords (same test); version 5 with a version 2 lifecycle runs real dumps with restored passwords in Task 4 (`sealedVersion5` moves them) and in the Task 10 lab (`s3-healthy`).
 - 6.2.3 `[pluton] type = s3`, 0700/0600, removal in `finally`, no `rclone obscure` → Task 5.
 - 6.2.4 `PLUTON_AGENT_STORAGE_CA_FILE` as `SSL_CERT_FILE` for Restic and Rclone, never sent by the server → Task 6, installer in Task 9, lab `s3-untrusted-ca` versus `s3-healthy`.
 - 6.2.5 empty S3 listing is empty, any object refuses → Task 7, lab `s3-non-empty`.
@@ -4955,7 +5328,7 @@ Coverage (spec point → task):
 
 Placeholder scan: every code step contains complete code; each referenced function exists at `4c2c3f3` (`asRecord`, `requiredString`, `validateRepositoryPath`, `validateRcloneOptions`, `runProgram`, `verifyRepository`, `ensureManagedRepository`, `assertRootOwnedPath`, `createExecutionFixture`, `executionInput`, `readCalls`, `multiFixture`, `multiEntries`, `calls`, `nativePids`, `port`, `run`) or is defined in a task. The only operator-supplied value is the reviewed Agent commit SHA in Task 11 operator step 2.
 
-Type consistency checked: `CommandSealContext` (Task 1) is the type of `parseBackupFilesystemPayload`'s second argument (Task 2) and of `executeFilesystemBackup`'s `commandSeal` (Task 3); `RepositoryTargetFailureCode` is reused by `ProgramExitError` and `classifyBackupStorageFailure` (Task 7); `AgentConfig.storageCaFile` (Task 6) is the field the lab sets (Task 10).
+Type consistency checked: `SealedCommandSecrets["lifecycle"]` (Task 1) is the type `openVersion5Secrets` returns and `withSealedDatabasePasswords` consumes (Task 2); `CommandSealContext` (Task 1) is the type of `parseBackupFilesystemPayload`'s second argument (Task 2) and of `executeFilesystemBackup`'s `commandSeal` (Task 3); `RepositoryTargetFailureCode` is reused by `ProgramExitError` and `classifyBackupStorageFailure` (Task 7); `AgentConfig.storageCaFile` (Task 6) is the field the lab sets (Task 10).
 
 Issues found and fixed inline while reviewing:
 
@@ -4964,6 +5337,7 @@ Issues found and fixed inline while reviewing:
 - The release scripts refused any version outside `0.7.x`, which would have failed `pnpm package:release` in the validation image; Task 8 extends both version gates and adds a test.
 - `*.pem` is excluded by `.dockerignore`, so lab certificates cannot come from the build context; Task 10 generates the CA inside a dedicated build stage and keeps the CA key there.
 - Windows `pnpm test` is not a clean gate at `origin/main`; Linux runs are used for every execution test.
+- After the 10.3 amendment: the sealed database passwords use the lifecycle parser's own rule (1 to 1024 characters, no NUL) instead of the stricter control-character rule for repository and storage credentials, because MySQL/MariaDB passwords with tabs or newlines are valid today (`backupLifecycle.test.ts` already uses one); the restore builds copies so the HMAC-signed `command.payload` object never holds a plain password; the Task 2 lifecycle test that used a plain `password` in version 5 now seals it.
 
 Open questions for the server plan (not blockers for this plan):
 
