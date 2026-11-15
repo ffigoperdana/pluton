@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import {
 	AGENT_COMMAND_SECRETS_ALG,
 	AGENT_COMMAND_SECRETS_KID,
@@ -113,5 +114,66 @@ describe('Agent command secret sealing (S3_AGENT_REPOSITORY_DESIGN.md 10.3 and 1
 		expect(Buffer.from(first.nonce, 'base64')).toHaveLength(12);
 		expect(Buffer.from(first.tag, 'base64')).toHaveLength(16);
 		expect(openVector(second)).toEqual(secrets);
+	});
+
+	describe('sealed database passwords (design 10.3, "Database passwords")', () => {
+		const base = {
+			repositoryPassword: 'synthetic-repository-password-01',
+			rclone: { pass: 'synthetic-sftp-password' },
+		};
+		/** Seals raw JSON through the same cipher path, so malformed plaintexts can be refused by open. */
+		const sealRaw = (plaintext: unknown) => {
+			const nonce = Buffer.alloc(12, 7);
+			const cipher = crypto.createCipheriv(
+				'aes-256-gcm',
+				deriveAgentCommandSealingKey(vector.secret),
+				nonce,
+				{ authTagLength: 16 }
+			);
+			cipher.setAAD(
+				Buffer.from(`${AGENT_COMMAND_SECRETS_KID}\n${vector.commandId}\n${vector.leaseToken}`, 'utf8')
+			);
+			const ciphertext = Buffer.concat([cipher.update(JSON.stringify(plaintext), 'utf8'), cipher.final()]);
+			return {
+				alg: 'A256GCM',
+				kid: AGENT_COMMAND_SECRETS_KID,
+				nonce: nonce.toString('base64'),
+				ciphertext: ciphertext.toString('base64'),
+				tag: cipher.getAuthTag().toString('base64'),
+			};
+		};
+
+		it('round trips a databases object keyed by databaseId', () => {
+			const secrets = {
+				...base,
+				lifecycle: {
+					databases: { 'db-01': 'synthetic-db-password-01', 'db-02': 'synthetic-db-password-02' },
+				},
+			};
+			const sealed = sealAgentCommandSecrets(vector.secret, vector.commandId, vector.leaseToken, secrets);
+			expect(openVector(sealed)).toEqual(secrets);
+		});
+
+		it('round trips the single database password of lifecycle version 1', () => {
+			const secrets = { ...base, lifecycle: { database: 'synthetic-db-password-01' } };
+			const sealed = sealAgentCommandSecrets(vector.secret, vector.commandId, vector.leaseToken, secrets);
+			expect(openVector(sealed)).toEqual(secrets);
+		});
+
+		it('refuses an unknown lifecycle key, an empty password and a non-string value', () => {
+			for (const lifecycle of [
+				{ other: 'x' },
+				{ databases: { 'db-01': '' } },
+				{ database: '' },
+				{ database: 7 },
+				{ databases: { 'db-01': 7 } },
+				{ databases: ['x'] },
+				{ database: 'x', extra: 'y' },
+				'x',
+				null,
+			]) {
+				expect(() => openVector(sealRaw({ ...base, lifecycle }))).toThrow(AgentCommandSealingError);
+			}
+		});
 	});
 });

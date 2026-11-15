@@ -558,9 +558,35 @@ export class RemoteBackupService {
 				plainOptions = sftpOptions;
 				secrets = { repositoryPassword, rclone: { pass } };
 			}
+			// Section 10.3: database passwords travel only inside the sealed secrets.
+			let sealedLifecycle: AgentCommandSecrets['lifecycle'];
+			let plainLifecycle = lifecycle;
+			if (lifecycle) {
+				const required = (password: string | undefined): string => {
+					if (!password) throw new AppError(500, 'Database backup credentials could not be prepared.');
+					return password;
+				};
+				if (lifecycle.version === 2) {
+					const passwords: Record<string, string> = {};
+					const stripped = (lifecycle.databases || []).map(entry => {
+						const { password, ...rest } = entry;
+						if (!entry.databaseId) required(undefined);
+						passwords[entry.databaseId as string] = required(password);
+						return rest;
+					});
+					plainLifecycle = { ...lifecycle, databases: stripped };
+					if (stripped.length) sealedLifecycle = { databases: passwords };
+				} else if (lifecycle.database) {
+					const { password, ...rest } = lifecycle.database;
+					plainLifecycle = { ...lifecycle, database: rest };
+					sealedLifecycle = { database: required(password) };
+				}
+			}
+			if (sealedLifecycle) secrets = { ...secrets, lifecycle: sealedLifecycle };
 			return {
 				version: 5,
 				...common,
+				...(plainLifecycle ? { lifecycle: plainLifecycle } : {}),
 				rclone: { type: target.type, options: plainOptions },
 				sealed: sealAgentCommandSecrets(
 					sealing.agentSecret,

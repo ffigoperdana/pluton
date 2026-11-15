@@ -12,6 +12,8 @@ export const AGENT_COMMAND_SECRETS_ALG = 'A256GCM';
 export type AgentCommandSecrets = {
 	repositoryPassword: string;
 	rclone: { pass?: string; access_key_id?: string; secret_access_key?: string };
+	/** Database passwords of a lifecycle that was stripped of them (section 10.3). */
+	lifecycle?: { database?: string; databases?: Record<string, string> };
 };
 
 export type SealedAgentCommandSecrets = {
@@ -60,6 +62,21 @@ function decodeBase64(value: unknown, length?: number): Buffer {
 	if (bytes.toString('base64') !== value || (length !== undefined && bytes.length !== length))
 		throw new AgentCommandSealingError();
 	return bytes;
+}
+
+const nonEmptyString = (value: unknown): boolean => typeof value === 'string' && value !== '';
+
+/** Absent is valid; present means exactly one of database or databases, with non-empty string passwords. */
+function validLifecycleSecrets(value: unknown): boolean {
+	if (value === undefined) return true;
+	if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+	const entries = Object.entries(value);
+	if (entries.length !== 1) return false;
+	const [key, entry] = entries[0];
+	if (key === 'database') return nonEmptyString(entry);
+	if (key !== 'databases' || !entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+	const passwords = Object.entries(entry);
+	return passwords.length > 0 && passwords.every(([id, password]) => id !== '' && nonEmptyString(password));
 }
 
 export function sealAgentCommandSecrets(
@@ -132,7 +149,9 @@ export function openAgentCommandSecrets(
 	if (
 		!secrets ||
 		typeof secrets !== 'object' ||
-		Object.keys(secrets).sort().join(',') !== 'rclone,repositoryPassword' ||
+		!['rclone,repositoryPassword', 'lifecycle,rclone,repositoryPassword'].includes(
+			Object.keys(secrets).sort().join(',')
+		) ||
 		typeof secrets.repositoryPassword !== 'string' ||
 		!secrets.repositoryPassword ||
 		!rclone ||
@@ -140,7 +159,8 @@ export function openAgentCommandSecrets(
 		Array.isArray(rclone) ||
 		Object.entries(rclone).some(
 			([key, entry]) => !RCLONE_SECRET_KEYS.has(key) || typeof entry !== 'string' || !entry
-		)
+		) ||
+		!validLifecycleSecrets((secrets as { lifecycle?: unknown }).lifecycle)
 	)
 		throw new AgentCommandSealingError();
 	return parsed as AgentCommandSecrets;

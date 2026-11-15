@@ -1289,6 +1289,146 @@ describe('RemoteBackupService', () => {
 			expect(payload).not.toHaveProperty('sealed');
 		});
 
+		describe('database passwords sealed in version 5', () => {
+			const commandId = 'remote-backup-backup-example-01';
+			const agentWithLifecycle = (version: 1 | 2) =>
+				agentStore.getAgentByDeviceId.mockResolvedValue({
+					...s3Agent,
+					lastSeen: new Date(),
+					capabilities: {
+						...s3Agent.capabilities,
+						backupLifecycleVersion: version,
+						databaseEngines: ['mariadb', 'postgresql'],
+					},
+				});
+			const credentials = (entries: Array<[string, string]>) =>
+				entries.map(([databaseId, value]) => ({
+					databaseId,
+					encryptedPassword: new Cryptr(encryptionSecret).encrypt(value),
+					legacySingle: false,
+				}));
+			const openSealed = (payload: any) =>
+				openAgentCommandSecrets(sealing.agentSecret, commandId, sealing.leaseToken, payload.sealed);
+
+			it('moves every collection password into the sealed secrets keyed by databaseId', async () => {
+				const databases = [
+					{ ...database, databaseId: 'db_01' },
+					{
+						...database,
+						databaseId: 'db_02',
+						engine: 'postgresql',
+						port: 5432,
+						database: 'analytics',
+						dumpFilename: 'analytics.sql',
+					},
+				];
+				planStore.getById.mockResolvedValue({
+					...plan,
+					settings: { ...plan.settings, remoteLifecycle: { version: 2, databases } },
+				});
+				agentWithLifecycle(2);
+				planStore.getDatabaseCredentials = jest.fn().mockResolvedValue(
+					credentials([
+						['db_02', 'synthetic-db-password-02'],
+						['db_01', 'synthetic-db-password-01'],
+					])
+				);
+				const payload: any = await service.materializeCommand(
+					capableAgent.agentId,
+					backupCommand(),
+					sealing
+				);
+				const serialized = JSON.stringify(payload);
+				expect(serialized).not.toContain('synthetic-db-password-01');
+				expect(serialized).not.toContain('synthetic-db-password-02');
+				expect(payload.lifecycle.databases).toHaveLength(2);
+				for (const entry of payload.lifecycle.databases) expect(entry).not.toHaveProperty('password');
+				expect(payload.lifecycle.databases[0]).toMatchObject({
+					databaseId: 'db_01',
+					engine: 'mariadb',
+					database: 'example_db',
+					dumpFilename: 'app.sql',
+				});
+				expect(openSealed(payload)).toEqual({
+					repositoryPassword,
+					rclone: { pass: storagePassword },
+					lifecycle: {
+						databases: { 'db_01': 'synthetic-db-password-01', 'db_02': 'synthetic-db-password-02' },
+					},
+				});
+			});
+
+			it('moves the single database password of lifecycle version 1 into sealed lifecycle.database', async () => {
+				planStore.getById.mockResolvedValue(lifecyclePlan());
+				agentWithLifecycle(1);
+				planStore.getDatabaseCredential = jest
+					.fn()
+					.mockResolvedValue(new Cryptr(encryptionSecret).encrypt('synthetic-db-password-01'));
+				const payload: any = await service.materializeCommand(
+					capableAgent.agentId,
+					backupCommand(),
+					sealing
+				);
+				expect(payload.lifecycle.version).toBe(1);
+				expect(payload.lifecycle.database).not.toHaveProperty('password');
+				expect(payload.lifecycle.database).toMatchObject({
+					engine: 'mariadb',
+					database: 'example_db',
+				});
+				expect(JSON.stringify(payload)).not.toContain('synthetic-db-password-01');
+				expect(openSealed(payload)).toEqual({
+					repositoryPassword,
+					rclone: { pass: storagePassword },
+					lifecycle: { database: 'synthetic-db-password-01' },
+				});
+			});
+
+			it('has no sealed lifecycle key without a lifecycle or without a database', async () => {
+				const plain: any = await service.materializeCommand(
+					capableAgent.agentId,
+					backupCommand(),
+					sealing
+				);
+				expect(openSealed(plain)).not.toHaveProperty('lifecycle');
+				planStore.getById.mockResolvedValue({
+					...plan,
+					settings: { ...plan.settings, remoteLifecycle: { version: 2, databases: [] } },
+				});
+				agentWithLifecycle(2);
+				planStore.getDatabaseCredentials = jest.fn().mockResolvedValue([]);
+				const hookOnly: any = await service.materializeCommand(
+					capableAgent.agentId,
+					backupCommand(),
+					sealing
+				);
+				expect(openSealed(hookOnly)).not.toHaveProperty('lifecycle');
+			});
+
+			it('keeps the password in the plain lifecycle for payload version 4 and below', async () => {
+				planStore.getById.mockResolvedValue(lifecyclePlan());
+				agentStore.getAgentByDeviceId.mockResolvedValue({
+					...capableAgent,
+					lastSeen: new Date(),
+					capabilities: {
+						...capableAgent.capabilities,
+						backupLifecycleVersion: 1,
+						databaseEngines: ['mariadb'],
+					},
+				});
+				planStore.getDatabaseCredential = jest
+					.fn()
+					.mockResolvedValue(new Cryptr(encryptionSecret).encrypt('synthetic-db-password-01'));
+				const payload: any = await service.materializeCommand(
+					capableAgent.agentId,
+					backupCommand(),
+					sealing
+				);
+				expect(payload.version).toBe(2);
+				expect(payload.lifecycle.database.password).toBe('synthetic-db-password-01');
+				expect(payload).not.toHaveProperty('sealed');
+			});
+		});
+
 		it('refuses to build version 5 without the lease sealing context', async () => {
 			const error = await service
 				.materializeCommand(capableAgent.agentId, backupCommand())
