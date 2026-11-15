@@ -4,6 +4,10 @@ import {
 	RemoteCommandPreparationError,
 } from '../../src/services/RemoteBackupService';
 import type { AgentCommand } from '../../src/db/schema/agents';
+import {
+	AgentCommandSealingError,
+	openAgentCommandSecrets,
+} from '../../src/utils/agentCommandSealing';
 
 jest.mock('../../src/services/events/BackupEventService', () => ({
 	BackupEventService: jest.fn().mockImplementation(() => ({
@@ -1168,6 +1172,172 @@ describe('RemoteBackupService', () => {
 				statusCode: 400,
 				message: 'Remote filesystem backups require an SFTP or S3 destination.',
 			});
+		});
+	});
+	describe('Payload version 5 (S3_AGENT_REPOSITORY_DESIGN.md 10.2 and 10.3)', () => {
+		const sealing = {
+			agentSecret: 'synthetic-agent-secret-0123456789abcdef',
+			leaseToken: '0123456789abcdef0123456789abcdef0123456789abcdef',
+		};
+		beforeEach(async () => {
+			const sftpStorage = await storageStore.getById(plan.storageId);
+			const s3Storage = s3StorageRecord(new Cryptr(encryptionSecret));
+			storageStore.getById.mockImplementation(async (id: string) =>
+				id === s3Plan.storageId ? s3Storage : sftpStorage
+			);
+			agentStore.getAgentByDeviceId.mockResolvedValue({ ...s3Agent, lastSeen: new Date() });
+		});
+		const useS3Plan = () => {
+			const s3Repository = {
+				id: 'remote-repo-example-01',
+				planId: plan.id,
+				agentId: capableAgent.agentId,
+				storageId: s3Plan.storageId,
+				storagePath: s3Plan.storagePath,
+				encryptedPassword: new Cryptr(encryptionSecret).encrypt(repositoryPassword),
+				initializedAt: null,
+			};
+			planStore.getById.mockResolvedValue(s3Plan);
+			repositories.getById.mockResolvedValue(s3Repository);
+			repositories.getByPlanId.mockResolvedValue(s3Repository);
+		};
+
+		it('sends an S3 Agent version 5 with only allowlisted plain options and every secret sealed', async () => {
+			useS3Plan();
+			const command = backupCommand();
+			const payload: any = await service.materializeCommand(capableAgent.agentId, command, sealing);
+			expect(payload).toEqual({
+				version: 5,
+				sourceDiagnosticsVersion: 1,
+				backupId: 'backup-example-01',
+				planId: plan.id,
+				sourcePath: '/srv/example-app',
+				excludes: [],
+				repository: { remoteName: 'pluton', path: 'bucket-01/agents/app-01', initialize: true },
+				rclone: {
+					type: 's3',
+					options: {
+						provider: 'Other',
+						endpoint: 'https://s3.example.internal',
+						force_path_style: 'true',
+						use_accept_encoding_gzip: 'false',
+						no_check_bucket: 'true',
+					},
+				},
+				sealed: {
+					alg: 'A256GCM',
+					kid: 'pluton-agent-command-secrets-v1',
+					nonce: expect.any(String),
+					ciphertext: expect.any(String),
+					tag: expect.any(String),
+				},
+			});
+			const serialized = JSON.stringify(payload);
+			for (const value of [repositoryPassword, s3AccessKey, s3SecretKey, encryptionSecret])
+				expect(serialized).not.toContain(value);
+			expect(
+				openAgentCommandSecrets(sealing.agentSecret, command.id, sealing.leaseToken, payload.sealed)
+			).toEqual({
+				repositoryPassword,
+				rclone: { access_key_id: s3AccessKey, secret_access_key: s3SecretKey },
+			});
+			expect(() =>
+				openAgentCommandSecrets(sealing.agentSecret, command.id, 'a'.repeat(32), payload.sealed)
+			).toThrow(AgentCommandSealingError);
+			expect(() =>
+				openAgentCommandSecrets(sealing.agentSecret, 'remote-backup-other', sealing.leaseToken, payload.sealed)
+			).toThrow(AgentCommandSealingError);
+		});
+
+		it('seals the SFTP password for a version 5 Agent and keeps host, port and user plain', async () => {
+			const command = backupCommand();
+			const payload: any = await service.materializeCommand(capableAgent.agentId, command, sealing);
+			expect(payload.version).toBe(5);
+			expect(payload.rclone).toEqual({
+				type: 'sftp',
+				options: { host: 'sftp.example.internal', port: '22', user: 'backup-user' },
+			});
+			expect(payload).not.toHaveProperty('repositoryPassword');
+			expect(JSON.stringify(payload)).not.toContain(storagePassword);
+			expect(
+				openAgentCommandSecrets(sealing.agentSecret, command.id, sealing.leaseToken, payload.sealed)
+			).toEqual({ repositoryPassword, rclone: { pass: storagePassword } });
+		});
+
+		it('keeps payload versions 1 to 4 unchanged for an Agent without version 5', async () => {
+			agentStore.getAgentByDeviceId.mockResolvedValue({
+				...capableAgent,
+				capabilities: { ...capableAgent.capabilities, repositoryBackends: ['sftp'] },
+				lastSeen: new Date(),
+			});
+			const payload: any = await service.materializeCommand(
+				capableAgent.agentId,
+				backupCommand(),
+				sealing
+			);
+			expect(payload.version).toBe(1);
+			expect(payload.repositoryPassword).toBe(repositoryPassword);
+			expect(payload.rclone).toEqual({
+				type: 'sftp',
+				options: {
+					host: 'sftp.example.internal',
+					port: '22',
+					user: 'backup-user',
+					pass: storagePassword,
+				},
+			});
+			expect(payload).not.toHaveProperty('sealed');
+		});
+
+		it('refuses to build version 5 without the lease sealing context', async () => {
+			const error = await service
+				.materializeCommand(capableAgent.agentId, backupCommand())
+				.then(() => null)
+				.catch(caught => caught);
+			expect(error).toBeInstanceOf(RemoteCommandPreparationError);
+			expect(error).toMatchObject({
+				stage: 'payload-sealing',
+				safeMessage: 'Remote backup secrets could not be sealed for the agent.',
+			});
+		});
+
+		it('fails a queued S3 command closed when the Agent no longer reports S3 at poll time', async () => {
+			useS3Plan();
+			agentStore.getAgentByDeviceId.mockResolvedValue({ ...capableAgent, lastSeen: new Date() });
+			const error = await service
+				.materializeCommand(capableAgent.agentId, backupCommand(), sealing)
+				.then(() => null)
+				.catch(caught => caught);
+			expect(error).toBeInstanceOf(RemoteCommandPreparationError);
+			expect(error).toMatchObject({
+				stage: 'repository-backend',
+				message: 'Remote agent does not support S3 repositories. Update the agent first.',
+			});
+		});
+
+		it('records an S3 primary snapshot exactly like an SFTP one and never queues replication', async () => {
+			useS3Plan();
+			planStore.update = jest.fn();
+			const replication = {
+				validatePlan: jest.fn(async () => undefined),
+				enqueueBackup: jest.fn(async () => undefined),
+			};
+			service.setReplicationService(replication);
+			const id = 'b'.repeat(64);
+			const summary = { message_type: 'summary', snapshot_id: id, total_bytes_processed: 2048 } as any;
+			await service.completeCommand(backupCommand(), {
+				success: true,
+				result: { snapshotId: id, summary },
+			});
+			expect((service as any).eventService.onBackupComplete).toHaveBeenCalledWith(
+				expect.objectContaining({ success: true, summary })
+			);
+			expect(repositories.markInitialized).toHaveBeenCalledWith('remote-repo-example-01');
+			expect(planStore.update).toHaveBeenCalledWith(
+				plan.id,
+				expect.objectContaining({ stats: { size: 2048, snapshots: [id] } })
+			);
+			expect(replication.enqueueBackup).not.toHaveBeenCalled();
 		});
 	});
 });

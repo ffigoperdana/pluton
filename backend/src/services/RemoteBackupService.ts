@@ -24,11 +24,18 @@ import {
 	AGENT_S3_SCOPE_UNVERIFIED_MESSAGE,
 	AGENT_S3_UNSUPPORTED_MESSAGE,
 	AgentS3OptionError,
+	agentBackupPayloadVersion,
 	agentS3RepositoryOptions,
 	agentS3ScopesOverlap,
 	agentSupportsS3Repository,
 	isAgentS3StorageType,
+	type AgentS3Secrets,
 } from '../utils/agentS3Repository';
+import {
+	sealAgentCommandSecrets,
+	type AgentCommandSealingContext,
+	type AgentCommandSecrets,
+} from '../utils/agentCommandSealing';
 import { CronManager } from '../managers/CronManager';
 import { BackupEventService } from './events/BackupEventService';
 import { intervalToCron } from '../utils/intervalToCron';
@@ -71,6 +78,12 @@ const MAX_SOURCE_PATH_LENGTH = 4_096;
 const SFTP_AGENT_OPTION_KEYS = new Set(['host', 'port', 'user', 'pass']);
 
 type CommandReference = { backupId: string; planId: string; repositoryId: string };
+
+/** A materialized primary repository. S3 keys stay apart from the plain options so that
+ * payload version 5 can seal them (docs/S3_AGENT_REPOSITORY_DESIGN.md 10.2). */
+type RepositoryTarget =
+	| { type: 'sftp'; options: Record<string, string> }
+	| { type: 's3'; options: Record<string, string>; secrets: AgentS3Secrets };
 
 type PreparationStageDetails = {
 	rejectedField?: string;
@@ -379,10 +392,15 @@ export class RemoteBackupService {
 		return projectRemoteProgress(backup);
 	}
 
-	/** Called during authenticated poll; returned data is never persisted in agent_commands. */
+	/**
+	 * Called during authenticated poll; returned data is never persisted in agent_commands.
+	 * `sealing` carries the per-Agent secret and this lease's token; payload version 5 seals
+	 * every secret with them (docs/S3_AGENT_REPOSITORY_DESIGN.md 10.3).
+	 */
 	async materializeCommand(
 		agentId: string,
-		command: AgentCommand
+		command: AgentCommand,
+		sealing?: AgentCommandSealingContext
 	): Promise<Record<string, unknown>> {
 		if (command.type !== 'BACKUP_FILESYSTEM') return command.payload;
 		const failure: RemoteCommandPreparationFailure = { stage: 'command-ownership' };
@@ -434,7 +452,7 @@ export class RemoteBackupService {
 			await this.assertSupportedPlan(plan, setStage, false);
 			setStage('repository-path');
 			validateRepositoryPath(repository.storagePath);
-			const storage = await this.materializeSftpStorage(repository.storageId, setStage);
+			const target = await this.materializeRepositoryStorage(repository.storageId, setStage);
 			setStage('repository-secret-decryption');
 			let repositoryPassword: string;
 			try {
@@ -494,8 +512,9 @@ export class RemoteBackupService {
 				}
 			}
 			setStage('payload');
-			return {
-				version: excludes.length ? 4 : lifecycle ? (lifecycle.version === 2 ? 3 : 2) : 1,
+			// Shared by every version. sourceDiagnosticsVersion is sent exactly as today and is part
+			// of version 5 (section 10.2); the payload carries no trust or CA setting (6.1 point 2).
+			const common = {
 				...(supportsSourceDiagnostics(agent.agentVersion) ? { sourceDiagnosticsVersion: 1 } : {}),
 				...(lifecycle ? { lifecycle } : {}),
 				backupId: backup.id,
@@ -507,8 +526,48 @@ export class RemoteBackupService {
 					path: repository.storagePath,
 					initialize: !repository.initializedAt,
 				},
-				rclone: storage,
-				repositoryPassword,
+			};
+			if (agentBackupPayloadVersion(agent.capabilities) !== 5) {
+				// Versions 1 to 4 are unchanged and SFTP-only (section 10.2).
+				if (target.type !== 'sftp') {
+					setStage('repository-backend');
+					throw new AppError(409, AGENT_S3_UNSUPPORTED_MESSAGE);
+				}
+				return {
+					version: excludes.length ? 4 : lifecycle ? (lifecycle.version === 2 ? 3 : 2) : 1,
+					...common,
+					rclone: target,
+					repositoryPassword,
+				};
+			}
+			setStage('payload-sealing');
+			if (!sealing) throw new AppError(500, 'Remote backup secrets could not be sealed.');
+			let plainOptions: Record<string, string>;
+			let secrets: AgentCommandSecrets;
+			if (target.type === 's3') {
+				plainOptions = target.options;
+				secrets = {
+					repositoryPassword,
+					rclone: {
+						access_key_id: target.secrets.access_key_id,
+						secret_access_key: target.secrets.secret_access_key,
+					},
+				};
+			} else {
+				const { pass, ...sftpOptions } = target.options;
+				plainOptions = sftpOptions;
+				secrets = { repositoryPassword, rclone: { pass } };
+			}
+			return {
+				version: 5,
+				...common,
+				rclone: { type: target.type, options: plainOptions },
+				sealed: sealAgentCommandSecrets(
+					sealing.agentSecret,
+					command.id,
+					sealing.leaseToken,
+					secrets
+				),
 			};
 		} catch (error) {
 			if (error instanceof RemoteCommandPreparationError) throw error;
@@ -940,6 +999,35 @@ export class RemoteBackupService {
 				400,
 				error instanceof Error ? error.message : 'Invalid Backup Exclusions.'
 			);
+		}
+	}
+
+	/** SFTP storage keeps the existing allowlist; S3 storage uses the section 10.2 projection. */
+	private async materializeRepositoryStorage(
+		storageId: string,
+		setPreparationStage?: SetPreparationStage
+	): Promise<RepositoryTarget> {
+		setPreparationStage?.('storage-lookup');
+		const storage = await this.storageStore.getById(storageId);
+		if (!storage || !isAgentS3StorageType(storage.type))
+			return this.materializeSftpStorage(storageId, setPreparationStage);
+		setPreparationStage?.('s3-storage-validation');
+		let credentials: Record<string, string>;
+		try {
+			credentials = decryptStorageCredentials(storage, this.encryptionSecret);
+		} catch {
+			throw new AppError(500, 'Storage credentials could not be prepared for the remote agent.');
+		}
+		try {
+			const { options, secrets } = agentS3RepositoryOptions(storage, credentials);
+			return { type: 's3', options, secrets };
+		} catch (error) {
+			if (error instanceof AgentS3OptionError)
+				setPreparationStage?.('s3-storage-validation', {
+					rejectedField: error.field,
+					ruleCategory: error.rule,
+				});
+			throw error;
 		}
 	}
 

@@ -26,6 +26,7 @@ export type RemoteCommandPreparationStage =
 	| 'lifecycle-configuration'
 	| 'database-credential-preparation'
 	| 'payload'
+	| 'payload-sealing'
 	| 'materializer-unavailable'
 	| 'unexpected';
 
@@ -74,6 +75,7 @@ function preparationFailureMessage(stage: RemoteCommandPreparationStage): string
 		'lifecycle-configuration': 'The remote backup lifecycle configuration is not supported.',
 		'database-credential-preparation': 'Database backup credentials could not be prepared.',
 		'payload': 'The remote backup command payload could not be prepared.',
+		'payload-sealing': 'Remote backup secrets could not be sealed for the agent.',
 		'materializer-unavailable': 'The remote backup materializer is unavailable.',
 		'unexpected': 'An unexpected remote command preparation error occurred.',
 	};
