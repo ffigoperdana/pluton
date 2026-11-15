@@ -260,3 +260,35 @@ test('actual S3 editor still requires missing keys that are not configured', asy
       assert.match(view.text(), /Required/);
    } finally { await view.cleanup(); }
 });
+
+test('an S3 primary Agent plan shows replication as unavailable and cannot turn it on', async () => {
+   const updates: PlanReplicationSettings[] = [];
+   const view = await fixture(Settings, {
+      replication: settings(1),
+      primaryStorageId: primary.storageId,
+      primaryStoragePath: primary.storagePath,
+      managedAgent: true,
+      deviceId: 'main',
+      unavailableReason: 'Replication is not available for an S3 primary repository yet. S3-to-SFTP replication is the next stage.',
+      onUpdate: (next: PlanReplicationSettings) => updates.push(next),
+   });
+   try {
+      const toggle = view.dom.window.document.querySelector<HTMLInputElement>('input[aria-label="Enable Replication"]')!;
+      assert.equal(toggle.disabled, true);
+      assert.equal(toggle.checked, false);
+      assert.match(view.text(), /S3-to-SFTP replication is the next stage/);
+      assert.doesNotMatch(view.text(), /Replication Destination 1/);
+      assert.equal(view.button('Add Replication Destination'), undefined);
+      assert.equal(updates.length, 0);
+   } finally { await view.cleanup(); }
+});
+
+test('failover policy wording names the primary repository, not a storage type', async () => {
+   for (const recoveryPolicy of ['primary-only', 'assisted', 'automatic'] as const) {
+      const view = await fixture(Settings, { replication: { ...settings(1), recoveryPolicy }, primaryStorageId: primary.storageId, primaryStoragePath: primary.storagePath, managedAgent: true, deviceId: 'main', onUpdate() {} });
+      try {
+         assert.match(view.text(), /primary repository/);
+         assert.doesNotMatch(view.text(), /primary SFTP/i);
+      } finally { await view.cleanup(); }
+   }
+});

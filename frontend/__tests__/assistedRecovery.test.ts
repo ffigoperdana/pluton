@@ -646,3 +646,10 @@ test('without an earlier job the manual check has no "new check" heading', async
       await ui.close();
    }
 });
+
+test('primary-ready wording names the primary repository, not a storage type', () => {
+   assert.equal(
+      recoveryStatus({ status: 'primary-ready' } as AssistedRecoveryJob),
+      'The primary repository is available. Continue the normal restore flow.',
+   );
+});

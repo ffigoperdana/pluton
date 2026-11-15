@@ -27,6 +27,8 @@ interface PlanReplicationSettingsProps {
    planID?: string;
    maxReplications?: number;
    managedAgent?: boolean;
+   /** Set when replication cannot be used for this primary (an S3 primary in stage 1). */
+   unavailableReason?: string;
    onUpdate: (replication: ReplicationSettings) => void;
 }
 
@@ -46,6 +48,7 @@ const PlanReplicationSettings = ({
    planID,
    maxReplications: maxReplicationsProp,
    managedAgent = false,
+   unavailableReason,
    onUpdate,
 }: PlanReplicationSettingsProps) => {
    const [tempStorages, setTempStorages] = useState<PlanReplicationStorage[]>([]);
@@ -187,11 +190,14 @@ const PlanReplicationSettings = ({
             <Toggle
                label="Enable Replication"
                description="Copy verified snapshots to up to two additional repositories. Primary backup success and replica success are tracked separately."
-               fieldValue={settings.enabled}
+               fieldValue={unavailableReason ? false : settings.enabled}
+               disabled={Boolean(unavailableReason)}
                onUpdate={updateEnabled}
             />
 
-            {settings.enabled && (
+            {unavailableReason && <p className={classes.fieldNotice}>{unavailableReason}</p>}
+
+            {!unavailableReason && settings.enabled && (
                <div className={mirrorClasses.mirrorSettings}>
                   <p className={classes.fieldNotice}>
                      Replication runs sequentially by default. Use a dedicated repository path for each destination.
@@ -224,10 +230,10 @@ const PlanReplicationSettings = ({
                         </label>
                         <p>
                            {settings.recoveryPolicy === 'automatic'
-                              ? 'Recovery starts on the primary SFTP. If it is unreachable, Pluton continues automatically with the first replica that passes identity and integrity checks, restoring only into isolated staging. Selecting this does not prove a replica is recoverable, and nothing is restored to production or imported into a database automatically.'
+                              ? 'Recovery starts on the primary repository. If it is unreachable, Pluton continues automatically with the first replica that passes identity and integrity checks, restoring only into isolated staging. Selecting this does not prove a replica is recoverable, and nothing is restored to production or imported into a database automatically.'
                               : settings.recoveryPolicy === 'assisted'
-                                ? 'Prefer primary SFTP. A verified S3 replica requires your explicit approval and restores only into isolated staging. Database import keeps its existing separate approval.'
-                                : 'Recovery uses the primary SFTP only. Choose a failover policy to allow verified S3 replicas as a recovery source.'}
+                                ? 'Prefer the primary repository. A verified S3 replica requires your explicit approval and restores only into isolated staging. Database import keeps its existing separate approval.'
+                                : 'Recovery uses the primary repository only. Choose a failover policy to allow verified S3 replicas as a recovery source.'}
                         </p>
                      </fieldset>
                   )}
