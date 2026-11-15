@@ -11,6 +11,24 @@ import { BackupStore } from '../stores/BackupStore';
 import { PlanStore } from '../stores/PlanStore';
 import { RemoteManagedRepositoryStore } from '../stores/RemoteManagedRepositoryStore';
 import { StorageStore } from '../stores/StorageStore';
+import type { Storage } from '../db/schema/storages';
+import {
+	canonicalS3RepositoryIdentity,
+	decryptStorageCredentials,
+	isS3Storage,
+	s3RepositoryScope,
+} from '../utils/storageSecurity';
+import {
+	AGENT_S3_OVERLAP_MESSAGE,
+	AGENT_S3_REPLICATION_MESSAGE,
+	AGENT_S3_SCOPE_UNVERIFIED_MESSAGE,
+	AGENT_S3_UNSUPPORTED_MESSAGE,
+	AgentS3OptionError,
+	agentS3RepositoryOptions,
+	agentS3ScopesOverlap,
+	agentSupportsS3Repository,
+	isAgentS3StorageType,
+} from '../utils/agentS3Repository';
 import { CronManager } from '../managers/CronManager';
 import { BackupEventService } from './events/BackupEventService';
 import { intervalToCron } from '../utils/intervalToCron';
@@ -149,6 +167,12 @@ function hasEnabledScripts(plan: Pick<Plan | NewPlan, 'settings'>): boolean {
 	return Object.values(plan.settings?.scripts || {}).some(
 		items => Array.isArray(items) && items.length > 0
 	);
+}
+
+/** Stage 1 has no replication from an S3 primary; listed but disabled replicas are refused too. */
+function hasReplicationSettings(plan: Pick<Plan | NewPlan, 'settings'>): boolean {
+	const replication = plan.settings?.replication;
+	return Boolean(replication?.enabled || replication?.storages?.length);
 }
 
 function toFiniteNumber(value: unknown): number | undefined {
@@ -738,6 +762,15 @@ export class RemoteBackupService {
 		if (hasEnabledScripts(plan)) {
 			throw new AppError(400, 'Scripts are not available for remote filesystem backups.');
 		}
+		// The primary storage type decides the repository backend (S3_AGENT_REPOSITORY_DESIGN.md 6.1.1).
+		setPreparationStage?.('storage-lookup');
+		const storage = await this.storageStore.getById(plan.storageId as string);
+		const s3Primary = Boolean(storage && isAgentS3StorageType(storage.type));
+		if (s3Primary && hasReplicationSettings(plan)) {
+			setPreparationStage?.('repository-backend');
+			throw new AppError(400, AGENT_S3_REPLICATION_MESSAGE);
+		}
+		setPreparationStage?.('plan-shape');
 		if (plan.settings.replication?.enabled) {
 			if (!this.replicationService)
 				throw new AppError(503, 'Managed replication executor is not configured.');
@@ -796,10 +829,16 @@ export class RemoteBackupService {
 				);
 			}
 		}
+		if (s3Primary) {
+			setPreparationStage?.('repository-backend');
+			if (!agentSupportsS3Repository(sourceAgent.capabilities))
+				throw new AppError(409, AGENT_S3_UNSUPPORTED_MESSAGE);
+			await this.assertS3PrimaryEligible(plan, storage!, setPreparationStage);
+			return;
+		}
 		setPreparationStage?.('sftp-storage-lookup');
-		const storage = await this.storageStore.getById(plan.storageId as string);
 		if (!storage || storage.type !== 'sftp') {
-			throw new AppError(400, 'Remote filesystem backups currently require an SFTP destination.');
+			throw new AppError(400, 'Remote filesystem backups require an SFTP or S3 destination.');
 		}
 	}
 
@@ -829,6 +868,57 @@ export class RemoteBackupService {
 			throw new AppError(409, 'Remote agent does not yet support filesystem backup.');
 		}
 		return agent;
+	}
+
+	/**
+	 * docs/S3_AGENT_REPOSITORY_DESIGN.md 6.1.1: the replication-destination HCP rules, a
+	 * prefix inside the bucket, and no overlap with another plan's primary or replica
+	 * (disabled replicas still own their prefix). PlanStore re-checks registered replica
+	 * destinations inside its write transaction; the Agent refuses a non-empty prefix.
+	 */
+	private async assertS3PrimaryEligible(
+		plan: Plan | NewPlan,
+		storage: Pick<Storage, 'id' | 'type' | 'credentials' | 'settings'>,
+		setPreparationStage?: SetPreparationStage
+	): Promise<void> {
+		const credentials = decryptStorageCredentials(storage, this.encryptionSecret);
+		try {
+			agentS3RepositoryOptions(storage, credentials);
+		} catch (error) {
+			if (error instanceof AgentS3OptionError)
+				setPreparationStage?.('s3-storage-validation', {
+					rejectedField: error.field,
+					ruleCategory: error.rule,
+				});
+			throw error;
+		}
+		const identity = canonicalS3RepositoryIdentity(storage, plan.storagePath || '', credentials);
+		for (const other of (await this.planStore.getAll(false)) || []) {
+			if (other.id === plan.id) continue;
+			const references = [
+				{ storageId: other.storageId, storagePath: other.storagePath },
+				...(other.settings?.replication?.storages || []),
+			];
+			for (const reference of references) {
+				if (!reference.storageId) continue;
+				const candidate =
+					reference.storageId === storage.id
+						? storage
+						: await this.storageStore.getById(reference.storageId);
+				if (!candidate || !isS3Storage(candidate.type)) continue;
+				let scope: { authority: string; prefix: string };
+				try {
+					scope = s3RepositoryScope(
+						candidate,
+						reference.storagePath,
+						decryptStorageCredentials(candidate, this.encryptionSecret)
+					);
+				} catch {
+					throw new AppError(409, AGENT_S3_SCOPE_UNVERIFIED_MESSAGE);
+				}
+				if (agentS3ScopesOverlap(identity, scope)) throw new AppError(409, AGENT_S3_OVERLAP_MESSAGE);
+			}
+		}
 	}
 
 	private getSingleSource(sourceConfig: PlanSource): string {
