@@ -11,7 +11,7 @@ no deploy order. The probe needs neither Node nor the Pluton Agent.
 
 ## What the probe does
 
-1. **Rclone.** Uses `--rclone PATH` when given, otherwise the Agent's private Rclone at
+1. **Rclone.** Uses `--rclone PATH` (it must contain a `/`, for example `./rclone`) when given, otherwise the Agent's private Rclone at
    `/opt/pluton-agent/bin/rclone`, otherwise downloads the release the Agent installer pins
    (Rclone 1.75.1, `linux-amd64`, from `downloads.rclone.org`) into its temporary directory and
    checks the installer's SHA-256 before running it. It reports the version.
@@ -22,12 +22,13 @@ no deploy order. The probe needs neither Node nor the Pluton Agent.
    the system trust store, then with `S3_PROBE_CA_FILE` when set. Certificate checks are never
    switched off. Any HTTP status counts: only the handshake and the certificate are judged.
 4. **Auth.** Lists `<bucket>/<prefix>` with `rclone lsf --max-depth 1`, a read-only check of the key
-   pair before anything is written. A prefix that does not exist yet counts as `PASS` (Rclone exit
-   status 3). Without this step a refusal sent while the body is still uploading can look like a
+   pair before anything is written. A prefix that does not exist yet counts as `PASS`: Rclone 1.75.1
+   lists an empty or missing prefix with exit status 0, and status 3 (an HTTP 404 on the listing, in
+   practice a missing bucket) is accepted too. Without this step a refusal sent while the body is still uploading can look like a
    connection reset.
 5. **Write.** Uploads one random object of `S3_PROBE_SIZE_MIB` MiB (default 64) to
    `<bucket>/<prefix>/pluton-probe-<UTC time>-<random>` as a single PUT of known size
-   (`rclone rcat --size`), the way Restic hands a pack to Rclone. It reports MiB/s.
+   (`rclone rcat --size`; at most 192 MiB, below Rclone's 200 MiB multipart cutoff), the way Restic hands a pack to Rclone. It reports MiB/s.
 6. **Read.** Reads the object back in full (`rclone cat`) and reports MiB/s.
 7. **Compare.** Compares the size and SHA-256 of both copies.
 8. **Delete.** Deletes the object (`rclone deletefile`) and confirms it is no longer listed.
@@ -38,8 +39,9 @@ Rclone runs with the settings stage 1 uses for HCP: `provider = Other`, path-sty
 `RCLONE_CONFIG_PROBE_*` environment variables with `RCLONE_CONFIG=/dev/null`, with one low-level
 retry, a 30-second connect timeout, a 120-second I/O idle timeout and at most one hour per transfer.
 
-Child processes start from an empty environment, like the Agent's own children: no proxy variables
-and no inherited `RCLONE_*`, `SSL_*` or `CURL_*` settings. When `S3_PROBE_CA_FILE` is set, Rclone
+The S3 checks (DNS, TLS, Rclone) run in an empty environment, like the Agent's own children: no proxy
+variables and no inherited `RCLONE_*`, `SSL_*` or `CURL_*` settings. Only the optional Rclone download
+uses the operator's environment and proxy. When `S3_PROBE_CA_FILE` is set, Rclone
 gets it as `SSL_CERT_FILE`, which is how stage 1 passes `PLUTON_AGENT_STORAGE_CA_FILE`.
 
 **On the host** the probe creates one temporary directory (`mktemp`, mode 0700, under `TMPDIR` or
@@ -54,6 +56,11 @@ root. It deletes the object on success, after any failed check and after Ctrl-C,
 (for a lone `TERM` or `HUP` the cleanup starts after the running Rclone call returns). If the
 deletion fails, it prints the object key so you can remove it. The key pair therefore needs
 permission to list the prefix: both the `auth` check and the cleanup list it.
+
+The probe prints nothing during the write and the read: for 64 MiB at 0.5 MiB/s each takes about two
+minutes. After Ctrl-C the cleanup can take up to about two minutes (each cleanup call is limited to 60
+seconds); its Rclone calls run outside the terminal's process group, so a second Ctrl-C does not
+abort the deletion.
 
 `SIGKILL` cannot be caught, so no cleanup runs after it. After a `SIGKILL` (for example `kill -9` or
 the out-of-memory killer), list the prefix and delete any leftover `pluton-probe-` object by hand.
@@ -76,36 +83,37 @@ Ubuntu Server). `unzip` is needed only when Rclone has to be downloaded
 
    On the Agent host, `sha256sum ~/agent-s3-probe.sh` must print the same digest.
 
-2. In the shell on the Agent host, enter the values with `read`. `read` is a shell builtin, so what
-   you type is not stored in the shell history; `-s` hides the keys while you type:
+2. Enter the values and run the probe inside a `( ... )` subshell, so that later commands in your
+   shell do not inherit the keys. `read` is a shell builtin, so what you type is not stored in the
+   shell history; `-s` hides the keys while you type:
 
    ```sh
-   read -r -p 'S3 endpoint (https://...): ' S3_PROBE_ENDPOINT
-   read -r -p 'Bucket (HCP namespace): ' S3_PROBE_BUCKET
-   read -rs -p 'Access key ID: ' S3_PROBE_ACCESS_KEY_ID; echo
-   read -rs -p 'Secret access key: ' S3_PROBE_SECRET_ACCESS_KEY; echo
-   export S3_PROBE_ENDPOINT S3_PROBE_BUCKET S3_PROBE_ACCESS_KEY_ID S3_PROBE_SECRET_ACCESS_KEY
+   (
+     read -r -p 'S3 endpoint (https://...): ' S3_PROBE_ENDPOINT
+     read -r -p 'Bucket (HCP namespace): ' S3_PROBE_BUCKET
+     read -rs -p 'Access key ID: ' S3_PROBE_ACCESS_KEY_ID; echo
+     read -rs -p 'Secret access key: ' S3_PROBE_SECRET_ACCESS_KEY; echo
+     export S3_PROBE_ENDPOINT S3_PROBE_BUCKET S3_PROBE_ACCESS_KEY_ID S3_PROBE_SECRET_ACCESS_KEY
+     bash ~/agent-s3-probe.sh
+   )
    ```
 
-   Use the key pair of the shared HCP storage that stage 1 will use. Optional:
+   Use the same endpoint origin (the tenant host, path-style) and the same bucket (HCP namespace) and
+   key pair as the existing Pluton S3 storage that stage 1 will use. Optional, before `bash`:
    `export S3_PROBE_PREFIX=probe` (the default; an empty prefix is refused),
-   `export S3_PROBE_CA_FILE=/path/to/ca.pem` and `export S3_PROBE_SIZE_MIB=64` (1 to 1024).
+   `export S3_PROBE_CA_FILE=/path/to/ca.pem` and `export S3_PROBE_SIZE_MIB=64` (1 to 192).
 
-3. Run it:
+   Choose a prefix outside every Pluton export or replica prefix: HCP can leave an empty `probe/`
+   directory marker behind, and the export preflight blocks nested markers. On a namespace with
+   versioning or retention the delete leaves a noncurrent version or fails.
 
-   ```sh
-   bash ~/agent-s3-probe.sh
-   ```
+3. If `/tmp` is mounted `noexec` and Rclone has to be downloaded, give the probe a temporary
+   directory on an executable filesystem: `mkdir -m 700 ~/probe-tmp`, run the subshell above with
+   `export TMPDIR=~/probe-tmp` before `bash`, then `rmdir ~/probe-tmp`.
 
-   If `/tmp` is mounted `noexec` and Rclone has to be downloaded, give it a temporary directory on
-   an executable filesystem: `mkdir -m 700 ~/probe-tmp && TMPDIR=~/probe-tmp bash ~/agent-s3-probe.sh`,
-   then `rmdir ~/probe-tmp`.
-
-4. Remove the values from the shell, or close it:
-
-   ```sh
-   unset S3_PROBE_ENDPOINT S3_PROBE_BUCKET S3_PROBE_ACCESS_KEY_ID S3_PROBE_SECRET_ACCESS_KEY S3_PROBE_CA_FILE
-   ```
+4. The values were set only inside the subshell, so there is nothing to unset. If you exported them
+   in your own shell instead, remove them:
+   `unset S3_PROBE_ENDPOINT S3_PROBE_BUCKET S3_PROBE_ACCESS_KEY_ID S3_PROBE_SECRET_ACCESS_KEY S3_PROBE_CA_FILE`.
 
 5. Share the output. It contains no key, endpoint or bucket; only the prefix appears, in an
    `object_key` fact when a deletion failed.
@@ -143,7 +151,7 @@ so there is nothing to delete). After a failed `auth` the output is `FAIL auth`,
 | `dns` | `addresses`, `ipv4`, `ipv6`, `elapsed_ms` | `not-found` or `timeout`: the host's resolver cannot resolve the endpoint. A public resolver may not know an internal HCP name; use the site resolver. Fix this first |
 | `tls` | `system_trust` (`yes` or `no`) and `ca_file` (`not-set`, `yes` or `no`) | `certificate-not-trusted`: the issuer is unknown; rerun with `S3_PROBE_CA_FILE`. `hostname-mismatch`: the certificate does not name the endpoint host; a CA file does not help. `certificate-expired`, `certificate-not-yet-valid`, `certificate-rejected`: the certificate itself is wrong. `ca-file-unreadable`: curl could not load `S3_PROBE_CA_FILE`. `handshake`, `connection`, `timeout`, `dns`, `other`: the HTTPS connection failed before the certificate was judged |
 | `auth` | none (the line is just `PASS auth`) | The same reasons as `write` (`authentication`, `access-denied`, `tls`, `dns`, `connection`, `timeout`, `server-error`, `other`). `access-denied` here may also mean the key cannot list the prefix, which the probe needs. A bucket that does not exist still shows `PASS auth` and fails at `write` with `bucket-not-found` |
-| `write` | `bytes`, `elapsed_ms`, `mib_per_s` | `authentication`: wrong key pair. `access-denied`: the key may not write under this prefix. `bucket-not-found`: wrong bucket. `tls`: Rclone rejected a certificate that curl accepted (for example one without a subjectAltName); the Agent would fail the same way. `dns`, `connection`, `timeout`, `server-error`, `other`: transport or endpoint failure; rerun once, then escalate with the UTC time. `insufficient-temp-space`, `payload-failed`: the temporary directory is too small or not writable |
+| `write` | `bytes`, `elapsed_ms`, `mib_per_s` | `authentication`: wrong key pair. `access-denied`: the key may not write under this prefix. A `connection` reason right after `PASS auth` can also be a write-permission refusal (the 403-and-reset race the `auth` check works around). `bucket-not-found`: wrong bucket. `tls`: Rclone rejected a certificate that curl accepted (for example one without a subjectAltName); the Agent would fail the same way. `dns`, `connection`, `timeout`, `server-error`, `other`: transport or endpoint failure; rerun once, then escalate with the UTC time. `insufficient-temp-space`, `payload-failed`: the temporary directory is too small or not writable |
 | `read` | `bytes`, `elapsed_ms`, `mib_per_s` | Same reasons as `write` |
 | `compare` | `sha256=match` | `size-mismatch` or `sha256-mismatch`: the endpoint returned different bytes. Stop and escalate; stage 1 must not start |
 | `delete` | `object=removed`, or `object=absent` when it was already gone | Any reason above, `listing-failed` (the check listing failed) or `still-listed`, with `object_key`: delete that one object by hand. A key without delete permission cannot be used, because Restic deletes its lock files |
@@ -180,18 +188,19 @@ Docker network, a throwaway private CA and an HTTPS `rclone serve s3` fixture at
 `s3.example.internal:9443` with the synthetic key pair `SYNTHETICKEY01`. The probe runs as UID 1000
 on a read-only root filesystem, in most scenarios with `--rclone` pointing at the fixture's Rclone.
 
-Scenarios (16): seven refused inputs (empty prefix, `/` prefix, `..` segment, `http://` endpoint,
-endpoint with a path, size 2048, missing secret), TLS without the CA file, a host name the
+Scenarios (19): nine refused inputs (empty prefix, `/` prefix, `..` segment, `http://` endpoint,
+endpoint with a path, size 2048, size 193, `--rclone` with a bare name, missing secret), TLS without the CA file, a host name the
 certificate does not name, an unknown host, success with the default 64 MiB, a wrong secret key,
 a failed read after a successful write, Ctrl-C during the read (the test double sends `SIGINT` to
-the probe's process group), the Agent's private Rclone found at `/opt/pluton-agent/bin/rclone`, and
+the probe's process group), a second Ctrl-C during the cleanup delete (a second test double signals the
+probe's process group; the object must still be removed), the Agent's private Rclone found at `/opt/pluton-agent/bin/rclone`, and
 the pinned download failing closed without Internet access. `--with-download` replaces the last one
 with a real download and checksum check of the pinned release.
 
 Every scenario also checks that each output line is a closed fact; that no key, endpoint host name,
-bucket or provider error text appears in stdout or stderr; that Rclone never received a key as an
+bucket or provider error text appears in stdout or stderr; that, in the scenarios that use the recording test doubles, Rclone never received a key as an
 argument; that the probe's temporary directory is gone; and that the bucket holds no object
-afterwards. Expected last line: `PASS agent-s3-probe lab: 16/16 scenarios`.
+afterwards. Expected last line: `PASS agent-s3-probe lab: 19/19 scenarios`.
 `--base-image ubuntu:24.04` runs the same scenarios on Ubuntu 24.04. `--static-only` runs only the
 checks that need no Docker (line endings, no disabled TLS verification in curl calls, the Rclone pin
 matching the lab image, and every `reason` documented here). The lab is run manually; CI does not run
@@ -199,8 +208,11 @@ it.
 
 ## Limitations
 
-- One object, one stream, one run: no concurrency, no multipart upload (64 MiB is below Rclone's
-  200 MiB upload cutoff) and no long-run stability.
+- One object, one stream, one run: no concurrency, no multipart upload (`S3_PROBE_SIZE_MIB` is capped
+  at 192, below Rclone's 200 MiB upload cutoff, so an interrupted run cannot leave an invisible
+  multipart upload) and no long-run stability.
+- Range reads are not exercised. Restic reads packs with Range requests, and the earlier HCP gzip
+  defect affected Range responses only; the probe reads the whole object with one plain GET.
 - The probe sets no region; Rclone then signs requests for `us-east-1`.
 - The TLS check uses curl (OpenSSL) and Rclone uses Go. A difference shows as `write` with
   `reason=tls`.
