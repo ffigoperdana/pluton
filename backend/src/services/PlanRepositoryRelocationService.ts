@@ -82,7 +82,12 @@ export class PlanRepositoryRelocationService {
 		const relocations = await Promise.all(
 			this.store.listForPlan(planId).map(relocation => this.view(relocation))
 		);
-		const supported = RemoteBackupService.isRemoteFilesystemPlan(plan) && plan.method === 'backup';
+		// start() copies SFTP to SFTP only, so an S3 primary is not offered (design section 3).
+		const primary = plan.storageId ? await this.storages.getById(plan.storageId) : undefined;
+		const supported =
+			RemoteBackupService.isRemoteFilesystemPlan(plan) &&
+			plan.method === 'backup' &&
+			(!primary || primary.type === 'sftp');
 		return {
 			supported,
 			canStart: supported && !this.store.activeForPlan(planId),
@@ -116,6 +121,11 @@ export class PlanRepositoryRelocationService {
 				409,
 				'The plan repository is not initialized or its binding changed. Run one successful backup first.'
 			);
+		// Relocation copies SFTP to SFTP. Switching an S3 primary is stage 4
+		// (docs/S3_AGENT_REPOSITORY_DESIGN.md section 3).
+		const sourceStorage = await this.storages.getById(repository.storageId);
+		if (!sourceStorage || sourceStorage.type !== 'sftp')
+			throw new AppError(400, 'Move Repository supports only SFTP primary repositories.');
 		const storagePath = validateRelocationPath(input.storagePath);
 		const destination = await this.storages.getById(input.storageId);
 		if (!destination || destination.type !== 'sftp')

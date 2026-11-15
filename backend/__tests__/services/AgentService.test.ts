@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import Cryptr from 'cryptr';
 import { AgentService } from '../../src/services/AgentService';
 import { AgentStore } from '../../src/stores/AgentStore';
-import { signAgentRequest } from '../../src/utils/agentProtocol';
+import { signAgentCommand, signAgentRequest } from '../../src/utils/agentProtocol';
 import { configService } from '../../src/services/ConfigService';
 import { serverLogger } from '../../src/utils/logger';
 import { RemoteCommandPreparationError } from '../../src/services/remoteCommandPreparation';
@@ -241,7 +241,8 @@ describe('AgentService', () => {
 		const result = await service.poll({ agentId: agent.agentId, deviceId: agent.deviceId, secret });
 		expect(remoteBackupService.materializeCommand).toHaveBeenCalledWith(
 			agent.agentId,
-			expect.objectContaining({ id: 'command-backup-01', payload: persistedPayload })
+			expect.objectContaining({ id: 'command-backup-01', payload: persistedPayload }),
+			{ agentSecret: secret, leaseToken: result.command?.leaseToken }
 		);
 		expect(result.command?.payload).toMatchObject({
 			repositoryPassword: 'test-only-repository-secret',
@@ -845,5 +846,110 @@ describe('AgentService', () => {
 		} finally {
 			warn.mockRestore();
 		}
+	});
+	it('accepts the S3 repository capability fields of section 10.1 and refuses any other shape', async () => {
+		const s3Capable = {
+			...inventory,
+			agentVersion: '0.8.0',
+			capabilities: {
+				...inventory.capabilities,
+				repositoryBackends: ['sftp', 's3'],
+				backupPayloadVersion: 5,
+			},
+		};
+		await service.heartbeat(agent.agentId, s3Capable);
+		expect(store.updateHeartbeat).toHaveBeenCalledWith(agent.agentId, s3Capable);
+		const sftpOnly = {
+			...inventory,
+			capabilities: { ...inventory.capabilities, repositoryBackends: ['sftp'] },
+		};
+		await service.heartbeat(agent.agentId, sftpOnly);
+		expect(store.updateHeartbeat).toHaveBeenLastCalledWith(agent.agentId, sftpOnly);
+		for (const capabilities of [
+			{ repositoryBackends: ['s3'] },
+			{ repositoryBackends: [] },
+			{ repositoryBackends: ['sftp', 'sftp'] },
+			{ repositoryBackends: ['sftp', 's3', 's3'] },
+			{ repositoryBackends: ['sftp', 'ftp'] },
+			{ backupPayloadVersion: 4 },
+			{ backupPayloadVersion: 6 },
+			{ backupPayloadVersion: '5' },
+		]) {
+			await expect(
+				service.heartbeat(agent.agentId, {
+					...inventory,
+					capabilities: { ...inventory.capabilities, ...capabilities },
+				})
+			).rejects.toThrow('Agent inventory is invalid.');
+		}
+	});
+	it('seals with the per-Agent secret and this lease, and signs the payload that contains sealed', async () => {
+		const sealedPayload = {
+			version: 5,
+			backupId: 'backup-05',
+			planId: 'plan-05',
+			sourcePath: '/srv/example-app',
+			excludes: [],
+			repository: { remoteName: 'pluton', path: 'bucket-01/agents/app-01', initialize: true },
+			rclone: {
+				type: 's3',
+				options: {
+					provider: 'Other',
+					endpoint: 'https://s3.example.internal',
+					force_path_style: 'true',
+					use_accept_encoding_gzip: 'false',
+					no_check_bucket: 'true',
+				},
+			},
+			sealed: {
+				alg: 'A256GCM',
+				kid: 'pluton-agent-command-secrets-v1',
+				nonce: 'AAECAwQFBgcICQoL',
+				ciphertext: 'c3ludGhldGljLWNpcGhlcnRleHQ=',
+				tag: 'pUKJ+stiEzlyVi8BFN6biQ==',
+			},
+		};
+		const remoteBackupService = {
+			materializeCommand: jest.fn().mockResolvedValue(sealedPayload),
+			completeCommand: jest.fn(),
+		};
+		service = new AgentService(
+			store,
+			'agent-service-test-secret-that-is-long-enough',
+			() => now,
+			remoteBackupService as any
+		);
+		store.leaseNext.mockImplementation(
+			async (_agentId, leaseToken) =>
+				({
+					id: 'command-backup-05',
+					type: 'BACKUP_FILESYSTEM',
+					payload: { backupId: 'backup-05', planId: 'plan-05', repositoryId: 'repo-05' },
+					idempotencyKey: 'idem-backup-05',
+					leaseOwner: leaseToken,
+					leaseExpiresAt: new Date(now.getTime() + 60_000),
+					lastEventSequence: 0,
+				}) as any
+		);
+		const result = await service.poll({ agentId: agent.agentId, deviceId: agent.deviceId, secret });
+		const delivered = result.command!;
+		expect(remoteBackupService.materializeCommand).toHaveBeenCalledWith(
+			agent.agentId,
+			expect.objectContaining({ id: 'command-backup-05' }),
+			{ agentSecret: secret, leaseToken: delivered.leaseToken }
+		);
+		expect(delivered.payload).toEqual(sealedPayload);
+		expect(delivered.signature).toBe(
+			signAgentCommand(secret, delivered.signatureTimestamp, delivered, delivered.leaseToken)
+		);
+		const { sealed: _sealed, ...unsealed } = sealedPayload;
+		expect(
+			signAgentCommand(
+				secret,
+				delivered.signatureTimestamp,
+				{ ...delivered, payload: unsealed },
+				delivered.leaseToken
+			)
+		).not.toBe(delivered.signature);
 	});
 });

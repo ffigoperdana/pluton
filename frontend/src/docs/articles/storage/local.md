@@ -2,7 +2,7 @@
 
 Storage **Local** menyimpan backup pada filesystem yang dilihat proses Pluton. Pilihan ini cocok untuk latihan atau disk tujuan yang memang dipasang pada host Pluton. Jika Pluton berada di container, path yang Anda pilih adalah path di dalam container; folder pada host perlu dipasang terlebih dahulu.
 
-Untuk source pada Managed Agent, gunakan [SFTP primer](/docs/storage/sftp). Disk pada VM Pluton dapat melayani repository agent melalui SFTP yang disiapkan operator, tetapi memilih **Local** pada form bukan pengganti layanan SFTP itu.
+Untuk source pada Managed Agent, gunakan [SFTP primer](/docs/storage/sftp), atau S3 primer bila Agent 0.8.0 melaporkan dukungan S3. Disk pada VM Pluton dapat melayani repository agent melalui SFTP yang disiapkan operator, tetapi memilih **Local** pada form bukan pengganti layanan SFTP itu.
 
 ## Sebelum mulai
 

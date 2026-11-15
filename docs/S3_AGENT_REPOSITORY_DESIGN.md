@@ -172,6 +172,11 @@ not a measurement of an Agent host.
     another command;
   - the HMAC signature still covers the whole payload, including the sealed blob.
   SFTP secrets are sealed the same way for Agents that accept version 5.
+- **Enrollment limitation.** Sealing is only as confidential as the enrollment exchange: the per-Agent
+  secret (the HKDF input) is returned in plain form in the enrollment response, and production may
+  allow Agent HTTP on the LAN (`ALLOW_INSECURE_AGENT_HTTP`). A passive observer of an enrollment over
+  HTTP can derive the sealing key. Agents that will use an S3 primary should be enrolled over HTTPS;
+  otherwise the residual risk is accepted. No code change in stage 1.
 - **Exposure on the host.** The S3 key exists only in the Agent process memory and the temporary
   0600 configuration during one backup, as the SFTP password does today. It is never logged; the
   server never stores the materialised payload.
@@ -302,8 +307,16 @@ version 4.
 ### 10.3 Sealing
 
 - Plaintext: UTF-8 JSON `{"repositoryPassword": string, "rclone": {"pass"?: string,
-  "access_key_id"?: string, "secret_access_key"?: string}}`. SFTP carries `pass`; S3 carries both
-  keys.
+  "access_key_id"?: string, "secret_access_key"?: string}, "lifecycle"?: {"database"?: string,
+  "databases"?: {"<databaseId>": string}}}`. SFTP carries `pass`; S3 carries both keys.
+- Database passwords (decision of 15 November 2026): in version 5 the plain `lifecycle` carries no
+  `password` field in any database entry. The password of `lifecycle.database` (lifecycle shape
+  version 1) is sealed as `lifecycle.database`; the password of each `lifecycle.databases[]` entry is
+  sealed under its `databaseId` in `lifecycle.databases`. The sealed `lifecycle` key is present only
+  when the payload has a lifecycle with at least one database. The Agent restores each password into
+  its entry before use. A version 5 payload is refused when a plain database entry carries
+  `password`, when a database has no sealed password, or when a sealed password has no matching
+  database.
 - Key: `HKDF-SHA256(ikm = UTF-8 bytes of the per-Agent secret, salt = empty, info =
   "pluton-agent-command-secrets-v1", length = 32)`.
 - Cipher: AES-256-GCM, random 12-byte nonce per command, 16-byte tag.
@@ -319,7 +332,7 @@ version 4.
 | leaseToken | `0123456789abcdef0123456789abcdef0123456789abcdef` |
 | derived key (hex) | `1f35dc3e9cf013165a2353883369bbfa7edd62b56072b3413c8074e2ffb93fac` |
 | nonce (base64) | `AAECAwQFBgcICQoL` |
-| plaintext | `{"repositoryPassword":"synthetic-repository-password-01","rclone":{"access_key_id":"SYNTHETICKEY01","secret_access_key":"synthetic-secret-key-01"}}` |
+| plaintext | `{"repositoryPassword":"synthetic-repository-password-01","rclone":{"access_key_id":"SYNTHETICKEY01","secret_access_key":"synthetic-secret-key-01"}}` (no lifecycle; a plaintext with `lifecycle` is sealed and opened the same way) |
 | ciphertext (base64) | `jh0qetVE17GJz08s3DXhomumBqDIVOhzX3A4LgVFJeiH9JSKr4qR7OowvN0duifn639ReyzbjXGWiSEWAaymlLJKNnxwbrP+vLmuRdk9vI+wuUG8cJhENnxGV0LXHElNyPLQME0jaSjTfM7T0n9LTBr7V76enQuphACHq53aFDwiyFLa5p/2ML2748FcdivP43U+` |
 | tag (base64) | `pUKJ+stiEzlyVi8BFN6biQ==` |
 

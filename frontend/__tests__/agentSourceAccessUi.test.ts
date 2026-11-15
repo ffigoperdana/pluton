@@ -67,17 +67,17 @@ async function component(relative: string) {
             export const useRevokeAgentEnrollment=()=>({isPending:false,mutateAsync:async()=>{}});
          `,
                );
-               load(/[\\/]services[\\/]storage\.ts$/, 'export const useGetStorages=()=>({data:{result:[]}});');
+               load(/[\\/]services[\\/]storage\.ts$/, 'export const useGetStorages=()=>({data:{result:globalThis.__sourceAccessUi.storages||[]}});');
                // Source Access tests do not contact the schedule-preview API.
                // Its real query/editor integration is covered by planScheduleUi.test.ts.
                load(/[\\/]services[\\/]plans\.ts$/, 'export const useSchedulePreview=()=>({isPending:true});');
                load(/[\\/]services[\\/]settings\.ts$/, 'export const useGetSettings=()=>({data:{result:{settings:{}}}});');
                load(/[\\/]utils[\\/]plans\.ts$/, 'export const isPlanSettingsValid=()=>true;');
                load(/[\\/]PlanAdvancedSettings\.tsx$/, 'export default ()=>null;');
-               load(/[\\/]PlanReplicationSettings\.tsx$/, 'export default ()=>null;');
+               load(/[\\/]PlanReplicationSettings\.tsx$/, `import React from 'react';export default p=>React.createElement('div',{'data-replication-settings':'','data-unavailable':p.unavailableReason||''});`);
                load(/[\\/]PlanPruneSettings\.tsx$/, 'export default ()=>null;');
                load(/[\\/]PathPicker\.tsx$/, 'export default ()=>null;');
-               load(/[\\/]StoragePicker\.tsx$/, 'export default ()=>null;');
+               load(/[\\/]StoragePicker\.tsx$/, `import React from 'react';export default p=>React.createElement('div',{'data-storage-picker':'','data-allowed':(p.allowedStorageTypes||[]).join(',')});`);
                load(/[\\/]IntervalField\.tsx$/, 'export default ()=>null;');
             },
          },
@@ -1148,5 +1148,46 @@ test('Server-Managed enrollment is an explicit reviewed intent; installer stays 
       assert.match(ui.text(), /future readable directories inside the scope can be validated and applied entirely in Pluton/);
    } finally {
       await ui.cleanup();
+   }
+});
+
+test('remote destination offers S3 only when the Agent reports it, explains why otherwise, and gates replication', async () => {
+   const props = { type: 'add', title: 'Add plan', planSettings: formPlan(), onSubmit() {}, isSubmitting: false, close() {} };
+   const legacy = await fixture(ControlledForm, props);
+   try {
+      await act(async () => legacy.button('Next: Configure Source')!.click());
+      assert.equal(legacy.dom.window.document.querySelector('[data-storage-picker]')!.getAttribute('data-allowed'), 'sftp');
+      assert.match(legacy.text(), /S3 storages are not offered for this machine/);
+      assert.match(legacy.text(), /SFTP or S3 primary repository/);
+      assert.equal(legacy.dom.window.document.querySelector('[data-replication-settings]')!.getAttribute('data-unavailable'), '');
+   } finally {
+      await legacy.cleanup();
+   }
+   const device = {
+      id: 'device-01',
+      name: 'app-01',
+      isRemote: true,
+      agent: {
+         status: 'online',
+         resticVersion: '0.19.1',
+         rcloneVersion: '1.75.1',
+         capabilities: {
+            filesystemRootsConfigured: true,
+            commandTypes: ['BACKUP_FILESYSTEM'],
+            sourceAccessVersion: 1,
+            repositoryBackends: ['sftp', 's3'],
+            backupPayloadVersion: 5,
+         },
+      },
+   };
+   const capable = await fixture(ControlledForm, props, { devices: [device], storages: [{ id: 'storage-01', name: 'Primary', type: 's3compatible' }] });
+   try {
+      await act(async () => capable.button('Next: Configure Source')!.click());
+      assert.equal(capable.dom.window.document.querySelector('[data-storage-picker]')!.getAttribute('data-allowed'), 'sftp,s3,s3compatible');
+      assert.doesNotMatch(capable.text(), /S3 storages are not offered/);
+      assert.match(capable.text(), /The Agent writes this plan directly to S3/);
+      assert.match(capable.dom.window.document.querySelector('[data-replication-settings]')!.getAttribute('data-unavailable')!, /S3-to-SFTP replication is the next stage/);
+   } finally {
+      await capable.cleanup();
    }
 });

@@ -14,15 +14,19 @@ export type RemoteCommandPreparationStage =
 	| 'source-validation'
 	| 'repository-path'
 	| 'agent-capability'
+	| 'storage-lookup'
+	| 'repository-backend'
 	| 'sftp-storage-lookup'
 	| 'sftp-credential-decryption'
 	| 'sftp-setting-allowlist'
 	| 'sftp-option-validation'
 	| 'sftp-required-credentials'
+	| 's3-storage-validation'
 	| 'repository-secret-decryption'
 	| 'lifecycle-configuration'
 	| 'database-credential-preparation'
 	| 'payload'
+	| 'payload-sealing'
 	| 'materializer-unavailable'
 	| 'unexpected';
 
@@ -34,7 +38,8 @@ export type RemoteCommandPreparationStage =
 export type RemoteCommandPreparationRuleCategory =
 	| 'unsupported-field'
 	| 'unsafe-control-character'
-	| 'value-too-long';
+	| 'value-too-long'
+	| 'unsupported-value';
 
 export type RemoteCommandPreparationFailure = {
 	stage: RemoteCommandPreparationStage;
@@ -57,16 +62,21 @@ function preparationFailureMessage(stage: RemoteCommandPreparationStage): string
 		'source-validation': 'The remote backup source configuration is no longer valid.',
 		'repository-path': 'The managed remote repository path is no longer valid.',
 		'agent-capability': 'The remote agent no longer supports filesystem backup.',
+		'storage-lookup': 'The remote backup destination could not be loaded.',
+		'repository-backend':
+			'The remote backup destination is not available to this agent or overlaps another repository.',
 		'sftp-storage-lookup': 'The remote SFTP destination could not be loaded.',
 		'sftp-credential-decryption': 'Remote SFTP credentials could not be decrypted or validated.',
 		'sftp-setting-allowlist': 'Remote SFTP settings are not supported for filesystem backup.',
 		'sftp-option-validation': 'Remote SFTP configuration contains an unsafe value.',
 		'sftp-required-credentials':
 			'Remote filesystem backups require SFTP host, username, and password credentials.',
+		's3-storage-validation': 'Remote S3 settings are not supported for filesystem backup.',
 		'repository-secret-decryption': 'The managed remote repository secret could not be decrypted.',
 		'lifecycle-configuration': 'The remote backup lifecycle configuration is not supported.',
 		'database-credential-preparation': 'Database backup credentials could not be prepared.',
 		'payload': 'The remote backup command payload could not be prepared.',
+		'payload-sealing': 'Remote backup secrets could not be sealed for the agent.',
 		'materializer-unavailable': 'The remote backup materializer is unavailable.',
 		'unexpected': 'An unexpected remote command preparation error occurred.',
 	};
@@ -108,6 +118,7 @@ export class RemoteCommandPreparationError extends Error {
 			'unsupported-field',
 			'unsafe-control-character',
 			'value-too-long',
+			'unsupported-value',
 		];
 		if (failure.ruleCategory && ruleCategories.includes(failure.ruleCategory)) {
 			this.ruleCategory = failure.ruleCategory;

@@ -151,7 +151,7 @@ export function recoveryStatus(job: AssistedRecoveryJob) {
    if (job.status === 'failed' && job.diagnostic?.timeoutCategory === 'archive-output-idle')
       return 'Archive stream stalled. Recovery stopped after the inactivity limit.';
    return job.status === 'primary-ready'
-      ? 'Primary SFTP is available. Continue the normal restore flow.'
+      ? 'The primary repository is available. Continue the normal restore flow.'
       : job.status === 'cancelled'
         ? 'Recovery cancelled.'
         : 'Recovery stopped safely. Review the diagnostic before retrying.';

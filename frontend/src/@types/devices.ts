@@ -54,6 +54,8 @@ export interface AgentInfo {
       sourceAccessVersion?: 1;
       sourceAccessModesVersion?: 1;
       commandTypes?: string[];
+      repositoryBackends?: ('sftp' | 's3')[];
+      backupPayloadVersion?: 5;
    };
    lastSeen: string | null;
    createdAt: string;

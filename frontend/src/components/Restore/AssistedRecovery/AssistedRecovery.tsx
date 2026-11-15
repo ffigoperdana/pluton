@@ -254,7 +254,7 @@ export default function AssistedRecovery({
          {awaitingStart && (
             <div className={classes.manual}>
                <p className={classes.note}>
-                  This plan uses Automatic Failover. Pluton checks the primary SFTP first and opens the normal restore when it is available. If
+                  This plan uses Automatic Failover. Pluton checks the primary repository first and opens the normal restore when it is available. If
                   the primary is unreachable, Pluton continues automatically with the first S3 replica that passes identity and integrity checks,
                   restoring only into isolated staging. No database is imported and no live target is overwritten.
                </p>

@@ -6,6 +6,7 @@ import { AssistedRecoveryStore } from '../../src/stores/AssistedRecoveryStore';
 import { AssistedRecoveryService } from '../../src/services/AssistedRecoveryService';
 import { RemoteRepositoryRecoveryService } from '../../src/services/RemoteRepositoryRecoveryService';
 import { configService } from '../../src/services/ConfigService';
+import { RemoteBackupService } from '../../src/services/RemoteBackupService';
 /** Real Restic SFTP -> SigV4 HTTPS S3 copy and read-only staged restore.
  * No external endpoints or credentials; both servers are loopback in network-none Docker. */
 import assert from 'node:assert/strict';
@@ -302,6 +303,96 @@ try {
 		'Recovery must not write lock files or mutate replica'
 	);
 	console.log('PASS replica contents unchanged after preflight and all restores');
+	// docs/S3_AGENT_REPOSITORY_DESIGN.md 6.1.3 and 6.6: the same HTTPS S3 repository, bound
+	// as an Agent plan's primary. SFTP is already stopped, so every read must use S3.
+	console.log('CHECK S3 primary read path');
+	const sqlArtifact = {
+		databaseId: 'db_example',
+		engine: 'mysql' as const,
+		database: 'example',
+		path: '/pluton/database/example.sql',
+		bytes: Buffer.byteLength(sql),
+		sha256: crypto.createHash('sha256').update(sql).digest('hex'),
+	};
+	const s3PrimaryBackup = {
+		...f.backup,
+		storageId: f.storage.id,
+		storagePath: f.replica.storagePath,
+		completionStats: {
+			...f.backup.completionStats,
+			snapshot_id: copied.snapshotId,
+			lifecycle: { warnings: [], databases: [sqlArtifact] },
+		},
+	};
+	const s3PrimaryPlan = {
+		...f.plan,
+		storageId: f.storage.id,
+		storagePath: f.replica.storagePath,
+		settings: { replication: { enabled: false, concurrent: false, storages: [] } },
+	};
+	const s3PrimaryRepository = {
+		...f.repository,
+		storageId: f.storage.id,
+		storagePath: f.replica.storagePath,
+	};
+	// The production read-option method, without constructing scheduler side effects.
+	const s3Remote = Object.assign(Object.create(RemoteBackupService.prototype), {
+		storageStore: { getById: async (id: string) => (id === f.storage.id ? f.storage : null) },
+		encryptionSecret: configService.config.SECRET,
+	}) as RemoteBackupService;
+	await fs.mkdir(path.join(root, 's3-primary'));
+	const s3PrimarySignal = AbortSignal.timeout(120_000);
+	const s3PrimaryRecovery = new RemoteRepositoryRecoveryService(
+		{ getByPlanId: async () => s3PrimaryRepository } as any,
+		{ getById: async () => s3PrimaryBackup } as any,
+		{ getById: async () => s3PrimaryPlan } as any,
+		{} as any,
+		s3Remote,
+		f.stores.agents as any,
+		undefined,
+		configService.config.SECRET,
+		path.join(root, 's3-primary', 'stage')
+	);
+	try {
+		const listing = await s3PrimaryRecovery.browse('backup-01');
+		assert(listing.some(file => file.path === path.join(source, 'file.txt')));
+		assert(listing.some(file => file.path === '/pluton/database/example.sql'));
+		const binding = await s3PrimaryRecovery.testBinding('backup-01', 'plan-01');
+		assert.equal(binding.snapshotId, copied.snapshotId);
+		const metadata = await s3PrimaryRecovery.testMetadata('backup-01', 'plan-01', copied.snapshotId);
+		assert.deepEqual(
+			metadata.databases.map(entry => entry.path),
+			['/pluton/database/example.sql']
+		);
+		const restored = await fs.mkdtemp(path.join(root, 's3-primary-restore-'));
+		const result = await s3PrimaryRecovery.testRestore(
+			binding,
+			restored,
+			s3PrimarySignal,
+			() => {},
+			async () => {}
+		);
+		assert.equal(result.sourceTrees, 1);
+		assert.deepEqual(await hashTree(path.join(restored, source.slice(1))), await hashTree(source));
+		const artifactTarget = await fs.mkdtemp(path.join(root, 's3-primary-sql-'));
+		const entry = await s3PrimaryRecovery.databaseRestoreArtifact(
+			{ ...binding, databaseId: sqlArtifact.databaseId, sha256: sqlArtifact.sha256 },
+			artifactTarget,
+			s3PrimarySignal,
+			async () => {}
+		);
+		assert.equal(entry.path, sqlArtifact.path);
+		assert.equal(
+			await fs.readFile(path.join(artifactTarget, 'pluton/database/example.sql'), 'utf8'),
+			sql
+		);
+	} finally {
+		await s3PrimaryRecovery.close();
+	}
+	assert.deepEqual(await hashTree(s3root), before, 'S3 primary reads must not mutate the repository');
+	console.log(
+		'PASS S3 primary: browse, staged restore and SQL artifact read through the routed S3 session with SFTP stopped'
+	);
 	const abortedRead = new AbortController();
 	const sessionRoot = await fs.mkdtemp(path.join(root, 'cancelled-session-'));
 	const blocked = new Writable({

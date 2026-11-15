@@ -7,7 +7,7 @@ Pluton menghubungkan sumber data, tempat penyimpanan backup, dan alat verifikasi
 | Komponen | Pekerjaan | Yang perlu disiapkan operator |
 | --- | --- | --- |
 | Pluton Server dan Web UI | Menyimpan konfigurasi, menjadwalkan pekerjaan, menampilkan hasil | Volume data persisten, origin HTTPS, akses administrator |
-| Agent | Membaca file dan menjalankan backup pada mesin sumber yang dikelola | Identitas Agent, direktori yang diizinkan, akses SFTP primer |
+| Agent | Membaca file dan menjalankan backup pada mesin sumber yang dikelola | Identitas Agent, direktori yang diizinkan, akses repository primer (SFTP atau S3) |
 | Primary Storage | Menyimpan repository utama dan snapshot | Ruang, kredensial, prefix yang tidak berbagi dengan plan lain |
 | Replication Destination | Menyimpan salinan tambahan sesuai jenis plan | Kredensial dan kapasitas tujuan yang terpisah |
 | Target recovery dan host operator | Menyiapkan lingkungan database yang diizinkan | Setup operator, resource, TLS, dan aturan kepemilikan |
@@ -16,7 +16,7 @@ Server, Agent, worker MySQL, dan host operator mempunyai peran berbeda. Memperba
 
 ## Contoh penempatan
 
-Contoh fiktif: Agent pada `app-01` membaca `/srv/example-app`, lalu menulis ke repository SFTP primer. Server dapat menyalin snapshot selesai ke S3 jika replikasi dikonfigurasi. Browse dan staged Restore Managed Agent membaca primer melalui server; hasil Restore berada pada staging privat server, bukan langsung menimpa aplikasi di `app-01`.
+Contoh fiktif: Agent pada `app-01` membaca `/srv/example-app`, lalu menulis ke repository primer SFTP (atau S3 untuk Agent 0.8.0). Untuk primer SFTP, server dapat menyalin snapshot selesai ke S3 jika replikasi dikonfigurasi. Browse dan staged Restore Managed Agent membaca primer melalui server; hasil Restore berada pada staging privat server, bukan langsung menimpa aplikasi di `app-01`.
 
 ```text
 Sumber aplikasi → Agent → Primary Storage

@@ -89,7 +89,7 @@ port protokol Agent. Database client dan izin DB tidak dipasang oleh installer.
 
 Di **Sources → + Add Remote Machine**, buat token sekali pakai melalui sesi
 administrator privat. Pilih roots yang sempit, tinjau mode otorisasi, lalu ikuti
-**Copy installation commands** dari konfigurasi distribusi standalone yang telah direview. Operator server harus menetapkan repository HTTPS, full commit SHA dan versi 0.7.0 atau 0.7.1 yang cocok dengan commit itu terlebih dahulu; lihat [enrollment](/docs/remote-agent/enrollment). Blok lengkap memverifikasi clone/pin/versi sebelum sudo. Bagian installer non-secret di checkout standalone tersebut:
+**Copy installation commands** dari konfigurasi distribusi standalone yang telah direview. Operator server harus menetapkan repository HTTPS, full commit SHA dan versi 0.7.0, 0.7.1 atau 0.8.0 yang cocok dengan commit itu terlebih dahulu; lihat [enrollment](/docs/remote-agent/enrollment). Blok lengkap memverifikasi clone/pin/versi sebelum sudo. Bagian installer non-secret di checkout standalone tersebut:
 
 ```sh
 sudo bash install-agent.sh \
@@ -154,7 +154,7 @@ adalah referensi izin, one-time command dan audit.
 
 ## 5. Register primary storage dan pastikan isolasinya
 
-Managed Agent backup memakai **SFTP primary**, bukan Local/S3 langsung. Standard
+Managed Agent backup memakai **SFTP primary** (atau S3 primary untuk Agent 0.8.0 yang melaporkan dukungan S3; lihat [S3 sebagai repository primer](/docs/backup-plans/managed-agent)), bukan Local. Panduan ini memakai SFTP. Standard
 server filesystem backup mendukung provider lain sesuai [storage](/docs/storage).
 Siapkan akun backup khusus, kapasitas/kuota, folder baru/empty dedicated, dan
 akses dari **Agent serta server**. Tidak perlu shell admin untuk akun tersebut.
@@ -281,7 +281,7 @@ maintenance repository hanya melalui kontrak managed/Standard yang sesuai.
 Managed replication berjalan **di server**, globally sequential, sesudah primary
 completed dan snapshot/artefaknya diverifikasi. Maksimum dua tujuan S3/S3-compatible,
 prefix khusus tanpa overlap. Non-AWS/S3-compatible wajib protected pre-existing
-namespace mode. Agent tidak mendapat S3 key. Windows tidak mendukung executor ini.
+namespace mode. Kunci replika tidak pernah dikirim ke Agent; Agent hanya menerima kunci S3 milik plan yang primernya S3, dalam bentuk tersegel. Windows tidak mendukung executor ini.
 
 Contoh logical, bukan path fisik otomatis:
 

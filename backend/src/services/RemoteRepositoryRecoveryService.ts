@@ -40,9 +40,9 @@ import {
 	ManagedRepositorySession,
 	ManagedRepositorySessionProvider,
 	ManagedSftpAccess,
-	ManagedSftpRepositorySession,
 	type ManagedSnapshotNode,
 } from '../utils/restic/ManagedSftpRepositorySession';
+import { ManagedRepositorySessionRouter } from '../utils/restic/ManagedRepositorySessionRouter';
 import { configService } from './ConfigService';
 import {
 	bindingDigest,
@@ -120,9 +120,12 @@ export class RemoteRepositoryRecoveryService {
 		private readonly backups: BackupStore,
 		private readonly plans: PlanStore,
 		private readonly restores: RestoreStore,
-		private readonly remoteBackups: Pick<RemoteBackupService, 'getSftpRecoveryOptions'>,
+		// getRepositoryAccessOptions chooses SFTP or S3 by the repository's storage type.
+		// Callers that only provide the SFTP lookup keep the SFTP-only behaviour.
+		private readonly remoteBackups: Pick<RemoteBackupService, 'getSftpRecoveryOptions'> &
+			Partial<Pick<RemoteBackupService, 'getRepositoryAccessOptions'>>,
 		private readonly agents: Pick<AgentStore, 'getAgentById'>,
-		private readonly sessions: ManagedRepositorySessionProvider = new ManagedSftpRepositorySession(),
+		private readonly sessions: ManagedRepositorySessionProvider = new ManagedRepositorySessionRouter(),
 		private readonly secret = configService.config.SECRET,
 		private readonly stagingRoot = path.join(appPaths.getDataDir(), 'managed-remote-restores'),
 		private readonly resolveReplica?: (
@@ -1331,7 +1334,9 @@ export class RemoteRepositoryRecoveryService {
 		let options: Record<string, string>;
 		try {
 			password = new Cryptr(this.secret).decrypt(repository.encryptedPassword);
-			options = await this.remoteBackups.getSftpRecoveryOptions(repository.storageId);
+			options = this.remoteBackups.getRepositoryAccessOptions
+				? await this.remoteBackups.getRepositoryAccessOptions(repository.storageId)
+				: await this.remoteBackups.getSftpRecoveryOptions(repository.storageId);
 		} catch {
 			throw new ManagedRepositoryAccessError('credentials-unavailable');
 		}

@@ -54,9 +54,14 @@ export function splitStorageSecrets(
 	return { credentials: cleanCredentials, settings: cleanSettings };
 }
 
-/** Server-only. Never return this projection through an API or Agent message. */
-export function decryptStorageCredentials(storage: StorageConfiguration): Record<string, string> {
-	const cryptr = new Cryptr(configService.config.SECRET as string);
+/** Server-only. Never return this projection through an API or Agent message.
+ * `secret` lets a service with an injected application secret (RemoteBackupService)
+ * decrypt with the key it uses for its own records. */
+export function decryptStorageCredentials(
+	storage: StorageConfiguration,
+	secret: string = configService.config.SECRET as string
+): Record<string, string> {
+	const cryptr = new Cryptr(secret);
 	const credentials: Record<string, string> = {};
 	try {
 		for (const [key, value] of Object.entries(storage.credentials || {})) {

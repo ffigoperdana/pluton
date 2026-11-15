@@ -4,6 +4,10 @@ import {
 	RemoteCommandPreparationError,
 } from '../../src/services/RemoteBackupService';
 import type { AgentCommand } from '../../src/db/schema/agents';
+import {
+	AgentCommandSealingError,
+	openAgentCommandSecrets,
+} from '../../src/utils/agentCommandSealing';
 
 jest.mock('../../src/services/events/BackupEventService', () => ({
 	BackupEventService: jest.fn().mockImplementation(() => ({
@@ -61,6 +65,32 @@ const capableAgent = {
 	},
 } as any;
 
+const s3AccessKey = 'SYNTHETICKEY01';
+const s3SecretKey = 'synthetic-secret-key-01';
+const s3Plan = { ...plan, storageId: 'storage-s3', storagePath: 'bucket-01/agents/app-01' } as any;
+const s3Agent = {
+	...capableAgent,
+	agentVersion: '0.8.0',
+	capabilities: {
+		...capableAgent.capabilities,
+		repositoryBackends: ['sftp', 's3'],
+		backupPayloadVersion: 5,
+	},
+} as any;
+const s3StorageRecord = (
+	crypt: Cryptr,
+	settings: Record<string, unknown> = { hcp_mode: true, endpoint: 'https://s3.example.internal' }
+) => ({
+	id: 'storage-s3',
+	type: 's3compatible',
+	settings,
+	credentials: {
+		bucket: crypt.encrypt('bucket-01'),
+		access_key_id: crypt.encrypt(s3AccessKey),
+		secret_access_key: crypt.encrypt(s3SecretKey),
+	},
+});
+
 describe('RemoteBackupService', () => {
 	let repositories: any;
 	let agentStore: any;
@@ -100,6 +130,7 @@ describe('RemoteBackupService', () => {
 			getById: jest.fn().mockResolvedValue(plan),
 			hasActiveBackups: jest.fn().mockResolvedValue(false),
 			getAll: jest.fn().mockResolvedValue([]),
+			getStorageRemovalReferences: jest.fn().mockResolvedValue([]),
 		};
 		backupStore = {
 			getById: jest.fn().mockResolvedValue({
@@ -923,5 +954,623 @@ describe('RemoteBackupService', () => {
 		}
 		expect((service as any).eventService.onBackupFailure).not.toHaveBeenCalled();
 		expect((service as any).eventService.onBackupComplete).not.toHaveBeenCalled();
+	});
+
+	describe('S3 primary eligibility (S3_AGENT_REPOSITORY_DESIGN.md 6.1.1)', () => {
+		let s3Storage: any;
+		beforeEach(async () => {
+			const crypt = new Cryptr(encryptionSecret);
+			const sftpStorage = await storageStore.getById(plan.storageId);
+			s3Storage = s3StorageRecord(crypt);
+			storageStore.getById.mockImplementation(async (id: string) =>
+				id === s3Plan.storageId ? s3Storage : sftpStorage
+			);
+			agentStore.getAgentByDeviceId.mockResolvedValue({ ...s3Agent, lastSeen: new Date() });
+			planStore.getById.mockResolvedValue(s3Plan);
+			const s3Repository = {
+				id: 'remote-repo-example-01',
+				planId: plan.id,
+				agentId: capableAgent.agentId,
+				storageId: s3Plan.storageId,
+				storagePath: s3Plan.storagePath,
+				encryptedPassword: crypt.encrypt(repositoryPassword),
+				initializedAt: null,
+			};
+			repositories.getByPlanId.mockResolvedValue(s3Repository);
+			repositories.getById.mockResolvedValue(s3Repository);
+		});
+
+		it('offers an S3 primary only to an Agent that reports s3 and payload version 5', async () => {
+			await expect(service.validatePlanCreation(s3Plan)).resolves.toBeUndefined();
+			for (const capabilities of [
+				capableAgent.capabilities,
+				{ ...capableAgent.capabilities, repositoryBackends: ['sftp', 's3'] },
+				{ ...capableAgent.capabilities, repositoryBackends: ['sftp'], backupPayloadVersion: 5 },
+			]) {
+				agentStore.getAgentByDeviceId.mockResolvedValue({
+					...s3Agent,
+					capabilities,
+					lastSeen: new Date(),
+				});
+				await expect(service.validatePlanCreation(s3Plan)).rejects.toMatchObject({
+					statusCode: 409,
+					message: 'Remote agent does not support S3 repositories. Update the agent first.',
+				});
+			}
+		});
+
+		it('refuses to queue an S3 plan for an Agent without S3 support and stores no command', async () => {
+			agentStore.getAgentByDeviceId.mockResolvedValue({ ...capableAgent, lastSeen: new Date() });
+			await expect(service.queuePlanBackup(s3Plan.id)).rejects.toMatchObject({
+				statusCode: 409,
+				message: 'Remote agent does not support S3 repositories. Update the agent first.',
+			});
+			expect(repositories.createBackupAndCommand).not.toHaveBeenCalled();
+			agentStore.getAgentByDeviceId.mockResolvedValue({ ...s3Agent, lastSeen: new Date() });
+			await expect(service.queuePlanBackup(s3Plan.id)).resolves.toBe(
+				'Remote filesystem backup queued.'
+			);
+			expect(repositories.createBackupAndCommand.mock.calls[0][0].command.payload).toEqual({
+				backupId: expect.any(String),
+				planId: s3Plan.id,
+				repositoryId: 'remote-repo-example-01',
+			});
+		});
+
+		it('applies the replication-destination HCP rules to the S3 storage', async () => {
+			const crypt = new Cryptr(encryptionSecret);
+			s3Storage = s3StorageRecord(crypt, { endpoint: 'https://s3.example.internal' });
+			await expect(service.validatePlanCreation(s3Plan)).rejects.toMatchObject({
+				statusCode: 400,
+				message: expect.stringContaining('HCP'),
+			});
+			s3Storage = s3StorageRecord(crypt, { hcp_mode: true, endpoint: 'http://s3.example.internal' });
+			await expect(service.validatePlanCreation(s3Plan)).rejects.toMatchObject({
+				statusCode: 400,
+				message: expect.stringContaining('HTTPS'),
+			});
+			s3Storage = s3StorageRecord(crypt, {
+				hcp_mode: true,
+				endpoint: 'https://s3.example.internal',
+				env_auth: true,
+			});
+			await expect(service.validatePlanCreation(s3Plan)).rejects.toMatchObject({ statusCode: 400 });
+		});
+
+		it('refuses the bucket root and a path outside the bucket', async () => {
+			for (const storagePath of ['bucket-01', 'other-bucket/agents/app-01']) {
+				await expect(service.validatePlanCreation({ ...s3Plan, storagePath })).rejects.toMatchObject({
+					statusCode: 400,
+					message: expect.stringContaining('bucket roots are forbidden'),
+				});
+			}
+		});
+
+		it('refuses S3 primary paths the Agent would refuse, without echoing them, and accepts a plain prefix', async () => {
+			for (const storagePath of [
+				'//bucket-01/agents/app-01',
+				'bucket-01/agents/app-01//',
+				'/bucket-01/agents/app-01',
+				'bucket-01/agents/app-01/',
+				'bucket-01//agents/app-01',
+				'bucket-01/./app-01',
+				'bucket-01/agents/../app-01',
+				'bucket-01/agents\\app-01',
+			]) {
+				const error = await service
+					.validatePlanCreation({ ...s3Plan, storagePath })
+					.then(() => null)
+					.catch(caught => caught);
+				expect({ storagePath, status: error?.statusCode }).toEqual({ storagePath, status: 400 });
+				expect(error.message).not.toContain('app-01');
+			}
+			await expect(
+				service.validatePlanCreation({ ...s3Plan, storagePath: 'bucket-01/agents/app-01' })
+			).resolves.toBeUndefined();
+		});
+
+		it('refuses a prefix that overlaps another plan primary or replica, and accepts a separate prefix', async () => {
+			const overlap = {
+				statusCode: 409,
+				message: 'The S3 repository prefix overlaps another plan or replica. Select a separate prefix.',
+			};
+			planStore.getAll.mockResolvedValue([
+				{ id: 'plan-other', storageId: 'storage-s3', storagePath: 'bucket-01/agents', settings: {} },
+			]);
+			await expect(service.validatePlanCreation(s3Plan)).rejects.toMatchObject(overlap);
+			planStore.getAll.mockResolvedValue([
+				{
+					id: 'plan-sftp',
+					storageId: plan.storageId,
+					storagePath: plan.storagePath,
+					settings: {
+						replication: {
+							enabled: true,
+							storages: [
+								{
+									replicationId: 'replica-01',
+									storageId: 'storage-s3',
+									storagePath: 'bucket-01/agents/app-01/mirror',
+								},
+							],
+						},
+					},
+				},
+			]);
+			await expect(service.validatePlanCreation(s3Plan)).rejects.toMatchObject(overlap);
+			planStore.getAll.mockResolvedValue([
+				{ id: s3Plan.id, storageId: 'storage-s3', storagePath: s3Plan.storagePath, settings: {} },
+				{ id: 'plan-sibling', storageId: 'storage-s3', storagePath: 'bucket-01/agents/app-010', settings: {} },
+			]);
+			await expect(service.validatePlanCreation(s3Plan)).resolves.toBeUndefined();
+			planStore.getAll.mockResolvedValue([
+				{ id: 'plan-foreign', storageId: 'storage-s3', storagePath: 'other-bucket/data', settings: {} },
+			]);
+			await expect(service.validatePlanCreation(s3Plan)).rejects.toMatchObject({
+				statusCode: 409,
+				message:
+					'Another plan uses an S3 location that cannot be verified, so the S3 repository prefix cannot be checked for overlap.',
+			});
+		});
+
+		it('refuses replication settings for an S3 primary before any replica validation', async () => {
+			const replication = {
+				validatePlan: jest.fn(async () => undefined),
+				enqueueBackup: jest.fn(async () => undefined),
+			};
+			service.setReplicationService(replication);
+			const replicated = {
+				...s3Plan,
+				settings: {
+					...s3Plan.settings,
+					replication: {
+						enabled: true,
+						concurrent: false,
+						storages: [
+							{
+								replicationId: 'replica-01',
+								storageId: 'mirror-01',
+								storagePath: 'bucket-02/owned',
+								storageType: 's3compatible',
+								storageName: 'Mirror',
+								addedAt: 1,
+							},
+						],
+					},
+				},
+			};
+			await expect(service.validatePlanCreation(replicated)).rejects.toMatchObject({
+				statusCode: 400,
+				message: 'Replication is not available for an S3 primary repository yet.',
+			});
+			await expect(
+				service.validatePlanCreation({
+					...replicated,
+					settings: {
+						...replicated.settings,
+						replication: { ...replicated.settings.replication, enabled: false },
+					},
+				})
+			).rejects.toMatchObject({ statusCode: 400 });
+			expect(replication.validatePlan).not.toHaveBeenCalled();
+			await expect(
+				service.validatePlanCreation({
+					...s3Plan,
+					settings: {
+						...s3Plan.settings,
+						replication: { enabled: false, concurrent: false, storages: [] },
+					},
+				})
+			).resolves.toBeUndefined();
+		});
+
+		it('refuses a prefix inside a retained repository of a deleted plan and allows a sibling prefix', async () => {
+			const retained = (storagePath: string) => [
+				{ planId: null, storageId: 'storage-s3', storagePath, kind: 'retained' },
+			];
+			planStore.getStorageRemovalReferences.mockResolvedValue(retained('bucket-01/agents/app-01'));
+			await expect(
+				service.validatePlanCreation({ ...s3Plan, storagePath: 'bucket-01/agents/app-01/x' })
+			).rejects.toMatchObject({
+				statusCode: 409,
+				message: 'The S3 repository prefix overlaps another plan or replica. Select a separate prefix.',
+			});
+			planStore.getStorageRemovalReferences.mockResolvedValue(retained('bucket-01/agents/app-010'));
+			await expect(service.validatePlanCreation(s3Plan)).resolves.toBeUndefined();
+		});
+
+		it('refuses a non primary-only recovery policy on an S3 primary even with replication off', async () => {
+			for (const recoveryPolicy of ['assisted', 'automatic']) {
+				await expect(
+					service.validatePlanCreation({
+						...s3Plan,
+						settings: {
+							...s3Plan.settings,
+							replication: { enabled: false, concurrent: false, recoveryPolicy, storages: [] },
+						},
+					})
+				).rejects.toMatchObject({
+					statusCode: 400,
+					message: 'Replication is not available for an S3 primary repository yet.',
+				});
+			}
+			await expect(
+				service.validatePlanCreation({
+					...s3Plan,
+					settings: {
+						...s3Plan.settings,
+						replication: { enabled: false, concurrent: false, recoveryPolicy: 'primary-only', storages: [] },
+					},
+				})
+			).resolves.toBeUndefined();
+		});
+
+		it('names a rejected S3 setting in the preparation diagnostics without its value', async () => {
+			s3Storage = s3StorageRecord(new Cryptr(encryptionSecret), {
+				hcp_mode: true,
+				endpoint: 'https://s3.example.internal',
+				chunk_size: '64Mi',
+			});
+			await expect(service.validatePlanCreation(s3Plan)).rejects.toMatchObject({ statusCode: 400 });
+			const error = await service
+				.materializeCommand(capableAgent.agentId, backupCommand())
+				.then(() => null)
+				.catch(caught => caught);
+			expect(error).toBeInstanceOf(RemoteCommandPreparationError);
+			expect(error).toMatchObject({
+				stage: 's3-storage-validation',
+				rejectedField: 'chunk_size',
+				ruleCategory: 'unsupported-field',
+				storageId: s3Plan.storageId,
+			});
+			expect(JSON.stringify(error)).not.toContain('64Mi');
+		});
+
+		it('refuses a destination that is neither SFTP nor S3', async () => {
+			storageStore.getById.mockResolvedValue({
+				id: plan.storageId,
+				type: 'local',
+				settings: {},
+				credentials: {},
+			});
+			await expect(service.validatePlanCreation(plan)).rejects.toMatchObject({
+				statusCode: 400,
+				message: 'Remote filesystem backups require an SFTP or S3 destination.',
+			});
+		});
+	});
+	describe('Payload version 5 (S3_AGENT_REPOSITORY_DESIGN.md 10.2 and 10.3)', () => {
+		const sealing = {
+			agentSecret: 'synthetic-agent-secret-0123456789abcdef',
+			leaseToken: '0123456789abcdef0123456789abcdef0123456789abcdef',
+		};
+		beforeEach(async () => {
+			const sftpStorage = await storageStore.getById(plan.storageId);
+			const s3Storage = s3StorageRecord(new Cryptr(encryptionSecret));
+			storageStore.getById.mockImplementation(async (id: string) =>
+				id === s3Plan.storageId ? s3Storage : sftpStorage
+			);
+			agentStore.getAgentByDeviceId.mockResolvedValue({ ...s3Agent, lastSeen: new Date() });
+		});
+		const useS3Plan = () => {
+			const s3Repository = {
+				id: 'remote-repo-example-01',
+				planId: plan.id,
+				agentId: capableAgent.agentId,
+				storageId: s3Plan.storageId,
+				storagePath: s3Plan.storagePath,
+				encryptedPassword: new Cryptr(encryptionSecret).encrypt(repositoryPassword),
+				initializedAt: null,
+			};
+			planStore.getById.mockResolvedValue(s3Plan);
+			repositories.getById.mockResolvedValue(s3Repository);
+			repositories.getByPlanId.mockResolvedValue(s3Repository);
+		};
+
+		it('sends an S3 Agent version 5 with only allowlisted plain options and every secret sealed', async () => {
+			useS3Plan();
+			const command = backupCommand();
+			const payload: any = await service.materializeCommand(capableAgent.agentId, command, sealing);
+			expect(payload).toEqual({
+				version: 5,
+				sourceDiagnosticsVersion: 1,
+				backupId: 'backup-example-01',
+				planId: plan.id,
+				sourcePath: '/srv/example-app',
+				excludes: [],
+				repository: { remoteName: 'pluton', path: 'bucket-01/agents/app-01', initialize: true },
+				rclone: {
+					type: 's3',
+					options: {
+						provider: 'Other',
+						endpoint: 'https://s3.example.internal',
+						force_path_style: 'true',
+						use_accept_encoding_gzip: 'false',
+						no_check_bucket: 'true',
+					},
+				},
+				sealed: {
+					alg: 'A256GCM',
+					kid: 'pluton-agent-command-secrets-v1',
+					nonce: expect.any(String),
+					ciphertext: expect.any(String),
+					tag: expect.any(String),
+				},
+			});
+			const serialized = JSON.stringify(payload);
+			for (const value of [repositoryPassword, s3AccessKey, s3SecretKey, encryptionSecret])
+				expect(serialized).not.toContain(value);
+			expect(
+				openAgentCommandSecrets(sealing.agentSecret, command.id, sealing.leaseToken, payload.sealed)
+			).toEqual({
+				repositoryPassword,
+				rclone: { access_key_id: s3AccessKey, secret_access_key: s3SecretKey },
+			});
+			expect(() =>
+				openAgentCommandSecrets(sealing.agentSecret, command.id, 'a'.repeat(32), payload.sealed)
+			).toThrow(AgentCommandSealingError);
+			expect(() =>
+				openAgentCommandSecrets(sealing.agentSecret, 'remote-backup-other', sealing.leaseToken, payload.sealed)
+			).toThrow(AgentCommandSealingError);
+		});
+
+		it('seals the SFTP password for a version 5 Agent and keeps host, port and user plain', async () => {
+			const command = backupCommand();
+			const payload: any = await service.materializeCommand(capableAgent.agentId, command, sealing);
+			expect(payload.version).toBe(5);
+			expect(payload.rclone).toEqual({
+				type: 'sftp',
+				options: { host: 'sftp.example.internal', port: '22', user: 'backup-user' },
+			});
+			expect(payload).not.toHaveProperty('repositoryPassword');
+			expect(JSON.stringify(payload)).not.toContain(storagePassword);
+			expect(
+				openAgentCommandSecrets(sealing.agentSecret, command.id, sealing.leaseToken, payload.sealed)
+			).toEqual({ repositoryPassword, rclone: { pass: storagePassword } });
+		});
+
+		it('keeps payload versions 1 to 4 unchanged for an Agent without version 5', async () => {
+			agentStore.getAgentByDeviceId.mockResolvedValue({
+				...capableAgent,
+				capabilities: { ...capableAgent.capabilities, repositoryBackends: ['sftp'] },
+				lastSeen: new Date(),
+			});
+			const payload: any = await service.materializeCommand(
+				capableAgent.agentId,
+				backupCommand(),
+				sealing
+			);
+			expect(payload.version).toBe(1);
+			expect(payload.repositoryPassword).toBe(repositoryPassword);
+			expect(payload.rclone).toEqual({
+				type: 'sftp',
+				options: {
+					host: 'sftp.example.internal',
+					port: '22',
+					user: 'backup-user',
+					pass: storagePassword,
+				},
+			});
+			expect(payload).not.toHaveProperty('sealed');
+		});
+
+		describe('database passwords sealed in version 5', () => {
+			const commandId = 'remote-backup-backup-example-01';
+			const agentWithLifecycle = (version: 1 | 2) =>
+				agentStore.getAgentByDeviceId.mockResolvedValue({
+					...s3Agent,
+					lastSeen: new Date(),
+					capabilities: {
+						...s3Agent.capabilities,
+						backupLifecycleVersion: version,
+						databaseEngines: ['mariadb', 'postgresql'],
+					},
+				});
+			const credentials = (entries: Array<[string, string]>) =>
+				entries.map(([databaseId, value]) => ({
+					databaseId,
+					encryptedPassword: new Cryptr(encryptionSecret).encrypt(value),
+					legacySingle: false,
+				}));
+			const openSealed = (payload: any) =>
+				openAgentCommandSecrets(sealing.agentSecret, commandId, sealing.leaseToken, payload.sealed);
+
+			it('moves every collection password into the sealed secrets keyed by databaseId', async () => {
+				const databases = [
+					{ ...database, databaseId: 'db_01' },
+					{
+						...database,
+						databaseId: 'db_02',
+						engine: 'postgresql',
+						port: 5432,
+						database: 'analytics',
+						dumpFilename: 'analytics.sql',
+					},
+				];
+				planStore.getById.mockResolvedValue({
+					...plan,
+					settings: { ...plan.settings, remoteLifecycle: { version: 2, databases } },
+				});
+				agentWithLifecycle(2);
+				planStore.getDatabaseCredentials = jest.fn().mockResolvedValue(
+					credentials([
+						['db_02', 'synthetic-db-password-02'],
+						['db_01', 'synthetic-db-password-01'],
+					])
+				);
+				const payload: any = await service.materializeCommand(
+					capableAgent.agentId,
+					backupCommand(),
+					sealing
+				);
+				const serialized = JSON.stringify(payload);
+				expect(serialized).not.toContain('synthetic-db-password-01');
+				expect(serialized).not.toContain('synthetic-db-password-02');
+				expect(payload.lifecycle.databases).toHaveLength(2);
+				for (const entry of payload.lifecycle.databases) expect(entry).not.toHaveProperty('password');
+				expect(payload.lifecycle.databases[0]).toMatchObject({
+					databaseId: 'db_01',
+					engine: 'mariadb',
+					database: 'example_db',
+					dumpFilename: 'app.sql',
+				});
+				expect(openSealed(payload)).toEqual({
+					repositoryPassword,
+					rclone: { pass: storagePassword },
+					lifecycle: {
+						databases: { 'db_01': 'synthetic-db-password-01', 'db_02': 'synthetic-db-password-02' },
+					},
+				});
+			});
+
+			it('moves the single database password of lifecycle version 1 into sealed lifecycle.database', async () => {
+				planStore.getById.mockResolvedValue(lifecyclePlan());
+				agentWithLifecycle(1);
+				planStore.getDatabaseCredential = jest
+					.fn()
+					.mockResolvedValue(new Cryptr(encryptionSecret).encrypt('synthetic-db-password-01'));
+				const payload: any = await service.materializeCommand(
+					capableAgent.agentId,
+					backupCommand(),
+					sealing
+				);
+				expect(payload.lifecycle.version).toBe(1);
+				expect(payload.lifecycle.database).not.toHaveProperty('password');
+				expect(payload.lifecycle.database).toMatchObject({
+					engine: 'mariadb',
+					database: 'example_db',
+				});
+				expect(JSON.stringify(payload)).not.toContain('synthetic-db-password-01');
+				expect(openSealed(payload)).toEqual({
+					repositoryPassword,
+					rclone: { pass: storagePassword },
+					lifecycle: { database: 'synthetic-db-password-01' },
+				});
+			});
+
+			it('has no sealed lifecycle key without a lifecycle or without a database', async () => {
+				const plain: any = await service.materializeCommand(
+					capableAgent.agentId,
+					backupCommand(),
+					sealing
+				);
+				expect(openSealed(plain)).not.toHaveProperty('lifecycle');
+				planStore.getById.mockResolvedValue({
+					...plan,
+					settings: { ...plan.settings, remoteLifecycle: { version: 2, databases: [] } },
+				});
+				agentWithLifecycle(2);
+				planStore.getDatabaseCredentials = jest.fn().mockResolvedValue([]);
+				const hookOnly: any = await service.materializeCommand(
+					capableAgent.agentId,
+					backupCommand(),
+					sealing
+				);
+				expect(openSealed(hookOnly)).not.toHaveProperty('lifecycle');
+			});
+
+			it('keeps the password in the plain lifecycle for payload version 4 and below', async () => {
+				planStore.getById.mockResolvedValue(lifecyclePlan());
+				agentStore.getAgentByDeviceId.mockResolvedValue({
+					...capableAgent,
+					lastSeen: new Date(),
+					capabilities: {
+						...capableAgent.capabilities,
+						backupLifecycleVersion: 1,
+						databaseEngines: ['mariadb'],
+					},
+				});
+				planStore.getDatabaseCredential = jest
+					.fn()
+					.mockResolvedValue(new Cryptr(encryptionSecret).encrypt('synthetic-db-password-01'));
+				const payload: any = await service.materializeCommand(
+					capableAgent.agentId,
+					backupCommand(),
+					sealing
+				);
+				expect(payload.version).toBe(2);
+				expect(payload.lifecycle.database.password).toBe('synthetic-db-password-01');
+				expect(payload).not.toHaveProperty('sealed');
+			});
+		});
+
+		it('refuses to build version 5 without the lease sealing context', async () => {
+			const error = await service
+				.materializeCommand(capableAgent.agentId, backupCommand())
+				.then(() => null)
+				.catch(caught => caught);
+			expect(error).toBeInstanceOf(RemoteCommandPreparationError);
+			expect(error).toMatchObject({
+				stage: 'payload-sealing',
+				safeMessage: 'Remote backup secrets could not be sealed for the agent.',
+			});
+		});
+
+		it('fails a queued S3 command closed when the Agent no longer reports S3 at poll time', async () => {
+			useS3Plan();
+			agentStore.getAgentByDeviceId.mockResolvedValue({ ...capableAgent, lastSeen: new Date() });
+			const error = await service
+				.materializeCommand(capableAgent.agentId, backupCommand(), sealing)
+				.then(() => null)
+				.catch(caught => caught);
+			expect(error).toBeInstanceOf(RemoteCommandPreparationError);
+			expect(error).toMatchObject({
+				stage: 'repository-backend',
+				message: 'Remote agent does not support S3 repositories. Update the agent first.',
+			});
+		});
+
+		it('records an S3 primary snapshot exactly like an SFTP one and never queues replication', async () => {
+			useS3Plan();
+			planStore.update = jest.fn();
+			const replication = {
+				validatePlan: jest.fn(async () => undefined),
+				enqueueBackup: jest.fn(async () => undefined),
+			};
+			service.setReplicationService(replication);
+			const id = 'b'.repeat(64);
+			const summary = { message_type: 'summary', snapshot_id: id, total_bytes_processed: 2048 } as any;
+			await service.completeCommand(backupCommand(), {
+				success: true,
+				result: { snapshotId: id, summary },
+			});
+			expect((service as any).eventService.onBackupComplete).toHaveBeenCalledWith(
+				expect.objectContaining({ success: true, summary })
+			);
+			expect(repositories.markInitialized).toHaveBeenCalledWith('remote-repo-example-01');
+			expect(planStore.update).toHaveBeenCalledWith(
+				plan.id,
+				expect.objectContaining({ stats: { size: 2048, snapshots: [id] } })
+			);
+			expect(replication.enqueueBackup).not.toHaveBeenCalled();
+		});
+	});
+
+	describe('Server read access by storage type (S3_AGENT_REPOSITORY_DESIGN.md 6.1.3)', () => {
+		it('keeps SFTP read options unchanged and returns S3 session options without asking the Agent', async () => {
+			const sftpOptions = await service.getSftpRecoveryOptions(plan.storageId);
+			await expect(service.getRepositoryAccessOptions(plan.storageId)).resolves.toEqual(sftpOptions);
+			const sftpStorage = await storageStore.getById(plan.storageId);
+			const s3Storage = s3StorageRecord(new Cryptr(encryptionSecret));
+			storageStore.getById.mockImplementation(async (id: string) =>
+				id === s3Plan.storageId ? s3Storage : sftpStorage
+			);
+			agentStore.getAgentByDeviceId.mockResolvedValue(null);
+			await expect(service.getRepositoryAccessOptions(s3Plan.storageId)).resolves.toEqual({
+				type: 's3',
+				provider: 'Other',
+				endpoint: 'https://s3.example.internal',
+				no_check_bucket: 'true',
+				use_accept_encoding_gzip: 'false',
+				force_path_style: 'true',
+				access_key_id: s3AccessKey,
+				secret_access_key: s3SecretKey,
+				env_auth: 'false',
+			});
+			expect(agentStore.getAgentByDeviceId).not.toHaveBeenCalled();
+			await expect(service.getSftpRecoveryOptions(s3Plan.storageId)).rejects.toMatchObject({
+				statusCode: 400,
+			});
+		});
 	});
 });
