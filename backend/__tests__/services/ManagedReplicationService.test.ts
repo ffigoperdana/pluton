@@ -1,6 +1,7 @@
 import Cryptr from 'cryptr';
 import { ManagedReplicationService } from '../../src/services/ManagedReplicationService';
 import { ManagedReplicationError } from '../../src/utils/restic/ManagedReplicationExecutor';
+import { REPLICATION_PROGRESS } from '../../src/utils/restic/replicationProgress';
 import { AppError } from '../../src/utils/AppError';
 import { storageRcloneOptions } from '../../src/utils/storageSecurity';
 import { serverLogger } from '../../src/utils/logger';
@@ -170,6 +171,26 @@ describe('Managed Agent server replication', () => {
 		await f.service.retryFailed('backup-01'); await f.service.tick();
 		expect(f.rows[0]).toMatchObject({ status: 'completed', attempts: 2 });
 	});
+	it('lets a long first copy run past thirty minutes and stops it only at the job limit', async () => {
+		const f = fixture(); await f.service.enqueueBackup('backup-01');
+		jest.useFakeTimers();
+		try {
+			let started!: () => void;
+			const copying = new Promise<void>(resolve => { started = resolve; });
+			let aborted = false;
+			f.executor.copy.mockImplementation(async ({ signal }: { signal: AbortSignal }) => {
+				started();
+				await new Promise<void>(resolve => signal.addEventListener('abort', () => { aborted = true; resolve(); }, { once: true }));
+				throw new ManagedReplicationError('cancelled');
+			});
+			const tick = f.service.tick(); await copying;
+			await jest.advanceTimersByTimeAsync(6 * 60 * 60_000);
+			expect(aborted).toBe(false);
+			expect(f.rows[0]).toMatchObject({ status: 'running' });
+			await jest.advanceTimersByTimeAsync(REPLICATION_PROGRESS.limitMs - 6 * 60 * 60_000); await tick;
+			expect(f.rows[0]).toMatchObject({ status: 'failed', lastErrorCode: 'timeout' });
+		} finally { jest.useRealTimers(); }
+	});
 	it('keeps uncertain child termination fenced even when the operation timed out', async () => {
 		const f = fixture(); await f.service.enqueueBackup('backup-01');
 		jest.useFakeTimers();
@@ -182,7 +203,7 @@ describe('Managed Agent server replication', () => {
 				throw new ManagedReplicationError('execution-uncertain');
 			});
 			const tick = f.service.tick(); await copying;
-			await jest.advanceTimersByTimeAsync(30 * 60_000); await tick;
+			await jest.advanceTimersByTimeAsync(REPLICATION_PROGRESS.limitMs); await tick;
 			expect(f.rows[0]).toMatchObject({ status: 'uncertain', lastErrorCode: 'execution-uncertain' });
 			await expect(f.service.retryFailed('backup-01')).rejects.toMatchObject({ statusCode: 409 });
 			await f.service.tick(); expect(f.executor.copy).toHaveBeenCalledTimes(1);

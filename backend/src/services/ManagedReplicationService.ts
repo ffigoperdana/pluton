@@ -26,6 +26,7 @@ import {
 	type ManagedReplicationExecutorContract,
 	type ReplicationSource,
 } from '../utils/restic/ManagedReplicationExecutor';
+import { REPLICATION_PROGRESS } from '../utils/restic/replicationProgress';
 import { fullSnapshotId } from '../utils/restic/ManagedSftpRepositorySession';
 import { lifecycleDatabases, parseRemoteLifecycle } from '../utils/remoteLifecycle';
 import { serverLogger } from '../utils/logger';
@@ -136,7 +137,8 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 		const existing = this.admissions.get(backupId);
 		if (existing) return existing.done;
 		const controller = new AbortController();
-		const timer = setTimeout(() => controller.abort('timeout'), 30 * 60_000);
+		// Admission reads the source SQL artifacts; stuck reads stop through the command watchdog.
+		const timer = setTimeout(() => controller.abort('timeout'), REPLICATION_PROGRESS.limitMs);
 		timer.unref();
 		const done = this.admitBackup(backupId, controller.signal).finally(() => {
 			clearTimeout(timer);
@@ -232,7 +234,9 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 			if (!job) continue;
 			const startedAt = Date.now();
 			const controller = new AbortController();
-			const timer = setTimeout(() => controller.abort('timeout'), 30 * 60_000);
+			// A first copy of a large plan runs for hours. A stuck command stops through the progress
+			// watchdog (`stalled`); this only bounds a job that keeps moving, since there is one slot.
+			const timer = setTimeout(() => controller.abort('timeout'), REPLICATION_PROGRESS.limitMs);
 			timer.unref();
 			this.active.set(job.id, controller);
 			await this.project(job.backupId);
