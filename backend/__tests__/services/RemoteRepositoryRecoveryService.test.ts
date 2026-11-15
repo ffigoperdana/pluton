@@ -1545,4 +1545,44 @@ describe('Phase 4 remote managed repository recovery', () => {
 		});
 		expect(await fs.readFile(path.join(outside, 'proof.txt'), 'utf8')).toBe('unchanged fixture');
 	});
+
+	it('reads an S3 primary with the S3 access of its storage and never asks for SFTP options', async () => {
+		const s3Options = {
+			type: 's3',
+			provider: 'Other',
+			endpoint: 'https://s3.example.internal',
+			force_path_style: 'true',
+			use_accept_encoding_gzip: 'false',
+			no_check_bucket: 'true',
+			access_key_id: 'SYNTHETICKEY01',
+			secret_access_key: 'synthetic-secret-key-01',
+			env_auth: 'false',
+		};
+		const access = jest.fn(async () => s3Options);
+		for (const record of [backup, plan, repository])
+			Object.assign(record, { storageId: 'storage-s3', storagePath: 'bucket-01/agents/app-01' });
+		const s3Service = new RemoteRepositoryRecoveryService(
+			stores.repositories,
+			stores.backups,
+			stores.plans,
+			stores.restores,
+			{ getSftpRecoveryOptions: options, getRepositoryAccessOptions: access },
+			stores.agents,
+			{ withSession },
+			secret,
+			path.join(scratch, 's3-primary', 'managed-remote-restores')
+		);
+		try {
+			await expect(s3Service.browse('backup-01')).resolves.toHaveLength(5);
+			expect(access).toHaveBeenCalledWith('storage-s3');
+			expect(options).not.toHaveBeenCalled();
+			expect(withSession.mock.calls[0][0]).toEqual({
+				options: s3Options,
+				password,
+				repositoryPath: 'bucket-01/agents/app-01',
+			});
+		} finally {
+			await s3Service.close();
+		}
+	});
 });

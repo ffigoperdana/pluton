@@ -1480,4 +1480,32 @@ describe('RemoteBackupService', () => {
 			expect(replication.enqueueBackup).not.toHaveBeenCalled();
 		});
 	});
+
+	describe('Server read access by storage type (S3_AGENT_REPOSITORY_DESIGN.md 6.1.3)', () => {
+		it('keeps SFTP read options unchanged and returns S3 session options without asking the Agent', async () => {
+			const sftpOptions = await service.getSftpRecoveryOptions(plan.storageId);
+			await expect(service.getRepositoryAccessOptions(plan.storageId)).resolves.toEqual(sftpOptions);
+			const sftpStorage = await storageStore.getById(plan.storageId);
+			const s3Storage = s3StorageRecord(new Cryptr(encryptionSecret));
+			storageStore.getById.mockImplementation(async (id: string) =>
+				id === s3Plan.storageId ? s3Storage : sftpStorage
+			);
+			agentStore.getAgentByDeviceId.mockResolvedValue(null);
+			await expect(service.getRepositoryAccessOptions(s3Plan.storageId)).resolves.toEqual({
+				type: 's3',
+				provider: 'Other',
+				endpoint: 'https://s3.example.internal',
+				no_check_bucket: 'true',
+				use_accept_encoding_gzip: 'false',
+				force_path_style: 'true',
+				access_key_id: s3AccessKey,
+				secret_access_key: s3SecretKey,
+				env_auth: 'false',
+			});
+			expect(agentStore.getAgentByDeviceId).not.toHaveBeenCalled();
+			await expect(service.getSftpRecoveryOptions(s3Plan.storageId)).rejects.toMatchObject({
+				statusCode: 400,
+			});
+		});
+	});
 });

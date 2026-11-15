@@ -245,6 +245,18 @@ export class RemoteBackupService {
 		return (await this.materializeSftpStorage(storageId)).options;
 	}
 
+	/**
+	 * Server read path of an Agent repository (browse, download, export, restore, recovery
+	 * tests): SFTP options exactly as getSftpRecoveryOptions, S3 options keyed by `type: 's3'`
+	 * for ManagedS3RecoverySession. Never consults the Agent, so snapshots already in S3 stay
+	 * readable after an Agent rollback (S3_AGENT_REPOSITORY_DESIGN.md 6.7).
+	 */
+	async getRepositoryAccessOptions(storageId: string): Promise<Record<string, string>> {
+		const target = await this.materializeRepositoryStorage(storageId);
+		if (target.type === 'sftp') return target.options;
+		return { type: 's3', ...target.options, ...target.secrets, env_auth: 'false' };
+	}
+
 	async validatePlanCreation(plan: NewPlan): Promise<void> {
 		await this.assertSupportedPlan(plan);
 	}
