@@ -113,7 +113,9 @@ not a measurement of an Agent host.
    Replication settings are refused for an S3-primary Agent plan in stage 1.
 2. **Command payload version 5.** For an S3 primary, `materializeCommand` sends
    `rclone {type: 's3', options}` built from `storageRcloneOptions(storage)` plus
-   `force_path_style: 'true'` and `use_accept_encoding_gzip: 'false'`, and the HCP trust settings.
+   `force_path_style: 'true'` and `use_accept_encoding_gzip: 'false'`. The payload carries no trust
+   or CA setting; the Agent uses its own `PLUTON_AGENT_STORAGE_CA_FILE` (6.2 point 4), and the
+   server applies `trustEnvironment` only on its own read path.
    Secrets (`repositoryPassword`, `secret_access_key`, `access_key_id`, and for SFTP `pass`) move into
    a sealed field (section 6.3). Agents that do not advertise version 5 keep receiving version 4,
    which stays SFTP-only.
@@ -251,3 +253,74 @@ not a measurement of an Agent host.
 - Agent failure classification that separates transport failures from the rest (stage 3 trigger).
 - Sealed secrets, so a later payload can carry the credentials of two repositories (stage 3).
 - No assumption that a plan's primary storage type never changes (stage 4).
+
+## 10. Stage 1 wire contract
+
+Server and Agent implement this exactly. Both test suites use the vector in 10.4.
+
+### 10.1 Capabilities
+
+Two optional fields are added to the inventory `capabilities` object (server schema in
+`AgentService.ts`, `.strict()`; Agent type `AgentCapabilities` in `agent/src/types.ts`):
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `repositoryBackends` | array of `'sftp'` and `'s3'`, 1 to 2 entries, no duplicates, must contain `'sftp'` | Repository types the Agent can back up to |
+| `backupPayloadVersion` | literal `5` | Highest `BACKUP_FILESYSTEM` payload version the Agent accepts |
+
+Because the server schema is strict, the server must be deployed before any 0.8.0 Agent reports
+these fields. An Agent that omits them is treated as `repositoryBackends: ['sftp']` and payload
+version 4.
+
+### 10.2 Payload version 5
+
+```json
+{
+  "version": 5,
+  "lifecycle": "<unchanged, optional>",
+  "backupId": "<unchanged>",
+  "planId": "<unchanged>",
+  "sourcePath": "<unchanged>",
+  "excludes": ["<unchanged>"],
+  "sourceDiagnosticsVersion": 1,
+  "repository": { "remoteName": "pluton", "path": "<sftp directory, or bucket/prefix for s3>", "initialize": true },
+  "rclone": { "type": "s3", "options": { "provider": "Other", "endpoint": "https://s3.example.internal", "force_path_style": "true", "use_accept_encoding_gzip": "false", "no_check_bucket": "true" } },
+  "sealed": { "alg": "A256GCM", "kid": "pluton-agent-command-secrets-v1", "nonce": "<base64, 12 bytes>", "ciphertext": "<base64>", "tag": "<base64, 16 bytes>" }
+}
+```
+
+- `rclone.type` is `sftp` or `s3`. Plain `options` never contain `pass`, `access_key_id`,
+  `secret_access_key` or a repository password; a payload that does is refused.
+- Allowed plain options: SFTP `host`, `port`, `user`; S3 `provider`, `endpoint`, `region`,
+  `location_constraint`, `acl`, `force_path_style` (must be `"true"`), `use_accept_encoding_gzip`
+  (must be `"false"`), `no_check_bucket`. The S3 `endpoint` must be an `https://` origin.
+- `repositoryPassword` is not a top-level field in version 5; it is inside `sealed`.
+- `sourceDiagnosticsVersion` is sent exactly as today (Agents 0.7.1 and later already receive it) and
+  must be accepted in version 5.
+- Versions 1 to 4 are unchanged and remain SFTP-only.
+
+### 10.3 Sealing
+
+- Plaintext: UTF-8 JSON `{"repositoryPassword": string, "rclone": {"pass"?: string,
+  "access_key_id"?: string, "secret_access_key"?: string}}`. SFTP carries `pass`; S3 carries both
+  keys.
+- Key: `HKDF-SHA256(ikm = UTF-8 bytes of the per-Agent secret, salt = empty, info =
+  "pluton-agent-command-secrets-v1", length = 32)`.
+- Cipher: AES-256-GCM, random 12-byte nonce per command, 16-byte tag.
+- Additional data: UTF-8 of `"pluton-agent-command-secrets-v1\n" + commandId + "\n" + leaseToken`.
+- The HMAC command signature is computed over the payload that contains `sealed`, as today.
+
+### 10.4 Test vector (synthetic)
+
+| Input | Value |
+| --- | --- |
+| secret | `synthetic-agent-secret-0123456789abcdef` |
+| commandId | `cmd-synthetic-01` |
+| leaseToken | `0123456789abcdef0123456789abcdef0123456789abcdef` |
+| derived key (hex) | `1f35dc3e9cf013165a2353883369bbfa7edd62b56072b3413c8074e2ffb93fac` |
+| nonce (base64) | `AAECAwQFBgcICQoL` |
+| plaintext | `{"repositoryPassword":"synthetic-repository-password-01","rclone":{"access_key_id":"SYNTHETICKEY01","secret_access_key":"synthetic-secret-key-01"}}` |
+| ciphertext (base64) | `jh0qetVE17GJz08s3DXhomumBqDIVOhzX3A4LgVFJeiH9JSKr4qR7OowvN0duifn639ReyzbjXGWiSEWAaymlLJKNnxwbrP+vLmuRdk9vI+wuUG8cJhENnxGV0LXHElNyPLQME0jaSjTfM7T0n9LTBr7V76enQuphACHq53aFDwiyFLa5p/2ML2748FcdivP43U+` |
+| tag (base64) | `pUKJ+stiEzlyVi8BFN6biQ==` |
+
+Changing any byte of the ciphertext, tag, nonce, command ID or lease token must make opening fail.
