@@ -172,6 +172,11 @@ not a measurement of an Agent host.
     another command;
   - the HMAC signature still covers the whole payload, including the sealed blob.
   SFTP secrets are sealed the same way for Agents that accept version 5.
+- **Enrollment limitation.** Sealing is only as confidential as the enrollment exchange: the per-Agent
+  secret (the HKDF input) is returned in plain form in the enrollment response, and production may
+  allow Agent HTTP on the LAN (`ALLOW_INSECURE_AGENT_HTTP`). A passive observer of an enrollment over
+  HTTP can derive the sealing key. Agents that will use an S3 primary should be enrolled over HTTPS;
+  otherwise the residual risk is accepted. No code change in stage 1.
 - **Exposure on the host.** The S3 key exists only in the Agent process memory and the temporary
   0600 configuration during one backup, as the SFTP password does today. It is never logged; the
   server never stores the materialised payload.

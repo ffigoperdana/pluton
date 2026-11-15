@@ -27,7 +27,6 @@ is installed (separate pull request).
 | Frontend | S3 storages are offered for a remote plan only when the machine's Agent reports S3; otherwise the form says why. Replication is disabled with a note for an S3 primary. "Primary SFTP" wording is generalised to "primary repository". |
 | In-app documentation | The Managed Agent guide gains an S3 primary section; Remote Agent and Getting Started wording is generalised. |
 | Agent distribution | `SUPPORTED_AGENT_INSTALL_VERSIONS` (server and browser) accepts `0.7.0`, `0.7.1` and `0.8.0`. The generated install command still verifies the package and runtime version on the host before sudo. `.env.template`, `deploy/.env.example` and the configuration and enrollment guides list the three versions. |
-
 | Database passwords | Lifecycle database passwords are sealed in payload version 5 as well (user decision of 15 November 2026; design section 10.3 amended in `3d241ea`), so no secret travels in plain `options` or lifecycle fields for a version 5 Agent. |
 
 Unchanged: existing SFTP plans and their replication, completion handling (snapshot ID,
@@ -111,13 +110,12 @@ Existing test assertions that changed:
 | Check | Result |
 | --- | --- |
 | Backend suite `npx jest --runInBand` (Task 15 Step 1) | `Test Suites: 1 failed, 239 passed, 240 total` / `Tests: 6 skipped, 5036 passed, 5042 total`; the one failed suite is `PlanService` (afterAll hook timeout in the Pino teardown, see next row) |
-| `PlanService` alone, only if it failed in the full run | Run alone three times: `Tests: 80 passed, 80 total` each time, but the suite still reports `FAIL` because the `afterAll` logger teardown in `__tests__/setup.ts` exceeds 5000 ms ("Exceeded timeout of 5000 ms for a hook"). No test assertion fails. This branch does not touch `PlanService`, its test or the setup file; it is the known Pino teardown flake |
+| `PlanService` alone, only if it failed in the full run | The full run and three solo runs by the implementer hit the known flaky Pino `afterAll` teardown timeout in `__tests__/setup.ts` ("Exceeded timeout of 5000 ms for a hook"); all 80 tests passed each time. A later solo rerun by the controller passed (80/80, suite passed), and so did the final review rerun. This branch does not touch `PlanService`, its test or the setup file. Hosted CI (Linux) must show the Backend Test job green before merge |
 | Backend `tsc --noEmit` and ESLint (Step 2) | `tsc --noEmit` exit 0; `pnpm lint` exit 0 (no output) |
 | Frontend tests `node --experimental-strip-types --test frontend/__tests__/*.test.ts` (Step 3) | `tests 501`, `pass 501`, `fail 0` |
 | Frontend `tsc -b` (Step 3) | `tsc -b` exit 0 |
 | `pnpm build` (Step 4) | `Tasks: 3 successful, 3 total` (no cache); `git diff --check origin/main...HEAD` prints nothing |
 | Replica lab with the S3 primary scenario (Task 9 Step 3) | Not rerun in Task 15 (needs Docker). Task 9 recorded 19/19 passed, including the S3 primary scenario (per the task ledger) |
-| `git diff --check origin/main...HEAD` | No output. |
 | Hosted CI | Not run yet; runs on the pull request. |
 
 ## Deployment, Agent and UAT
@@ -154,6 +152,8 @@ is installed:
    database artifact if the plan dumps a database).
 8. The plan menu has no **Move Repository**.
 
+Note: if the Agent of an S3 plan is older than 0.8.0, the server refuses to queue its backups and this appears only as a `remote_backup_not_queued` log warning, not in the UI. Check the log if a scheduled S3 backup does not start.
+
 If a step fails, record only: plan ID, backup ID, the backup error text shown in the UI, and from
 the server log either the `remote_backup_command_preparation_failed` fields `failureStage`,
 `rejectedField`, `ruleCategory`, or the `command_failed` fields `failureStage`, `failureCode`.
@@ -161,21 +161,21 @@ Do not copy payloads, storage settings or `.env`.
 
 ## Rollback
 
-- Agent first: reinstall the previous Agent. The server then refuses to queue backups for S3
+- Agent first, then server. The order matters because an older server's strict capability schema refuses 0.8.0 heartbeats, so those Agents would go offline for all their plans. Reinstall the previous Agent. The server then refuses to queue backups for S3
   plans with HTTP 409 "Remote agent does not support S3 repositories. Update the agent first."
-  instead of sending a payload the Agent cannot read. Snapshots already in S3 stay readable.
+  instead of sending a payload the Agent cannot read. While the Agent is older than 0.8.0 this refusal shows only as a `remote_backup_not_queued` log warning, not in the UI. Snapshots already in S3 stay readable.
 - Server: redeploy the previous image by digest. No schema change, so no downgrade step. With the
   older server, S3-primary plans fail to back up and their snapshots are not reachable from the
   UI until this version is deployed again; their data in S3 is untouched.
 
 ## Decisions from the design
 
-0. Two additions beyond the original task list: database passwords are sealed in version 5 too (commit `ab73e45`), and sibling in-app articles were aligned (`55f2d93`).
-1. `sourceDiagnosticsVersion: 1` is sent in payload version 5 exactly as today (design 10.2), so
+1. Two additions beyond the original task list: database passwords are sealed in version 5 too (commit `ab73e45`), and sibling in-app articles were aligned (`55f2d93`).
+2. `sourceDiagnosticsVersion: 1` is sent in payload version 5 exactly as today (design 10.2), so
    Agent 0.8.0 keeps path-level source diagnostics.
-2. The payload carries no trust or CA setting (design 6.1 point 2); the server applies
+3. The payload carries no trust or CA setting (design 6.1 point 2); the server applies
    `PLUTON_STORAGE_CA_FILE` only on its own read path.
-3. `AGENT_INSTALL_VERSION=0.8.0` is accepted by this server; the `.env` pin is an operator step
+4. `AGENT_INSTALL_VERSION=0.8.0` is accepted by this server; the `.env` pin is an operator step
    after the Agent pull request merges.
 
 ## Limitations
@@ -190,4 +190,9 @@ Do not copy payloads, storage settings or `.env`.
 - Not tested against a real HCP tenant; the lab uses `rclone serve s3` with a private CA.
 - Storage settings outside the Agent allowlist with a non-default value refuse the plan with the
   field name; adjust the storage or use another one.
-- Review follow-ups recorded in the task ledger, none blocking: `seal()` has no runtime shape check and accepts empty secret, command ID or lease token (poll guarantees them); the overlap scan decrypts all plans' storages on every S3 queue (performance, fail-closed: one unverifiable plan scope blocks all S3 plans); a missing-password or missing-`databaseId` path in database sealing is untested; the replica lab uses fake stores and has no negative control; the `PlanService` suite fails on the Pino teardown hook even when run alone, unrelated to this change.
+- Review follow-ups recorded in the task ledger, none blocking: `seal()` has no runtime shape check and accepts empty secret, command ID or lease token (poll guarantees them); the overlap scan decrypts all plans' storages on every S3 queue (performance, fail-closed: one unverifiable plan scope blocks all S3 plans); a missing-password or missing-`databaseId` path in database sealing is untested; the replica lab uses fake stores and has no negative control; the `PlanService` suite can hit the known flaky Pino teardown timeout (see the Tests table; solo rerun passed 80/80), unrelated to this change, and hosted CI must show the Backend Test job green before merge.
+- Sealing is only as confidential as the Agent enrollment exchange: the per-Agent secret (HKDF input) is returned in plain form in the enrollment response (`AgentService.ts`), and production may allow Agent HTTP on the LAN (`ALLOW_INSECURE_AGENT_HTTP`). A passive observer of an enrollment over HTTP could derive the sealing key. Enroll Agents that will use an S3 primary over HTTPS; otherwise the residual risk is accepted. Documentation only, no code change.
+- Agents older than 0.8.0 on an S3 plan: the queue refusal is visible only as the `remote_backup_not_queued` log warning, not in the UI (follow-up).
+- A local (device Main) plan created later inside an S3 primary's prefix is not refused and makes that S3 plan's backups stop queueing (follow-up).
+- Hostname aliases of the same HCP namespace are not detected (a single shared storage record today).
+- Switching between two remote machines in the plan form keeps an S3 selection; the server refuses it with HTTP 409 (follow-up).

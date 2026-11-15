@@ -281,7 +281,7 @@ maintenance repository hanya melalui kontrak managed/Standard yang sesuai.
 Managed replication berjalan **di server**, globally sequential, sesudah primary
 completed dan snapshot/artefaknya diverifikasi. Maksimum dua tujuan S3/S3-compatible,
 prefix khusus tanpa overlap. Non-AWS/S3-compatible wajib protected pre-existing
-namespace mode. Agent tidak mendapat S3 key. Windows tidak mendukung executor ini.
+namespace mode. Kunci replika tidak pernah dikirim ke Agent; Agent hanya menerima kunci S3 milik plan yang primernya S3, dalam bentuk tersegel. Windows tidak mendukung executor ini.
 
 Contoh logical, bukan path fisik otomatis:
 

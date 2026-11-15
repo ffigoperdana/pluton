@@ -41,7 +41,7 @@ Contoh fiktif: endpoint `https://objects.example.internal`, bucket `example-back
 6. Klik **Add Storage**. Pluton memeriksa akses namespace dengan listing; keberhasilan tahap ini tidak membuat bucket baru.
 7. Pada plan yang sesuai, pilih storage tersebut dan prefix repository yang terpisah. Bila UI sudah menampilkan awalan bucket, isi hanya subfoldernya.
 
-HCP dapat dipakai melalui konfigurasi S3 yang relevan untuk alur standar. Pada Managed Agent, HCP/S3 adalah replika opsional yang dikerjakan server; primer tetap SFTP. Ikuti [replikasi HCP](/docs/replication/hcp) untuk langkah dan batasnya. Agent tidak menerima kredensial HCP/S3.
+HCP dapat dipakai melalui konfigurasi S3 yang relevan untuk alur standar. Pada Managed Agent, HCP/S3 adalah replika opsional yang dikerjakan server; primer tetap SFTP. Ikuti [replikasi HCP](/docs/replication/hcp) untuk langkah dan batasnya. Kunci replika tidak pernah dikirim ke Agent. Agent hanya menerima kunci S3 milik plan yang primernya S3, dalam bentuk tersegel per backup.
 
 ### Endpoint, path-style dan trust
 
