@@ -137,6 +137,8 @@ OFFLINE_SCENARIOS = [
 DOWNLOAD_SCENARIOS = [
     {
         "name": "download-pinned-rclone",
+        # Docker mounts tmpfs noexec by default; the downloaded Rclone must be able to run from /tmp.
+        "tmp_exec": True,
         "exit": 0,
         "stdout": [r"PASS rclone version=v1\.75\.1 source=download pinned=yes", DNS_PASS, TLS_WITH_CA, *ROUND_TRIP_8_MIB, r"RESULT PASS storage_ca_file_needed=yes"],
     },
@@ -204,7 +206,7 @@ def run_scenario(name, image, scenario, index):
     values = dict(BASE_ENV)
     values.update(scenario.get("env", {}))
     env = dict(os.environ)
-    args = ["run", "--rm", "--init", "--name", container, "--network", name, "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--memory", "768m", "--memory-swap", "768m", "--pids-limit", "128", "--tmpfs", "/tmp:rw,nosuid,nodev,size=320m,mode=1777", "--mount", "type=bind,source=" + str(PROBE) + ",target=/work/agent-s3-probe.sh,readonly", "--mount", "type=volume,source=" + name + "-ca,target=/ca,readonly"]
+    args = ["run", "--rm", "--init", "--name", container, "--network", name, "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--memory", "768m", "--memory-swap", "768m", "--pids-limit", "128", "--tmpfs", "/tmp:rw,nosuid,nodev," + ("exec," if scenario.get("tmp_exec") else "") + "size=320m,mode=1777", "--mount", "type=bind,source=" + str(PROBE) + ",target=/work/agent-s3-probe.sh,readonly", "--mount", "type=volume,source=" + name + "-ca,target=/ca,readonly"]
     if not scenario.get("root"):
         args += ["--user", "1000:1000", "--read-only"]
     for variable, value in values.items():

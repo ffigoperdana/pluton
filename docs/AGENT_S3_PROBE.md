@@ -3,7 +3,7 @@
 Stage 0 of [S3_AGENT_REPOSITORY_DESIGN.md](S3_AGENT_REPOSITORY_DESIGN.md) (section 5). Before an
 S3-compatible store (Hitachi Content Platform) is used as a Managed Agent repository, the operator
 runs `scripts/diagnostics/agent-s3-probe.sh` on the future Agent host, the ERP host first. It answers
-four questions with closed facts: does the endpoint resolve, does its certificate verify, can this
+five questions with closed facts: does the endpoint resolve, does its certificate verify, can this
 host authenticate, write, read back and delete an object, and how fast.
 
 Nothing is deployed. No migration, no server or Agent change, no Agent update or re-enrollment, and
