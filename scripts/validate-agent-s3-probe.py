@@ -16,6 +16,7 @@ import uuid
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PROBE = ROOT / "scripts" / "diagnostics" / "agent-s3-probe.sh"
 LAB = ROOT / "scripts" / "diagnostics" / "test" / "agent-s3-probe"
+DOC = ROOT / "docs" / "AGENT_S3_PROBE.md"
 ENDPOINT = "https://s3.example.internal:9443"
 ACCESS_KEY = "SYNTHETICKEY01"
 SECRET_KEY = "synthetic-secret-key-01"
@@ -172,6 +173,15 @@ def static_checks():
         lab_value = re.search(r"^ARG " + name + r"=(\S+)$", dockerfile, re.MULTILINE)
         if not probe_value or not lab_value or probe_value.group(1) != lab_value.group(1):
             problems.append(name + " differs between the probe and the lab image")
+    # Every closed reason the probe can print must be explained to the operator.
+    tokens = set(re.findall(r"reason=([a-z][a-z0-9-]+)", text))
+    tokens |= set(re.findall(r"(?:RCLONE_FAILURE|REMOVE_REASON)='([a-z][a-z0-9-]+)'", text))
+    tokens |= set(re.findall(r"printf '([a-z][a-z0-9-]+)'", text))
+    tokens.discard("ok")
+    doc = DOC.read_text(encoding="utf-8") if DOC.is_file() else ""
+    missing = sorted(token for token in tokens if "`" + token + "`" not in doc)
+    if missing:
+        problems.append("docs/AGENT_S3_PROBE.md does not document: " + ", ".join(missing))
     return problems
 
 
