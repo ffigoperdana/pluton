@@ -58,6 +58,8 @@ SCENARIOS = [
     refusal("refuse-http-endpoint", "S3_PROBE_ENDPOINT", "http://s3.example.internal:9443", r"S3_PROBE_ENDPOINT must be an https:// origin"),
     refusal("refuse-endpoint-path", "S3_PROBE_ENDPOINT", ENDPOINT + "/bucket-01", r"S3_PROBE_ENDPOINT must be an https:// origin"),
     refusal("refuse-size", "S3_PROBE_SIZE_MIB", "2048", r"S3_PROBE_SIZE_MIB must be a whole number"),
+    refusal("refuse-size-multipart", "S3_PROBE_SIZE_MIB", "193", r"S3_PROBE_SIZE_MIB must be a whole number from 1 to 192"),
+    {"name": "refuse-bare-rclone-name", "args": ["--rclone", "rclone"], "exit": 2, "stdout": [], "stdout_empty": True, "stderr": r"agent-s3-probe: refused: --rclone must be a path"},
     refusal("refuse-missing-secret", "S3_PROBE_SECRET_ACCESS_KEY", None, r"S3_PROBE_SECRET_ACCESS_KEY is not set"),
     {
         "name": "tls-without-ca",
@@ -114,6 +116,13 @@ SCENARIOS = [
     {
         "name": "interrupt-cleans-up",
         "args": ["--rclone", "/opt/lab/rclone-cat-interrupted.sh"],
+        "exit": 130,
+        "stdout": [AUTH_PASS, WRITE_8_MIB, r"PASS cleanup object=removed", r"RESULT FAIL storage_ca_file_needed=yes interrupted=yes"],
+    },
+    {
+        # A second Ctrl-C (SIGINT to the probe's process group) arrives while the cleanup delete runs.
+        "name": "second-interrupt-cleans-up",
+        "args": ["--rclone", "/opt/lab/rclone-delete-interrupted.sh"],
         "exit": 130,
         "stdout": [AUTH_PASS, WRITE_8_MIB, r"PASS cleanup object=removed", r"RESULT FAIL storage_ca_file_needed=yes interrupted=yes"],
     },

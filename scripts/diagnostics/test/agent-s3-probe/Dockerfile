@@ -18,4 +18,4 @@ RUN set -eu; \
 	rm -rf /tmp/rclone /tmp/rclone.zip; \
 	/opt/lab/rclone version | head -n 1
 # /opt/lab exists already: COPY --chmod would also apply the mode to directories it creates.
-COPY --chmod=0755 pki.sh serve-fixture.sh run-probe.sh rclone-recording.sh rclone-cat-fails.sh rclone-cat-interrupted.sh /opt/lab/
+COPY --chmod=0755 pki.sh serve-fixture.sh run-probe.sh rclone-recording.sh rclone-cat-fails.sh rclone-cat-interrupted.sh rclone-delete-interrupted.sh /opt/lab/

@@ -8,6 +8,8 @@ if [[ "${1-}" == --install-agent-rclone ]]; then
 	shift
 	install -D -m 0755 /opt/lab/rclone /opt/pluton-agent/bin/rclone
 fi
+# Process group of the probe, for lab test doubles that signal it.
+cut -d " " -f 5 "/proc/$$/stat" >/tmp/lab-probe-pgid
 bash /work/agent-s3-probe.sh "$@"
 status=$?
 if compgen -G '/tmp/pluton-agent-s3-probe.*' >/dev/null; then

@@ -51,6 +51,7 @@ STARTED='no'
 RESULT_PRINTED='no'
 INTERRUPTED='no'
 FAILED='no'
+IN_CLEANUP='no'
 
 usage() {
 	cat <<'EOF'
@@ -63,7 +64,7 @@ Environment (set by the operator; see docs/AGENT_S3_PROBE.md):
   S3_PROBE_ACCESS_KEY_ID      access key ID
   S3_PROBE_SECRET_ACCESS_KEY  secret access key
   S3_PROBE_CA_FILE            optional PEM file of a private CA
-  S3_PROBE_SIZE_MIB           test object size in MiB, 1 to 1024 (default: 64)
+  S3_PROBE_SIZE_MIB           test object size in MiB, 1 to 192 (default: 64)
 
 Options:
   --rclone PATH  Rclone binary to use. Default: the Agent's private Rclone at
@@ -127,7 +128,7 @@ validate_inputs() {
 	local endpoint_pattern='^https://(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?)(:([0-9]{1,5}))?/?$'
 	local bucket_pattern='^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
 	local prefix_pattern='^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$'
-	local size_pattern='^[1-9][0-9]{0,3}$'
+	local size_pattern='^[1-9][0-9]{0,2}$'
 	local unsafe_pattern='[[:space:][:cntrl:]]'
 
 	[[ -n "$ENDPOINT" ]] || refuse 'S3_PROBE_ENDPOINT is not set.'
@@ -162,13 +163,16 @@ validate_inputs() {
 		CA_FILE="$(realpath -- "$CA_FILE")"
 	fi
 
-	if ! [[ "$SIZE_MIB" =~ $size_pattern ]] || ((SIZE_MIB > 1024)); then
-		refuse 'S3_PROBE_SIZE_MIB must be a whole number from 1 to 1024.'
+	if ! [[ "$SIZE_MIB" =~ $size_pattern ]] || ((SIZE_MIB > 192)); then
+		# Above Rclone's 200 MiB upload cutoff rcat would use a multipart upload.
+		refuse 'S3_PROBE_SIZE_MIB must be a whole number from 1 to 192.'
 	fi
 	SIZE_BYTES=$((SIZE_MIB * MIB))
 
-	if [[ -n "$RCLONE_ARGUMENT" && ! (-f "$RCLONE_ARGUMENT" && -x "$RCLONE_ARGUMENT") ]]; then
-		refuse '--rclone must name an executable file.'
+	if [[ -n "$RCLONE_ARGUMENT" ]]; then
+		# A bare name would be validated against the current directory but run through a PATH search.
+		[[ "$RCLONE_ARGUMENT" == */* ]] || refuse '--rclone must be a path that contains a /, for example ./rclone.'
+		[[ -f "$RCLONE_ARGUMENT" && -x "$RCLONE_ARGUMENT" ]] || refuse '--rclone must name an executable file.'
 	fi
 }
 
@@ -204,6 +208,11 @@ run_rclone() {
 			RCLONE_CONFIG_PROBE_NO_CHECK_BUCKET=true
 		export RCLONE_CONFIG_PROBE_ACCESS_KEY_ID="$ACCESS_KEY_ID" RCLONE_CONFIG_PROBE_SECRET_ACCESS_KEY="$SECRET_ACCESS_KEY"
 		if [[ -n "$CA_FILE" ]]; then export SSL_CERT_FILE="$CA_FILE"; fi
+		if [[ "$IN_CLEANUP" == yes ]]; then
+			# Without --foreground timeout moves Rclone into its own process group, so a
+			# terminal Ctrl-C or a job-control HUP aimed at the probe cannot abort the delete.
+			exec timeout --kill-after=10 "$limit" "$RCLONE" "$@" </dev/null
+		fi
 		exec timeout --foreground --kill-after=10 "$limit" "$RCLONE" "$@"
 	)
 }
@@ -506,7 +515,8 @@ remove_test_object() {
 	err=''
 	status=0
 	listing="$(run_rclone "$REQUEST_LIMIT_SECONDS" lsf --files-only --max-depth 1 --include "/$OBJECT_NAME" "probe:$BUCKET/$PREFIX/" 2>/dev/null)" || status=$?
-	if ((status != 0)); then
+	# Status 3 (directory not found) proves the object is absent, as in check_auth.
+	if ((status != 0 && status != 3)); then
 		REMOVE_REASON='listing-failed'
 		return 1
 	fi
@@ -584,8 +594,11 @@ on_exit() {
 	local status=$?
 	trap - EXIT
 	# Cleanup is bounded by REQUEST_LIMIT_SECONDS per call; do not let a second
-	# interrupt leave the test object or the temporary directory behind.
-	trap '' INT TERM HUP
+	# interrupt leave the test object or the temporary directory behind. The
+	# cleanup Rclone calls also leave the terminal's process group (IN_CLEANUP).
+	# PIPE: a closed output pipe (tee died on Ctrl-C) must not stop the cleanup.
+	trap '' INT TERM HUP PIPE
+	IN_CLEANUP='yes'
 	if [[ "$OBJECT_STATE" != none ]]; then
 		if remove_test_object; then
 			emit PASS cleanup "object=$REMOVED"
