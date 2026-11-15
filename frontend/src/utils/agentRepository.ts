@@ -36,7 +36,12 @@ export function replicationForAgentPrimary(
    replication: PlanReplicationSettings | undefined,
    s3Primary: boolean,
 ): PlanReplicationSettings | undefined {
-   if (!s3Primary || !replication || (!replication.enabled && !replication.storages.length)) return replication;
+   if (
+      !s3Primary ||
+      !replication ||
+      (!replication.enabled && !replication.storages.length && (replication.recoveryPolicy ?? 'primary-only') === 'primary-only')
+   )
+      return replication;
    return { ...replication, enabled: false, storages: [], recoveryPolicy: 'primary-only' };
 }
 

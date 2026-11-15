@@ -185,7 +185,11 @@ function hasEnabledScripts(plan: Pick<Plan | NewPlan, 'settings'>): boolean {
 /** Stage 1 has no replication from an S3 primary; listed but disabled replicas are refused too. */
 function hasReplicationSettings(plan: Pick<Plan | NewPlan, 'settings'>): boolean {
 	const replication = plan.settings?.replication;
-	return Boolean(replication?.enabled || replication?.storages?.length);
+	return Boolean(
+		replication?.enabled ||
+			replication?.storages?.length ||
+			(replication?.recoveryPolicy && replication.recoveryPolicy !== 'primary-only')
+	);
 }
 
 function toFiniteNumber(value: unknown): number | undefined {
@@ -990,12 +994,22 @@ export class RemoteBackupService {
 			throw error;
 		}
 		const identity = canonicalS3RepositoryIdentity(storage, plan.storagePath || '', credentials);
-		for (const other of (await this.planStore.getAll(false)) || []) {
-			if (other.id === plan.id) continue;
-			const references = [
-				{ storageId: other.storageId, storagePath: other.storagePath },
-				...(other.settings?.replication?.storages || []),
-			];
+		// Repositories kept after a plan was deleted (or by a relocation) still own their prefix.
+		const retained = ((await this.planStore.getStorageRemovalReferences()) || [])
+			.filter(reference => reference.kind === 'retained' && reference.storageId)
+			.map(reference => ({ storageId: reference.storageId, storagePath: reference.storagePath }));
+		const owners: Array<{ id?: string; references: Array<{ storageId: string | null; storagePath?: string | null }> }> = [
+			...((await this.planStore.getAll(false)) || []).map(other => ({
+				id: other.id,
+				references: [
+					{ storageId: other.storageId, storagePath: other.storagePath },
+					...(other.settings?.replication?.storages || []),
+				],
+			})),
+			{ references: retained },
+		];
+		for (const { id, references } of owners) {
+			if (id === plan.id) continue;
 			for (const reference of references) {
 				if (!reference.storageId) continue;
 				const candidate =

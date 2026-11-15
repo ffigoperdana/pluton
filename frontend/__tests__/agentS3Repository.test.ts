@@ -53,6 +53,9 @@ test('choosing an S3 primary turns replication off and leaves it untouched other
    const off: PlanReplicationSettings = { enabled: false, concurrent: false, storages: [] };
    assert.equal(replicationForAgentPrimary(off, true), off);
    assert.equal(replicationForAgentPrimary(undefined, true), undefined);
+   const assistedOff: PlanReplicationSettings = { enabled: false, concurrent: false, recoveryPolicy: 'assisted', storages: [] };
+   assert.deepEqual(replicationForAgentPrimary(assistedOff, true), { enabled: false, concurrent: false, recoveryPolicy: 'primary-only', storages: [] });
+   assert.equal(replicationForAgentPrimary(assistedOff, false), assistedOff);
 });
 
 test('destination wording covers both repository types and states what the Agent receives', () => {

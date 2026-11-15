@@ -305,6 +305,15 @@ describe('plan repository relocation service', () => {
 		});
 	});
 
+	it('reports an S3 primary as unsupported and not startable in the overview', async () => {
+		await expect(service.overview('plan-01')).resolves.toMatchObject({ supported: true, canStart: true });
+		context.sqlite.exec(`
+			UPDATE plans SET storage_id='storage-s3', storage_path='bucket-01/managed/fixture' WHERE id='plan-01';
+			UPDATE remote_managed_repositories SET storage_id='storage-s3', storage_path='bucket-01/managed/fixture' WHERE id='repo-01';
+		`);
+		await expect(service.overview('plan-01')).resolves.toMatchObject({ supported: false, canStart: false });
+	});
+
 	it('fails closed on a foreign destination and gives the plan back', async () => {
 		const foreign = repository(hex('9'));
 		foreign.id = hex('8');

@@ -82,7 +82,12 @@ export class PlanRepositoryRelocationService {
 		const relocations = await Promise.all(
 			this.store.listForPlan(planId).map(relocation => this.view(relocation))
 		);
-		const supported = RemoteBackupService.isRemoteFilesystemPlan(plan) && plan.method === 'backup';
+		// start() copies SFTP to SFTP only, so an S3 primary is not offered (design section 3).
+		const primary = plan.storageId ? await this.storages.getById(plan.storageId) : undefined;
+		const supported =
+			RemoteBackupService.isRemoteFilesystemPlan(plan) &&
+			plan.method === 'backup' &&
+			(!primary || primary.type === 'sftp');
 		return {
 			supported,
 			canStart: supported && !this.store.activeForPlan(planId),

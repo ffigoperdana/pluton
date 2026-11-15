@@ -130,6 +130,7 @@ describe('RemoteBackupService', () => {
 			getById: jest.fn().mockResolvedValue(plan),
 			hasActiveBackups: jest.fn().mockResolvedValue(false),
 			getAll: jest.fn().mockResolvedValue([]),
+			getStorageRemovalReferences: jest.fn().mockResolvedValue([]),
 		};
 		backupStore = {
 			getById: jest.fn().mockResolvedValue({
@@ -1135,6 +1136,47 @@ describe('RemoteBackupService', () => {
 					settings: {
 						...s3Plan.settings,
 						replication: { enabled: false, concurrent: false, storages: [] },
+					},
+				})
+			).resolves.toBeUndefined();
+		});
+
+		it('refuses a prefix inside a retained repository of a deleted plan and allows a sibling prefix', async () => {
+			const retained = (storagePath: string) => [
+				{ planId: null, storageId: 'storage-s3', storagePath, kind: 'retained' },
+			];
+			planStore.getStorageRemovalReferences.mockResolvedValue(retained('bucket-01/agents/app-01'));
+			await expect(
+				service.validatePlanCreation({ ...s3Plan, storagePath: 'bucket-01/agents/app-01/x' })
+			).rejects.toMatchObject({
+				statusCode: 409,
+				message: 'The S3 repository prefix overlaps another plan or replica. Select a separate prefix.',
+			});
+			planStore.getStorageRemovalReferences.mockResolvedValue(retained('bucket-01/agents/app-010'));
+			await expect(service.validatePlanCreation(s3Plan)).resolves.toBeUndefined();
+		});
+
+		it('refuses a non primary-only recovery policy on an S3 primary even with replication off', async () => {
+			for (const recoveryPolicy of ['assisted', 'automatic']) {
+				await expect(
+					service.validatePlanCreation({
+						...s3Plan,
+						settings: {
+							...s3Plan.settings,
+							replication: { enabled: false, concurrent: false, recoveryPolicy, storages: [] },
+						},
+					})
+				).rejects.toMatchObject({
+					statusCode: 400,
+					message: 'Replication is not available for an S3 primary repository yet.',
+				});
+			}
+			await expect(
+				service.validatePlanCreation({
+					...s3Plan,
+					settings: {
+						...s3Plan.settings,
+						replication: { enabled: false, concurrent: false, recoveryPolicy: 'primary-only', storages: [] },
 					},
 				})
 			).resolves.toBeUndefined();
