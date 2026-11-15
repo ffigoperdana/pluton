@@ -23,6 +23,7 @@ import {
 	AGENT_S3_REPLICATION_MESSAGE,
 	AGENT_S3_SCOPE_UNVERIFIED_MESSAGE,
 	AGENT_S3_UNSUPPORTED_MESSAGE,
+	assertAgentS3RepositoryPath,
 	AgentS3OptionError,
 	agentBackupPayloadVersion,
 	agentS3RepositoryOptions,
@@ -994,6 +995,7 @@ export class RemoteBackupService {
 			throw error;
 		}
 		const identity = canonicalS3RepositoryIdentity(storage, plan.storagePath || '', credentials);
+		assertAgentS3RepositoryPath(plan.storagePath || '');
 		// Repositories kept after a plan was deleted (or by a relocation) still own their prefix.
 		const retained = ((await this.planStore.getStorageRemovalReferences()) || [])
 			.filter(reference => reference.kind === 'retained' && reference.storageId)

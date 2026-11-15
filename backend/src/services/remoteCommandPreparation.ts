@@ -38,7 +38,8 @@ export type RemoteCommandPreparationStage =
 export type RemoteCommandPreparationRuleCategory =
 	| 'unsupported-field'
 	| 'unsafe-control-character'
-	| 'value-too-long';
+	| 'value-too-long'
+	| 'unsupported-value';
 
 export type RemoteCommandPreparationFailure = {
 	stage: RemoteCommandPreparationStage;
@@ -117,6 +118,7 @@ export class RemoteCommandPreparationError extends Error {
 			'unsupported-field',
 			'unsafe-control-character',
 			'value-too-long',
+			'unsupported-value',
 		];
 		if (failure.ruleCategory && ruleCategories.includes(failure.ruleCategory)) {
 			this.ruleCategory = failure.ruleCategory;

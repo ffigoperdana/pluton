@@ -60,11 +60,19 @@ export const AGENT_S3_PLAIN_OPTION_KEYS: readonly string[] = [
 	'no_check_bucket',
 ];
 const AGENT_S3_SECRET_OPTION_KEYS: readonly string[] = ['access_key_id', 'secret_access_key'];
-const MAX_OPTION_LENGTH = 16_384;
+// Mirrors the Agent 0.8.0 parser (backupFilesystem.ts validateS3PlainOptions / validateS3RepositoryPath).
+const MAX_OPTION_LENGTH = 1_024;
+const MAX_SECRET_LENGTH = 16_384;
+const AGENT_S3_SAFE_VALUE_KEYS: readonly string[] = ['provider', 'region', 'location_constraint', 'acl'];
+const AGENT_S3_SAFE_VALUE = /^[A-Za-z0-9._-]{1,128}$/;
 const AWS_ENDPOINT = /^(?:s3|s3[.-][a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$/;
 
 export type AgentS3Secrets = { access_key_id: string; secret_access_key: string };
-export type AgentS3OptionRule = 'unsupported-field' | 'unsafe-control-character' | 'value-too-long';
+export type AgentS3OptionRule =
+	| 'unsupported-field'
+	| 'unsafe-control-character'
+	| 'value-too-long'
+	| 'unsupported-value';
 
 type S3StorageConfiguration = Pick<Storage, 'type' | 'credentials' | 'settings'>;
 
@@ -145,10 +153,33 @@ export function agentS3RepositoryOptions(
 		secret_access_key: resolved.secret_access_key,
 	};
 	for (const [key, value] of Object.entries({ ...options, ...secrets })) {
-		if (value.length > MAX_OPTION_LENGTH) throw new AgentS3OptionError(key, 'value-too-long');
+		// Plain options are limited like the Agent; sealed secrets keep the wider limit.
+		const limit = key in options ? MAX_OPTION_LENGTH : MAX_SECRET_LENGTH;
+		if (value.length > limit) throw new AgentS3OptionError(key, 'value-too-long');
 		if (hasControl(value)) throw new AgentS3OptionError(key, 'unsafe-control-character');
+		if (AGENT_S3_SAFE_VALUE_KEYS.includes(key) && !AGENT_S3_SAFE_VALUE.test(value))
+			throw new AgentS3OptionError(key, 'unsupported-value');
 	}
 	return { options, secrets };
+}
+
+export const AGENT_S3_PATH_MESSAGE =
+	'The S3 repository path must be bucket/prefix with no leading or trailing slash, empty, dot or backslash segment.';
+
+/**
+ * Agent 0.8.0 validateS3RepositoryPath: bucket plus at least one prefix segment, no empty,
+ * "." or ".." segment and no backslash. Stored paths are refused, never rewritten.
+ */
+export function assertAgentS3RepositoryPath(repositoryPath: string): void {
+	const segments = repositoryPath.split('/');
+	if (
+		!repositoryPath ||
+		repositoryPath.includes('\\') ||
+		hasControl(repositoryPath) ||
+		segments.length < 2 ||
+		segments.some(segment => !segment || segment === '.' || segment === '..')
+	)
+		throw new AppError(400, AGENT_S3_PATH_MESSAGE);
 }
 
 /** The replication overlap rule; an empty prefix is a bucket root and overlaps everything in it. */

@@ -28,6 +28,7 @@ is installed (separate pull request).
 | In-app documentation | The Managed Agent guide gains an S3 primary section; Remote Agent and Getting Started wording is generalised. |
 | Agent distribution | `SUPPORTED_AGENT_INSTALL_VERSIONS` (server and browser) accepts `0.7.0`, `0.7.1` and `0.8.0`. The generated install command still verifies the package and runtime version on the host before sudo. `.env.template`, `deploy/.env.example` and the configuration and enrollment guides list the three versions. |
 | Database passwords | Lifecycle database passwords are sealed in payload version 5 as well (user decision of 15 November 2026; design section 10.3 amended in `3d241ea`), so no secret travels in plain `options` or lifecycle fields for a version 5 Agent. |
+| Agent parity | The server refuses, with a 400 that never echoes the value, an S3 primary the Agent 0.8.0 parser would always refuse: a repository path with a leading or trailing slash, an empty, `.` or `..` segment, a backslash, or no prefix after the bucket (stored paths are refused, never rewritten); and plain S3 options longer than 1024 characters, or a `region`, `location_constraint`, `acl` or `provider` outside `[A-Za-z0-9._-]{1,128}` (closed rules `value-too-long` and `unsupported-value`). Sealed keys keep the 16384 limit. |
 
 Unchanged: existing SFTP plans and their replication, completion handling (snapshot ID,
 summary, database artifacts, `initialized_at`), Agent failure stages and codes, enrollment

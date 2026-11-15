@@ -1046,6 +1046,29 @@ describe('RemoteBackupService', () => {
 			}
 		});
 
+		it('refuses S3 primary paths the Agent would refuse, without echoing them, and accepts a plain prefix', async () => {
+			for (const storagePath of [
+				'//bucket-01/agents/app-01',
+				'bucket-01/agents/app-01//',
+				'/bucket-01/agents/app-01',
+				'bucket-01/agents/app-01/',
+				'bucket-01//agents/app-01',
+				'bucket-01/./app-01',
+				'bucket-01/agents/../app-01',
+				'bucket-01/agents\\app-01',
+			]) {
+				const error = await service
+					.validatePlanCreation({ ...s3Plan, storagePath })
+					.then(() => null)
+					.catch(caught => caught);
+				expect({ storagePath, status: error?.statusCode }).toEqual({ storagePath, status: 400 });
+				expect(error.message).not.toContain('app-01');
+			}
+			await expect(
+				service.validatePlanCreation({ ...s3Plan, storagePath: 'bucket-01/agents/app-01' })
+			).resolves.toBeUndefined();
+		});
+
 		it('refuses a prefix that overlaps another plan primary or replica, and accepts a separate prefix', async () => {
 			const overlap = {
 				statusCode: 409,

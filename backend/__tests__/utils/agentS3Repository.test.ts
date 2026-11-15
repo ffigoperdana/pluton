@@ -153,6 +153,32 @@ describe('Agent S3 repository options (S3_AGENT_REPOSITORY_DESIGN.md 6.1.1 and 1
 		).toThrow(AppError);
 	});
 
+	it('applies the Agent option limits: 1024 characters and a closed character set', () => {
+		const refused = (settings: Record<string, unknown>) => {
+			try {
+				agentS3RepositoryOptions(s3compatible({ ...s3Settings, ...settings }), s3Credentials);
+			} catch (error) {
+				return error;
+			}
+			return null;
+		};
+		expect(refused({ region: 'us east' })).toMatchObject({
+			field: 'region',
+			rule: 'unsupported-value',
+		});
+		expect(refused({ acl: 'private/x' })).toMatchObject({ field: 'acl', rule: 'unsupported-value' });
+		expect(refused({ location_constraint: 'a'.repeat(129) })).toMatchObject({
+			field: 'location_constraint',
+			rule: 'unsupported-value',
+		});
+		expect(refused({ endpoint: `https://${'a'.repeat(1020)}.example.internal` })).toMatchObject({
+			field: 'endpoint',
+			rule: 'value-too-long',
+		});
+		expect(refused({ region: 'eu-west-1', acl: 'private', provider: 'Other' })).toBeNull();
+		expect(JSON.stringify(refused({ region: 'us east' }))).not.toContain('us east');
+	});
+
 	it('refuses a storage type other than s3 and s3compatible', () => {
 		expect(() =>
 			agentS3RepositoryOptions(
