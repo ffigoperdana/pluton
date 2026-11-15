@@ -476,7 +476,11 @@ export class AgentService {
 				if (!this.remoteBackupService) {
 					throw new RemoteCommandPreparationError({ stage: 'materializer-unavailable' });
 				}
-				payload = await this.remoteBackupService.materializeCommand(agent.agentId, command);
+				// The lease token and per-Agent secret seal payload version 5 (S3_AGENT_REPOSITORY_DESIGN.md 10.3).
+				payload = await this.remoteBackupService.materializeCommand(agent.agentId, command, {
+					agentSecret: agent.secret,
+					leaseToken,
+				});
 			} catch (error) {
 				// Do not lease a command whose ephemeral credentials or managed plan can no
 				// longer be prepared. Mark it terminal without disclosing provider details.
