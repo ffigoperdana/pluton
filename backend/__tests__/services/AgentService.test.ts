@@ -846,4 +846,40 @@ describe('AgentService', () => {
 			warn.mockRestore();
 		}
 	});
+	it('accepts the S3 repository capability fields of section 10.1 and refuses any other shape', async () => {
+		const s3Capable = {
+			...inventory,
+			agentVersion: '0.8.0',
+			capabilities: {
+				...inventory.capabilities,
+				repositoryBackends: ['sftp', 's3'],
+				backupPayloadVersion: 5,
+			},
+		};
+		await service.heartbeat(agent.agentId, s3Capable);
+		expect(store.updateHeartbeat).toHaveBeenCalledWith(agent.agentId, s3Capable);
+		const sftpOnly = {
+			...inventory,
+			capabilities: { ...inventory.capabilities, repositoryBackends: ['sftp'] },
+		};
+		await service.heartbeat(agent.agentId, sftpOnly);
+		expect(store.updateHeartbeat).toHaveBeenLastCalledWith(agent.agentId, sftpOnly);
+		for (const capabilities of [
+			{ repositoryBackends: ['s3'] },
+			{ repositoryBackends: [] },
+			{ repositoryBackends: ['sftp', 'sftp'] },
+			{ repositoryBackends: ['sftp', 's3', 's3'] },
+			{ repositoryBackends: ['sftp', 'ftp'] },
+			{ backupPayloadVersion: 4 },
+			{ backupPayloadVersion: 6 },
+			{ backupPayloadVersion: '5' },
+		]) {
+			await expect(
+				service.heartbeat(agent.agentId, {
+					...inventory,
+					capabilities: { ...inventory.capabilities, ...capabilities },
+				})
+			).rejects.toThrow('Agent inventory is invalid.');
+		}
+	});
 });

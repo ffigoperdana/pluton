@@ -65,6 +65,16 @@ const inventorySchema = z
 				hooksConfigured: z.boolean().optional(),
 				sourceAccessVersion: z.literal(1).optional(),
 				sourceAccessModesVersion: z.literal(1).optional(),
+				// docs/S3_AGENT_REPOSITORY_DESIGN.md 10.1. Omitted means ['sftp'] and payload version 4.
+				repositoryBackends: z
+					.array(z.enum(['sftp', 's3']))
+					.min(1)
+					.max(2)
+					.refine(
+						backends => new Set(backends).size === backends.length && backends.includes('sftp')
+					)
+					.optional(),
+				backupPayloadVersion: z.literal(5).optional(),
 			})
 			.strict(),
 	})

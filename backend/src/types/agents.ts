@@ -31,6 +31,8 @@ export type AgentInventory = {
 		hooksConfigured?: boolean;
 		sourceAccessVersion?: 1;
 		sourceAccessModesVersion?: 1;
+		repositoryBackends?: ('sftp' | 's3')[];
+		backupPayloadVersion?: 5;
 	};
 };
 
