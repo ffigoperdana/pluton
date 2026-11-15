@@ -12,7 +12,17 @@ import PlanAdvancedSettings from '../PlanSettings/PlanAdvancedSettings';
 import { isPlanSettingsValid } from '../../../utils/plans';
 import PlanScheduleField from '../PlanSettings/PlanScheduleField';
 import PlanFormNav from './PlanFormNav';
-import { useGetDevice } from '../../../services/devices';
+import { useGetDevice, useGetDevices } from '../../../services/devices';
+import { useGetStorages } from '../../../services/storage';
+import type { Device } from '../../../@types/devices';
+import {
+   AGENT_S3_REPLICATION_NOTICE,
+   agentRepositoryStorageTypes,
+   agentS3HiddenNotice,
+   isAgentS3Primary,
+   managedDestinationNotice,
+   replicationForAgentPrimary,
+} from '../../../utils/agentRepository';
 import PlanPruneSettings from '../PlanSettings/PlanPruneSettings';
 import PlanReplicationSettings from '../PlanSettings/PlanReplicationSettings';
 import { useSourceAccess } from '../../../services/agentSourceAccess';
@@ -67,6 +77,18 @@ const PlanForm = ({
 
    const { data: deviceData } = useGetDevice('main', true);
    const deviceInstance = deviceData?.result?.device;
+
+   // The selected machine's Agent decides whether S3 can be its primary (S3_AGENT_REPOSITORY_DESIGN.md 6.4).
+   const { data: devicesData } = useGetDevices();
+   const { data: storagesData } = useGetStorages();
+   const sourceAgent = isRemoteFilesystemSource
+      ? ((devicesData?.result || []) as Device[]).find((device) => device.id === planSettings.sourceId)?.agent
+      : undefined;
+   const primaryStorageType = ((storagesData?.result || []) as { id: string; type: string }[]).find(
+      (item) => item.id === planSettings.storage?.id,
+   )?.type;
+   const s3Primary = isAgentS3Primary(isRemoteFilesystemSource, primaryStorageType);
+   const s3HiddenNotice = isRemoteFilesystemSource ? agentS3HiddenNotice(sourceAgent) : undefined;
 
    const buttonTexts: Record<number, { title: string; onClick: () => void }> = {
       1: {
@@ -266,26 +288,29 @@ const PlanForm = ({
                         storagePath={storagePath || planSettings.storagePath}
                         storageId={storageId || planSettings.storage?.id || ''}
                         deviceId={isRemoteFilesystemSource ? 'main' : planSettings.sourceId || 'main'}
-                        allowedStorageTypes={isRemoteFilesystemSource ? ['sftp'] : undefined}
+                        allowedStorageTypes={isRemoteFilesystemSource ? agentRepositoryStorageTypes(sourceAgent) : undefined}
                         requirePath={isRemoteFilesystemSource}
                         disabled={type === 'edit' ? true : false}
-                        onUpdate={(s: { storage: { name: string; id: string; type: string }; path: string }) =>
+                        onUpdate={(s: { storage: { name: string; id: string; type: string }; path: string }) => {
+                           const replication = replicationForAgentPrimary(
+                              planSettings.settings.replication,
+                              isAgentS3Primary(isRemoteFilesystemSource, s.storage.type),
+                           );
                            onPlanSettingsChange({
                               ...planSettings,
                               storagePath: s.path,
                               storage: { id: s.storage.id, name: s.storage.name },
-                           })
-                        }
+                              ...(replication !== planSettings.settings.replication
+                                 ? { settings: { ...planSettings.settings, replication } }
+                                 : {}),
+                           });
+                        }}
                      />
                   </div>
                   {isRemoteFilesystemSource && (
                      <div className={classes.field}>
-                        <p className={classes.fieldNotice}>
-                           Remote managed backups use SFTP. Database dumps and constrained hooks can be configured under Advanced → Database & Hooks.
-                           Optional replicas are copied by the Pluton server after snapshot verification. Storage credentials stay on the server.
-                           Native database recovery continues to use the trusted primary repository. Agent prune and arbitrary scripts remain
-                           unavailable.
-                        </p>
+                        {s3HiddenNotice && <p className={classes.fieldNotice}>{s3HiddenNotice}</p>}
+                        <p className={classes.fieldNotice}>{managedDestinationNotice(s3Primary)}</p>
                      </div>
                   )}
                   <PlanReplicationSettings
@@ -294,6 +319,7 @@ const PlanForm = ({
                      primaryStoragePath={planSettings.storagePath}
                      deviceId={isRemoteFilesystemSource ? 'main' : planSettings.sourceId || 'main'}
                      managedAgent={isRemoteFilesystemSource}
+                     unavailableReason={s3Primary ? AGENT_S3_REPLICATION_NOTICE : undefined}
                      isEditing={type === 'edit'}
                      planID={planId}
                      onUpdate={(replication) =>

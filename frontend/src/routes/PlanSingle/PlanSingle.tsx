@@ -20,6 +20,7 @@ import PlanRelocationModal from '../../components/Plan/PlanRelocation/PlanReloca
 import { useExclusiveMenu } from '../../hooks/useExclusiveMenu';
 import { PlanVerifiedResult } from '../..';
 import { getBackupIconName } from '../../utils';
+import { agentRepositoryCanMove } from '../../utils/agentRepository';
 
 const PlanSingle = () => {
    const { open: showMoreOptions, setOpen: setShowMoreOptions, ref: moreOptionsRef } = useExclusiveMenu<HTMLDivElement>();
@@ -78,6 +79,8 @@ const PlanSingle = () => {
       const isSync = method === 'sync';
       // Only managed Remote Agent backup plans can move their repository (server enforces it too).
       const remoteManaged = method === 'backup' && plan.sourceType === 'device' && plan.sourceId !== 'main';
+      // Move Repository copies SFTP to SFTP only; the server refuses an S3 primary as well.
+      const movableRepository = remoteManaged && agentRepositoryCanMove(plan.storage?.type);
 
       return (
          <div className={classes.planSingle}>
@@ -167,7 +170,7 @@ const PlanSingle = () => {
                                  >
                                     <Icon size={14} type="logs" /> View Logs
                                  </li>
-                                 {remoteManaged && (
+                                 {movableRepository && (
                                     <li
                                        className={classes.actionBtn}
                                        onClick={() => {
