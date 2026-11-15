@@ -253,3 +253,20 @@ describe('HCP S3 protected storage boundary', () => {
 		expect(() => trustEnvironment()).toThrow('Operator storage CA');
 	});
 });
+
+describe('decryptStorageCredentials with an explicit secret', () => {
+	it('uses the supplied application secret instead of the configured one', () => {
+		const other = new Cryptr('synthetic-other-secret-0123456789');
+		const storage = {
+			type: 's3compatible',
+			credentials: { access_key_id: other.encrypt('synthetic-access') },
+			settings: {},
+		} as any;
+		expect(decryptStorageCredentials(storage, 'synthetic-other-secret-0123456789')).toEqual({
+			access_key_id: 'synthetic-access',
+		});
+		expect(() => decryptStorageCredentials(storage)).toThrow(
+			'Storage credentials could not be decrypted.'
+		);
+	});
+});
