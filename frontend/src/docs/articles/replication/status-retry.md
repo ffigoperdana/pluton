@@ -43,6 +43,8 @@ Rekonsiliasi pending/admission setelah restart berbeda dari retry failed/cancell
 | `storage-tls-failed`, `storage-authentication-failed`, `storage-access-denied` | Betulkan CA/hostname atau policy/credential privat |
 | `repository-locked`, `retention-denied` | Tinjau proses/kebijakan storage; tidak ada automatic unlock/prune/purge Managed Agent |
 | `platform-not-supported` | Init/copy Managed Agent tidak didukung di Windows; gunakan deployment yang mendukung melalui proses terpisah |
+| `stalled` | Restic/Rclone tidak membaca, menulis, atau memakai CPU berarti selama 10 menit. Periksa jaringan atau DNS ke tujuan, lalu retry. Data yang sudah terunggah dan tercatat di indeks sementara Restic tidak dikirim ulang |
+| `timeout` | Job melewati batas mutlak 24 jam walaupun masih bergerak (salinan pertama plan sangat besar). Retry melanjutkan dari data yang sudah tercatat; selama job berjalan, replikasi plan lain menunggu |
 | `execution-interrupted`, `execution-uncertain`, `initialization-uncertain`, `claim-lost` | Jangan replay atau melepas state manual; kepastian proses/ownership perlu ditinjau |
 
 Tindakan detach/removal juga ditahan saat pending/running/uncertain. Setelah hasil sah, ikuti [detach dan retention](/docs/replication/retention-restore). Laporan publik hanya memuat contoh sintetis serta safe code; jangan menyertakan credential, raw process output, atau inventaris repository.

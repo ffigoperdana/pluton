@@ -13,6 +13,13 @@ import {
 	type ArchiveBackendRetrySummary,
 } from './archiveBackendRetries';
 import type { DatabaseArtifact } from '../../types/remoteLifecycle';
+import {
+	REPLICATION_PROGRESS,
+	createProgressTracker,
+	sampleProcessTree,
+	type ProcessTreeSample,
+	type ReplicationProgressLimits,
+} from './replicationProgress';
 
 /** Fixed workflow steps; recorded with a failure so an operator knows where a job stopped. */
 export type ReplicationStep =
@@ -197,7 +204,14 @@ export class ManagedReplicationExecutor implements ManagedReplicationExecutorCon
 	 * temporary file first (`restic-temp-pack-*`, up to 16 MiB each, several in flight), so the
 	 * container's small `/tmp` tmpfs cannot be used for a large copy.
 	 */
-	constructor(private readonly options: { tempRoot?: string } = {}) {}
+	constructor(
+		private readonly options: {
+			tempRoot?: string;
+			progress?: Partial<ReplicationProgressLimits> & {
+				sample?: (pid: number, name: string) => Promise<ProcessTreeSample | undefined>;
+			};
+		} = {}
+	) {}
 
 	async inspectSource(
 		source: ReplicationSource,
@@ -610,7 +624,43 @@ export class ManagedReplicationExecutor implements ManagedReplicationExecutorCon
 			};
 			const abort = () => stop('cancelled');
 			signal?.addEventListener('abort', abort, { once: true });
-			const timer = setTimeout(() => stop('timeout'), long ? 30 * 60_000 : 60_000);
+			const limits = { ...REPLICATION_PROGRESS, ...this.options.progress };
+			const startedAt = Date.now();
+			let closed = false;
+			let timer = setTimeout(() => stop('timeout'), long ? limits.legacyLimitMs : 60_000);
+			let monitor: NodeJS.Timeout | undefined;
+			if (long && child.pid) {
+				// Long commands are judged by progress, not by a fixed duration (see REPLICATION_PROGRESS).
+				const pid = child.pid;
+				const tracker = createProgressTracker(startedAt, limits);
+				const sample = this.options.progress?.sample ?? sampleProcessTree;
+				let sampling = false;
+				let observed = false;
+				monitor = setInterval(() => {
+					if (sampling || closed || failure) return;
+					sampling = true;
+					void sample(pid, binary)
+						.then(counters => {
+							if (closed || failure) return;
+							const state = tracker.observe(counters, Date.now());
+							if (state === 'unobservable') return; // the fixed legacy limit stays in force
+							if (!observed) {
+								observed = true;
+								clearTimeout(timer);
+								timer = setTimeout(
+									() => stop('timeout'),
+									Math.max(0, limits.limitMs - (Date.now() - startedAt))
+								);
+							}
+							if (state === 'stalled') stop('stalled');
+						})
+						.catch(() => undefined)
+						.finally(() => {
+							sampling = false;
+						});
+				}, limits.sampleMs);
+				monitor.unref?.();
+			}
 			child.on('error', () => {
 				failure ||= 'execution-failed';
 			});
@@ -635,7 +685,9 @@ export class ManagedReplicationExecutor implements ManagedReplicationExecutorCon
 				diagnostic = Buffer.concat([diagnostic, chunk]).subarray(-32 * 1024);
 			});
 			child.once('close', async (code, exitSignal) => {
+				closed = true;
 				clearTimeout(timer);
+				clearInterval(monitor);
 				signal?.removeEventListener('abort', abort);
 				// Do not release a durable repository claim before all descendants stop.
 				if (process.platform !== 'win32' && child.pid && !(await this.stopDescendants(child.pid)))

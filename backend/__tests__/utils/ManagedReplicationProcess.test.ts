@@ -46,6 +46,37 @@ describe('Managed replication child process security', () => {
 		const executor = new ManagedReplicationExecutor() as any;
 		await expect(executor.command('rclone', ['-e', "process.kill(process.pid, 'SIGKILL')"], {})).rejects.toMatchObject({ code: 'process-killed', detail: { exitCode: null, signal: 'SIGKILL' } });
 	});
+	describe('long command progress watchdog', () => {
+		// Windows cannot prove a killed tree stopped, so the same stop is reported as uncertain there.
+		const stopped = (code: string) => (process.platform === 'win32' ? 'execution-uncertain' : code);
+		const idle = "setTimeout(() => {}, 4000)";
+		const growing = () => { let bytes = 0; return async () => [{ key: '1:1', bytes: (bytes += 2 * 1024 * 1024), cpuTicks: 0 }]; };
+		const watched = (progress: Record<string, unknown>) =>
+			new ManagedReplicationExecutor({ progress: { sampleMs: 20, stallMs: 300, legacyLimitMs: 5000, limitMs: 10_000, ...progress } }) as any;
+
+		it('stops a long command that shows no progress as stalled', async () => {
+			const executor = watched({ sample: async () => [{ key: '1:1', bytes: 0, cpuTicks: 0 }] });
+			await expect(executor.command('rclone', ['-e', idle], {}, undefined, undefined, true)).rejects.toMatchObject({ code: stopped('stalled') });
+		});
+		it('lets a long command that keeps progressing run past the old fixed limit', async () => {
+			const executor = watched({ legacyLimitMs: 150, sample: growing() });
+			await expect(executor.command('rclone', ['-e', "setTimeout(() => process.stdout.write('done'), 600)"], {}, undefined, undefined, true)).resolves.toBe('done');
+		});
+		it('keeps the old fixed limit when progress cannot be observed', async () => {
+			const executor = watched({ legacyLimitMs: 200, stallMs: 50, sample: async () => undefined });
+			await expect(executor.command('rclone', ['-e', idle], {}, undefined, undefined, true)).rejects.toMatchObject({ code: stopped('timeout') });
+		});
+		it('still enforces the absolute limit on a command that keeps progressing', async () => {
+			const executor = watched({ limitMs: 250, sample: growing() });
+			await expect(executor.command('rclone', ['-e', idle], {}, undefined, undefined, true)).rejects.toMatchObject({ code: stopped('timeout') });
+		});
+		it('does not watch short commands', async () => {
+			const sample = jest.fn(async () => [{ key: '1:1', bytes: 0, cpuTicks: 0 }]);
+			const executor = watched({ sample });
+			await expect(executor.command('rclone', ['-e', "setTimeout(() => process.stdout.write('ok'), 500)"], {})).resolves.toBe('ok');
+			expect(sample).not.toHaveBeenCalled();
+		});
+	});
 	it('falls back to the generic code only when nothing is recognised', () => {
 		expect(unclassifiedFailureCode(1, 'no space left on device')).toBe('no-space-left');
 		expect(unclassifiedFailureCode(null, '', 'SIGTERM')).toBe('process-killed');

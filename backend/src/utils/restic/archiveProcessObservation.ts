@@ -16,7 +16,7 @@ export type ArchiveProcessWindow = {
 	rclone?: CounterDelta;
 };
 
-async function counters(pid: number, name: 'restic' | 'rclone', parent?: number) {
+export async function readProcessCounters(pid: number, name: string, parent?: number) {
 	try {
 		const stat = await fs.readFile('/proc/' + pid + '/stat', 'utf8');
 		const end = stat.lastIndexOf(')');
@@ -40,7 +40,7 @@ async function counters(pid: number, name: 'restic' | 'rclone', parent?: number)
 
 export async function sampleArchiveProcesses(pid: number): Promise<ProcessSample | undefined> {
 	if (process.platform !== 'linux' || !Number.isSafeInteger(pid) || pid <= 0) return;
-	const restic = await counters(pid, 'restic');
+	const restic = await readProcessCounters(pid, 'restic');
 	if (!restic) return;
 	try {
 		// Go can spawn Rclone on a non-main thread. Only inspect a bounded
@@ -55,7 +55,7 @@ export async function sampleArchiveProcesses(pid: number): Promise<ProcessSample
 				.catch(() => '');
 			for (const child of children.trim().split(/\s+/, 8)) {
 				if (!/^[1-9]\d*$/.test(child)) continue;
-				const rclone = await counters(Number(child), 'rclone', pid);
+				const rclone = await readProcessCounters(Number(child), 'rclone', pid);
 				if (rclone) return { at: performance.now(), restic, rclone };
 			}
 		}
