@@ -448,6 +448,13 @@ export class AgentStore {
 		);
 	}
 
+	async getCommand(commandId: string): Promise<AgentCommand | null> {
+		return (
+			(await this.db.query.agentCommands.findFirst({ where: eq(agentCommands.id, commandId) })) ||
+			null
+		);
+	}
+
 	/**
 	 * Marks a durable command cancelled without deleting its audit trail. A
 	 * running agent observes this through its signed status poll and terminates

@@ -346,6 +346,69 @@ describe('BackupService', () => {
 			);
 			expect(mockBackupStore.delete).not.toHaveBeenCalled();
 		});
+
+		describe('remote failed history', () => {
+			const remoteFailed = {
+				...mockBackup,
+				sourceId: 'remote-device-01',
+				sourceType: 'device',
+				status: 'failed',
+				success: false,
+				inProgress: false,
+			};
+			const remoteService = (assertFailedHistoryRemovable: jest.Mock) =>
+				new BackupService(
+					mockSnapshotManager,
+					mockBackupManager,
+					mockPlanStore,
+					mockBackupStore,
+					mockRestoreStore,
+					mockStorageStore,
+					{ assertFailedHistoryRemovable } as any
+				);
+
+			it('removes only the history row of an eligible failed run and never the repository', async () => {
+				const assert = jest.fn().mockResolvedValue(undefined);
+				mockBackupStore.getById.mockResolvedValue(remoteFailed);
+				const result = await remoteService(assert).deleteBackup(backupId, true);
+				expect(assert).toHaveBeenCalledWith(remoteFailed);
+				expect(mockPlanStore.deleteBackupIfUnreferenced).toHaveBeenCalledWith(backupId);
+				expect(mockSnapshotStrategy.removeSnapshot).not.toHaveBeenCalled();
+				expect(mockPlanStore.update).not.toHaveBeenCalled();
+				expect(mockPlanStore.beginSourceRemoval).toHaveBeenCalledWith({ backupId });
+				expect(result).toEqual({ success: true, result: expect.stringContaining('not changed') });
+			});
+
+			it('keeps the history row when the remote service refuses removal', async () => {
+				const refusal = Object.assign(new Error('REMOTE_CAPABILITY_NOT_IMPLEMENTED'), {
+					statusCode: 501,
+				});
+				mockBackupStore.getById.mockResolvedValue({ ...remoteFailed, status: 'completed' });
+				await expect(
+					remoteService(jest.fn().mockRejectedValue(refusal)).deleteBackup(backupId, true)
+				).rejects.toBe(refusal);
+				expect(mockPlanStore.deleteBackupIfUnreferenced).not.toHaveBeenCalled();
+			});
+
+			it('still refuses an active backup before asking the remote service', async () => {
+				const assert = jest.fn();
+				mockBackupStore.getById.mockResolvedValue({ ...remoteFailed, inProgress: true });
+				await expect(remoteService(assert).deleteBackup(backupId, true)).rejects.toHaveProperty(
+					'statusCode',
+					409
+				);
+				expect(assert).not.toHaveBeenCalled();
+				expect(mockPlanStore.deleteBackupIfUnreferenced).not.toHaveBeenCalled();
+			});
+
+			it('refuses even a failed run when no remote service is wired', async () => {
+				mockBackupStore.getById.mockResolvedValue(remoteFailed);
+				await expect(backupService.deleteBackup(backupId, true)).rejects.toThrow(
+					'REMOTE_CAPABILITY_NOT_IMPLEMENTED'
+				);
+				expect(mockPlanStore.deleteBackupIfUnreferenced).not.toHaveBeenCalled();
+			});
+		});
 	});
 
 	// ---------------------------------

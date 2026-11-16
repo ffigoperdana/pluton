@@ -200,9 +200,17 @@ export class BackupService {
 				'Wait for active backup and restore operations before removing this backup.'
 			);
 		if (RemoteBackupService.isRemoteFilesystemPlan(backup)) {
-			// Remote snapshot deletion is a future forget capability. Do not remove
-			// the server record while leaving the remote repository untouched.
-			throw new AppError(501, 'REMOTE_CAPABILITY_NOT_IMPLEMENTED');
+			// Remote snapshot deletion is a future forget capability. Never drop the
+			// record of a recorded snapshot while its repository data stays behind.
+			// Only a failed run that recorded no snapshot may clear its history row,
+			// and the remote repository is never changed here.
+			if (!this.remoteBackupService) throw new AppError(501, 'REMOTE_CAPABILITY_NOT_IMPLEMENTED');
+			await this.remoteBackupService.assertFailedHistoryRemovable(backup);
+			await this.planStore.deleteBackupIfUnreferenced(backup.id);
+			return {
+				success: true,
+				result: 'Failed backup history removed. The remote repository was not changed.',
+			};
 		}
 
 		const strategy = this.getSnapshotStrategy(backup.sourceId, backup.method);

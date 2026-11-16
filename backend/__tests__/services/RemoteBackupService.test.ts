@@ -430,6 +430,67 @@ describe('RemoteBackupService', () => {
 		);
 	});
 
+	describe('failed history removal', () => {
+		const failed = {
+			id: 'backup-example-01',
+			planId: plan.id,
+			sourceId: plan.sourceId,
+			sourceType: 'device',
+			status: 'failed',
+			success: false,
+			inProgress: false,
+			completionStats: null,
+			mirrors: [],
+		} as any;
+
+		beforeEach(() => {
+			agentStore.getCommand = jest.fn().mockResolvedValue({
+				id: 'remote-backup-backup-example-01',
+				state: 'failed',
+			});
+		});
+
+		it.each(['failed', 'completed', 'cancelled'])(
+			'allows a failed run whose Agent command is %s and checks the exact command',
+			async state => {
+				agentStore.getCommand.mockResolvedValue({ id: 'remote-backup-backup-example-01', state });
+				await expect(service.assertFailedHistoryRemovable(failed)).resolves.toBeUndefined();
+				expect(agentStore.getCommand).toHaveBeenCalledWith('remote-backup-backup-example-01');
+			}
+		);
+
+		it('allows a failed run whose Agent command no longer exists', async () => {
+			agentStore.getCommand.mockResolvedValue(null);
+			await expect(service.assertFailedHistoryRemovable(failed)).resolves.toBeUndefined();
+		});
+
+		it.each([
+			['completed', { status: 'completed', success: true }],
+			['cancelled', { status: 'cancelled' }],
+			['queued', { status: 'queued', inProgress: true }],
+			['retrying', { status: 'retrying' }],
+			['in progress', { inProgress: true }],
+			['successful', { success: true }],
+			['with a recorded snapshot', { completionStats: { snapshot_id: 'a1b2c3d4e5f60718' } }],
+			['with replica records', { mirrors: [{ replicationId: 'replica-01', status: 'failed' }] }],
+		])('refuses a %s backup without asking the Agent store', async (_label, override) => {
+			await expect(
+				service.assertFailedHistoryRemovable({ ...failed, ...override })
+			).rejects.toMatchObject({ statusCode: 501, message: 'REMOTE_CAPABILITY_NOT_IMPLEMENTED' });
+			expect(agentStore.getCommand).not.toHaveBeenCalled();
+		});
+
+		it.each(['queued', 'leased', 'acknowledged', 'running'])(
+			'refuses while the Agent command is still %s',
+			async state => {
+				agentStore.getCommand.mockResolvedValue({ id: 'remote-backup-backup-example-01', state });
+				await expect(service.assertFailedHistoryRemovable(failed)).rejects.toMatchObject({
+					statusCode: 409,
+				});
+			}
+		);
+	});
+
 	it('materializes the minimum SFTP and repository credentials only at poll time', async () => {
 		const command = {
 			id: 'remote-backup-backup-example-01',
