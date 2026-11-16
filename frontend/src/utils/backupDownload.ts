@@ -1,13 +1,13 @@
 type BackupRow = { status: string; active?: boolean; inProgress?: boolean; success?: boolean };
 
-/** Keep the existing menu; remote recovery adds Download, never Remove. */
+/** Keep the existing menu; remote recovery adds Download. Remote Remove only clears a failed run's history row. */
 export function backupRowActions(backup: BackupRow, isSync: boolean, isRemoteManaged: boolean) {
    const completed = backup.status === 'completed' && !!backup.active;
    return {
       download: !isSync && completed && (!isRemoteManaged || (!backup.inProgress && backup.success !== false)),
       browse: !isSync && completed,
       restore: completed,
-      remove: !isRemoteManaged,
+      remove: !isRemoteManaged || (backup.status === 'failed' && !backup.inProgress),
    };
 }
 

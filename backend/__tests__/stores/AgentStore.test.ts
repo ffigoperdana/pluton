@@ -387,6 +387,23 @@ describe('AgentStore durable command queue', () => {
 				?.cancelled
 		).toBe(true);
 	});
+	it('reads a command by id regardless of agent and reports a missing one as null', async () => {
+		await store.enqueueCommand({
+			id: 'command-lookup',
+			agentId: 'agent-1',
+			type: 'PING',
+			payload: {},
+			idempotencyKey: 'idem-lookup',
+		});
+		expect(await store.getCommand('command-lookup')).toMatchObject({
+			id: 'command-lookup',
+			agentId: 'agent-1',
+			state: 'queued',
+		});
+		await store.cancelCommand('command-lookup');
+		expect((await store.getCommand('command-lookup'))?.state).toBe('cancelled');
+		expect(await store.getCommand('command-absent')).toBeNull();
+	});
 	it('persists nonce hashes and rejects a repeated nonce', async () => {
 		const future = new Date(Date.now() + 5 * 60 * 1000);
 		expect(await store.reserveNonce('agent-1', 'nonce-hash', future)).toBe(true);

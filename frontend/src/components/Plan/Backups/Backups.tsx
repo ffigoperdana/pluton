@@ -530,9 +530,16 @@ const Backups = ({
             <ActionModal
                title="Remove Backup"
                message={
-                  <>
-                     Are you sure you want to remove the Backup <strong>"backup-{showDeleteModal.id}"</strong>?
-                  </>
+                  isRemoteManaged ? (
+                     <>
+                        Remove the failed run <strong>"backup-{showDeleteModal.id}"</strong> from this plan's history? Backup data in the repository
+                        is not changed.
+                     </>
+                  ) : (
+                     <>
+                        Are you sure you want to remove the Backup <strong>"backup-{showDeleteModal.id}"</strong>?
+                     </>
+                  )
                }
                closeModal={() => !deleteBackupMutation.isPending && setShowDeleteModal(false)}
                errorMessage={deleteBackupMutation.error ? <DeleteDependencyNotice error={deleteBackupMutation.error} /> : undefined}

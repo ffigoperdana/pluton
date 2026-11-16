@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { backupRowActions, startNativeBackupDownload } from '../src/utils/backupDownload.ts';
 
 const completed = { status: 'completed', active: true, inProgress: false, success: true };
-test('completed remote menu exposes Download/Browse/Restore, never Remove', () => {
+test('completed remote menu exposes Download/Browse/Restore, not Remove', () => {
    assert.deepEqual(backupRowActions(completed, false, true), { download: true, browse: true, restore: true, remove: false });
 });
 for (const status of ['failed', 'started', 'pending', 'cancelled', 'retrying']) {
@@ -15,6 +15,16 @@ test('incomplete/unsuccessful/inactive remote rows do not expose Download', () =
    for (const state of [{ inProgress: true }, { success: false }, { active: false }])
       assert.equal(backupRowActions({ ...completed, ...state }, false, true).download, false);
 });
+test('a finished failed remote run exposes only Remove, to clear its history row', () => {
+   const failed = { ...completed, status: 'failed', success: false };
+   assert.deepEqual(backupRowActions(failed, false, true), { download: false, browse: false, restore: false, remove: true });
+   assert.equal(backupRowActions({ ...failed, inProgress: true }, false, true).remove, false);
+});
+for (const status of ['completed', 'started', 'pending', 'queued', 'cancelled', 'retrying']) {
+   test(`remote ${status} rows never expose Remove`, () => {
+      assert.equal(backupRowActions({ ...completed, status }, false, true).remove, false);
+   });
+}
 test('existing local and sync menu behavior stays intact', () => {
    assert.deepEqual(backupRowActions(completed, false, false), { download: true, browse: true, restore: true, remove: true });
    assert.deepEqual(backupRowActions(completed, true, false), { download: false, browse: false, restore: true, remove: true });

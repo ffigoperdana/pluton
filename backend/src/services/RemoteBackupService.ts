@@ -5,7 +5,7 @@ import Cryptr from 'cryptr';
 import { parseBackupExclusions, sourceResticExclusions } from '../utils/backupExclusions';
 import { Plan, NewPlan } from '../db/schema/plans';
 import { type AgentCommand, type AgentIdentity } from '../db/schema/agents';
-import { type NewBackup } from '../db/schema/backups';
+import { type Backup, type NewBackup } from '../db/schema/backups';
 import { AgentStore } from '../stores/AgentStore';
 import { BackupStore } from '../stores/BackupStore';
 import { PlanStore } from '../stores/PlanStore';
@@ -381,6 +381,31 @@ export class RemoteBackupService {
 			},
 		});
 		return 'Remote filesystem backup queued.';
+	}
+
+	/**
+	 * A failed run that recorded no snapshot leaves the server nothing to forget,
+	 * so only its history row may go. Completed snapshots still need a future
+	 * Agent forget capability. This never touches the repository: a partial
+	 * snapshot Restic may have written before failing stays untracked, exactly as
+	 * it already was while the row existed.
+	 */
+	async assertFailedHistoryRemovable(backup: Backup): Promise<void> {
+		const recordedSnapshot = backup.completionStats?.snapshot_id;
+		if (
+			backup.status !== 'failed' ||
+			backup.success === true ||
+			backup.inProgress ||
+			(typeof recordedSnapshot === 'string' && recordedSnapshot.trim() !== '') ||
+			(backup.mirrors?.length ?? 0) > 0
+		)
+			throw new AppError(501, 'REMOTE_CAPABILITY_NOT_IMPLEMENTED');
+		const command = await this.agentStore.getCommand(`remote-backup-${backup.id}`);
+		if (command && ['queued', 'leased', 'acknowledged', 'running'].includes(command.state))
+			throw new AppError(
+				409,
+				'Wait for the remote agent to finish this backup command before removing it.'
+			);
 	}
 
 	async cancelBackup(
