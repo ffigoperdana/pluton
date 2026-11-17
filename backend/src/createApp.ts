@@ -461,6 +461,11 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	const publicPath = path.join(__dirname, '..', 'public');
 	app.use(express.static(publicPath));
 
+	// Agent routes are mounted before the shared limiter: they carry their own
+	// per-IP and per-Agent budgets (createAgentRouter), so browser polling can no
+	// longer exhaust the bucket a running Agent backup depends on.
+	app.use('/api/agent', createAgentRouter(agentController, agentService));
+
 	// Rate Limiter
 	const apiLimiter = rateLimit({
 		windowMs: 15 * 60 * 1000, // 15 minutes
@@ -507,7 +512,6 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	app.use('/api/settings', createSettingsRouter(settingsController));
 	app.use('/api/notifications', createNotificationRouter(notificationStore));
 	app.use('/api/legacy-repositories', createLegacyRepositoryRouter(legacyRepositoryController));
-	app.use('/api/agent', createAgentRouter(agentController, agentService));
 	app.use('/api/agent-admin', createAgentAdminRouter(agentAdminController));
 	app.use(
 		'/api/recovery-testing',

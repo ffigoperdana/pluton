@@ -330,6 +330,7 @@
       "backend/__tests__/agentControlPlane.integration.test.ts",
       "backend/__tests__/agentSourceAccess.test.ts",
       "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/agents.rateLimit.test.ts",
       "backend/__tests__/routes/dualOrigin.test.ts"
     ],
     "source": "backend/src/controllers/AgentController.ts",
@@ -361,6 +362,7 @@
       "backend/__tests__/agentControlPlane.integration.test.ts",
       "backend/__tests__/agentSourceAccess.test.ts",
       "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/agents.rateLimit.test.ts",
       "backend/__tests__/routes/dualOrigin.test.ts"
     ],
     "source": "backend/src/controllers/AgentController.ts",
@@ -392,6 +394,7 @@
       "backend/__tests__/agentControlPlane.integration.test.ts",
       "backend/__tests__/agentSourceAccess.test.ts",
       "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/agents.rateLimit.test.ts",
       "backend/__tests__/routes/dualOrigin.test.ts"
     ],
     "source": "backend/src/controllers/AgentController.ts",
@@ -423,6 +426,7 @@
       "backend/__tests__/agentControlPlane.integration.test.ts",
       "backend/__tests__/agentSourceAccess.test.ts",
       "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/agents.rateLimit.test.ts",
       "backend/__tests__/routes/dualOrigin.test.ts"
     ],
     "source": "backend/src/controllers/AgentController.ts",
@@ -453,6 +457,7 @@
       "backend/__tests__/agentControlPlane.integration.test.ts",
       "backend/__tests__/agentSourceAccess.test.ts",
       "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/agents.rateLimit.test.ts",
       "backend/__tests__/routes/dualOrigin.test.ts"
     ],
     "source": "backend/src/controllers/AgentController.ts",
@@ -483,6 +488,7 @@
       "backend/__tests__/agentControlPlane.integration.test.ts",
       "backend/__tests__/agentSourceAccess.test.ts",
       "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/agents.rateLimit.test.ts",
       "backend/__tests__/routes/dualOrigin.test.ts"
     ],
     "source": "backend/src/controllers/AgentController.ts",
@@ -511,6 +517,7 @@
       "backend/__tests__/agentControlPlane.integration.test.ts",
       "backend/__tests__/agentSourceAccess.test.ts",
       "backend/__tests__/middlewares/agentJson.test.ts",
+      "backend/__tests__/routes/agents.rateLimit.test.ts",
       "backend/__tests__/routes/dualOrigin.test.ts"
     ],
     "source": "backend/src/controllers/AgentController.ts",

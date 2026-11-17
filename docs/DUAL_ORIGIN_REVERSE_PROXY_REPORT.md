@@ -133,6 +133,16 @@ Only enable it after reviewing the actual last-hop peer seen by the container,
 firewall restrictions, and header replacement. With simultaneous direct LAN
 and proxy paths, a blind `TRUST_PROXY=1` is not a safe general recommendation.
 Never use `true`, `0.0.0.0/0` or a broad private subnet merely to remove a warning.
+
+Agent control-plane routes (`/api/agent/*`) do not use that shared browser
+bucket. `createAgentRouter` mounts before the `/api/` limiter with its own
+budgets per 15 minutes: enrollment 1,000 per client IP, signed requests 20,000
+per client IP before authentication, and 2,000 per verified Agent after it. A
+busy Agent sends about 270 signed requests per window (status every 10 s,
+progress every 5 s). Previously an open plan page behind the same proxy IP could
+exhaust the shared 1,000-request bucket, and the Agent stopped a long backup with
+`command-status-check/control-plane-rate-limited` after its bounded status
+retries. TRUST_PROXY still decides whether browsers get per-client buckets.
 These constraints follow the
 [Express proxy trust guidance](https://expressjs.com/en/guide/behind-proxies/).
 
