@@ -1,6 +1,10 @@
 import crypto from 'crypto';
 import { remoteBackupFailure } from '../utils/remoteBackupDiagnostics';
-import { supportsSourceDiagnostics, type SourceDiagnostics } from '../utils/sourceDiagnostics';
+import {
+	supportsSourceDiagnostics,
+	supportsVanishedSourceEntries,
+	type SourceDiagnostics,
+} from '../utils/sourceDiagnostics';
 import Cryptr from 'cryptr';
 import { parseBackupExclusions, sourceResticExclusions } from '../utils/backupExclusions';
 import { Plan, NewPlan } from '../db/schema/plans';
@@ -115,6 +119,8 @@ type RemoteCompletion = {
 			database?: { path: string; bytes: number; sha256: string };
 			databases?: DatabaseArtifact[];
 		};
+		/** Agent 0.8.1: source entries that vanished between Restic's scan and read. */
+		sourceWarnings?: { vanishedEntries: number };
 	};
 };
 
@@ -558,6 +564,9 @@ export class RemoteBackupService {
 			// of version 5 (section 10.2); the payload carries no trust or CA setting (6.1 point 2).
 			const common = {
 				...(supportsSourceDiagnostics(agent.agentVersion) ? { sourceDiagnosticsVersion: 1 } : {}),
+				...(supportsVanishedSourceEntries(agent.agentVersion)
+					? { vanishedSourceEntriesVersion: 1 }
+					: {}),
 				...(lifecycle ? { lifecycle } : {}),
 				backupId: backup.id,
 				planId: plan.id,
@@ -777,13 +786,33 @@ export class RemoteBackupService {
 				...(completion.result?.lifecycle ? { lifecycle: completion.result.lifecycle } : {}),
 			},
 		});
+		const vanishedEntries = completion.result?.sourceWarnings?.vanishedEntries;
+		const vanishedNote = vanishedEntries
+			? `${vanishedEntries} source ${vanishedEntries === 1 ? 'entry' : 'entries'} vanished while the backup ran and ${vanishedEntries === 1 ? 'is' : 'are'} not in this snapshot.`
+			: undefined;
+		if (vanishedNote) {
+			serverLogger?.warn(
+				{
+					agentEvent: 'backup_source_entries_vanished',
+					planId: reference.planId,
+					backupId: reference.backupId,
+					vanishedEntries,
+				},
+				'Snapshot completed without source entries that vanished during the backup'
+			);
+			if (!completion.result?.lifecycle?.warnings.length)
+				await this.backupStore.update(reference.backupId, {
+					errorMsg: `Snapshot completed; ${vanishedNote}`,
+				});
+		}
 		if (completion.result?.lifecycle?.warnings.length) {
 			await this.backupStore.update(reference.backupId, {
 				errorMsg:
 					'Snapshot completed; lifecycle cleanup needs attention: ' +
 					completion.result.lifecycle.warnings
 						.map(warning => `${warning.stage}/${warning.code}`)
-						.join(', '),
+						.join(', ') +
+					(vanishedNote ? `; ${vanishedNote}` : ''),
 			});
 			serverLogger?.warn(
 				{
@@ -851,6 +880,8 @@ export class RemoteBackupService {
 			serverLogger.warn({
 				schedulerEvent: 'remote_backup_not_queued', planId,
 				status: error instanceof AppError ? error.statusCode : 500,
+				// Server-written AppError text only (for example "already in progress").
+				...(error instanceof AppError ? { reason: error.message } : {}),
 			}, 'Scheduled remote backup was not queued; inspect Agent status and plan history.');
 		}
 	}
@@ -972,11 +1003,15 @@ export class RemoteBackupService {
 	private async getCapableAgent(deviceId: string): Promise<AgentIdentity> {
 		const agent = await this.agentStore.getAgentByDeviceId(deviceId);
 		const offlineTimeoutMs = (configService.config.AGENT_OFFLINE_TIMEOUT_SECONDS || 90) * 1_000;
+		const heartbeatFresh =
+			!!agent?.lastSeen && Date.now() - agent.lastSeen.getTime() <= offlineTimeoutMs;
+		// An Agent busy with a long backup sends no heartbeat but renews its lease. The
+		// new command then waits in the durable queue instead of being refused (and a
+		// scheduled run silently skipped); the Agent runs it as soon as it is free.
 		if (
 			!agent ||
 			agent.revokedAt ||
-			!agent.lastSeen ||
-			Date.now() - agent.lastSeen.getTime() > offlineTimeoutMs
+			(!heartbeatFresh && !(await this.agentStore.hasLiveCommand(agent.agentId)))
 		) {
 			throw new AppError(409, 'Remote agent is not available.');
 		}

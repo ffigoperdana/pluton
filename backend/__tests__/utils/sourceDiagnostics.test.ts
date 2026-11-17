@@ -1,6 +1,7 @@
 import {
 	sourceDiagnosticsSchema,
 	supportsSourceDiagnostics,
+	supportsVanishedSourceEntries,
 } from '../../src/utils/sourceDiagnostics';
 const entry = {
 	relativePath: 'app/logs/id_rsa',
@@ -68,5 +69,11 @@ describe('private source diagnostic contract', () => {
 			expect(supportsSourceDiagnostics(version)).toBe(true);
 		for (const version of ['0.7.0', '0.6.9', '0.7.1-dev', 'unknown', '0.7.1-malicious'])
 			expect(supportsSourceDiagnostics(version)).toBe(false);
+	});
+	it('sends the vanished-entry opt-in only to stable Agent 0.8.1 and later', () => {
+		for (const version of ['0.8.1', 'v0.8.1', '0.8.10', '0.9.0', '1.0.0'])
+			expect(supportsVanishedSourceEntries(version)).toBe(true);
+		for (const version of ['0.8.0', '0.7.9', '0.8.1-dev', 'unknown', ''])
+			expect(supportsVanishedSourceEntries(version)).toBe(false);
 	});
 });

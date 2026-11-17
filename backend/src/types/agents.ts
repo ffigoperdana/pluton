@@ -12,6 +12,18 @@ export const AGENT_COMMAND_TYPES: readonly AgentCommandType[] = [
 ];
 export const AGENT_REQUEST_SKEW_MS = 5 * 60 * 1000;
 export const AGENT_COMMAND_LEASE_MS = 60 * 1000;
+/**
+ * Renewal of a BACKUP_FILESYSTEM lease (status checks and progress events). The
+ * Agent is a serial executor, so a backup holds its Agent anyway; a longer lease
+ * lets an Agent 0.8.1 backup outlive a Pluton restart or a proxy reload, at the
+ * cost of a slower requeue (at most this long) if the Agent itself dies. A first
+ * lease, before the Agent renews it, stays AGENT_COMMAND_LEASE_MS.
+ */
+export const AGENT_BACKUP_LEASE_RENEWAL_MS = 10 * 60 * 1000;
+
+export function agentCommandRenewalMs(type: AgentCommandType): number {
+	return type === 'BACKUP_FILESYSTEM' ? AGENT_BACKUP_LEASE_RENEWAL_MS : AGENT_COMMAND_LEASE_MS;
+}
 
 export type AgentInventory = {
 	hostname: string;

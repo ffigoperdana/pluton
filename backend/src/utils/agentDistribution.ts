@@ -17,7 +17,7 @@ const hasControl = (value: string) =>
  * command verifies that on the host before sudo. Keep in sync with
  * frontend/src/utils/agentEnrollment.ts. Existing Agents are not affected.
  */
-export const SUPPORTED_AGENT_INSTALL_VERSIONS: readonly string[] = ['0.7.0', '0.7.1', '0.8.0'];
+export const SUPPORTED_AGENT_INSTALL_VERSIONS: readonly string[] = ['0.7.0', '0.7.1', '0.8.0', '0.8.1'];
 
 /** Public installation metadata only. Never pass Git credentials or enrollment secrets. */
 export function agentDistribution(config: DistributionConfig) {
