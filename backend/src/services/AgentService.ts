@@ -11,6 +11,7 @@ import {
 	AGENT_COMMAND_LEASE_MS,
 	AGENT_COMMAND_TYPES,
 	AGENT_REQUEST_SKEW_MS,
+	agentCommandRenewalMs,
 	type AgentInventory,
 	type AuthenticatedAgent,
 } from '../types/agents';
@@ -587,7 +588,7 @@ export class AgentService {
 			parsed.data.leaseToken,
 			parsed.data.sequence,
 			this.now(),
-			AGENT_COMMAND_LEASE_MS
+			existing => agentCommandRenewalMs(existing.type)
 		);
 		if (!command) throw new NotFoundError('Command not found.');
 		if (
@@ -679,6 +680,13 @@ export class AgentService {
 							})
 							.strict(),
 						lifecycle: lifecycleReportSchema.optional(),
+						// Agent 0.8.1 with the signed vanishedSourceEntriesVersion opt-in: a count only.
+						sourceWarnings: z
+							.object({
+								vanishedEntries: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+							})
+							.strict()
+							.optional(),
 					})
 					.strict()
 					.optional(),
@@ -687,6 +695,12 @@ export class AgentService {
 			.safeParse(input);
 		if (!parsed.success || (!parsed.data.success && !parsed.data.error)) {
 			throw new AppError(400, 'Command completion is invalid.');
+		}
+		if (parsed.data.result?.sourceWarnings) {
+			// A count for a successful backup only (the opt-in is added at poll time).
+			const command = await this.agentStore.getCommandForAgent(agentId, commandId);
+			if (!parsed.data.success || command?.type !== 'BACKUP_FILESYSTEM')
+				throw new AppError(400, 'Command source warnings are invalid.');
 		}
 		if (parsed.data.sourceDiagnostics) {
 			const command = await this.agentStore.getCommandForAgent(agentId, commandId);
@@ -759,7 +773,7 @@ export class AgentService {
 			agentId,
 			commandId,
 			parsed.leaseToken,
-			AGENT_COMMAND_LEASE_MS,
+			existing => agentCommandRenewalMs(existing.type),
 			this.now()
 		);
 		if (!status) throw new NotFoundError('Command not found.');
@@ -779,7 +793,18 @@ export class AgentService {
 
 	async getPublicAgent(deviceId: string): Promise<AgentPublic | null> {
 		const identity = await this.agentStore.getAgentByDeviceId(deviceId);
-		return identity ? this.toPublic(identity) : null;
+		if (!identity) return null;
+		// An Agent executing a command sends no heartbeat but renews its lease.
+		const busy =
+			!identity.revokedAt &&
+			!this.heartbeatFresh(identity) &&
+			(await this.agentStore.hasLiveCommand(identity.agentId, this.now()));
+		return this.toPublic(identity, busy);
+	}
+
+	private heartbeatFresh(identity: AgentIdentity): boolean {
+		const timeout = (configService.config.AGENT_OFFLINE_TIMEOUT_SECONDS || 90) * 1000;
+		return !!identity.lastSeen && this.now().getTime() - identity.lastSeen.getTime() <= timeout;
 	}
 
 	private parseInventory(input: unknown): AgentInventory {
@@ -788,11 +813,10 @@ export class AgentService {
 		return parsed.data;
 	}
 
-	private toPublic(identity: AgentIdentity): AgentPublic {
-		const timeout = (configService.config.AGENT_OFFLINE_TIMEOUT_SECONDS || 90) * 1000;
+	private toPublic(identity: AgentIdentity, busy = false): AgentPublic {
 		const status = identity.revokedAt
 			? 'revoked'
-			: identity.lastSeen && this.now().getTime() - identity.lastSeen.getTime() <= timeout
+			: busy || this.heartbeatFresh(identity)
 				? 'online'
 				: 'offline';
 		return {

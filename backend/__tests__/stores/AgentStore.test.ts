@@ -387,6 +387,68 @@ describe('AgentStore durable command queue', () => {
 				?.cancelled
 		).toBe(true);
 	});
+	it('renews by the command when given a renewal function, for status and progress events', async () => {
+		const renewal = (command: { type: string }) =>
+			command.type === 'BACKUP_FILESYSTEM' ? 600_000 : 60_000;
+		await store.enqueueCommand({
+			id: 'command-backup',
+			agentId: 'agent-1',
+			type: 'BACKUP_FILESYSTEM',
+			payload: {},
+			idempotencyKey: 'idem-backup',
+		});
+		const start = new Date('2026-01-01T00:00:00Z');
+		await store.leaseNext('agent-1', 'backup-token', 60_000, start);
+		const checked = new Date(start.getTime() + 10_000);
+		const status = await store.getCommandStatus(
+			'agent-1',
+			'command-backup',
+			'backup-token',
+			renewal,
+			checked
+		);
+		expect(status?.command.leaseExpiresAt).toEqual(new Date(checked.getTime() + 600_000));
+		const evented = new Date(start.getTime() + 20_000);
+		const event = await store.recordCommandEvent(
+			'agent-1',
+			'command-backup',
+			'backup-token',
+			1,
+			evented,
+			renewal
+		);
+		expect(event?.leaseExpiresAt).toEqual(new Date(evented.getTime() + 600_000));
+		// A renewal never revives an ended lease, however long the next one would be.
+		expect(
+			await store.getCommandStatus(
+				'agent-1',
+				'command-backup',
+				'backup-token',
+				renewal,
+				new Date(evented.getTime() + 600_000)
+			)
+		).toBeNull();
+	});
+
+	it('reports a live command only while an unexpired lease is held', async () => {
+		const start = new Date('2026-01-01T00:00:00Z');
+		expect(await store.hasLiveCommand('agent-1', start)).toBe(false);
+		await store.enqueueCommand({
+			id: 'command-live',
+			agentId: 'agent-1',
+			type: 'BACKUP_FILESYSTEM',
+			payload: {},
+			idempotencyKey: 'idem-live',
+		});
+		expect(await store.hasLiveCommand('agent-1', start)).toBe(false);
+		await store.leaseNext('agent-1', 'live-token', 60_000, start);
+		expect(await store.hasLiveCommand('agent-1', new Date(start.getTime() + 59_000))).toBe(true);
+		expect(await store.hasLiveCommand('agent-1', new Date(start.getTime() + 60_000))).toBe(false);
+		expect(await store.hasLiveCommand('agent-2', start)).toBe(false);
+		await store.cancelCommand('command-live');
+		expect(await store.hasLiveCommand('agent-1', start)).toBe(false);
+	});
+
 	it('reads a command by id regardless of agent and reports a missing one as null', async () => {
 		await store.enqueueCommand({
 			id: 'command-lookup',

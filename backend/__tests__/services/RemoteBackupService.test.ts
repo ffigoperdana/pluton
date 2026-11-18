@@ -4,6 +4,7 @@ import {
 	RemoteCommandPreparationError,
 } from '../../src/services/RemoteBackupService';
 import type { AgentCommand } from '../../src/db/schema/agents';
+import { serverLogger } from '../../src/utils/logger';
 import {
 	AgentCommandSealingError,
 	openAgentCommandSecrets,
@@ -125,6 +126,7 @@ describe('RemoteBackupService', () => {
 		};
 		agentStore = {
 			getAgentByDeviceId: jest.fn().mockResolvedValue({ ...capableAgent, lastSeen: new Date() }),
+			hasLiveCommand: jest.fn().mockResolvedValue(false),
 		};
 		planStore = {
 			getById: jest.fn().mockResolvedValue(plan),
@@ -890,6 +892,44 @@ describe('RemoteBackupService', () => {
 			errorMsg: expect.stringContaining('post-backup/hook-failed'),
 		});
 	});
+	it('a snapshot without vanished source entries stays completed and says how many are missing', async () => {
+		backupStore.update = jest.fn();
+		planStore.update = jest.fn();
+		const id = 'b'.repeat(64);
+		const summary = { message_type: 'summary', snapshot_id: id, total_bytes_processed: 1024 } as any;
+		const warn = jest.spyOn(serverLogger, 'warn').mockImplementation(() => undefined as any);
+		try {
+			await service.completeCommand(backupCommand(), {
+				success: true,
+				result: { snapshotId: id, summary, sourceWarnings: { vanishedEntries: 3 } },
+			});
+			expect((service as any).eventService.onBackupComplete).toHaveBeenCalledWith(
+				expect.objectContaining({ success: true })
+			);
+			expect((service as any).eventService.onBackupFailure).not.toHaveBeenCalled();
+			expect(backupStore.update).toHaveBeenCalledWith('backup-example-01', {
+				errorMsg:
+					'Snapshot completed; 3 source entries vanished while the backup ran and are not in this snapshot.',
+			});
+			expect(warn).toHaveBeenCalledWith(
+				expect.objectContaining({ agentEvent: 'backup_source_entries_vanished', vanishedEntries: 3 }),
+				expect.any(String)
+			);
+			backupStore.update.mockClear();
+			const warnings = [{ stage: 'post-backup', code: 'hook-failed' }] as any;
+			await service.completeCommand(backupCommand(), {
+				success: true,
+				result: { snapshotId: id, summary, lifecycle: { warnings }, sourceWarnings: { vanishedEntries: 1 } },
+			});
+			expect(backupStore.update).toHaveBeenCalledTimes(1);
+			expect(backupStore.update).toHaveBeenCalledWith('backup-example-01', {
+				errorMsg:
+					'Snapshot completed; lifecycle cleanup needs attention: post-backup/hook-failed; 1 source entry vanished while the backup ran and is not in this snapshot.',
+			});
+		} finally {
+			warn.mockRestore();
+		}
+	});
 	it('accepts only complete multi-DB snapshot metadata bound to every configured entry', async () => {
 		planStore.update = jest.fn();
 		const databases = [
@@ -956,6 +996,35 @@ describe('RemoteBackupService', () => {
 		agentStore.getAgentByDeviceId.mockResolvedValue({ ...capableAgent, lastSeen: new Date(Date.now() - 91_000) });
 		await options.taskCallback(plan.id);
 		expect(repositories.createBackupAndCommand).toHaveBeenCalledTimes(1);
+		expect(agentStore.hasLiveCommand).toHaveBeenCalledWith(capableAgent.agentId);
+	});
+
+	it('queues a scheduled run behind a long backup instead of skipping it while the Agent renews a lease', async () => {
+		const clockPlan = { ...plan, settings: { ...plan.settings, interval: { type: 'daily', time: '01:00AM', timeZone: 'Asia/Jakarta' } } };
+		planStore.getById.mockResolvedValue(clockPlan);
+		const cron = { getSchedule: jest.fn().mockResolvedValue([]), scheduleTask: jest.fn(), activateLoadedSchedule: jest.fn() };
+		(service as any).cronManager = cron;
+		await (service as any).ensureSchedule(clockPlan);
+		const options = cron.scheduleTask.mock.calls[0][2];
+		// No heartbeat for hours: the Agent is executing another command and renewing its lease.
+		agentStore.getAgentByDeviceId.mockResolvedValue({ ...capableAgent, lastSeen: new Date(Date.now() - 6 * 3_600_000) });
+		agentStore.hasLiveCommand.mockResolvedValue(true);
+		await options.taskCallback(plan.id);
+		expect(repositories.createBackupAndCommand).toHaveBeenCalledTimes(1);
+		// A revoked Agent is never available, busy or not.
+		agentStore.getAgentByDeviceId.mockResolvedValue({ ...capableAgent, lastSeen: new Date(), revokedAt: new Date() });
+		await expect(service.queuePlanBackup(plan.id)).rejects.toThrow('Remote agent is not available');
+		expect(repositories.createBackupAndCommand).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([
+		['0.8.0', undefined],
+		['0.8.1', 1],
+	])('sends the signed vanished-entry opt-in to Agent %s as %s', async (agentVersion, expected) => {
+		agentStore.getAgentByDeviceId.mockResolvedValue({ ...capableAgent, agentVersion, lastSeen: new Date() });
+		const payload = await service.materializeCommand(capableAgent.agentId, backupCommand());
+		expect(payload.vanishedSourceEntriesVersion).toBe(expected);
+		expect(payload.sourceDiagnosticsVersion).toBe(1);
 	});
 
 	it.each(['0.7.0', '0.7.1'])(

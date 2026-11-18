@@ -55,3 +55,12 @@ export function supportsSourceDiagnostics(version: string): boolean {
 	const [major, minor, patch] = match.slice(1).map(Number);
 	return major > 0 || minor > 7 || (minor === 7 && patch >= 1);
 }
+
+/** Agent 0.8.1 accepts the signed `vanishedSourceEntriesVersion: 1` payload field and
+ * may then complete with `result.sourceWarnings`; older Agents refuse the field. */
+export function supportsVanishedSourceEntries(version: string): boolean {
+	const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(version);
+	if (!match) return false;
+	const [major, minor, patch] = match.slice(1).map(Number);
+	return major > 0 || minor > 8 || (minor === 8 && patch >= 1);
+}

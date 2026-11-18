@@ -64,6 +64,7 @@ describe('AgentService', () => {
 			recordCommandEvent: jest.fn(),
 			completeCommand: jest.fn(),
 			getCommandStatus: jest.fn(),
+			hasLiveCommand: jest.fn().mockResolvedValue(false),
 			revokeAgentByDeviceId: jest.fn(),
 			getAgentByDeviceId: jest.fn().mockResolvedValue(agent),
 			revokeEnrollment: jest.fn(),
@@ -84,9 +85,14 @@ describe('AgentService', () => {
 			agent.agentId,
 			'command-01',
 			'a'.repeat(32),
-			60_000,
+			expect.any(Function),
 			now
 		);
+		// A backup lease renews for ten minutes; every other command keeps 60 seconds.
+		const renewal = store.getCommandStatus.mock.calls[0][3] as (command: unknown) => number;
+		expect(renewal({ type: 'BACKUP_FILESYSTEM' })).toBe(600_000);
+		for (const type of ['PING', 'INVENTORY_REFRESH', 'SOURCE_ACCESS_VALIDATE', 'SOURCE_ACCESS_APPLY'])
+			expect(renewal({ type })).toBe(60_000);
 		store.getCommandStatus.mockResolvedValue({
 			cancelled: true,
 			command: { leaseExpiresAt: expiry },
@@ -474,6 +480,17 @@ describe('AgentService', () => {
 		now = new Date('2026-01-01T00:02:00.000Z');
 		const result = await service.getPublicAgent(agent.deviceId);
 		expect(result?.status).toBe('offline');
+		expect(store.hasLiveCommand).toHaveBeenCalledWith(agent.agentId, now);
+	});
+
+	it('shows an Agent busy with a leased command as online without moving last seen', async () => {
+		now = new Date('2026-01-01T00:02:00.000Z');
+		store.hasLiveCommand.mockResolvedValue(true);
+		const result = await service.getPublicAgent(agent.deviceId);
+		expect(result?.status).toBe('online');
+		expect(result?.lastSeen).toEqual(agent.lastSeen);
+		store.getAgentByDeviceId.mockResolvedValueOnce({ ...agent, revokedAt: now } as any);
+		expect((await service.getPublicAgent(agent.deviceId))?.status).toBe('revoked');
 	});
 
 	it('persists explicit exclusion capability and rejects unknown policy versions', async () => {
@@ -846,6 +863,79 @@ describe('AgentService', () => {
 		} finally {
 			warn.mockRestore();
 		}
+	});
+	it('accepts a vanished-entry count only on a successful backup completion', async () => {
+		const command = {
+			id: 'command-vanished',
+			type: 'BACKUP_FILESYSTEM',
+			state: 'completed',
+			payload: { backupId: 'backup-01', planId: 'plan-01', repositoryId: 'repo-01' },
+		} as any;
+		store.getCommandForAgent = jest.fn().mockResolvedValue(command);
+		store.completeCommand.mockResolvedValue(command);
+		const remote = { completeCommand: jest.fn() } as any;
+		service = new AgentService(
+			store,
+			'agent-service-test-secret-that-is-long-enough',
+			() => now,
+			remote
+		);
+		const summary = {
+			message_type: 'summary',
+			files_new: 1,
+			files_changed: 0,
+			files_unmodified: 9,
+			dirs_new: 0,
+			dirs_changed: 0,
+			dirs_unmodified: 1,
+			data_blobs: 1,
+			tree_blobs: 1,
+			data_added: 10,
+			data_added_packed: 10,
+			total_files_processed: 10,
+			total_bytes_processed: 100,
+			total_duration: 1,
+			snapshot_id: 'abcdef0123456789',
+		};
+		const input = {
+			sequence: 2,
+			leaseToken: 'a'.repeat(32),
+			success: true,
+			result: {
+				snapshotId: 'abcdef0123456789',
+				summary,
+				sourceWarnings: { vanishedEntries: 3 },
+			},
+		};
+		for (const invalid of [
+			{ ...input, result: { ...input.result, sourceWarnings: { vanishedEntries: 0 } } },
+			{ ...input, result: { ...input.result, sourceWarnings: { vanishedEntries: 1.5 } } },
+			{
+				...input,
+				result: {
+					...input.result,
+					sourceWarnings: { vanishedEntries: 3, paths: ['ab/0123abcd'] },
+				},
+			},
+			{ ...input, success: false, error: 'Remote filesystem backup failed.' },
+		])
+			await expect(service.complete(agent.agentId, command.id, invalid)).rejects.toMatchObject({
+				statusCode: 400,
+			});
+		store.getCommandForAgent.mockResolvedValue({ ...command, type: 'PING' });
+		await expect(service.complete(agent.agentId, command.id, input)).rejects.toMatchObject({
+			statusCode: 400,
+		});
+		expect(store.completeCommand).not.toHaveBeenCalled();
+		store.getCommandForAgent.mockResolvedValue(command);
+		await service.complete(agent.agentId, command.id, input);
+		expect(remote.completeCommand).toHaveBeenCalledWith(
+			command,
+			expect.objectContaining({
+				success: true,
+				result: expect.objectContaining({ sourceWarnings: { vanishedEntries: 3 } }),
+			})
+		);
 	});
 	it('accepts the S3 repository capability fields of section 10.1 and refuses any other shape', async () => {
 		const s3Capable = {

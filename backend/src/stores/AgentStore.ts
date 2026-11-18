@@ -349,7 +349,8 @@ export class AgentStore {
 		leaseToken: string,
 		sequence: number,
 		now = new Date(),
-		leaseMs = 60_000
+		/** A fixed renewal, or one chosen from the command (see agentCommandRenewalMs). */
+		leaseMs: number | ((command: AgentCommand) => number) = 60_000
 	): Promise<AgentCommand | null> {
 		const existing = await this.getCommandForAgent(agentId, commandId);
 		if (!existing) return null;
@@ -375,7 +376,9 @@ export class AgentStore {
 				state: 'running',
 				lastEventSequence: sequence,
 				// A long Restic run keeps its durable lease while it sends bounded progress.
-				leaseExpiresAt: new Date(now.getTime() + leaseMs),
+				leaseExpiresAt: new Date(
+					now.getTime() + (typeof leaseMs === 'function' ? leaseMs(existing) : leaseMs)
+				),
 			})
 			.where(
 				and(
@@ -448,6 +451,22 @@ export class AgentStore {
 		);
 	}
 
+	/**
+	 * True while the Agent holds an unexpired lease on a command. The Agent sends no
+	 * heartbeat while it executes one, but it renews the lease, so the lease shows
+	 * the Agent is alive and busy. A crashed Agent stops renewing and the lease ends.
+	 */
+	async hasLiveCommand(agentId: string, now = new Date()): Promise<boolean> {
+		return !!(await this.db.query.agentCommands.findFirst({
+			columns: { id: true },
+			where: and(
+				eq(agentCommands.agentId, agentId),
+				inArray(agentCommands.state, ['leased', 'acknowledged', 'running']),
+				gt(agentCommands.leaseExpiresAt, now)
+			),
+		}));
+	}
+
 	async getCommand(commandId: string): Promise<AgentCommand | null> {
 		return (
 			(await this.db.query.agentCommands.findFirst({ where: eq(agentCommands.id, commandId) })) ||
@@ -484,7 +503,7 @@ export class AgentStore {
 		agentId: string,
 		commandId: string,
 		leaseToken: string,
-		leaseMs: number,
+		leaseMs: number | ((command: AgentCommand) => number),
 		now = new Date()
 	): Promise<{ command: AgentCommand; cancelled: boolean } | null> {
 		const existing = await this.getCommandForAgent(agentId, commandId);
@@ -499,7 +518,11 @@ export class AgentStore {
 		}
 		const renewed = await this.db
 			.update(agentCommands)
-			.set({ leaseExpiresAt: new Date(now.getTime() + leaseMs) })
+			.set({
+				leaseExpiresAt: new Date(
+					now.getTime() + (typeof leaseMs === 'function' ? leaseMs(existing) : leaseMs)
+				),
+			})
 			.where(
 				and(
 					eq(agentCommands.id, commandId),
