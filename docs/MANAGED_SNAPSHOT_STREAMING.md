@@ -61,15 +61,15 @@ bounds; the listing no longer uses that whole-output limit.
 | --- | --- |
 | Simultaneous metadata constructions | 1 per server process |
 | Managed recovery repository sessions | 2 per server process, including archive/restore sessions |
-| Completed/building/failed cache reservations | 2, at most 512 MiB of index files combined |
-| One index | 256 MiB SQLite page limit; 500,000 nodes |
+| Completed/building/failed cache reservations | 2, at most 2 GiB of index files combined |
+| One index | 1 GiB SQLite page limit; 1,000,000 nodes |
 | Listing record / complete input | 256 KiB / 1 GiB; exceeding either fails closed |
 | Listing construction process deadline | 15 minutes |
 | SQLite page cache | 8 MiB per index; prepared indexed scans avoid full result sorts |
-| Free disk before construction | At least 320 MiB (256 MiB reservation + 64 MiB reserve) |
+| Free disk before construction | At least 1,088 MiB (1 GiB reservation + 64 MiB reserve) |
 | Idle cache lifetime | 15 minutes, swept every minute and on requests |
 | Page size | 200 by default; maximum 500 |
-| Offset / filename search | 0–500,000 / at most 128 characters |
+| Offset / filename search | 0–1,000,000 / at most 128 characters |
 | Unpaginated compatibility response | At most 5,000 entries |
 | Preview/result displayed paths | At most 5,000, explicitly marked truncated; totals remain complete |
 | Granular restore | Existing 1,024 regular-file/include limits; additionally 8,192 selected nodes/ancestors |
@@ -79,8 +79,11 @@ Admission is serialized with at most 16 pending admissions. An idle completed or
 failed index is evicted in least-recently-used order when slots or free space are
 needed. Readers and unfinished builds remain pinned. Native SQLite handles close
 before generated files are removed; failed cleanup retains its reservation.
-These are safety limits, not a promise that every 500,000-entry snapshot fits the
-disk limit. Long names and paths make indexes larger. Resource exhaustion returns
+These are safety limits, not a promise that every 1,000,000-entry snapshot fits the
+disk limit. Long names and paths make indexes larger: one entry with its six
+child-order indexes takes about 0.6 to 2 KiB, so a content-addressed tree with
+long paths (such as an application filestore) fits about 500,000 entries in
+1 GiB. The earlier 256 MiB limit filled at about 150,000 such entries. Resource exhaustion returns
 a precise closed error, never an incomplete listing. Hard entry/database limits
 are HTTP 413 and are not fixed by repeatedly polling. Recovery still needs enough
 disk for its selected restored content plus the existing 512 MiB reserve and its
@@ -223,10 +226,10 @@ introduced.
 | `index-resource-limit`, `reason=cache-active` / 429 | Both slots are consumed by active readers; finish/cancel those operations and retry. Idle indexes are evicted automatically. |
 | `index-resource-limit`, `reason=build-busy` / 429 | One metadata build is already running; retry after it completes. |
 | `index-resource-limit`, `reason=admission-busy` / 429 | The bounded admission queue is full; retry shortly. Busy index responses include `Retry-After: 2`. |
-| `index-resource-limit`, `reason=disk-capacity` / 507 | Fewer than 320 MiB remain after safe idle eviction. Check available cache filesystem capacity. |
-| `index-resource-limit`, `reason=database-size` / 413 | SQLite reached its 256 MiB hard page limit. Repeating unchanged indexing does not help. |
-| `index-resource-limit`, `reason=storage-full` / 507 | SQLite reported FULL without sufficient evidence to attribute it to the configured page cap. Inspect filesystem capacity/quota; do not assume snapshot corruption or a full disk. |
-| `index-resource-limit`, `reason=entry-count` / 413 | More than 500,000 metadata nodes. No partial manifest is published. |
+| `index-resource-limit`, `reason=disk-capacity` / 507 | Fewer than 1,088 MiB remain after safe idle eviction. Check available cache filesystem capacity. |
+| `index-resource-limit`, `reason=database-size` / 413 | SQLite reached its 1 GiB hard page limit. Within 16 MiB of the cap the allocation is sampled after every row, so a FULL there is attributed to the cap even though SQLite rolls the build back. Repeating unchanged indexing does not help. |
+| `index-resource-limit`, `reason=storage-full` / 507 | SQLite reported FULL more than 1 MiB below the configured page cap. Inspect filesystem capacity/quota; do not assume snapshot corruption or a full disk. |
+| `index-resource-limit`, `reason=entry-count` / 413 | More than 1,000,000 metadata nodes. No partial manifest is published. |
 | `repository-busy` / 429 | Two recovery repository sessions already active; retry after one finishes. |
 | `index-unavailable`, `reason=unavailable` or `cleanup-failed` / 503 | Private cache unavailable or cleanup failed; check disk/ownership and explicitly retry. |
 | `index-unavailable`, `reason=timeout` / 504 | Indexing deadline expired. Inspect storage latency and explicitly retry. |

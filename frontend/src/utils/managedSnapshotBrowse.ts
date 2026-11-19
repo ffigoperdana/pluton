@@ -45,6 +45,8 @@ function retryAt(response: Response, now: number) {
    const at = /^\d+$/.test(value.trim()) ? now + Number(value) * 1000 : Date.parse(value);
    return Number.isFinite(at) && at > now ? at : 0;
 }
+/** Mirrors the server snapshot index entry bound (SNAPSHOT_INDEX_LIMITS.maxEntries). */
+export const MAX_SNAPSHOT_INDEX_ENTRIES = 1_000_000;
 const unavailable = 'Snapshot metadata is unavailable. Retry shortly.';
 const proxyMessage = (status: number) =>
    status === 429
@@ -112,10 +114,10 @@ async function readPage(response: Response, query: ManagedSnapshotQuery, now: nu
       page.limit <= 500 &&
       integer(page.total) &&
       integer(page.entries) &&
-      page.entries <= 500_000 &&
+      page.entries <= MAX_SNAPSHOT_INDEX_ENTRIES &&
       page.offset === query.offset &&
       page.limit === query.limit &&
-      (page.nextOffset === null || (integer(page.nextOffset) && page.nextOffset > page.offset && page.nextOffset <= 500_000)) &&
+      (page.nextOffset === null || (integer(page.nextOffset) && page.nextOffset > page.offset && page.nextOffset <= MAX_SNAPSHOT_INDEX_ENTRIES)) &&
       typeof page.snapshotId === 'string' &&
       /^[a-f0-9]{64}$/.test(page.snapshotId)
    )

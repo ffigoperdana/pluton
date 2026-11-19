@@ -345,11 +345,19 @@ export class RemoteBackupService {
 		return this.cronManager.resumeSchedule(planId, 'remote-backup');
 	}
 
-	async queuePlanBackup(planId: string): Promise<string> {
+	/**
+	 * Pausing a plan stops its schedule only, as for local plans: an explicit run
+	 * (Backup Now, run on creation) of a paused plan is still queued. A Source
+	 * Access mode setup keeps refusing every run through assertSupportedPlan.
+	 */
+	async queuePlanBackup(
+		planId: string,
+		options: { scheduled?: boolean } = {}
+	): Promise<string> {
 		const plan = await this.planStore.getById(planId);
 		if (!plan) throw new NotFoundError('Plan not found.');
 		await this.assertSupportedPlan(plan, undefined, false);
-		if (!plan.isActive) return 'Remote backup plan is paused.';
+		if (options.scheduled && !plan.isActive) return 'Remote backup plan is paused.';
 		if (await this.planStore.hasActiveBackups(planId)) {
 			throw new AppError(409, 'A backup is already in progress for this plan.');
 		}
@@ -875,7 +883,7 @@ export class RemoteBackupService {
 
 	private async queueScheduledBackup(planId: string): Promise<void> {
 		try {
-			await this.queuePlanBackup(planId);
+			await this.queuePlanBackup(planId, { scheduled: true });
 		} catch (error) {
 			serverLogger.warn({
 				schedulerEvent: 'remote_backup_not_queued', planId,

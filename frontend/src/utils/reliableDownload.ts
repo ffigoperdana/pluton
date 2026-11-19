@@ -165,7 +165,7 @@ export function validateReliableJob(value: unknown, backupId: string, mode: Down
                  ? telemetry.phase
                  : undefined,
               indexedEntries:
-                 Number.isSafeInteger(telemetry.indexedEntries) && Number(telemetry.indexedEntries) >= 0 && Number(telemetry.indexedEntries) <= 500000
+                 Number.isSafeInteger(telemetry.indexedEntries) && Number(telemetry.indexedEntries) >= 0 && Number(telemetry.indexedEntries) <= 1_000_000
                     ? telemetry.indexedEntries
                     : undefined,
               lastProgressAgeMs:

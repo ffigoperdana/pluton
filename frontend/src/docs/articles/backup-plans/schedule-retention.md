@@ -18,7 +18,7 @@ Plan lama tanpa timezone tetap mengikuti waktu server yang sebelumnya digunakan.
 
 Jadwal direkonsiliasi dari data plan saat startup sebelum timer backup dari cache diaktifkan. Eksekusi yang terlewat saat layanan mati tidak diputar ulang otomatis. Preview adalah slot kalender berikutnya, bukan bukti bahwa antrean atau Agent sehat. Antrean sibuk dapat menunda pekerjaan; Agent offline atau izin source yang ditolak dapat menggagalkan dispatch. Periksa riwayat dan status Agent. Mengubah timezone tampilan riwayat hanya mengubah cara tanggal/filter dibaca; itu tidak mengubah jadwal backup.
 
-Gunakan **Pause** untuk menghentikan jadwal sementara dan **Resume** untuk mengaktifkannya kembali. Pause tidak menghapus snapshot dan bukan tombol untuk membatalkan backup aktif. UI menolak pause ketika backup sedang berjalan. Tunggu status akhir sebelum pemeliharaan atau perubahan yang memerlukan keadaan idle.
+Gunakan **Pause** untuk menghentikan jadwal sementara dan **Resume** untuk mengaktifkannya kembali. Pause hanya menghentikan jadwal: **Backup Now** tetap menjalankan backup pada plan yang di-pause, termasuk plan managed agent. Pause tidak menghapus snapshot dan bukan tombol untuk membatalkan backup aktif. UI menolak pause ketika backup sedang berjalan. Tunggu status akhir sebelum pemeliharaan atau perubahan yang memerlukan keadaan idle.
 
 ## Retention
 
