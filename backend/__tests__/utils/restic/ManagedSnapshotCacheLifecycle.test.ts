@@ -319,10 +319,20 @@ describe('managed index cache lifecycle and bounded admission', () => {
 			.spyOn(fs, 'statfs')
 			.mockImplementation(
 				async () =>
-					({ bavail: cache.status(key('A')) === 'ready' ? 0 : 400000, bsize: 4096 }) as any
+					({ bavail: cache.status(key('A')) === 'ready' ? 0 : 200000, bsize: 4096 }) as any
 			);
 		await expect(fill('B')).resolves.toBe(2);
 		expect(cache.status(key('A'))).toBe('missing');
+		disk.mockRestore();
+	});
+	it('starts an index with less free space than the full page cap', async () => {
+		// 500 MiB free: above the 320 MiB start requirement, below the 1 GiB cap plus reserve.
+		const disk = jest
+			.spyOn(fs, 'statfs')
+			.mockResolvedValue({ bavail: (500 * 1024 ** 2) / 4096, bsize: 4096 } as any);
+		await expect(fill('A')).resolves.toBe(2);
+		disk.mockResolvedValue({ bavail: (300 * 1024 ** 2) / 4096, bsize: 4096 } as any);
+		await expect(fill('B')).rejects.toMatchObject({ reason: 'disk-capacity', statusCode: 507 });
 		disk.mockRestore();
 	});
 	it('sanitizes unavailable filesystem admission as 503 and permits retry after access returns', async () => {
@@ -372,7 +382,8 @@ describe('managed index cache lifecycle and bounded admission', () => {
 		expect(SNAPSHOT_INDEX_LIMITS).toMatchObject({ maxEntries: 1_000_000, maxBytes: 1024 ** 3 });
 		const message = (reason: 'disk-capacity' | 'database-size' | 'entry-count') =>
 			new SnapshotIndexError('index-resource-limit', reason).message;
-		expect(message('disk-capacity')).toContain('1,088 MiB');
+		expect(message('disk-capacity')).toContain('320 MiB');
+		expect(message('disk-capacity')).toContain('grows up to 1,024 MiB');
 		expect(message('database-size')).toContain('1,024 MiB');
 		expect(message('entry-count')).toContain('1,000,000');
 	});

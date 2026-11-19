@@ -102,6 +102,13 @@ export type SnapshotIndexReason =
 export const SNAPSHOT_INDEX_LIMITS = Object.freeze({
 	maxEntries: 1_000_000,
 	maxBytes: 1024 ** 3,
+	/**
+	 * Free space an index needs before it starts (plus the reserve). An index only
+	 * grows as large as its snapshot needs, up to maxBytes; running out of disk on
+	 * the way is reported as disk-capacity. Requiring the whole cap up front would
+	 * refuse even small snapshots on a modest cache filesystem.
+	 */
+	startBytes: 256 * 1024 ** 2,
 	maxIndexes: 2,
 	ttlMs: 15 * 60_000,
 	maxBuilds: 1,
@@ -139,7 +146,7 @@ const reasonMessages: Partial<Record<SnapshotIndexReason, string>> = {
 		'Snapshot cache is busy with active readers. Retry after those operations finish.',
 	'build-busy': 'Another snapshot is being indexed. Retry shortly.',
 	'admission-busy': 'Snapshot cache is busy handling requests. Retry shortly.',
-	'disk-capacity': `Snapshot indexing needs ${mib(SNAPSHOT_INDEX_LIMITS.maxBytes + SNAPSHOT_INDEX_DISK_RESERVE)} of available cache filesystem space. Free cache filesystem space and retry.`,
+	'disk-capacity': `Snapshot indexing needs ${mib(SNAPSHOT_INDEX_LIMITS.startBytes + SNAPSHOT_INDEX_DISK_RESERVE)} of available cache filesystem space to start, and the index of a large snapshot grows up to ${mib(SNAPSHOT_INDEX_LIMITS.maxBytes)}. Free cache filesystem space and retry.`,
 	'database-size': `Snapshot metadata index exceeds the bounded database size limit (${mib(SNAPSHOT_INDEX_LIMITS.maxBytes)}): the snapshot has too many entries or too long paths to index.`,
 	'entry-count': `Snapshot metadata exceeds the maximum entry count (${SNAPSHOT_INDEX_LIMITS.maxEntries.toLocaleString('en-US')}).`,
 	'cleanup-failed': 'Snapshot index cleanup failed. Check cache filesystem access and retry.',
@@ -417,6 +424,10 @@ export class ManagedSnapshotIndexCache {
 		}, 60_000);
 		this.timer.unref();
 	}
+	/** Free space required before a build: its starting allowance plus the reserve. */
+	private requiredFreeBytes() {
+		return Math.min(this.limits.maxBytes, this.limits.startBytes) + SNAPSHOT_INDEX_DISK_RESERVE;
+	}
 	static key(binding: unknown) {
 		return crypto.createHash('sha256').update(JSON.stringify(binding)).digest('hex');
 	}
@@ -538,7 +549,7 @@ export class ManagedSnapshotIndexCache {
 					await this.initialize();
 					let disk = await fs.statfs(this.root);
 					this.availableBytes = disk.bavail * disk.bsize;
-					while (disk.bavail * disk.bsize < this.limits.maxBytes + SNAPSHOT_INDEX_DISK_RESERVE) {
+					while (disk.bavail * disk.bsize < this.requiredFreeBytes()) {
 						const victim = [...this.entries]
 							.filter(([, value]) => value.settled && !value.readers)
 							.sort((a, b) => a[1].used - b[1].used)[0];
@@ -669,7 +680,7 @@ export class ManagedSnapshotIndexCache {
 		try {
 			await this.initialize();
 			const disk = await fs.statfs(this.root);
-			if (disk.bavail * disk.bsize < this.limits.maxBytes + SNAPSHOT_INDEX_DISK_RESERVE)
+			if (disk.bavail * disk.bsize < this.requiredFreeBytes())
 				throw new SnapshotIndexError('index-resource-limit', 'disk-capacity');
 			entry.directory = path.join(
 				this.root,

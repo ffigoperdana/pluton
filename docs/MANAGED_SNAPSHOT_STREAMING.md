@@ -66,7 +66,7 @@ bounds; the listing no longer uses that whole-output limit.
 | Listing record / complete input | 256 KiB / 1 GiB; exceeding either fails closed |
 | Listing construction process deadline | 15 minutes |
 | SQLite page cache | 8 MiB per index; prepared indexed scans avoid full result sorts |
-| Free disk before construction | At least 1,088 MiB (1 GiB reservation + 64 MiB reserve) |
+| Free disk before construction | At least 320 MiB (256 MiB to start + 64 MiB reserve); a large index then grows up to 1 GiB while space remains |
 | Idle cache lifetime | 15 minutes, swept every minute and on requests |
 | Page size | 200 by default; maximum 500 |
 | Offset / filename search | 0–1,000,000 / at most 128 characters |
@@ -226,7 +226,7 @@ introduced.
 | `index-resource-limit`, `reason=cache-active` / 429 | Both slots are consumed by active readers; finish/cancel those operations and retry. Idle indexes are evicted automatically. |
 | `index-resource-limit`, `reason=build-busy` / 429 | One metadata build is already running; retry after it completes. |
 | `index-resource-limit`, `reason=admission-busy` / 429 | The bounded admission queue is full; retry shortly. Busy index responses include `Retry-After: 2`. |
-| `index-resource-limit`, `reason=disk-capacity` / 507 | Fewer than 1,088 MiB remain after safe idle eviction. Check available cache filesystem capacity. |
+| `index-resource-limit`, `reason=disk-capacity` / 507 | Fewer than 320 MiB remain after safe idle eviction, or the cache filesystem filled (under 64 MiB left) while a large index grew. Check available cache filesystem capacity. |
 | `index-resource-limit`, `reason=database-size` / 413 | SQLite reached its 1 GiB hard page limit. Within 16 MiB of the cap the allocation is sampled after every row, so a FULL there is attributed to the cap even though SQLite rolls the build back. Repeating unchanged indexing does not help. |
 | `index-resource-limit`, `reason=storage-full` / 507 | SQLite reported FULL more than 1 MiB below the configured page cap. Inspect filesystem capacity/quota; do not assume snapshot corruption or a full disk. |
 | `index-resource-limit`, `reason=entry-count` / 413 | More than 1,000,000 metadata nodes. No partial manifest is published. |
