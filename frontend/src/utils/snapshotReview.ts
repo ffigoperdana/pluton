@@ -26,6 +26,8 @@ export type SnapshotDetails = {
    replication: { id: string; storageName: string; status: string; snapshotId: string | null; verifiedAt: number | null }[];
    warnings: { stage: string; code: string }[];
    comparisonAvailable: boolean;
+   /** Set when the plan names its files from a paired database (Odoo attachments). */
+   attachmentCatalog?: { adapter: 'odoo' } | null;
 };
 export type ComparisonStatus = {
    state: 'missing' | 'unavailable' | 'preparing' | 'ready' | 'failed' | 'cancelled';

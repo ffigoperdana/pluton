@@ -38,6 +38,7 @@ import { BackupRunConfig } from '../types/backups';
 import { RemoteBackupService } from './RemoteBackupService';
 import { prepareRemoteLifecycleCollection } from '../utils/remoteLifecycle';
 import type { DatabaseCredential } from '../types/remoteLifecycle';
+import { validateAttachmentCatalogSettings } from '../utils/attachmentCatalog/config';
 import { configService } from './ConfigService';
 import type { RecoveryTestStore } from '../stores/RecoveryTestStore';
 import { parseBackupHistoryQuery } from '../utils/backupHistoryQuery';
@@ -225,6 +226,18 @@ export class PlanService {
 			settings,
 			tags,
 		};
+		if (settings && Object.hasOwn(settings, 'attachmentCatalog')) {
+			const catalog = await validateAttachmentCatalogSettings(
+				settings.attachmentCatalog,
+				{ ...newPlanData, method: method as Plan['method'] } as Plan,
+				this.planStore
+			);
+			const { attachmentCatalog: _omitted, ...rest } = newPlanData.settings;
+			newPlanData = {
+				...newPlanData,
+				settings: { ...rest, ...(catalog ? { attachmentCatalog: catalog } : {}) } as typeof settings,
+			};
+		}
 		let databaseCredential: DatabaseCredential[] | undefined;
 		if (settings?.remoteLifecycle !== undefined) {
 			if (!RemoteBackupService.isRemoteFilesystemPlan(newPlanData)) {
@@ -336,11 +349,33 @@ export class PlanService {
 		let previousCredential: DatabaseCredential[] = [];
 		const lifecycleSupplied =
 			!!planData.settings && Object.hasOwn(planData.settings, 'remoteLifecycle');
+		const catalogSupplied =
+			!!planData.settings && Object.hasOwn(planData.settings, 'attachmentCatalog');
 		// Partial unrelated settings updates must not implicitly disable database backup.
 		// Disabling is an explicit version-2 empty collection (hooks may remain).
 		if (planData.settings) {
 			planData = { ...planData, settings: { ...currentPlan.settings, ...planData.settings } };
 			planData.settings!.interval = preparePlanInterval(planData.settings!.interval, currentPlan.settings.interval);
+		}
+		if (
+			catalogSupplied &&
+			planData.settings &&
+			// The form sends the stored value back with every edit; only a change is revalidated,
+			// so a later problem with the paired plan never blocks unrelated edits.
+			JSON.stringify(planData.settings.attachmentCatalog ?? null) !==
+				JSON.stringify(currentPlan.settings.attachmentCatalog ?? null)
+		) {
+			// null switches the catalog off; an unrelated settings update keeps it.
+			const catalog = await validateAttachmentCatalogSettings(
+				planData.settings.attachmentCatalog,
+				{ ...currentPlan, ...planData, id: currentPlan.id } as Plan,
+				this.planStore
+			);
+			const { attachmentCatalog: _omitted, ...rest } = planData.settings;
+			planData = {
+				...planData,
+				settings: { ...rest, ...(catalog ? { attachmentCatalog: catalog } : {}) } as typeof planData.settings,
+			};
 		}
 		if (
 			lifecycleSupplied &&

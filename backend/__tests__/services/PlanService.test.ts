@@ -476,6 +476,108 @@ describe('PlanService', () => {
 		});
 	});
 
+	describe('attachment catalog settings', () => {
+		const catalog = {
+			version: 1,
+			adapter: 'odoo',
+			databasePlanId: 'plan-db',
+			databaseId: 'db_example01',
+		};
+		const databasePlan = {
+			id: 'plan-db',
+			sourceId: 'app-02',
+			sourceType: 'device',
+			settings: {
+				remoteLifecycle: {
+					version: 2,
+					databases: [
+						{
+							databaseId: 'db_example01',
+							engine: 'postgresql',
+							host: 'localhost',
+							port: 5432,
+							tls: 'local',
+							database: 'example_odoo',
+							username: 'backup_reader',
+							dumpFilename: 'example-odoo.sql',
+							timeoutSeconds: 900,
+							maxDumpBytes: 1024 ** 3,
+							includeRoutines: false,
+							includeEvents: false,
+							passwordConfigured: true,
+						},
+					],
+				},
+			},
+		};
+		let current: any;
+		let remote: { validatePlanCreation: jest.Mock; updateManagedPlan: jest.Mock };
+		let service: PlanService;
+		beforeEach(() => {
+			current = {
+				id: 'plan-files',
+				title: 'Files',
+				method: 'backup',
+				sourceId: 'app-01',
+				sourceType: 'device',
+				storageId: 'storage-123',
+				storagePath: 'files',
+				sourceConfig: { includes: ['/srv/example-filestore'], excludes: [] },
+				settings: { interval: { type: 'daily', time: '01:00AM' }, encryption: true },
+			};
+			mockPlanStore.getById.mockImplementation(async (id: string) =>
+				id === 'plan-db' ? (databasePlan as any) : current
+			);
+			mockPlanStore.update.mockImplementation(async (_id: string, values: any) => {
+				current = { ...current, ...values };
+				return current;
+			});
+			remote = { validatePlanCreation: jest.fn(), updateManagedPlan: jest.fn() };
+			service = new PlanService(
+				mockLocalAgent,
+				mockPlanStore,
+				mockBackupStore,
+				mockStorageStore,
+				mockDeviceStore,
+				mockRestoreStore,
+				remote as unknown as RemoteBackupService
+			);
+		});
+
+		it('saves a validated pairing, keeps it across unrelated edits and removes it with null', async () => {
+			await service.updatePlan('plan-files', { settings: { attachmentCatalog: catalog } } as any);
+			expect(current.settings.attachmentCatalog).toEqual(catalog);
+			expect(current.settings.encryption).toBe(true);
+			await service.updatePlan('plan-files', { title: 'Renamed', settings: { encryption: true } } as any);
+			expect(current.settings.attachmentCatalog).toEqual(catalog);
+			// The form sends the stored pairing back; it is kept even if the database plan is gone.
+			mockPlanStore.getById.mockImplementation(async (id: string) => (id === 'plan-db' ? null : current));
+			await service.updatePlan('plan-files', {
+				title: 'Renamed again',
+				settings: { attachmentCatalog: { ...catalog } },
+			} as any);
+			expect(current.settings.attachmentCatalog).toEqual(catalog);
+			mockPlanStore.getById.mockImplementation(async (id: string) =>
+				id === 'plan-db' ? (databasePlan as any) : current
+			);
+			await service.updatePlan('plan-files', { settings: { attachmentCatalog: null } } as any);
+			expect(current.settings).not.toHaveProperty('attachmentCatalog');
+		});
+
+		it('refuses an invalid pairing before persistence', async () => {
+			await expect(
+				service.updatePlan('plan-files', {
+					settings: { attachmentCatalog: { ...catalog, databaseId: 'db_unknown' } },
+				} as any)
+			).rejects.toHaveProperty('statusCode', 400);
+			current.sourceId = 'main';
+			await expect(
+				service.updatePlan('plan-files', { settings: { attachmentCatalog: catalog } } as any)
+			).rejects.toThrow('Managed Agent backup plan');
+			expect(mockPlanStore.update).not.toHaveBeenCalled();
+		});
+	});
+
 	// -------------------------------------
 	// Tests for updating a storage-to-storage sync plan
 	// -------------------------------------

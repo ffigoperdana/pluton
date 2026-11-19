@@ -6,10 +6,13 @@ import { API_URL } from '../../../utils/constants';
 import { detailBackup, snapshotRequest, type SnapshotDetails, type ChangeFilter } from '../../../utils/snapshotReview';
 import { formatBytes } from '../../../utils/helpers';
 import { formatHistoryDate } from '../../../utils/backupHistory';
+import AttachmentCatalogView from './AttachmentCatalogView';
 import classes from './SnapshotReview.module.scss';
+import catalogClasses from './AttachmentCatalogView.module.scss';
 export default function SnapshotExplorerModal(props: SnapshotViewerProps & { initialFilter?: ChangeFilter }) {
    const [backup, setBackup] = useState(props.backup);
    const [navigationError, setNavigationError] = useState('');
+   const [view, setView] = useState<'files' | 'attachments'>('files');
    const details = useQuery({
       queryKey: ['snapshot-details', backup.id],
       queryFn: ({ signal }) => snapshotRequest<SnapshotDetails>(API_URL, backup.id, 'details', signal),
@@ -55,18 +58,32 @@ export default function SnapshotExplorerModal(props: SnapshotViewerProps & { ini
                {navigationError}
             </p>
          )}
+         {value?.attachmentCatalog?.adapter === 'odoo' && (
+            <div className={catalogClasses.viewSwitch} role="tablist" aria-label="Snapshot view">
+               <button type="button" role="tab" aria-selected={view === 'files'} onClick={() => setView('files')}>
+                  Files
+               </button>
+               <button type="button" role="tab" aria-selected={view === 'attachments'} onClick={() => setView('attachments')}>
+                  Odoo attachments
+               </button>
+            </div>
+         )}
          <div className={classes.explorer}>
-            <SnapshotViewer
-               {...props}
-               key={backup.id}
-               backup={backup}
-               toolbarLeftContent={<strong>Files and directories</strong>}
-               comparison={{
-                  enabled: !!value?.comparisonAvailable,
-                  initialFilter: backup.id === props.backup.id ? props.initialFilter : 'all',
-                  onPrevious: (id) => void previous(id).catch(() => setNavigationError('Previous snapshot is unavailable. Retry later.')),
-               }}
-            />
+            {view === 'attachments' && value?.attachmentCatalog ? (
+               <AttachmentCatalogView key={backup.id} backupId={backup.id} />
+            ) : (
+               <SnapshotViewer
+                  {...props}
+                  key={backup.id}
+                  backup={backup}
+                  toolbarLeftContent={<strong>Files and directories</strong>}
+                  comparison={{
+                     enabled: !!value?.comparisonAvailable,
+                     initialFilter: backup.id === props.backup.id ? props.initialFilter : 'all',
+                     onPrevious: (id) => void previous(id).catch(() => setNavigationError('Previous snapshot is unavailable. Retry later.')),
+                  }}
+               />
+            )}
          </div>
          <footer className={classes.footer}>
             <span>Historical snapshot · Restore uses the selected snapshot identity.</span>

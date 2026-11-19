@@ -11,3 +11,5 @@ Dockerfile.source text eol=lf
 # The Agent S3 probe and its lab files run on Linux
 scripts/diagnostics/*.sh text eol=lf
 scripts/diagnostics/test/agent-s3-probe/* text eol=lf
+# Real pg_dump output: COPY framing is LF-only, as on the Linux Agent
+backend/__tests__/fixtures/attachmentCatalog/*.sql text eol=lf

@@ -159,6 +159,16 @@ export type PlanSettings = {
       onBackupComplete?: PlanScript[];
    };
    replication?: PlanReplicationSettings;
+   /** Names filestore files from a paired database plan; null switches it off. */
+   attachmentCatalog?: AttachmentCatalogSettings | null;
+};
+
+export type AttachmentCatalogSettings = {
+   version: 1;
+   adapter: 'odoo';
+   databasePlanId: string;
+   databaseId: string;
+   filestoreRoot?: string;
 };
 
 export type RemoteDatabaseBackup = {

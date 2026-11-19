@@ -11,7 +11,13 @@ import { streamSelectedManagedArchive } from './ManagedTarExport';
 import { managedSnapshotPath } from '../managedSnapshotPath';
 import { AppError } from '../AppError';
 
-export type SelectedDownloadHeaders = { fileName: string; contentType: string; length?: number };
+export type SelectedDownloadHeaders = {
+	fileName: string;
+	contentType: string;
+	length?: number;
+	/** Original UTF-8 name, sent as RFC 5987 filename* next to the ASCII fileName. */
+	utf8FileName?: string;
+};
 /** No repository writes, staging restore or archive buffer. The caller holds the exact index lease. */
 export async function streamSelectedSnapshot(
 	index: ManagedSnapshotIndex,

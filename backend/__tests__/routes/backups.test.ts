@@ -58,6 +58,8 @@ describe('Backup Routes', () => {
 			getSnapshotFiles: jest.fn(),
 			getSnapshotPage: jest.fn(),
 			downloadSnapshotItem: jest.fn(),
+			attachmentCatalogPage: jest.fn(),
+			downloadAttachment: jest.fn(),
 			getBackupProgress: jest.fn(),
 			cancelBackup: jest.fn(),
 			getBackupDownload: jest.fn(),
@@ -147,6 +149,87 @@ describe('Backup Routes', () => {
 			expect(result.body.error).toBe('Selected snapshot download failed.');
 			expect(JSON.stringify(result.body)).not.toContain('synthetic-private');
 		});
+	});
+
+	describe('attachment catalog', () => {
+		it.each([
+			'/api/backups/backup-01/attachments',
+			'/api/backups/backup-01/attachments/7/download',
+		])('requires authentication for %s', async url => {
+			setupAuthMock(false);
+			expect((await request(app).get(url)).status).toBe(401);
+			expect(mockBackupService.attachmentCatalogPage).not.toHaveBeenCalled();
+			expect(mockBackupService.downloadAttachment).not.toHaveBeenCalled();
+		});
+		it('passes a validated query and answers 202 with Retry-After while the catalog builds', async () => {
+			mockBackupService.attachmentCatalogPage.mockResolvedValue({
+				status: 'indexing',
+				retryAfterMs: 2000,
+			} as any);
+			const result = await request(app).get(
+				'/api/backups/backup-01/attachments?search=Faktur&model=account.move&status=missing&sort=size&order=desc&offset=50&limit=25'
+			);
+			expect(result.status).toBe(202);
+			expect(result.headers['retry-after']).toBe('2');
+			expect(mockBackupService.attachmentCatalogPage).toHaveBeenCalledWith('backup-01', {
+				search: 'Faktur',
+				model: 'account.move',
+				status: 'missing',
+				sort: 'size',
+				order: 'desc',
+				offset: 50,
+				limit: 25,
+			});
+		});
+		it.each(['model=Account%20Move', 'limit=500', 'status=deleted', 'path=%2Fsrv', 'offset=-1'])(
+			'refuses the attachment query %s before reading anything',
+			async query => {
+				const result = await request(app).get('/api/backups/backup-01/attachments?' + query);
+				expect(result.status).toBe(400);
+				expect(mockBackupService.attachmentCatalogPage).not.toHaveBeenCalled();
+			}
+		);
+		it('keeps the service status and message of a catalog failure', async () => {
+			mockBackupService.attachmentCatalogPage.mockRejectedValue(
+				new AppError(422, 'The paired database dump has no ir_attachment table.')
+			);
+			const result = await request(app).get('/api/backups/backup-01/attachments');
+			expect(result.status).toBe(422);
+			expect(result.body.error).toBe('The paired database dump has no ir_attachment table.');
+		});
+		it.each(['get', 'head'] as const)(
+			'downloads an attachment under its original name (%s)',
+			async method => {
+				mockBackupService.downloadAttachment.mockImplementation(
+					async (id, attachmentId, output, signal, headers, head) => {
+						expect([id, attachmentId, head]).toEqual(['backup-01', 7, method === 'head']);
+						expect(signal).toBeInstanceOf(AbortSignal);
+						headers({
+							fileName: 'Ringkasan rapat _ Q3 _.pdf',
+							utf8FileName: "Ringkasan rapat – Q3 ✓ (final)'s.pdf",
+							contentType: 'application/octet-stream',
+							length: 5,
+						});
+						if (!head) output.write(Buffer.from('hello'));
+					}
+				);
+				const result = await request(app)[method]('/api/backups/backup-01/attachments/7/download');
+				expect(result.status).toBe(200);
+				expect(result.headers['content-disposition']).toBe(
+					`attachment; filename="Ringkasan rapat _ Q3 _.pdf"; filename*=UTF-8''Ringkasan%20rapat%20%E2%80%93%20Q3%20%E2%9C%93%20%28final%29%27s.pdf`
+				);
+				expect(result.headers['cache-control']).toBe('private, no-store');
+				if (method === 'get') expect(result.body).toEqual(Buffer.from('hello'));
+			}
+		);
+		it.each(['/api/backups/backup-01/attachments/abc/download', '/api/backups/backup-01/attachments/7/download?path=%2Fetc'])(
+			'refuses %s before reading anything',
+			async url => {
+				const result = await request(app).get(url);
+				expect(result.status).toBe(400);
+				expect(mockBackupService.downloadAttachment).not.toHaveBeenCalled();
+			}
+		);
 	});
 
 	describe('mode-bound verified exports', () => {
@@ -382,7 +465,9 @@ describe('Backup Routes', () => {
 			'limit=501',
 			'limit=0',
 			'offset=-1',
-			'offset=500001',
+			// The page offset follows the index entry bound (SNAPSHOT_INDEX_LIMITS.maxEntries).
+			'offset=1000001',
+			'offset=10000000',
 			'offset=1.5',
 			'sort=command',
 			'order=other',
