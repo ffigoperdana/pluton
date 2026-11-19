@@ -63,6 +63,7 @@ import {
 import { appPaths } from './utils/AppPaths';
 import { BaseSnapshotManager } from './managers/BaseSnapshotManager';
 import { RestoreService } from './services/RestoreService';
+import { AgentHostRestoreService } from './services/AgentHostRestoreService';
 import { RemoteRepositoryRecoveryService } from './services/RemoteRepositoryRecoveryService';
 import { AttachmentCatalogService } from './services/AttachmentCatalogService';
 import { RestoreEventListener } from './services/listeners/RestoreEventListener';
@@ -309,20 +310,31 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		recoveryTestStore,
 		new AttachmentCatalogService(planStore, backupStore, remoteRecoveryService)
 	);
+	// docs/AGENT_HOST_RESTORE.md: the Agent restores on its own host; nothing passes through here.
+	const agentHostRestoreService = new AgentHostRestoreService(
+		agentStore,
+		planStore,
+		backupStore,
+		restoreStore,
+		remoteManagedRepositoryStore,
+		remoteBackupService
+	);
 	const restoreService = new RestoreService(
 		localRestoreAgent,
 		planStore,
 		backupStore,
 		restoreStore,
 		storageStore,
-		remoteRecoveryService
+		remoteRecoveryService,
+		agentHostRestoreService
 	);
 	const agentService = new AgentService(
 		agentStore,
 		configService.config.SECRET,
 		undefined,
 		remoteBackupService,
-		sourceAccessService
+		sourceAccessService,
+		agentHostRestoreService
 	);
 	const deviceService = new DeviceService(
 		localSystemAgent,

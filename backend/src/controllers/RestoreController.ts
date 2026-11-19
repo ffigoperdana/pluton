@@ -18,6 +18,39 @@ type RestorePayload = {
 export class RestoreController {
 	constructor(protected restoreService: RestoreService) {}
 
+	/** docs/AGENT_HOST_RESTORE.md 8.2: what the Agent of a Managed Agent backup can offer. */
+	async agentHostOptions(req: Request, res: Response): Promise<void> {
+		const backupId = typeof req.query.backupId === 'string' ? req.query.backupId : '';
+		const planId = typeof req.query.planId === 'string' ? req.query.planId : '';
+		if (!backupId || !planId) {
+			res.status(400).json({ success: false, error: 'Required fields missing: backupId, planId' });
+			return;
+		}
+		try {
+			const result = await this.restoreService.agentHostOptions(backupId, planId);
+			res.json({ success: true, result });
+		} catch (error: any) {
+			res.status(error instanceof AppError ? error.statusCode : 500).json({
+				success: false,
+				error:
+					error instanceof AppError ? error.message : 'Agent host restore options are unavailable.',
+			});
+		}
+	}
+
+	/** Queues RESTORE_FILESYSTEM; the restore itself runs on the Agent host. */
+	async performAgentHostRestore(req: Request, res: Response): Promise<void> {
+		try {
+			const result = await this.restoreService.agentHostRestore(req.body);
+			res.status(202).json({ success: true, result });
+		} catch (error: any) {
+			res.status(error instanceof AppError ? error.statusCode : 500).json({
+				success: false,
+				error: error instanceof AppError ? error.message : 'Could not queue the Agent host restore.',
+			});
+		}
+	}
+
 	async listRestores(req: Request, res: Response): Promise<void> {
 		try {
 			const result = await this.restoreService.getAllRestores();

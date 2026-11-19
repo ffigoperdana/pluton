@@ -666,6 +666,69 @@ export class RemoteBackupService {
 		}
 	}
 
+	/**
+	 * Restore to an Agent host (docs/AGENT_HOST_RESTORE.md 3.2): the plan's own managed
+	 * repository, with the same plain/secret split and version 5 sealing as a backup.
+	 * The repository password and storage secrets exist only inside `sealed`.
+	 */
+	async sealedRestoreRepository(input: {
+		repositoryId: string;
+		planId: string;
+		agentId: string;
+		capabilities: Record<string, unknown> | null | undefined;
+		commandId: string;
+		sealing: AgentCommandSealingContext;
+	}): Promise<{
+		repository: { remoteName: 'pluton'; path: string };
+		rclone: { type: 'sftp' | 's3'; options: Record<string, string> };
+		sealed: ReturnType<typeof sealAgentCommandSecrets>;
+	}> {
+		const repository = await this.repositories.getById(input.repositoryId);
+		if (!repository || repository.planId !== input.planId)
+			throw new AppError(409, 'The managed repository of this restore no longer exists.');
+		if (repository.agentId !== input.agentId)
+			throw new AppError(403, 'Managed repository belongs to another agent.');
+		validateRepositoryPath(repository.storagePath);
+		const target = await this.materializeRepositoryStorage(repository.storageId);
+		if (target.type === 's3') {
+			if (!agentSupportsS3Repository(input.capabilities))
+				throw new AppError(409, AGENT_S3_UNSUPPORTED_MESSAGE);
+			assertAgentS3RepositoryPath(repository.storagePath);
+		}
+		let repositoryPassword: string;
+		try {
+			repositoryPassword = new Cryptr(this.encryptionSecret).decrypt(repository.encryptedPassword);
+		} catch {
+			throw new AppError(500, 'Remote repository credentials could not be prepared.');
+		}
+		let plainOptions: Record<string, string>;
+		let secrets: AgentCommandSecrets;
+		if (target.type === 's3') {
+			plainOptions = target.options;
+			secrets = {
+				repositoryPassword,
+				rclone: {
+					access_key_id: target.secrets.access_key_id,
+					secret_access_key: target.secrets.secret_access_key,
+				},
+			};
+		} else {
+			const { pass, ...sftpOptions } = target.options;
+			plainOptions = sftpOptions;
+			secrets = { repositoryPassword, rclone: { pass } };
+		}
+		return {
+			repository: { remoteName: 'pluton', path: repository.storagePath },
+			rclone: { type: target.type, options: plainOptions },
+			sealed: sealAgentCommandSecrets(
+				input.sealing.agentSecret,
+				input.commandId,
+				input.sealing.leaseToken,
+				secrets
+			),
+		};
+	}
+
 	async recordCommandEvent(
 		command: AgentCommand,
 		event: RemoteProgressEvent,

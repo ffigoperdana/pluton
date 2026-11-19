@@ -55,6 +55,8 @@ describe('Restore Routes', () => {
 			cancelRestore: jest.fn(),
 			dryRestoreBackup: jest.fn(),
 			restoreBackup: jest.fn(),
+			agentHostOptions: jest.fn(),
+			agentHostRestore: jest.fn(),
 		} as any;
 
 		restoreController = new RestoreController(mockRestoreService);
@@ -246,6 +248,42 @@ describe('Restore Routes', () => {
 
 			expect(response.status).toBe(200);
 			expect(mockRestoreService.restoreBackup).toHaveBeenCalled();
+		});
+	});
+
+	describe('Agent host restore (docs/AGENT_HOST_RESTORE.md 8.2)', () => {
+		it('requires authentication for both routes', async () => {
+			setupAuthMock(false);
+			expect((await request(app).get('/api/restores/agent-host/options?backupId=b&planId=p')).status).toBe(401);
+			expect((await request(app).post('/api/restores/action/agent-host').send({})).status).toBe(401);
+			expect(mockRestoreService.agentHostOptions).not.toHaveBeenCalled();
+			expect(mockRestoreService.agentHostRestore).not.toHaveBeenCalled();
+		});
+
+		it('returns options and refuses a missing backup or plan', async () => {
+			mockRestoreService.agentHostOptions.mockResolvedValue({ supported: true } as any);
+			const response = await request(app).get('/api/restores/agent-host/options?backupId=backup-01&planId=plan-01');
+			expect(response.status).toBe(200);
+			expect(response.body).toEqual({ success: true, result: { supported: true } });
+			expect(mockRestoreService.agentHostOptions).toHaveBeenCalledWith('backup-01', 'plan-01');
+			expect((await request(app).get('/api/restores/agent-host/options?backupId=backup-01')).status).toBe(400);
+		});
+
+		it('queues with 202 and passes service refusals through with their status', async () => {
+			mockRestoreService.agentHostRestore.mockResolvedValue({ restoreId: 'r', target: '/srv/pluton-restore/x' } as any);
+			const body = { backupId: 'backup-01', planId: 'plan-01', root: '/srv/pluton-restore', name: 'x' };
+			const queued = await request(app).post('/api/restores/action/agent-host').send(body);
+			expect(queued.status).toBe(202);
+			expect(mockRestoreService.agentHostRestore).toHaveBeenCalledWith(body);
+			const { AppError } = await import('../../src/utils/AppError');
+			mockRestoreService.agentHostRestore.mockRejectedValue(new AppError(409, 'Another restore into this host folder is in progress.'));
+			const refused = await request(app).post('/api/restores/action/agent-host').send(body);
+			expect(refused.status).toBe(409);
+			expect(refused.body.error).toBe('Another restore into this host folder is in progress.');
+			mockRestoreService.agentHostRestore.mockRejectedValue(new Error('secret provider detail'));
+			const failed = await request(app).post('/api/restores/action/agent-host').send(body);
+			expect(failed.status).toBe(500);
+			expect(failed.body.error).toBe('Could not queue the Agent host restore.');
 		});
 	});
 });

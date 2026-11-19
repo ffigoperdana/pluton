@@ -7,6 +7,8 @@ export function createRestoreRouter(
 	router: Router = Router()
 ): Router {
 	router.get('/', authM, controller.listRestores.bind(controller));
+	router.get('/agent-host/options', authM, controller.agentHostOptions.bind(controller));
+	router.post('/action/agent-host', authM, controller.performAgentHostRestore.bind(controller));
 	router.get('/:id', authM, controller.getRestore.bind(controller));
 	router.get('/:id/stats', authM, controller.getRestoreStats.bind(controller));
 	router.delete('/:id', authM, controller.deleteRestore.bind(controller));

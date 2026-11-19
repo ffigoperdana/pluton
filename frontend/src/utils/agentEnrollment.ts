@@ -11,7 +11,7 @@ const quote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'";
 const hasControl = (value: string) => Array.from(value).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127);
 
 /** Same reviewed allowlist as backend/src/utils/agentDistribution.ts; keep both in sync. */
-export const SUPPORTED_AGENT_INSTALL_VERSIONS: readonly string[] = ['0.7.0', '0.7.1', '0.8.0', '0.8.1'];
+export const SUPPORTED_AGENT_INSTALL_VERSIONS: readonly string[] = ['0.7.0', '0.7.1', '0.8.0', '0.8.1', '0.9.0'];
 
 /** Validate again at the rendering boundary; an older/misconfigured Server has no fallback. */
 export function buildStandaloneAgentCommand(distribution: AgentDistribution | undefined, serverUrl: string, roots: string[]): string {

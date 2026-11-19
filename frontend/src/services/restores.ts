@@ -4,6 +4,7 @@ import { toast } from 'react-toastify';
 import { API_URL } from '../utils/constants';
 import { useMemo } from 'react';
 import { progressPollingFor, fetchProgress, progressFinished } from '../utils/progressPolling';
+import { agentHostOptionsUrl, type AgentHostRestoreOptions, type AgentHostRestoreRequest } from '../utils/agentHostRestore';
 
 const notifiedRestoreProgress = new Set<string>();
 
@@ -266,5 +267,49 @@ export function useGetRestoreProgressOnce(payload: { id: string; sourceId: strin
       queryFn: () => getRestoreProgress(payload),
       refetchOnMount: true,
       retry: false,
+   });
+}
+
+// Restore to an Agent host (docs/AGENT_HOST_RESTORE.md): the Agent restores on its own host.
+export async function getAgentHostRestoreOptions(backupId: string, planId: string, signal?: AbortSignal) {
+   const res = await fetch(agentHostOptionsUrl(API_URL, backupId, planId), { credentials: 'include', signal });
+   const data = await res.json().catch(() => ({ success: false, error: 'Agent host restore options are unavailable.' }));
+   if (!data.success) throw new Error(data.error || 'Agent host restore options are unavailable.');
+   return data.result as AgentHostRestoreOptions;
+}
+
+export function useAgentHostRestoreOptions({ backupId, planId, enabled }: { backupId: string; planId: string; enabled: boolean }) {
+   return useQuery({
+      queryKey: ['agent-host-restore-options', backupId, planId],
+      queryFn: ({ signal }) => getAgentHostRestoreOptions(backupId, planId, signal),
+      enabled,
+      retry: false,
+      gcTime: 0,
+      refetchOnWindowFocus: false,
+   });
+}
+
+export async function startAgentHostRestore(body: AgentHostRestoreRequest) {
+   const data = await mutationResponse<{ success: boolean; result: { restoreId: string; target: string }; error?: string }>(
+      `${API_URL}/restores/action/agent-host`,
+      {
+         method: 'POST',
+         credentials: 'include',
+         headers: new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' }),
+         body: JSON.stringify(body),
+      },
+      { allowAccepted: true },
+   );
+   return data.result;
+}
+
+export function useStartAgentHostRestore() {
+   const queryClient = useQueryClient();
+   return useMutation({
+      mutationFn: startAgentHostRestore,
+      onSuccess: (_result, payload) => {
+         queryClient.invalidateQueries({ queryKey: ['plan', payload.planId] });
+         queryClient.invalidateQueries({ queryKey: ['restores'] });
+      },
    });
 }

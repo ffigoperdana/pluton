@@ -12,6 +12,8 @@ import RestoreFileSelectorStep from './RestoreFileSelectorStep';
 import { Backup, Plan } from '../../..';
 import { restoreSelectionSummary } from '../../../utils/restoreSelection';
 import ManagedSnapshotViewer from '../../Plan/SnapshotViewer/ManagedSnapshotViewer';
+import AgentHostRestoreConfirm from '../AgentHostRestore/AgentHostRestoreConfirm';
+import { useAgentHostRestoreOptions } from '../../../services/restores';
 
 interface RestoreWizardProps {
    backupId: string;
@@ -56,6 +58,9 @@ const RestoreWizard = ({
    const isLoading = isFetching > 0 || isMutating > 0;
    const { data: snapshotData, error: snapShotError } = useGetSnapshotFiles({ backupId, enabled: !stagingOnly });
    const files: RestoreFileItem[] = snapshotData?.result && Array.isArray(snapshotData.result) ? snapshotData.result : [];
+   // docs/AGENT_HOST_RESTORE.md 8.4: the Agent checks space itself, so no server preview.
+   const agentHost = stagingOnly && restoreSettings.destination === 'agent-host';
+   const hostOptions = useAgentHostRestoreOptions({ backupId, planId, enabled: stagingOnly });
 
    const snapShotsStats = useMemo(() => {
       const counts = restoreSelectionSummary(files, { includes: new Set(), excludes: new Set() });
@@ -134,6 +139,7 @@ const RestoreWizard = ({
             {step === 1 && (
                <RestoreSettingsStep
                   backupId={backupId}
+                  planId={planId}
                   deviceId={deviceId}
                   settings={restoreSettings}
                   primaryStorage={planStorage}
@@ -165,7 +171,7 @@ const RestoreWizard = ({
                   </div>
                   <div className={classes.footer}>
                      <button onClick={() => setStep(1)}>Back</button>
-                     <button onClick={() => setStep(3)}>Next: Preview Restore</button>
+                     <button onClick={() => setStep(agentHost ? 4 : 3)}>{agentHost ? 'Next: Review Restore on Agent Host' : 'Next: Preview Restore'}</button>
                   </div>
                </div>
             )}
@@ -197,7 +203,28 @@ const RestoreWizard = ({
                   close={close}
                />
             )}
-            {step === 4 && (
+            {step === 4 && agentHost && (
+               <div className={classes.stepContent}>
+                  <div className={classes.step}>
+                     <AgentHostRestoreConfirm
+                        backupId={backupId}
+                        planId={planId}
+                        hostname={hostOptions.data?.agent?.hostname || 'the Agent host'}
+                        snapshotId={hostOptions.data?.snapshotId}
+                        root={restoreSettings.agentHostRoot || ''}
+                        name={restoreSettings.agentHostName || ''}
+                        includes={restoreSettings.includes}
+                        excludes={restoreSettings.excludes}
+                        onDone={close}
+                     />
+                  </div>
+                  <div className={classes.footer}>
+                     <button onClick={() => setStep(2)}>Back</button>
+                     <button onClick={close}>Close</button>
+                  </div>
+               </div>
+            )}
+            {step === 4 && !agentHost && (
                <RestoreConfirmStep
                   stagingOnly={stagingOnly}
                   backupId={backupId}

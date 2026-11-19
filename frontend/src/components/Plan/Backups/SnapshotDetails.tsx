@@ -15,6 +15,7 @@ import { formatBytes } from '../../../utils/helpers';
 import { formatHistoryDate } from '../../../utils/backupHistory';
 import type { Backup } from '../../../@types/backups';
 import classes from '../SnapshotViewer/SnapshotReview.module.scss';
+import AgentHostRestoreModal from '../../Restore/AgentHostRestore/AgentHostRestoreModal';
 const absent = 'Not recorded';
 // missing | ready | failed | cancelled | unavailable; 'preparing' shows live progress instead.
 const comparisonStateLabel = (state: string) => (state === 'missing' ? 'Not compared yet' : `Comparison ${state}`);
@@ -41,7 +42,10 @@ export default function SnapshotDetails({
    // One change-type selection drives both Browse Changed Files and the detailed path list.
    const [filter, setFilter] = useState<ChangeFilter>('added'),
       [offset, setOffset] = useState(0),
-      [listOpen, setListOpen] = useState(false);
+      [listOpen, setListOpen] = useState(false),
+      // docs/AGENT_HOST_RESTORE.md 8.4: one dump restored on the Agent host, never via Pluton.
+      [hostRestorePath, setHostRestorePath] = useState<string | null>(null);
+   const managedAgentBackup = !!value && value.source.type === 'device' && value.source.id !== 'main';
    const listId = useId();
    const changes = useQuery({
       queryKey: ['snapshot-detailed-changes', backupId, filter, offset],
@@ -66,6 +70,14 @@ export default function SnapshotDetails({
    );
    return (
       <Modal title="Snapshot Details" stableLayout layout="details" closeModal={close}>
+         {hostRestorePath && value && (
+            <AgentHostRestoreModal
+               backupId={value.backupId}
+               planId={value.planId}
+               databasePath={hostRestorePath}
+               close={() => setHostRestorePath(null)}
+            />
+         )}
          <div className={classes.details}>
             {details.isError ? (
                <p role="alert">
@@ -130,6 +142,13 @@ export default function SnapshotDetails({
                               {field('Dump timestamp', absent)}
                               {field('Recorded SHA-256', <code>{a.sha256}</code>)}
                               {field('Recovery Test', value.recovery?.status || absent)}
+                              {managedAgentBackup &&
+                                 field(
+                                    'Restore to Agent host',
+                                    <button type="button" className={classes.secondaryButton} onClick={() => setHostRestorePath(a.path)}>
+                                       Restore this dump on the Agent host
+                                    </button>,
+                                 )}
                            </dl>
                         ))
                      )}

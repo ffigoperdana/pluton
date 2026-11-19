@@ -34,7 +34,7 @@ test('complete fail-fast clone/pin/version/install block uses standalone root in
 });
 
 test('the reviewed version allowlist matches the server and is the exact value verified on the host', () => {
-   assert.deepEqual(SUPPORTED_AGENT_INSTALL_VERSIONS, ['0.7.0', '0.7.1', '0.8.0', '0.8.1']);
+   assert.deepEqual(SUPPORTED_AGENT_INSTALL_VERSIONS, ['0.7.0', '0.7.1', '0.8.0', '0.8.1', '0.9.0']);
    for (const version of SUPPORTED_AGENT_INSTALL_VERSIONS) {
       const script = generate({ ...distribution, version });
       // The pinned package.json version and runtime AGENT_VERSION must both equal this argument before sudo.
@@ -52,7 +52,7 @@ test('unconfigured, old server, moving refs, incompatible versions and unsafe di
       { commit: 'main' },
       { commit: 'a'.repeat(12) },
       { commit: '0'.repeat(40) },
-      ...['', '0.8.2', '0.9.0', '0.7.2', '0.6.9', '0.7', '0.7.1-dev', 'v0.7.1', ' 0.7.1', "0.7.1'", 'latest'].map((version) => ({ version })),
+      ...['', '0.8.2', '0.9.1', '0.10.0', '0.7.2', '0.6.9', '0.7', '0.7.1-dev', 'v0.7.1', ' 0.7.1', "0.7.1'", 'latest'].map((version) => ({ version })),
       { contract: 'old-monorepo' },
       ...[
          'http://example.internal/a.git',

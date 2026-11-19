@@ -120,7 +120,10 @@ Credentials and the target are materialized in `AgentService.poll`
   1,024 excludes, each at most 4,096 characters), normalized, no `.`/`..`
   segment, no control character and no glob metacharacter `* ? [ ] \`
   (Restic treats `--include` values as patterns). Empty includes means the whole
-  snapshot.
+  snapshot. A selection has includes **or** excludes, never both, so the Agent's
+  exact-path size accounting and Restic's filters always describe the same set;
+  the UI asks to select only the items to restore instead of deselecting inside
+  a selected folder.
 - `artifact` (optional) is set only for a database dump restore. Then the
   selection is exactly `{includes: [artifact.path], excludes: []}`, the path
   matches `^/pluton/database/[A-Za-z0-9_][A-Za-z0-9_.-]{0,95}\.sql$` and
@@ -133,13 +136,19 @@ Credentials and the target are materialized in `AgentService.poll`
 ### 3.3 Completion result
 
 ```json
-{ "restoreId": "...", "snapshotId": "<64 hex>", "targetPath": "/srv/pluton-restore/<name>",
+{ "restoreId": "...", "restoredSnapshotId": "<64 hex>", "targetPath": "/srv/pluton-restore/<name>",
   "totalFiles": 400000, "filesRestored": 400000, "totalBytes": 375809638400,
   "bytesRestored": 375809638400, "verified": true, "artifactSha256": "<64 hex, artifact only>" }
 ```
 
-Failures use closed `failureStage`/`failureCode` values only (section 6.9);
-Restic, Rclone and provider text never leave the host, as for backups.
+The field is `restoredSnapshotId`, not `snapshotId`: the Agent derives backup
+parent candidates from `result.snapshotId` of its stored receipts
+(`agent/src/resticParent.ts` `successfulSnapshotIds`), and a restore receipt must
+never become one. Failures use closed `failureStage`/`failureCode` values only
+(section 6.9); Restic, Rclone and provider text never leave the host, as for
+backups. The server validates the completion with its own strict schema
+(`agentHostRestoreCompletionSchema`) and accepts a success only when the restore
+ID, snapshot ID, target path and, for a dump, the SHA-256 equal the request.
 
 ## 4. Capability and version negotiation
 
@@ -167,7 +176,11 @@ heartbeat**. Deploy the server first, exactly as for the S3 capability fields
   `RESTORE_FILESYSTEM` in `commandTypes` **and** Agent version `>= 0.9.0`
   (the same belt-and-braces version gate as `supportsVanishedSourceEntries`,
   `backend/src/utils/sourceDiagnostics.ts:61-66`);
-- offers a root only if the latest heartbeat reported it `writable`.
+- offers a root only if the latest heartbeat reported it `writable`. The report is
+  stored beside the capabilities (`capabilities.restoreAccess` in
+  `agent_identities`), so no migration is needed and the UI reads it with the
+  device;
+- requires `restoreAccess` exactly when `RESTORE_FILESYSTEM` is advertised.
 
 An Agent 0.8.x never sees the command. A server rollback with 0.9.0 Agents is
 **not** safe (the old strict schema refuses their heartbeat): roll back the Agent
@@ -395,7 +408,8 @@ Pluton never runs these steps.
 No migration. An Agent host restore is a `restores` row
 (`backend/src/db/schema/restores.ts`) with `sourceId` = the Agent's device ID,
 `method: 'backup'`, `status` `queued | started | completed | failed | cancelled`,
-`taskStats` for totals and progress, and `config`:
+`taskStats` for totals and progress, `progressStats.backupStage` for the last
+closed restore stage, and `config`:
 
 ```json
 { "target": "/srv/pluton-restore/<name>", "overwrite": "never", "delete": false,
@@ -416,7 +430,7 @@ the Agent keeps running across a Pluton restart. `RestoreService` dispatches
 | Method and path | Purpose |
 | --- | --- |
 | `GET /api/restores/agent-host/options?backupId=&planId=` | Agent hostname, version, `supported` and a closed reason, writable roots with free space, suggested name, database artifacts of the backup |
-| `POST /api/restores/action/agent-host` | `{ backupId, planId, root, name, includes?, excludes?, databaseId? }` → `{ restoreId }` |
+| `POST /api/restores/action/agent-host` | `{ backupId, planId, root, name, includes?, excludes?, databaseId? }` → `202 { restoreId, target }` (`databaseId` is a `db_…` ID or `legacy` for a lifecycle version 1 dump) |
 | existing `GET /api/restores/:id/progress`, `/stats`, `POST /:id/action/cancel`, `DELETE /:id` | dispatched for `agentHost` rows; delete refuses while in progress |
 
 Creation checks (all server-side; hiding UI controls is not relied on):
@@ -438,22 +452,27 @@ command as failed and the restore as failed, without delivering it.
 
 Structured `serverLogger` events, never with secrets, paths of restored content
 or provider text: `agent_host_restore_requested` (restoreId, planId, backupId,
-agentId, root, name, whole/partial, include/exclude counts, databaseId),
-`agent_host_restore_delivered`, `agent_host_restore_completed`
-(files, bytes, verified), `agent_host_restore_failed` (failureStage,
-failureCode), `agent_host_restore_cancel_requested`. The `restores` row keeps the
-durable history.
+agentId, root, name, whole/partial/database-dump, include/exclude counts,
+databaseId), `agent_host_restore_delivered` (attempt),
+`agent_host_restore_preparation_failed` (poll-time refusal),
+`agent_host_restore_completed` (files, bytes, verified),
+`agent_host_restore_failed` (failureStage, failureCode),
+`agent_host_restore_cancelled` and `agent_host_restore_cancel_requested`. The
+Agent logs one closed line per stage. The `restores` row keeps the durable
+history.
 
 ### 8.4 UI
 
 - **Restore wizard** for Managed Agent backups (`RestoreWizard`,
   `stagingOnly` mode): step 1 offers *Pluton server staging* (unchanged) or
   *Agent host (`<hostname>`)*. The Agent host option shows the host-approved
-  roots with free space, the folder name, and the ownership note; it is disabled
-  with the reason when the Agent cannot do it. Step 2 keeps the existing
-  selection viewer; an empty selection restores the whole snapshot. Step 3 shows
-  the target and selection without a server-side preview (the Agent checks space
-  itself). Step 4 queues it and links to the restore's progress.
+  roots with free space, the folder name, and the ownership note; when the Agent
+  cannot do it, it shows the closed reason instead of the fields. Step 2 keeps
+  the existing selection viewer; an empty selection restores the whole snapshot.
+  There is no server-side preview (the Agent checks space itself): the wizard
+  goes from the selection straight to a review step that shows the target and
+  the selection and queues the restore, then shows the operator steps and links
+  to the plan's restores.
 - **Database artifact** in Snapshot Details: a *Restore to Agent host* action on
   each `.sql` artifact opens a small dialog (root, name) and queues an `artifact`
   restore.

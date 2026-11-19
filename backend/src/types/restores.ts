@@ -34,6 +34,23 @@ export interface RestoreConfig {
 	/** Set by the server only for Phase 4 internal staged recovery records. */
 	stagingOnly?: boolean;
 	snapshotId?: string;
+	/** Set by the server only for a restore executed by the Agent on its own host. */
+	agentHost?: AgentHostRestoreConfig;
+}
+
+/** docs/AGENT_HOST_RESTORE.md 8.1. Non-secret; secrets are sealed at poll time only. */
+export interface AgentHostRestoreConfig {
+	version: 1;
+	agentId: string;
+	root: string;
+	name: string;
+	commandId: string;
+	databaseId?: string;
+	artifact?: { path: string; bytes: number; sha256: string };
+	/** Set at completion from the Agent's closed failure vocabulary. */
+	failureStage?: string;
+	failureCode?: string;
+	verified?: boolean;
 }
 
 export interface RestoreStats {

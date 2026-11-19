@@ -116,4 +116,8 @@ export interface RestoreSettings {
    delete: boolean;
    replicationId?: string;
    storageId?: string;
+   /** Managed Agent backups only: restore on the Agent host instead of server staging. */
+   destination?: 'server' | 'agent-host';
+   agentHostRoot?: string;
+   agentHostName?: string;
 }

@@ -22,9 +22,9 @@ describe('Standalone enrollment distribution (new installs only)', () => {
 		});
 	});
 	it('allows exactly the reviewed standalone releases', () => {
-		expect(SUPPORTED_AGENT_INSTALL_VERSIONS).toEqual(['0.7.0', '0.7.1', '0.8.0', '0.8.1']);
+		expect(SUPPORTED_AGENT_INSTALL_VERSIONS).toEqual(['0.7.0', '0.7.1', '0.8.0', '0.8.1', '0.9.0']);
 	});
-	it.each(['0.7.0', '0.7.1', '0.8.0', '0.8.1'])(
+	it.each(['0.7.0', '0.7.1', '0.8.0', '0.8.1', '0.9.0'])(
 		'passes reviewed standalone version %s through unchanged for the host-side check',
 		version => {
 			expect(agentDistribution({ ...valid, AGENT_INSTALL_VERSION: version })).toEqual({
@@ -37,7 +37,7 @@ describe('Standalone enrollment distribution (new installs only)', () => {
 	);
 	it('names every supported version in the sanitized refusal', () => {
 		expect(() => agentDistribution({ ...valid, AGENT_INSTALL_VERSION: '0.7.2' })).toThrow(
-			'supported Agent version (0.7.0 or 0.7.1 or 0.8.0 or 0.8.1)'
+			'supported Agent version (0.7.0 or 0.7.1 or 0.8.0 or 0.8.1 or 0.9.0)'
 		);
 	});
 	it.each([
@@ -49,7 +49,8 @@ describe('Standalone enrollment distribution (new installs only)', () => {
 		...[
 			'',
 			'0.8.2',
-			'0.9.0',
+			'0.9.1',
+			'0.10.0',
 			'0.7.2',
 			'0.6.9',
 			'0.7',
