@@ -123,7 +123,7 @@ and expected Agent version (0.7.0 or 0.7.1, matching that commit). It never defa
    verifies the clean checkout and package/runtime version, then runs root-level
    `sudo bash install-agent.sh` with repeated quoted `--allowed-root` options.
 3. Paste the token only at the installer's hidden terminal prompt. The UI no
-   longer offers a token-in-argv Quick install. Expiry is 15 minutes and one use;
+   longer offers a token-in-argv Quick install. Expiry is one hour and one use;
    closing the dialog is not revocation. New generated installation requires TLS.
 4. Check `systemctl is-active pluton-agent.service`, refresh Sources, and verify
    authenticated Online/version/capabilities. Complete explicit host delegation,

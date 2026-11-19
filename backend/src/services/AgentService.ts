@@ -259,6 +259,14 @@ export type AgentPublic = {
 };
 
 /**
+ * Lifetime of a one-time enrollment token. The installer asks for the token only
+ * after its download and build, which can take longer than 15 minutes on a slow
+ * host, and the host administrator is often not the person who creates the
+ * token. The token stays single-use, hashed at rest and revocable.
+ */
+export const AGENT_ENROLLMENT_TOKEN_TTL_MS = 60 * 60 * 1000;
+
+/**
  * Service for the deliberately small, outbound-only Phase 4 agent control
  * plane. It does not run Restic, Rclone, shell commands, restores, or scripts.
  */
@@ -286,7 +294,7 @@ export class AgentService {
 		const distribution = agentDistribution(configService.config);
 
 		const token = crypto.randomBytes(32).toString('base64url');
-		const expiresAt = new Date(this.now().getTime() + 15 * 60 * 1000);
+		const expiresAt = new Date(this.now().getTime() + AGENT_ENROLLMENT_TOKEN_TTL_MS);
 		const created = await this.agentStore.createEnrollment({
 			id: generateUID(24),
 			tokenHash: this.hashToken(token),

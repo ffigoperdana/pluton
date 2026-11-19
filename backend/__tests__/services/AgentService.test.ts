@@ -121,6 +121,12 @@ describe('AgentService', () => {
 		);
 	});
 
+	it('gives a one-time enrollment token one hour, enough for a slow installer build', async () => {
+		await service.createEnrollment({ name: 'app-01' });
+		const { expiresAt } = store.createEnrollment.mock.calls[0][0] as { expiresAt: Date };
+		expect(expiresAt.getTime() - now.getTime()).toBe(60 * 60 * 1000);
+	});
+
 	it('fails closed before creating a token when fresh-install distribution is unavailable, without touching existing Agents', async () => {
 		const config = configService.config as any;
 		const original = config.AGENT_INSTALL_COMMIT;
