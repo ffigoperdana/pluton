@@ -93,6 +93,34 @@ export type SnapshotIndexReason =
 	| 'unsupported-node-type'
 	| 'symlink-target-unverified'
 	| 'host-path-unsupported';
+/**
+ * One index row with its six child-order indexes takes about 0.6 to 2 KiB,
+ * depending on path length (a content-addressed tree such as an Odoo filestore
+ * is at the top of that range). 1 GiB holds a 500,000-entry snapshot with long
+ * paths; the entry bound keeps short-path snapshots within the same budget.
+ */
+export const SNAPSHOT_INDEX_LIMITS = Object.freeze({
+	maxEntries: 1_000_000,
+	maxBytes: 1024 ** 3,
+	maxIndexes: 2,
+	ttlMs: 15 * 60_000,
+	maxBuilds: 1,
+	pageSize: 200,
+	maxPageSize: 500,
+	compatibilityEntries: 5000,
+});
+/** Free space kept on the cache filesystem in addition to one index reservation. */
+const SNAPSHOT_INDEX_DISK_RESERVE = 64 * 1024 ** 2;
+/** Within this distance of the page cap the allocation is sampled after every row. */
+const PAGE_CAP_SAMPLING_WINDOW = 16 * 1024 ** 2;
+/**
+ * SQLite rolls the build back on FULL, so the cap can only be recognised from the
+ * last sample. One row with its index pages adds far less than this, so a FULL
+ * within it of the cap is the page cap, not a quota.
+ */
+const PAGE_CAP_ATTRIBUTION_MARGIN = 1024 ** 2;
+const mib = (bytes: number) => `${Math.round(bytes / 1024 ** 2).toLocaleString('en-US')} MiB`;
+
 const reasonMessages: Partial<Record<SnapshotIndexReason, string>> = {
 	'unsafe-path': 'Snapshot metadata contains an unsafe or ambiguous path. Export was refused.',
 	'invalid-node-name': 'Snapshot node name does not match its exact path.',
@@ -111,27 +139,15 @@ const reasonMessages: Partial<Record<SnapshotIndexReason, string>> = {
 		'Snapshot cache is busy with active readers. Retry after those operations finish.',
 	'build-busy': 'Another snapshot is being indexed. Retry shortly.',
 	'admission-busy': 'Snapshot cache is busy handling requests. Retry shortly.',
-	'disk-capacity':
-		'Snapshot indexing needs 320 MiB of available cache filesystem space. Free cache filesystem space and retry.',
-	'database-size':
-		'Snapshot metadata index exceeds the bounded database size limit (256 MiB by default).',
-	'entry-count': 'Snapshot metadata exceeds the maximum entry count (500,000 by default).',
+	'disk-capacity': `Snapshot indexing needs ${mib(SNAPSHOT_INDEX_LIMITS.maxBytes + SNAPSHOT_INDEX_DISK_RESERVE)} of available cache filesystem space. Free cache filesystem space and retry.`,
+	'database-size': `Snapshot metadata index exceeds the bounded database size limit (${mib(SNAPSHOT_INDEX_LIMITS.maxBytes)}): the snapshot has too many entries or too long paths to index.`,
+	'entry-count': `Snapshot metadata exceeds the maximum entry count (${SNAPSHOT_INDEX_LIMITS.maxEntries.toLocaleString('en-US')}).`,
 	'cleanup-failed': 'Snapshot index cleanup failed. Check cache filesystem access and retry.',
 	'storage-full':
 		'SQLite index storage is full or quota-limited. Check available cache capacity and filesystem quota before retrying.',
 	'timeout': 'Snapshot indexing timed out. Retry indexing.',
 };
 
-export const SNAPSHOT_INDEX_LIMITS = Object.freeze({
-	maxEntries: 500_000,
-	maxBytes: 256 * 1024 ** 2,
-	maxIndexes: 2,
-	ttlMs: 15 * 60_000,
-	maxBuilds: 1,
-	pageSize: 200,
-	maxPageSize: 500,
-	compatibilityEntries: 5000,
-});
 export type SnapshotPageQuery = {
 	path?: string;
 	search?: string;
@@ -522,7 +538,7 @@ export class ManagedSnapshotIndexCache {
 					await this.initialize();
 					let disk = await fs.statfs(this.root);
 					this.availableBytes = disk.bavail * disk.bsize;
-					while (disk.bavail * disk.bsize < this.limits.maxBytes + 64 * 1024 ** 2) {
+					while (disk.bavail * disk.bsize < this.limits.maxBytes + SNAPSHOT_INDEX_DISK_RESERVE) {
 						const victim = [...this.entries]
 							.filter(([, value]) => value.settled && !value.readers)
 							.sort((a, b) => a[1].used - b[1].used)[0];
@@ -653,7 +669,7 @@ export class ManagedSnapshotIndexCache {
 		try {
 			await this.initialize();
 			const disk = await fs.statfs(this.root);
-			if (disk.bavail * disk.bsize < this.limits.maxBytes + 64 * 1024 ** 2)
+			if (disk.bavail * disk.bsize < this.limits.maxBytes + SNAPSHOT_INDEX_DISK_RESERVE)
 				throw new SnapshotIndexError('index-resource-limit', 'disk-capacity');
 			entry.directory = path.join(
 				this.root,
@@ -739,7 +755,13 @@ export class ManagedSnapshotIndexCache {
 					parentPath = path.posix.dirname(parentPath);
 				}
 				// Preserve a bounded allocation sample before SQLite can roll back on FULL.
-				if (count % 256 === 0 || this.limits.maxBytes < 1024 ** 2)
+				// Near the page cap every row is sampled, so the last sample is one row
+				// below the cap when SQLite reports FULL there.
+				if (
+					count % 256 === 0 ||
+					entry.bytes >= this.limits.maxBytes - PAGE_CAP_SAMPLING_WINDOW ||
+					this.limits.maxBytes < 1024 ** 2
+				)
 					entry.bytes = (db!.pragma('page_count', { simple: true }) as number) * 4096;
 			};
 			await populate(node => {
@@ -784,11 +806,12 @@ export class ManagedSnapshotIndexCache {
 			) {
 				const disk = await fs.statfs(this.root).catch(() => undefined);
 				if (disk) this.availableBytes = disk.bavail * disk.bsize;
+				const capMargin = Math.min(PAGE_CAP_ATTRIBUTION_MARGIN, this.limits.maxBytes / 4);
 				throw new SnapshotIndexError(
 					'index-resource-limit',
-					entry.bytes >= this.limits.maxBytes
+					entry.bytes >= this.limits.maxBytes - capMargin
 						? 'database-size'
-						: disk && this.availableBytes < 64 * 1024 ** 2
+						: disk && this.availableBytes < SNAPSHOT_INDEX_DISK_RESERVE
 							? 'disk-capacity'
 							: 'storage-full'
 				);

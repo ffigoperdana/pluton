@@ -1017,6 +1017,41 @@ describe('RemoteBackupService', () => {
 		expect(repositories.createBackupAndCommand).toHaveBeenCalledTimes(1);
 	});
 
+	it('pauses only the schedule: Backup Now still queues a paused plan, its schedule does not', async () => {
+		const pausedPlan = {
+			...plan,
+			isActive: false,
+			settings: { ...plan.settings, interval: { type: 'daily', time: '01:00AM', timeZone: 'Asia/Jakarta' } },
+		};
+		planStore.getById.mockResolvedValue(pausedPlan);
+		const cron = { getSchedule: jest.fn().mockResolvedValue([]), scheduleTask: jest.fn(), activateLoadedSchedule: jest.fn() };
+		(service as any).cronManager = cron;
+		await (service as any).ensureSchedule(pausedPlan);
+		const options = cron.scheduleTask.mock.calls[0][2];
+		await options.taskCallback(plan.id);
+		expect(repositories.createBackupAndCommand).not.toHaveBeenCalled();
+		await expect(service.queuePlanBackup(plan.id)).resolves.toBe('Remote filesystem backup queued.');
+		expect(repositories.createBackupAndCommand).toHaveBeenCalledTimes(1);
+		expect(repositories.createBackupAndCommand.mock.calls[0][0].backup).toMatchObject({
+			planId: plan.id,
+			status: 'queued',
+			inProgress: true,
+		});
+	});
+
+	it('refuses Backup Now of a paused plan while a Source Access mode setup is pending', async () => {
+		planStore.getById.mockResolvedValue({ ...plan, isActive: false });
+		const sourceAccess = {
+			assertModeChangeIdle: jest
+				.fn()
+				.mockRejectedValue(new Error('Keep this agent backup plans paused.')),
+		};
+		service.setSourceAccessService(sourceAccess as any);
+		await expect(service.queuePlanBackup(plan.id)).rejects.toThrow('Keep this agent');
+		expect(sourceAccess.assertModeChangeIdle).toHaveBeenCalledWith(capableAgent.agentId);
+		expect(repositories.createBackupAndCommand).not.toHaveBeenCalled();
+	});
+
 	it.each([
 		['0.8.0', undefined],
 		['0.8.1', 1],

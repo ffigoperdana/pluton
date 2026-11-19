@@ -319,7 +319,7 @@ describe('managed index cache lifecycle and bounded admission', () => {
 			.spyOn(fs, 'statfs')
 			.mockImplementation(
 				async () =>
-					({ bavail: cache.status(key('A')) === 'ready' ? 0 : 200000, bsize: 4096 }) as any
+					({ bavail: cache.status(key('A')) === 'ready' ? 0 : 400000, bsize: 4096 }) as any
 			);
 		await expect(fill('B')).resolves.toBe(2);
 		expect(cache.status(key('A'))).toBe('missing');
@@ -341,6 +341,40 @@ describe('managed index cache lifecycle and bounded admission', () => {
 				() => {}
 			)
 		).rejects.toMatchObject({ reason: 'storage-full', statusCode: 507 });
+	});
+	it('attributes FULL at the page cap to the database size, not to a quota', async () => {
+		// Above 1 MiB the allocation is sampled every 256 rows, and SQLite rolls the
+		// build back on FULL, so the last periodic sample alone is below the cap.
+		await cache.close();
+		cache = new ManagedSnapshotIndexCache(path.join(root, 'indexes'), {
+			...SNAPSHOT_INDEX_LIMITS,
+			maxBytes: 4 * 1024 ** 2,
+		});
+		const hex = (n: number) => n.toString(16).padStart(40, '0');
+		await expect(
+			cache.use(
+				key('cap'),
+				async append => {
+					append(node('/srv'));
+					append(node('/srv/example-filestore'));
+					for (let dir = 0; dir < 256; dir++)
+						append(node(`/srv/example-filestore/${dir.toString(16).padStart(2, '0')}`));
+					for (let n = 0; n < 100_000; n++) {
+						const name = hex(n);
+						append(node(`/srv/example-filestore/${name.slice(-2)}/${name}`, 'file'));
+					}
+				},
+				index => index.count
+			)
+		).rejects.toMatchObject({ reason: 'database-size', statusCode: 413 });
+	});
+	it('names the default bounds in its client messages', () => {
+		expect(SNAPSHOT_INDEX_LIMITS).toMatchObject({ maxEntries: 1_000_000, maxBytes: 1024 ** 3 });
+		const message = (reason: 'disk-capacity' | 'database-size' | 'entry-count') =>
+			new SnapshotIndexError('index-resource-limit', reason).message;
+		expect(message('disk-capacity')).toContain('1,088 MiB');
+		expect(message('database-size')).toContain('1,024 MiB');
+		expect(message('entry-count')).toContain('1,000,000');
 	});
 	it('emits only bounded structured diagnostics and tolerates an unavailable logger', async () => {
 		await cache.close();
