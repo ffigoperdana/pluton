@@ -83,6 +83,34 @@ export class BackupStore {
 			.limit(32);
 	}
 
+	/**
+	 * Completed backups of a plan nearest to a moment: up to `limit` at or before it
+	 * and up to `limit` after it, nearest first in each direction. Bounded; never
+	 * hydrates a whole plan history.
+	 */
+	async completedNear(planId: string, at: Date, limit = 8): Promise<Backup[]> {
+		const seconds = Math.floor(at.getTime() / 1000);
+		const completed = and(
+			eq(backups.planId, planId),
+			eq(backups.method, 'backup'),
+			eq(backups.status, 'completed'),
+			sql`coalesce(${backups.inProgress},0)=0 AND coalesce(${backups.success},1)!=0`
+		);
+		const before = await this.db
+			.select()
+			.from(backups)
+			.where(and(completed, sql`${backupHistoryDate}<=${seconds}`))
+			.orderBy(desc(backupHistoryDate), desc(backups.id))
+			.limit(limit);
+		const after = await this.db
+			.select()
+			.from(backups)
+			.where(and(completed, sql`${backupHistoryDate}>${seconds}`))
+			.orderBy(backupHistoryDate, backups.id)
+			.limit(limit);
+		return [...before, ...after];
+	}
+
 	async getHistoryPage(planId: string, query: BackupHistoryQuery) {
 		const where = and(
 			eq(backups.planId, planId),

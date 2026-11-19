@@ -64,6 +64,7 @@ import { appPaths } from './utils/AppPaths';
 import { BaseSnapshotManager } from './managers/BaseSnapshotManager';
 import { RestoreService } from './services/RestoreService';
 import { RemoteRepositoryRecoveryService } from './services/RemoteRepositoryRecoveryService';
+import { AttachmentCatalogService } from './services/AttachmentCatalogService';
 import { RestoreEventListener } from './services/listeners/RestoreEventListener';
 import { DownloadEventListener } from './services/listeners/DownloadEventListener';
 import { DeviceService } from './services/DeviceService';
@@ -305,7 +306,8 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		remoteBackupService,
 		remoteRecoveryService,
 		managedReplicationService,
-		recoveryTestStore
+		recoveryTestStore,
+		new AttachmentCatalogService(planStore, backupStore, remoteRecoveryService)
 	);
 	const restoreService = new RestoreService(
 		localRestoreAgent,

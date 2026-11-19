@@ -27,6 +27,7 @@ import { RemoteRepositoryRecoveryService } from './RemoteRepositoryRecoveryServi
 import type { ManagedReplicationService } from './ManagedReplicationService';
 import type { RecoveryTestStore } from '../stores/RecoveryTestStore';
 import { managedSnapshotPath } from '../utils/managedSnapshotPath';
+import type { AttachmentCatalogQuery, AttachmentCatalogService } from './AttachmentCatalogService';
 
 export class BackupService {
 	constructor(
@@ -39,12 +40,42 @@ export class BackupService {
 		private readonly remoteBackupService?: RemoteBackupService,
 		private readonly remoteRecovery?: RemoteRepositoryRecoveryService,
 		private readonly managedReplications?: ManagedReplicationService,
-		private readonly recoveryTests?: RecoveryTestStore
+		private readonly recoveryTests?: RecoveryTestStore,
+		private readonly attachmentCatalogs?: AttachmentCatalogService
 	) {}
 	async downloadSnapshotItem(...args: Parameters<RemoteRepositoryRecoveryService['downloadItem']>) {
 		if (!this.remoteRecovery)
 			throw new AppError(501, 'Selected snapshot downloads are unavailable.');
 		return this.remoteRecovery.downloadItem(...args);
+	}
+	async attachmentCatalogPage(backupId: string, query: AttachmentCatalogQuery) {
+		if (!this.attachmentCatalogs) throw new AppError(501, 'Attachment catalogs are unavailable.');
+		return this.attachmentCatalogs.page(backupId, query);
+	}
+	/** Streams one attachment of a ready catalog under its original name. */
+	async downloadAttachment(
+		backupId: string,
+		attachmentId: number,
+		...rest: Parameters<RemoteRepositoryRecoveryService['downloadItem']> extends [
+			string,
+			string,
+			...infer Tail,
+		]
+			? Tail
+			: never
+	) {
+		if (!this.attachmentCatalogs || !this.remoteRecovery)
+			throw new AppError(501, 'Attachment catalogs are unavailable.');
+		const { itemPath, names } = await this.attachmentCatalogs.attachmentDownload(backupId, attachmentId);
+		const [output, signal, headers, headOnly] = rest;
+		return this.remoteRecovery.downloadItem(
+			backupId,
+			itemPath,
+			output,
+			signal,
+			value => headers({ ...value, fileName: names.ascii, utf8FileName: names.utf8 }),
+			headOnly
+		);
 	}
 	async snapshotDetails(backupId: string) {
 		const backup = await this.backupStore.getById(backupId);
@@ -123,6 +154,10 @@ export class BackupService {
 				packedRepositoryBytes: measured('data_added_packed'),
 			},
 			databases: artifacts,
+			attachmentCatalog:
+				snapshotId && backup.status === 'completed' && plan?.settings?.attachmentCatalog
+					? { adapter: plan.settings.attachmentCatalog.adapter }
+					: null,
 			recovery:
 				snapshotId && backup.planId && this.recoveryTests
 					? await this.recoveryTests.latestForSnapshot(backup.planId, backup.id, snapshotId)

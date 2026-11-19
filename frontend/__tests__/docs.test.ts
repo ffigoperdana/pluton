@@ -12,7 +12,8 @@ const index = createDocsIndex(
 );
 test('all required categories and representative routes have original Bahasa Indonesia articles', () => {
    assert.equal(docCategories.length, 15);
-   assert.equal(index.length, 98);
+   // 98 articles plus database-backup/odoo-attachments.
+   assert.equal(index.length, 99);
    assert.equal(new Set(index.map((a) => a.slug)).size, index.length);
    // Source-built images need no Git metadata; a checkout must not silently omit
    // a public article because a credential-file ignore pattern matches its name.

@@ -979,6 +979,19 @@ export class RemoteRepositoryRecoveryService {
 			this.selectedDownloads--;
 		}
 	}
+	/**
+	 * Read-only lease on the exact metadata index of a managed snapshot, verified
+	 * like every other index consumer (builds it when needed). The index must not
+	 * be used after `consume` settles.
+	 */
+	async withSnapshotIndex<T>(
+		backupId: string,
+		consume: (index: ManagedSnapshotIndex) => Promise<T> | T,
+		signal?: AbortSignal
+	): Promise<T> {
+		const context = await this.context(backupId);
+		return this.withIndex(context, consume, signal);
+	}
 	async downloadManifest(
 		backupId: string,
 		preparationId: string,

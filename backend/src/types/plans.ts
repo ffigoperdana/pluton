@@ -2,6 +2,7 @@ import { NewPlan, Plan } from '../db/schema/plans';
 import { Restore } from '../db/schema/restores';
 import { IntegrationTypes } from './settings';
 import type { RemoteBackupLifecycle } from './remoteLifecycle';
+import type { AttachmentCatalogSettings } from '../utils/attachmentCatalog/config';
 import { SourceTypes } from './source';
 import { Backup } from '../db/schema/backups';
 import { Device } from '../db/schema/devices';
@@ -188,6 +189,8 @@ export interface PlanBackupSettings {
 	rescue?: PlanRescueSettings;
 	replication?: PlanReplicationSettings;
 	remoteLifecycle?: RemoteBackupLifecycle;
+	/** Names a filestore's files from a paired database plan (see ATTACHMENT_CATALOG.md). */
+	attachmentCatalog?: AttachmentCatalogSettings;
 }
 
 export type PlanError = {

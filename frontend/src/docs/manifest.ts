@@ -68,7 +68,7 @@ export const docCategories: DocCategory[] = [
    {
       id: "database-backup",
       title: "Database Backup dan Hooks",
-      evidence: ["agent/src/backupLifecycle.ts","agent/src/lifecyclePolicy.ts","agent/src/lifecycleProcess.ts","frontend/src/components/Plan/PlanSettings/PlanRemoteLifecycleSettings.tsx"],
+      evidence: ["agent/src/backupLifecycle.ts","agent/src/lifecyclePolicy.ts","agent/src/lifecycleProcess.ts","frontend/src/components/Plan/PlanSettings/PlanRemoteLifecycleSettings.tsx","backend/src/services/AttachmentCatalogService.ts"],
       articles: [
          page("database-backup", "Mencadangkan berkas aplikasi dan database bersama"),
          page("database-backup/engines", "Memilih MariaDB, MySQL, atau PostgreSQL", "operator-setup"),
@@ -76,6 +76,7 @@ export const docCategories: DocCategory[] = [
          page("database-backup/dump-options", "Mengatur cakupan dump, privilege, dan batas pekerjaan"),
          page("database-backup/hooks", "Menyiapkan pre-hook dan post-hook backup", "operator-setup"),
          page("database-backup/artifacts", "Memeriksa artefak SQL dan konsistensi snapshot"),
+         page("database-backup/odoo-attachments", "Melihat lampiran Odoo dengan nama aslinya", "unvalidated"),
       ],
    },
    {

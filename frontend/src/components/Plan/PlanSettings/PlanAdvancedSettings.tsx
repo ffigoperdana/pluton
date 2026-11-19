@@ -14,6 +14,7 @@ import PlanRemoteLifecycleSettings from './PlanRemoteLifecycleSettings';
 import RecoverySettings from '../RecoveryTesting/RecoverySettings';
 import ManagedPlanNotifications from './ManagedPlanNotifications';
 import PlanBackupExclusions from './PlanBackupExclusions';
+import PlanAttachmentCatalogSettings from './PlanAttachmentCatalogSettings';
 
 interface PlanAdvancedSettingsProps {
    plan: NewPlanSettings;
@@ -69,7 +70,10 @@ const PlanAdvancedSettings = ({
                   { label: 'Misc.', value: 'Misc', icon: 'settings-alt' },
                   ...(remoteLifecycle ? [{ label: 'Database & Hooks', value: 'Lifecycle', icon: 'cli' as const }] : []),
                   ...(remoteLifecycle && plan.method === 'backup'
-                     ? [{ label: 'Recovery Testing', value: 'Recovery', icon: 'restore' as const }]
+                     ? [
+                          { label: 'Recovery Testing', value: 'Recovery', icon: 'restore' as const },
+                          { label: 'Attachments', value: 'Attachments', icon: 'file' as const },
+                       ]
                      : []),
                ]}
                fieldValue={advancedTab}
@@ -106,6 +110,11 @@ const PlanAdvancedSettings = ({
                         <Icon type="restore" size={13} /> Recovery Testing
                      </li>
                   )}
+                  {remoteLifecycle && plan.method === 'backup' && (
+                     <li onClick={() => setAdvancedTab('Attachments')} className={advancedTab === 'Attachments' ? classes.advancedTabActive : ''}>
+                        <Icon type="file" size={13} /> Attachments
+                     </li>
+                  )}
                   <li onClick={() => setAdvancedTab('Misc')} className={advancedTab === 'Misc' ? classes.advancedTabActive : ''}>
                      <Icon size={14} type="settings-alt" /> Misc.
                   </li>
@@ -115,6 +124,13 @@ const PlanAdvancedSettings = ({
          <div className={classes.advancedTabContent}>
             {remoteLifecycle && plan.method === 'backup' && advancedTab === 'Recovery' && (
                <RecoverySettings planId={isEditing ? plan.id : undefined} />
+            )}
+            {remoteLifecycle && plan.method === 'backup' && advancedTab === 'Attachments' && (
+               <PlanAttachmentCatalogSettings
+                  plan={plan}
+                  value={settings.attachmentCatalog}
+                  onUpdate={(attachmentCatalog) => onUpdate({ ...plan, settings: { ...settings, attachmentCatalog } })}
+               />
             )}
             {remoteLifecycle && advancedTab === 'Lifecycle' && (
                <PlanRemoteLifecycleSettings

@@ -6,7 +6,8 @@ import { z } from 'zod';
 import { managedSnapshotPath } from '../utils/managedSnapshotPath';
 import { comparisonDiagnostic } from '../utils/restic/SnapshotComparisonPolicy';
 import { comparisonFailure } from '../utils/restic/SnapshotComparison';
-import { SnapshotIndexError } from '../utils/restic/ManagedSnapshotIndex';
+import { SNAPSHOT_INDEX_LIMITS, SnapshotIndexError } from '../utils/restic/ManagedSnapshotIndex';
+import { ATTACHMENT_CATALOG_LIMITS } from '../services/AttachmentCatalogService';
 import { ManagedRepositoryAccessError } from '../utils/restic/ManagedSftpRepositorySession';
 import { observeTransfer, transferReason } from '../utils/managedExport/TransferTelemetry';
 import {
@@ -20,9 +21,9 @@ const pageQuery = z.strictObject({
 	search: z.string().trim().max(128).optional(),
 	offset: z
 		.string()
-		.regex(/^\d{1,6}$/)
+		.regex(/^\d{1,7}$/)
 		.transform(Number)
-		.pipe(z.number().int().min(0).max(500000))
+		.pipe(z.number().int().min(0).max(SNAPSHOT_INDEX_LIMITS.maxEntries))
 		.optional(),
 	limit: z
 		.string()
@@ -41,6 +42,38 @@ const pageQuery = z.strictObject({
 		.transform(value => value === 'true')
 		.optional(),
 });
+const attachmentQuery = z.strictObject({
+	search: z.string().trim().max(128).optional(),
+	model: z
+		.string()
+		.regex(/^[a-z0-9_.]{1,128}$/)
+		.optional(),
+	status: z.enum(['all', 'present', 'missing']).optional(),
+	sort: z.enum(['name', 'created', 'size']).optional(),
+	order: z.enum(['asc', 'desc']).optional(),
+	offset: z
+		.string()
+		.regex(/^\d{1,7}$/)
+		.transform(Number)
+		.pipe(z.number().int().min(0).max(ATTACHMENT_CATALOG_LIMITS.maxAttachments))
+		.optional(),
+	limit: z
+		.string()
+		.regex(/^\d{1,3}$/)
+		.transform(Number)
+		.pipe(z.number().int().min(1).max(ATTACHMENT_CATALOG_LIMITS.maxPageSize))
+		.optional(),
+	retry: z
+		.enum(['true', 'false'])
+		.transform(value => value === 'true')
+		.optional(),
+});
+/** RFC 5987 value: percent-encode everything outside attr-char. */
+const rfc5987 = (value: string) =>
+	encodeURIComponent(value).replace(
+		/['()*!]/g,
+		character => '%' + character.charCodeAt(0).toString(16).toUpperCase()
+	);
 const failureCode = (error: unknown) =>
 	error instanceof SnapshotIndexError || error instanceof ManagedExportError
 		? { code: error.code, reason: error.reason }
@@ -155,6 +188,69 @@ export class BackupController {
 				res.status(error instanceof AppError ? error.statusCode : 502).json({
 					success: false,
 					error: error instanceof AppError ? error.message : 'Selected snapshot download failed.',
+					...failureCode(error),
+				});
+			}
+		} finally {
+			request.cleanup();
+		}
+	}
+
+	async getAttachmentCatalog(req: Request, res: Response): Promise<void> {
+		try {
+			const query = attachmentQuery.safeParse(req.query);
+			if (!query.success) throw new AppError(400, 'Attachment list request is invalid.');
+			res.setHeader('Cache-Control', 'private, no-store');
+			const result = await this.backupService.attachmentCatalogPage(req.params.id, query.data);
+			if (result.status === 'indexing') res.setHeader('Retry-After', '2');
+			res.status(result.status === 'indexing' ? 202 : 200).json({ success: true, result });
+		} catch (error) {
+			res.status(error instanceof AppError ? error.statusCode : 500).json({
+				success: false,
+				error: error instanceof AppError ? error.message : 'Attachment list is unavailable.',
+				...failureCode(error),
+			});
+		}
+	}
+
+	async downloadAttachment(req: Request, res: Response): Promise<void> {
+		const request = this.downloadRequest(req, res);
+		const transfer = observeTransfer(res, 'standard');
+		try {
+			if (Object.keys(req.query).length) throw new AppError(400, 'Attachment download accepts no options.');
+			if (!/^\d{1,15}$/.test(req.params.attachmentId || ''))
+				throw new AppError(400, 'Select one attachment.');
+			await this.backupService.downloadAttachment(
+				req.params.id,
+				Number(req.params.attachmentId),
+				transfer.output,
+				request.signal,
+				value => {
+					res.setHeader('Content-Type', value.contentType);
+					res.setHeader(
+						'Content-Disposition',
+						`attachment; filename="${value.fileName}"` +
+							(value.utf8FileName ? `; filename*=UTF-8''${rfc5987(value.utf8FileName)}` : '')
+					);
+					res.setHeader('Cache-Control', 'private, no-store');
+					res.setHeader('Accept-Ranges', 'none');
+					if (value.length !== undefined) res.setHeader('Content-Length', value.length);
+				},
+				req.method === 'HEAD'
+			);
+			if (!res.destroyed) res.end();
+			transfer.finish('origin-stream-complete');
+		} catch (error) {
+			transfer.finish(transferReason(error));
+			if (res.headersSent || res.destroyed) {
+				if (!res.destroyed) res.destroy();
+			} else {
+				res.removeHeader('Content-Type');
+				res.removeHeader('Content-Length');
+				res.removeHeader('Content-Disposition');
+				res.status(error instanceof AppError ? error.statusCode : 502).json({
+					success: false,
+					error: error instanceof AppError ? error.message : 'Attachment download failed.',
 					...failureCode(error),
 				});
 			}
