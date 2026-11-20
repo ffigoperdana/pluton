@@ -2,6 +2,10 @@ import { and, eq } from 'drizzle-orm';
 import { sql } from 'drizzle-orm/sql';
 import { DatabaseType } from '../db';
 import { Restore, NewRestore, restores } from '../db/schema/restores';
+import { agentCommands } from '../db/schema/agents';
+
+/** Thrown inside the Agent host restore transaction; mapped to HTTP 409 by the service. */
+export class RestoreConflictError extends Error {}
 
 /**
  * RestoreStore is a class for managing restore records in the database.
@@ -28,6 +32,63 @@ export class RestoreStore {
 			.values({ ...restoreData, started: sql`(unixepoch())` })
 			.returning();
 		return result[0] || null;
+	}
+
+	/**
+	 * Restore to an Agent host (docs/AGENT_HOST_RESTORE.md 8.1): the restore row and its
+	 * reference-only RESTORE_FILESYSTEM command are written in one transaction, after
+	 * checking that no restore of the backup and no restore into the same host folder
+	 * is still in progress.
+	 */
+	async createAgentHostRestore(input: {
+		restore: NewRestore;
+		command: {
+			id: string;
+			agentId: string;
+			idempotencyKey: string;
+			payload: { restoreId: string; planId: string; backupId: string; repositoryId: string };
+		};
+	}): Promise<Restore> {
+		const backupId = input.restore.backupId;
+		const target = input.restore.config?.target;
+		if (!backupId || !target) throw new Error('Agent host restore requires a backup and target.');
+		return this.db.transaction(tx => {
+			const running = tx
+				.select({ id: restores.id, backupId: restores.backupId, config: restores.config })
+				.from(restores)
+				.where(eq(restores.inProgress, true))
+				.all();
+			if (running.some(row => row.backupId === backupId))
+				throw new RestoreConflictError('A restoration is already in progress for this backup.');
+			if (
+				running.some(
+					row =>
+						row.config?.agentHost &&
+						row.config.agentHost.agentId === input.command.agentId &&
+						row.config.target === target
+				)
+			)
+				throw new RestoreConflictError('Another restore into this host folder is in progress.');
+			const restore = tx
+				.insert(restores)
+				.values({ ...input.restore, started: sql`(unixepoch())` })
+				.returning()
+				.get();
+			if (!restore) throw new Error('Could not create the restore record.');
+			const command = tx
+				.insert(agentCommands)
+				.values({
+					id: input.command.id,
+					agentId: input.command.agentId,
+					type: 'RESTORE_FILESYSTEM',
+					payload: input.command.payload,
+					idempotencyKey: input.command.idempotencyKey,
+				})
+				.returning()
+				.get();
+			if (!command) throw new Error('Could not enqueue the Agent host restore command.');
+			return restore;
+		});
 	}
 
 	async update(

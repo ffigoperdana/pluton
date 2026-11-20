@@ -6,6 +6,8 @@ import { devices } from './devices';
  * `BACKUP_FILESYSTEM` is the fixed Restic/Rclone execution workflow. Source
  * Access commands only validate paths or select within the host-approved
  * maximum; they never change host permissions or carry shell commands.
+ * `RESTORE_FILESYSTEM` is the fixed Restic restore into a new folder inside a
+ * host-approved restore root (docs/AGENT_HOST_RESTORE.md).
  */
 export type AgentCommandType =
 	| 'PING'
@@ -13,7 +15,8 @@ export type AgentCommandType =
 	| 'BACKUP_FILESYSTEM'
 	| 'SOURCE_ACCESS_VALIDATE'
 	| 'SOURCE_ACCESS_APPLY'
-	| 'SOURCE_ACCESS_MODE_SETUP';
+	| 'SOURCE_ACCESS_MODE_SETUP'
+	| 'RESTORE_FILESYSTEM';
 export type AgentCommandState =
 	| 'queued'
 	| 'leased'

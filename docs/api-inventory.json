@@ -904,6 +904,67 @@
   },
   {
     "feature": "backups",
+    "method": "GET",
+    "route": "/api/backups/:id/attachments",
+    "handler": "BackupController.getAttachmentCatalog",
+    "services": [
+      "backupService.attachmentCatalogPage"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "backups",
+    "method": "GET",
+    "route": "/api/backups/:id/attachments/:attachmentId/download",
+    "handler": "BackupController.downloadAttachment",
+    "services": [
+      "backupService.downloadAttachment"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "params.attachmentId",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "controller JSON or binary/stream contract; unversioned",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "backups",
     "method": "DELETE",
     "route": "/api/backups/:id/comparison",
     "handler": "BackupController.snapshotComparison",
@@ -4744,6 +4805,34 @@
   {
     "feature": "restores",
     "method": "POST",
+    "route": "/api/restores/action/agent-host",
+    "handler": "RestoreController.performAgentHostRestore",
+    "services": [
+      "restoreService.agentHostRestore"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "body"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "delegated; inspect controller/service",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/RestoreController.test.ts",
+      "backend/__tests__/routes/restores.test.ts"
+    ],
+    "source": "backend/src/controllers/RestoreController.ts",
+    "routeSource": "backend/src/routes/restores.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "restores",
+    "method": "POST",
     "route": "/api/restores/action/dryrestore",
     "handler": "RestoreController.performDryRestore",
     "services": [
@@ -4796,6 +4885,35 @@
     "source": "backend/src/controllers/RestoreController.ts",
     "routeSource": "backend/src/routes/restores.ts",
     "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "restores",
+    "method": "GET",
+    "route": "/api/restores/agent-host/options",
+    "handler": "RestoreController.agentHostOptions",
+    "services": [
+      "restoreService.agentHostOptions"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "query.backupId",
+      "query.planId"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/RestoreController.test.ts",
+      "backend/__tests__/routes/restores.test.ts"
+    ],
+    "source": "backend/src/controllers/RestoreController.ts",
+    "routeSource": "backend/src/routes/restores.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
   },
   {
     "feature": "settings",

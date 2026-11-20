@@ -1494,6 +1494,53 @@ describe('RemoteBackupService', () => {
 			).toEqual({ repositoryPassword, rclone: { pass: storagePassword } });
 		});
 
+		it('seals Agent host restore repository access with the same split (AGENT_HOST_RESTORE.md 3.2)', async () => {
+			const commandId = 'agent-restore-0123456789abcdef01234567';
+			const input = {
+				repositoryId: 'remote-repo-example-01',
+				planId: plan.id,
+				agentId: capableAgent.agentId,
+				capabilities: s3Agent.capabilities,
+				commandId,
+				sealing,
+			};
+			const sftp: any = await service.sealedRestoreRepository(input);
+			expect(sftp.repository).toEqual({ remoteName: 'pluton', path: plan.storagePath });
+			expect(sftp.rclone).toEqual({
+				type: 'sftp',
+				options: { host: 'sftp.example.internal', port: '22', user: 'backup-user' },
+			});
+			for (const value of [repositoryPassword, storagePassword, encryptionSecret])
+				expect(JSON.stringify(sftp)).not.toContain(value);
+			expect(openAgentCommandSecrets(sealing.agentSecret, commandId, sealing.leaseToken, sftp.sealed)).toEqual({
+				repositoryPassword,
+				rclone: { pass: storagePassword },
+			});
+			// Bound to the restore command and lease, never to a backup command.
+			expect(() =>
+				openAgentCommandSecrets(sealing.agentSecret, 'remote-backup-other', sealing.leaseToken, sftp.sealed)
+			).toThrow(AgentCommandSealingError);
+			useS3Plan();
+			const s3: any = await service.sealedRestoreRepository(input);
+			expect(s3.rclone.type).toBe('s3');
+			expect(s3.repository).toEqual({ remoteName: 'pluton', path: 'bucket-01/agents/app-01' });
+			for (const value of [repositoryPassword, s3AccessKey, s3SecretKey])
+				expect(JSON.stringify(s3)).not.toContain(value);
+			expect(openAgentCommandSecrets(sealing.agentSecret, commandId, sealing.leaseToken, s3.sealed)).toEqual({
+				repositoryPassword,
+				rclone: { access_key_id: s3AccessKey, secret_access_key: s3SecretKey },
+			});
+			await expect(
+				service.sealedRestoreRepository({ ...input, capabilities: capableAgent.capabilities })
+			).rejects.toThrow('does not support S3');
+			await expect(
+				service.sealedRestoreRepository({ ...input, agentId: 'agent-other' })
+			).rejects.toThrow('another agent');
+			await expect(
+				service.sealedRestoreRepository({ ...input, planId: 'plan-other' })
+			).rejects.toThrow('no longer exists');
+		});
+
 		it('keeps payload versions 1 to 4 unchanged for an Agent without version 5', async () => {
 			agentStore.getAgentByDeviceId.mockResolvedValue({
 				...capableAgent,

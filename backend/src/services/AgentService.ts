@@ -25,6 +25,11 @@ import { RemoteCommandPreparationError } from './remoteCommandPreparation';
 import { databaseIdSchema } from '../utils/remoteLifecycle';
 import { sourceAccessReportSchema } from '../utils/agentSourceAccess';
 import type { AgentSourceAccessService } from './AgentSourceAccessService';
+import { restoreAccessReportSchema, restoreStageSchema } from '../utils/agentHostRestore';
+import {
+	agentHostRestoreCompletionSchema,
+	type AgentHostRestoreService,
+} from './AgentHostRestoreService';
 
 const inventorySchema = z
 	.object({
@@ -41,6 +46,8 @@ const inventorySchema = z
 			.max(365 * 24 * 60 * 60)
 			.optional(),
 		sourceAccess: sourceAccessReportSchema.optional(),
+		// Agent 0.9.0 (docs/AGENT_HOST_RESTORE.md section 4): host-approved restore roots.
+		restoreAccess: restoreAccessReportSchema.optional(),
 		capabilities: z
 			.object({
 				backupExclusionsVersion: z.literal(1).optional(),
@@ -54,10 +61,11 @@ const inventorySchema = z
 							'SOURCE_ACCESS_VALIDATE',
 							'SOURCE_ACCESS_APPLY',
 							'SOURCE_ACCESS_MODE_SETUP',
+							'RESTORE_FILESYSTEM',
 						])
 					)
 					.min(1)
-					.max(6),
+					.max(7),
 				backupLifecycleVersion: z.union([z.literal(1), z.literal(2)]).optional(),
 				databaseEngines: z
 					.array(z.enum(['mysql', 'mariadb', 'postgresql']))
@@ -76,11 +84,32 @@ const inventorySchema = z
 					)
 					.optional(),
 				backupPayloadVersion: z.literal(5).optional(),
+				restoreFilesystemVersion: z.literal(1).optional(),
 			})
 			.strict(),
 	})
 	.strict()
-	.refine(inventory => !inventory.sourceAccess || inventory.capabilities.sourceAccessVersion === 1);
+	.refine(inventory => !inventory.sourceAccess || inventory.capabilities.sourceAccessVersion === 1)
+	.refine(
+		inventory =>
+			(!inventory.restoreAccess && !inventory.capabilities.commandTypes.includes('RESTORE_FILESYSTEM')) ||
+			(inventory.capabilities.restoreFilesystemVersion === 1 &&
+				!!inventory.restoreAccess &&
+				inventory.capabilities.commandTypes.includes('RESTORE_FILESYSTEM'))
+	);
+
+/** The restore-root report is kept beside the capabilities so the UI and the
+ * restore service read the latest heartbeat (docs/AGENT_HOST_RESTORE.md 4). */
+function storedInventory(inventory: AgentInventory): AgentInventory {
+	if (!inventory.restoreAccess) return inventory;
+	return {
+		...inventory,
+		capabilities: {
+			...inventory.capabilities,
+			restoreAccess: inventory.restoreAccess,
+		} as AgentInventory['capabilities'],
+	};
+}
 
 const enrollmentSchema = z
 	.object({
@@ -276,7 +305,8 @@ export class AgentService {
 		private readonly encryptionSecret = configService.config.SECRET,
 		private readonly now: () => Date = () => new Date(),
 		private readonly remoteBackupService?: RemoteBackupService,
-		private readonly sourceAccessService?: AgentSourceAccessService
+		private readonly sourceAccessService?: AgentSourceAccessService,
+		private readonly agentHostRestoreService?: AgentHostRestoreService
 	) {}
 
 	async createEnrollment(input: unknown): Promise<{
@@ -342,13 +372,13 @@ export class AgentService {
 				device: {
 					id: deviceId,
 					agentId,
-					inventory: parsed.data.inventory,
+					inventory: storedInventory(parsed.data.inventory),
 				},
 				identity: {
 					agentId,
 					deviceId,
 					encryptedSecret,
-					inventory: parsed.data.inventory,
+					inventory: storedInventory(parsed.data.inventory),
 				},
 				command: {
 					id: generateUID(24),
@@ -441,7 +471,7 @@ export class AgentService {
 		signedTimestamp = this.now().getTime()
 	): Promise<AgentPublic> {
 		const inventory = this.parseInventory(input);
-		const updated = await this.agentStore.updateHeartbeat(agentId, inventory);
+		const updated = await this.agentStore.updateHeartbeat(agentId, storedInventory(inventory));
 		if (!updated) throw new AppError(401, 'Agent authentication failed.');
 		if (inventory.sourceAccess)
 			await this.sourceAccessService?.recordHeartbeat(
@@ -480,6 +510,36 @@ export class AgentService {
 				return { command: null };
 		}
 		let payload = command.payload;
+		if (command.type === 'RESTORE_FILESYSTEM') {
+			try {
+				if (!this.agentHostRestoreService)
+					throw new AppError(503, 'Agent host restore service is unavailable.');
+				// Sealed to this lease like backup payload version 5 (docs/AGENT_HOST_RESTORE.md 3.2).
+				payload = await this.agentHostRestoreService.materializeCommand(agent.agentId, command, {
+					agentSecret: agent.secret,
+					leaseToken,
+				});
+			} catch {
+				// Never deliver a restore the server cannot vouch for, and never to an Agent
+				// that lost the capability: an older Agent would not acknowledge it and
+				// would block its serial queue. No provider or decryption text is logged.
+				serverLogger?.warn(
+					{ agentEvent: 'agent_host_restore_preparation_failed', deviceId: agent.deviceId },
+					'Agent host restore command preparation failed'
+				);
+				const failed = await this.agentStore.completeCommand(
+					agent.agentId,
+					command.id,
+					leaseToken,
+					command.lastEventSequence + 1,
+					false,
+					'Agent host restore command could not be prepared.',
+					this.now()
+				);
+				if (failed) await this.agentHostRestoreService?.failUndeliverable(failed);
+				return { command: null };
+			}
+		}
 		if (command.type === 'BACKUP_FILESYSTEM') {
 			try {
 				if (!this.remoteBackupService) {
@@ -549,6 +609,7 @@ export class AgentService {
 					.object({
 						phase: z.enum(['accepted', 'running']).optional(),
 						backupStage: z.enum(remoteBackupStages).optional(),
+						restoreStage: restoreStageSchema.optional(),
 						lifecycleStage: lifecycleStageSchema.optional(),
 						databaseId: databaseIdSchema.optional(),
 						engine: z.enum(['mysql', 'mariadb', 'postgresql']).optional(),
@@ -601,6 +662,20 @@ export class AgentService {
 		if (!command) throw new NotFoundError('Command not found.');
 		if (
 			parsed.data.event &&
+			command.type === 'RESTORE_FILESYSTEM' &&
+			command.state === 'running' &&
+			command.lastEventSequence === parsed.data.sequence
+		) {
+			const { phase, restoreStage, progress } = parsed.data.event;
+			await this.agentHostRestoreService?.recordEvent(
+				command,
+				{ phase, restoreStage, progress },
+				parsed.data.sequence
+			);
+			return;
+		}
+		if (
+			parsed.data.event &&
 			command.state === 'running' &&
 			command.lastEventSequence === parsed.data.sequence
 		)
@@ -617,9 +692,14 @@ export class AgentService {
 		input: unknown,
 		signedTimestamp = this.now().getTime()
 	): Promise<void> {
-		const existing = this.sourceAccessService
-			? await this.agentStore.getCommandForAgent(agentId, commandId)
-			: null;
+		const existing =
+			this.sourceAccessService || this.agentHostRestoreService
+				? await this.agentStore.getCommandForAgent(agentId, commandId)
+				: null;
+		if (existing?.type === 'RESTORE_FILESYSTEM') {
+			await this.completeRestore(agentId, commandId, input);
+			return;
+		}
 		if (
 			existing?.type === 'SOURCE_ACCESS_VALIDATE' ||
 			existing?.type === 'SOURCE_ACCESS_APPLY' ||
@@ -769,6 +849,27 @@ export class AgentService {
 			result: parsed.data.result,
 		});
 		this.audit(command.state === 'completed' ? 'command_completed' : 'command_failed');
+	}
+
+	/** RESTORE_FILESYSTEM completion: its own strict schema; closed codes only. */
+	private async completeRestore(agentId: string, commandId: string, input: unknown): Promise<void> {
+		const parsed = agentHostRestoreCompletionSchema.safeParse(input);
+		if (!parsed.success) throw new AppError(400, 'Command completion is invalid.');
+		const completion = parsed.data;
+		const command = await this.agentStore.completeCommand(
+			agentId,
+			commandId,
+			completion.leaseToken,
+			completion.sequence,
+			completion.success,
+			completion.success
+				? undefined
+				: `Agent host restore failed (${completion.failureStage || 'unknown'}/${completion.failureCode || 'unexpected'}).`,
+			this.now()
+		);
+		if (!command) throw new NotFoundError('Command not found.');
+		await this.agentHostRestoreService?.complete(command, completion);
+		this.audit(completion.success ? 'command_completed' : 'command_failed');
 	}
 
 	async commandStatus(

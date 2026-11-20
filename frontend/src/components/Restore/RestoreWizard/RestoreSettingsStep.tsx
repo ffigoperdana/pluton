@@ -7,9 +7,13 @@ import FolderPicker from '../../common/FolderPicker/FolderPicker';
 import { RestoreSettings } from '../../../@types/restores';
 import Toggle from '../../common/form/Toggle/Toggle';
 import { Backup } from '../../..';
+import AgentHostTargetFields from '../AgentHostRestore/AgentHostTargetFields';
+import { useAgentHostRestoreOptions } from '../../../services/restores';
+import { agentHostRestoreNameProblem } from '../../../utils/agentHostRestore';
 
 interface RestoreSettingsStepProps {
    backupId: string;
+   planId: string;
    deviceId: string;
    stagingOnly?: boolean;
    settings: RestoreSettings;
@@ -29,11 +33,26 @@ const RestoreSettingsStep = ({
    goNext,
    close,
    deviceId,
+   backupId,
+   planId,
 }: RestoreSettingsStepProps) => {
    const [showFileManager, setShowFileManager] = useState(false);
    const [showCustomPathError, setShowCustomPathError] = useState(false);
+   const agentHost = stagingOnly && settings.destination === 'agent-host';
+   const hostOptions = useAgentHostRestoreOptions({ backupId, planId, enabled: stagingOnly });
+   const hostRoot = settings.agentHostRoot || hostOptions.data?.roots[0]?.path || '';
+   const hostName = settings.agentHostName ?? hostOptions.data?.suggestedName ?? '';
 
    const gotoPreviewStep = () => {
+      if (agentHost) {
+         if (!hostOptions.data?.supported || !hostRoot || agentHostRestoreNameProblem(hostName)) {
+            setShowCustomPathError(true);
+            return;
+         }
+         updateSettings({ ...settings, agentHostRoot: hostRoot, agentHostName: hostName });
+         goNext();
+         return;
+      }
       if ((settings.type === 'custom' && settings.path) || settings.type === 'original') {
          goNext();
       } else {
@@ -42,38 +61,73 @@ const RestoreSettingsStep = ({
    };
 
    if (stagingOnly) {
+      const hostname = hostOptions.data?.agent?.hostname;
       return (
          <div className={classes.stepContent}>
             <div className={classes.step}>
-               <p>Restore into a new private workspace on the Pluton server. This does not restore to the remote agent or original source.</p>
                <div className={classes.settingBlock}>
                   <Select
-                     label="Staging destination"
+                     label="Restore destination"
                      options={[
-                        { label: 'New internal staging workspace', value: 'original' },
-                        { label: 'Custom subfolder inside new staging workspace', value: 'custom' },
+                        { label: 'Pluton server staging (browse or download afterwards)', value: 'server' },
+                        {
+                           label: hostname ? `Agent host ${hostname} (restore directly on the host)` : 'Agent host (restore directly on the host)',
+                           value: 'agent-host',
+                        },
                      ]}
-                     fieldValue={settings.type}
+                     fieldValue={settings.destination || 'server'}
                      full
-                     onUpdate={(value) => updateSettings({ ...settings, type: value as 'original' | 'custom' })}
+                     onUpdate={(value) => {
+                        updateSettings({ ...settings, destination: value as 'server' | 'agent-host' });
+                        setShowCustomPathError(false);
+                     }}
                   />
                </div>
-               {settings.type === 'custom' && (
+               {agentHost ? (
                   <div className={classes.settingBlock}>
-                     <Input
-                        label="Relative staging subfolder"
-                        placeholder="recovery/check"
-                        fieldValue={settings.path}
-                        full
-                        onUpdate={(value) => {
-                           updateSettings({ ...settings, path: value });
-                           setShowCustomPathError(false);
-                        }}
+                     <AgentHostTargetFields
+                        options={hostOptions.data}
+                        loading={hostOptions.isLoading}
+                        error={hostOptions.error?.message}
+                        root={hostRoot}
+                        name={hostName}
+                        showErrors={showCustomPathError}
+                        onChange={({ root, name }) => updateSettings({ ...settings, agentHostRoot: root, agentHostName: name })}
                      />
-                     {showCustomPathError && <p>Enter a relative subfolder, not an absolute server or source path.</p>}
                   </div>
+               ) : (
+                  <>
+                     <p>Restore into a new private workspace on the Pluton server. This does not restore to the remote agent or original source.</p>
+                     <div className={classes.settingBlock}>
+                        <Select
+                           label="Staging destination"
+                           options={[
+                              { label: 'New internal staging workspace', value: 'original' },
+                              { label: 'Custom subfolder inside new staging workspace', value: 'custom' },
+                           ]}
+                           fieldValue={settings.type}
+                           full
+                           onUpdate={(value) => updateSettings({ ...settings, type: value as 'original' | 'custom' })}
+                        />
+                     </div>
+                     {settings.type === 'custom' && (
+                        <div className={classes.settingBlock}>
+                           <Input
+                              label="Relative staging subfolder"
+                              placeholder="recovery/check"
+                              fieldValue={settings.path}
+                              full
+                              onUpdate={(value) => {
+                                 updateSettings({ ...settings, path: value });
+                                 setShowCustomPathError(false);
+                              }}
+                           />
+                           {showCustomPathError && <p>Enter a relative subfolder, not an absolute server or source path.</p>}
+                        </div>
+                     )}
+                     <p>Never overwrite. No deletion. Only regular files and directories are supported; repository contents remain unchanged.</p>
+                  </>
                )}
-               <p>Never overwrite. No deletion. Only regular files and directories are supported; repository contents remain unchanged.</p>
             </div>
             <div className={classes.footer}>
                <div className={classes.footerLeft}></div>
