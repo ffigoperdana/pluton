@@ -62,11 +62,21 @@ export function restoreActionNotice(operation: string, automatic: boolean) {
 export function needsRestoreRefresh(row: DatabaseRestoreView) {
    return row.status !== 'deleted';
 }
+const MYSQL_INTERNAL_MAX_SQL_BYTES = 128 * 1024 ** 2;
+/** The SQL size Internal accepts: the operator budget, and never more than 128 MiB for MySQL. */
+export function internalSqlBudget(preview: RestorePreview, engine?: string | null) {
+   return engine === 'mysql' ? Math.min(preview.internalPolicy.maxSqlBytes, MYSQL_INTERNAL_MAX_SQL_BYTES) : preview.internalPolicy.maxSqlBytes;
+}
+export function exceedsInternalBudget(preview: RestorePreview, artifact?: { bytes: number; engine?: string | null }) {
+   return !!artifact && artifact.bytes > internalSqlBudget(preview, artifact.engine);
+}
+const restoreSize = (bytes: number) => (bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GiB` : `${Math.round(bytes / 1024 ** 2)} MiB`);
 export function initialRestoreChoice(preview: RestorePreview): RestoreChoice {
    const first = preview.databases.find((entry) => entry.databaseId);
    return {
       databaseId: first?.databaseId || '',
-      mode: first?.engine && preview.engines[first.engine].includes('internal') ? 'internal' : 'custom',
+      // A dump larger than the Internal budget starts on Custom; Internal could only refuse it.
+      mode: first?.engine && preview.engines[first.engine].includes('internal') && !exceedsInternalBudget(preview, first) ? 'internal' : 'custom',
       targetId: '',
       ttlSeconds: 86400,
       resources: false,
@@ -82,6 +92,8 @@ export function restoreRefusal(preview: RestorePreview, choice: RestoreChoice) {
             ? 'MySQL Internal requires the approved automatic operator and Internal-enabled Oracle worker. No manual fallback is assumed.'
             : 'The Oracle MySQL persistent worker is not configured. Ordinary backups are unaffected.'
          : 'This engine/destination is not implemented.';
+   if (choice.mode === 'internal' && exceedsInternalBudget(preview, artifact))
+      return `This SQL dump (${restoreSize(artifact.bytes)}) is larger than the Internal budget (${restoreSize(internalSqlBudget(preview, artifact.engine))}). Choose a Custom approved target.`;
    const target = preview.targets.find((entry) => entry.id === choice.targetId);
    if (choice.mode === 'custom' && (!target || target.engine !== artifact.engine || target.database !== artifact.database))
       return 'Select an approved dedicated target for this exact engine and database.';

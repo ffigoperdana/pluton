@@ -128,6 +128,47 @@ describe('BackupService', () => {
 			).rejects.toMatchObject({ statusCode: 400 });
 			expect(prepareDownload).not.toHaveBeenCalled();
 		});
+		it('refuses a whole-snapshot Download above 200 GiB before reading the repository', async () => {
+			const download = jest.fn();
+			const prepareDownload = jest.fn().mockResolvedValue({ streaming: true });
+			backupService = new BackupService(
+				mockSnapshotManager,
+				mockBackupManager,
+				mockPlanStore,
+				mockBackupStore,
+				mockRestoreStore,
+				mockStorageStore,
+				undefined,
+				{ download, prepareDownload } as any
+			);
+			const backup = (bytes?: number) =>
+				({
+					id: 'backup-01',
+					sourceId: 'app-01',
+					sourceType: 'device',
+					method: 'backup',
+					completionStats: bytes === undefined ? undefined : { total_bytes_processed: bytes },
+				}) as any;
+			const signal = new AbortController().signal;
+			mockBackupStore.getById.mockResolvedValue(backup(350 * 1024 ** 3));
+			await expect(
+				backupService.generateBackupDownload('backup-01', undefined, signal)
+			).rejects.toMatchObject({ statusCode: 413, message: expect.stringContaining('350.0 GiB') });
+			await expect(
+				backupService.getBackupDownload('backup-01', 'preparation-01')
+			).rejects.toMatchObject({ statusCode: 413 });
+			expect(prepareDownload).not.toHaveBeenCalled();
+			expect(download).not.toHaveBeenCalled();
+			// Exactly 200 GiB, and a snapshot without a recorded size, still download.
+			mockBackupStore.getById.mockResolvedValue(backup(200 * 1024 ** 3));
+			await expect(
+				backupService.generateBackupDownload('backup-01', undefined, signal)
+			).resolves.toEqual({ streaming: true });
+			mockBackupStore.getById.mockResolvedValue(backup());
+			await expect(
+				backupService.generateBackupDownload('backup-01', undefined, signal)
+			).resolves.toEqual({ streaming: true });
+		});
 		it('fails closed for remote Download when recovery is not wired; never falls back to local', async () => {
 			mockBackupStore.getById.mockResolvedValue({
 				id: 'backup-01',

@@ -3,6 +3,7 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import {
+   exceedsInternalBudget,
    initialRestoreChoice,
    restoreRefusal,
    restoreBody,
@@ -73,6 +74,30 @@ test('automatic lifecycle displays measured stages and requires independent MySQ
    const mysql = { ...preview, lifecycle: { available: true }, databases: [{ ...preview.databases[0], engine: 'mysql' as const }] };
    assert.match(restoreRefusal(mysql, choice)!, /approved automatic operator/);
 });
+test('a dump larger than the Internal budget starts on Custom and Internal says why it refuses', () => {
+   const large: RestorePreview = {
+      ...preview,
+      databases: [{ ...preview.databases[0], engine: 'postgresql', bytes: 6 * 1024 ** 3 }],
+   };
+   assert.equal(exceedsInternalBudget(large, large.databases[0]), true);
+   assert.equal(exceedsInternalBudget(preview, preview.databases[0]), false);
+   assert.equal(initialRestoreChoice(large).mode, 'custom');
+   assert.equal(initialRestoreChoice(preview).mode, 'internal');
+   const internal = { ...initialRestoreChoice(large), mode: 'internal' as const, resources: true, security: true };
+   assert.equal(
+      restoreRefusal(large, internal),
+      'This SQL dump (6.0 GiB) is larger than the Internal budget (128 MiB). Choose a Custom approved target.',
+   );
+   // MySQL Internal never exceeds 128 MiB, whatever the operator budget says.
+   const mysql: RestorePreview = {
+      ...preview,
+      databases: [{ ...preview.databases[0], engine: 'mysql', bytes: 200 * 1024 ** 2 }],
+      engines: { ...preview.engines, mysql: ['internal', 'custom'] },
+      internalPolicy: { ...preview.internalPolicy, maxSqlBytes: 384 * 1024 ** 2 },
+   };
+   assert.equal(exceedsInternalBudget(mysql, mysql.databases[0]), true);
+});
+
 test('approved MySQL Internal is selectable, with its own budget/headroom and unchanged snapshot identity', () => {
    const mysql: RestorePreview = {
       ...preview,

@@ -11,6 +11,15 @@ export function backupRowActions(backup: BackupRow, isSync: boolean, isRemoteMan
    };
 }
 
+/** Mirrors the server bound (MANAGED_FULL_DOWNLOAD_MAX_BYTES) for whole managed snapshots. */
+export const MAX_FULL_SNAPSHOT_DOWNLOAD_BYTES = 200 * 1024 ** 3;
+
+/** Why a whole managed snapshot cannot be downloaded as one archive, or undefined when it can. */
+export function fullDownloadBlockedReason(isRemoteManaged: boolean, logicalBytes: number | null | undefined) {
+   if (!isRemoteManaged || typeof logicalBytes !== 'number' || logicalBytes <= MAX_FULL_SNAPSHOT_DOWNLOAD_BYTES) return undefined;
+   return `This snapshot holds ${(logicalBytes / 1024 ** 3).toFixed(1)} GiB, more than the 200 GiB that can be downloaded as one archive. Download folders or files from Browse instead.`;
+}
+
 /** Browser-owned transfer avoids fetch().blob() buffering the complete archive. */
 export function startNativeBackupDownload(apiUrl: string, backupId: string, preparationId?: string, mode: 'full' | 'regular-files' = 'full') {
    const link = document.createElement('a');

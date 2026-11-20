@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
 import type { RestorePreview, RestoreSelection, DatabaseRestoreView, RestoreChoice } from '../../../@types/databaseRestores';
 import { useRestorePreview, restoreRequest } from '../../../services/databaseRestores';
-import { initialRestoreChoice, restoreRefusal, restoreBody, restoreResourceSafety } from '../../../utils/databaseRestores';
+import { exceedsInternalBudget, initialRestoreChoice, restoreRefusal, restoreBody, restoreResourceSafety } from '../../../utils/databaseRestores';
 import InternalResourceWarning from '../../common/InternalResourceWarning';
 import { RequestActivity } from '../../common/OperationProgress/OperationProgress';
 import { formatBytes } from '../../../utils/helpers';
@@ -90,8 +90,12 @@ export function DatabaseRestoreForm({
                      value={choice.mode}
                      onChange={(event) => setChoice({ ...choice, mode: event.target.value as 'internal' | 'custom', targetId: '' })}
                   >
-                     <option value="internal" disabled={!artifact?.engine || !preview.engines[artifact.engine].includes('internal')}>
+                     <option
+                        value="internal"
+                        disabled={!artifact?.engine || !preview.engines[artifact.engine].includes('internal') || exceedsInternalBudget(preview, artifact)}
+                     >
                         {preview.lifecycle ? 'Internal — automatic host lifecycle' : 'Internal — manual operator provisioning'}
+                        {exceedsInternalBudget(preview, artifact) ? ' (SQL larger than the Internal budget)' : ''}
                      </option>
                      <option value="custom" disabled={!artifact?.engine || !preview.engines[artifact.engine].includes('custom')}>
                         Custom — root-approved dedicated target
