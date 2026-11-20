@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { toast } from 'react-toastify';
 import { Plan } from '../../../@types/plans';
 import { Backup } from '../../../@types/backups';
-import { backupRowActions } from '../../../utils/backupDownload';
+import { backupRowActions, fullDownloadBlockedReason } from '../../../utils/backupDownload';
 import { formatBytes, formatDuration, formatNumberToK } from '../../../utils/helpers';
 import Icon from '../../common/Icon/Icon';
 import classes from './Backups.module.scss';
@@ -257,6 +257,7 @@ const Backups = ({
                   const modifiedFiles = isRemoteManaged ? counters.modifiedFiles : changes.modified;
                   const measuredFiles = isRemoteManaged ? counters.totalFiles : totalFiles;
                   const measuredSize = isRemoteManaged ? counters.logicalBytes : totalSize;
+                  const downloadBlocked = fullDownloadBlockedReason(isRemoteManaged, counters.logicalBytes);
                   const recovery = recoveryForBackup(recoveryTests.data || [], id, snapshot.completionStats?.snapshot_id);
 
                   return (
@@ -428,8 +429,9 @@ const Backups = ({
                               )}
                               {actions.download && (
                                  <button
-                                    className={downloadBackupMutation.isPending || cancelDownloadMutation.isPending ? 'notAllowed' : ''}
-                                    disabled={downloadBackupMutation.isPending || cancelDownloadMutation.isPending}
+                                    className={downloadBackupMutation.isPending || cancelDownloadMutation.isPending || downloadBlocked ? 'notAllowed' : ''}
+                                    disabled={downloadBackupMutation.isPending || cancelDownloadMutation.isPending || !!downloadBlocked}
+                                    title={downloadBlocked}
                                     onClick={() => {
                                        if (isDownloading) {
                                           cancelDownload(id);

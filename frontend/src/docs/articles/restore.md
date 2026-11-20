@@ -7,7 +7,7 @@ Mulailah pemulihan dengan menentukan data dan waktu yang dibutuhkan. Untuk kehil
 | Tujuan | Tindakan | Hasil yang diharapkan |
 | --- | --- | --- |
 | Melihat berkas yang tersimpan | Browse | Daftar isi snapshot |
-| Mengambil seluruh snapshot managed remote | Download | Arsip TAR pada perangkat pengunduh |
+| Mengambil seluruh snapshot managed remote | Download | Arsip TAR pada perangkat pengunduh; tersedia sampai 200 GiB data logical. Snapshot yang lebih besar diunduh per folder atau berkas lewat Browse |
 | Memulihkan berkas atau direktori terpilih | Restore | Berkas pada staging privat Pluton Server untuk managed remote |
 | Mempertahankan satu database native | Restore Database | Database terpisah dengan TTL dan pengelolaan ownership |
 | Menguji pemulihan snapshot | Run Recovery Test | Hasil validasi dan cleanup target sementara |

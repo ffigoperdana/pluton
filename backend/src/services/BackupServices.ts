@@ -29,6 +29,22 @@ import type { RecoveryTestStore } from '../stores/RecoveryTestStore';
 import { managedSnapshotPath } from '../utils/managedSnapshotPath';
 import type { AttachmentCatalogQuery, AttachmentCatalogService } from './AttachmentCatalogService';
 
+/**
+ * A whole managed snapshot downloads as one archive through the Pluton server and
+ * the browser. Above this logical size that is not a practical recovery path, so
+ * it is refused before any repository read; Browse still downloads folders and files.
+ */
+export const MANAGED_FULL_DOWNLOAD_MAX_BYTES = 200 * 1024 ** 3;
+
+export function assertFullDownloadSize(backup: Pick<Backup, 'completionStats'>) {
+	const bytes = backup.completionStats?.total_bytes_processed;
+	if (typeof bytes === 'number' && Number.isFinite(bytes) && bytes > MANAGED_FULL_DOWNLOAD_MAX_BYTES)
+		throw new AppError(
+			413,
+			`This snapshot holds ${(bytes / 1024 ** 3).toFixed(1)} GiB, more than the 200 GiB that can be downloaded as one archive. Download folders or files from Browse instead.`
+		);
+}
+
 export class BackupService {
 	constructor(
 		protected localSnapshotAgent: BaseSnapshotManager,
@@ -306,6 +322,7 @@ export class BackupService {
 		}
 		if (backup.method === 'backup' && RemoteBackupService.isRemoteFilesystemPlan(backup)) {
 			if (!this.remoteRecovery) throw new AppError(501, 'REMOTE_CAPABILITY_NOT_IMPLEMENTED');
+			assertFullDownloadSize(backup);
 			return this.remoteRecovery.download(backupId, preparationId, mode);
 		}
 		if (mode !== 'full')
@@ -339,6 +356,7 @@ export class BackupService {
 			if (!this.remoteRecovery) throw new AppError(501, 'REMOTE_CAPABILITY_NOT_IMPLEMENTED');
 			if (hasBody)
 				throw new AppError(400, 'Remote downloads support only the complete exact snapshot.');
+			assertFullDownloadSize(backup);
 			return this.remoteRecovery.prepareDownload(backupId, replicationId, signal, mode);
 		}
 		if (mode !== 'full')

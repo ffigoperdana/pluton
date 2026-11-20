@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { backupRowActions, startNativeBackupDownload } from '../src/utils/backupDownload.ts';
+import { backupRowActions, fullDownloadBlockedReason, startNativeBackupDownload } from '../src/utils/backupDownload.ts';
 
 const completed = { status: 'completed', active: true, inProgress: false, success: true };
+test('a managed snapshot above 200 GiB is not offered as one archive; local plans and unknown sizes are unchanged', () => {
+   assert.match(fullDownloadBlockedReason(true, 350 * 1024 ** 3)!, /350\.0 GiB, more than the 200 GiB/);
+   assert.equal(fullDownloadBlockedReason(true, 200 * 1024 ** 3), undefined);
+   assert.equal(fullDownloadBlockedReason(true, null), undefined);
+   assert.equal(fullDownloadBlockedReason(false, 350 * 1024 ** 3), undefined);
+});
 test('completed remote menu exposes Download/Browse/Restore, not Remove', () => {
    assert.deepEqual(backupRowActions(completed, false, true), { download: true, browse: true, restore: true, remove: false });
 });
