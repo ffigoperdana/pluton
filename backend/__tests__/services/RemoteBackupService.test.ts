@@ -4,6 +4,7 @@ import {
 	RemoteCommandPreparationError,
 } from '../../src/services/RemoteBackupService';
 import type { AgentCommand } from '../../src/db/schema/agents';
+import { AppError } from '../../src/utils/AppError';
 import { serverLogger } from '../../src/utils/logger';
 import {
 	AgentCommandSealingError,
@@ -1278,7 +1279,7 @@ describe('RemoteBackupService', () => {
 			});
 		});
 
-		it('refuses replication settings for an S3 primary before any replica validation', async () => {
+		it('delegates replica validation of an S3 primary to the replication service (stage 2)', async () => {
 			const replication = {
 				validatePlan: jest.fn(async () => undefined),
 				enqueueBackup: jest.fn(async () => undefined),
@@ -1294,9 +1295,9 @@ describe('RemoteBackupService', () => {
 						storages: [
 							{
 								replicationId: 'replica-01',
-								storageId: 'mirror-01',
-								storagePath: 'bucket-02/owned',
-								storageType: 's3compatible',
+								storageId: 'sftp-mirror-01',
+								storagePath: 'replicas/app-01',
+								storageType: 'sftp',
 								storageName: 'Mirror',
 								addedAt: 1,
 							},
@@ -1304,29 +1305,15 @@ describe('RemoteBackupService', () => {
 					},
 				},
 			};
+			await expect(service.validatePlanCreation(replicated)).resolves.toBeUndefined();
+			expect(replication.validatePlan).toHaveBeenCalledWith(replicated);
+			replication.validatePlan.mockRejectedValueOnce(
+				new AppError(400, 'An S3 primary replicates to an SFTP destination.')
+			);
 			await expect(service.validatePlanCreation(replicated)).rejects.toMatchObject({
 				statusCode: 400,
-				message: 'Replication is not available for an S3 primary repository yet.',
+				message: 'An S3 primary replicates to an SFTP destination.',
 			});
-			await expect(
-				service.validatePlanCreation({
-					...replicated,
-					settings: {
-						...replicated.settings,
-						replication: { ...replicated.settings.replication, enabled: false },
-					},
-				})
-			).rejects.toMatchObject({ statusCode: 400 });
-			expect(replication.validatePlan).not.toHaveBeenCalled();
-			await expect(
-				service.validatePlanCreation({
-					...s3Plan,
-					settings: {
-						...s3Plan.settings,
-						replication: { enabled: false, concurrent: false, storages: [] },
-					},
-				})
-			).resolves.toBeUndefined();
 		});
 
 		it('refuses a prefix inside a retained repository of a deleted plan and allows a sibling prefix', async () => {
@@ -1344,8 +1331,8 @@ describe('RemoteBackupService', () => {
 			await expect(service.validatePlanCreation(s3Plan)).resolves.toBeUndefined();
 		});
 
-		it('refuses a non primary-only recovery policy on an S3 primary even with replication off', async () => {
-			for (const recoveryPolicy of ['assisted', 'automatic']) {
+		it('treats a failover policy on an S3 primary like an SFTP primary at this layer', async () => {
+			for (const recoveryPolicy of ['assisted', 'automatic', 'primary-only']) {
 				await expect(
 					service.validatePlanCreation({
 						...s3Plan,
@@ -1354,20 +1341,8 @@ describe('RemoteBackupService', () => {
 							replication: { enabled: false, concurrent: false, recoveryPolicy, storages: [] },
 						},
 					})
-				).rejects.toMatchObject({
-					statusCode: 400,
-					message: 'Replication is not available for an S3 primary repository yet.',
-				});
+				).resolves.toBeUndefined();
 			}
-			await expect(
-				service.validatePlanCreation({
-					...s3Plan,
-					settings: {
-						...s3Plan.settings,
-						replication: { enabled: false, concurrent: false, recoveryPolicy: 'primary-only', storages: [] },
-					},
-				})
-			).resolves.toBeUndefined();
 		});
 
 		it('names a rejected S3 setting in the preparation diagnostics without its value', async () => {

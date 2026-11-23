@@ -5,7 +5,7 @@ import { Storage, NewStorage, storages, StorageFull } from '../db/schema/storage
 import { providers } from '../utils/providers';
 import { PlanChildItem, PlanBackupSettings, ReplicationPlanItem } from '../types/plans';
 import { AppError } from '../utils/AppError';
-import { canonicalS3RepositoryIdentity } from '../utils/storageSecurity';
+import { replicaRepositoryIdentity } from '../utils/managedReplicaIdentity';
 import { assertStorageUpdateReplicaIsolation } from '../utils/managedReplicationPolicy';
 import {
 	assertExportStorageUpdate,
@@ -83,7 +83,8 @@ export class StorageStore {
 				)
 				.all(storageId) as Array<any>;
 			for (const destination of destinations) {
-				const identity = canonicalS3RepositoryIdentity(next, destination.destination_storage_path);
+				// S3 endpoint/bucket or SFTP host/port/account (S3_PRIMARY_REPLICATION.md 3).
+				const identity = replicaRepositoryIdentity(next, destination.destination_storage_path);
 				if (
 					identity.authority !== destination.destination_authority ||
 					identity.prefix !== destination.destination_prefix

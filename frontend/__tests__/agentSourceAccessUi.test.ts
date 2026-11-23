@@ -74,7 +74,7 @@ async function component(relative: string) {
                load(/[\\/]services[\\/]settings\.ts$/, 'export const useGetSettings=()=>({data:{result:{settings:{}}}});');
                load(/[\\/]utils[\\/]plans\.ts$/, 'export const isPlanSettingsValid=()=>true;');
                load(/[\\/]PlanAdvancedSettings\.tsx$/, 'export default ()=>null;');
-               load(/[\\/]PlanReplicationSettings\.tsx$/, `import React from 'react';export default p=>React.createElement('div',{'data-replication-settings':'','data-unavailable':p.unavailableReason||''});`);
+               load(/[\\/]PlanReplicationSettings\.tsx$/, `import React from 'react';export default p=>React.createElement('div',{'data-replication-settings':'','data-unavailable':p.unavailableReason||'','data-primary-type':p.primaryStorageType||''});`);
                load(/[\\/]PlanPruneSettings\.tsx$/, 'export default ()=>null;');
                load(/[\\/]PathPicker\.tsx$/, 'export default ()=>null;');
                load(/[\\/]StoragePicker\.tsx$/, `import React from 'react';export default p=>React.createElement('div',{'data-storage-picker':'','data-allowed':(p.allowedStorageTypes||[]).join(',')});`);
@@ -1151,7 +1151,7 @@ test('Server-Managed enrollment is an explicit reviewed intent; installer stays 
    }
 });
 
-test('remote destination offers S3 only when the Agent reports it, explains why otherwise, and gates replication', async () => {
+test('remote destination offers S3 only when the Agent reports it, explains why otherwise, and passes the primary type to replication', async () => {
    const props = { type: 'add', title: 'Add plan', planSettings: formPlan(), onSubmit() {}, isSubmitting: false, close() {} };
    const legacy = await fixture(ControlledForm, props);
    try {
@@ -1186,7 +1186,10 @@ test('remote destination offers S3 only when the Agent reports it, explains why 
       assert.equal(capable.dom.window.document.querySelector('[data-storage-picker]')!.getAttribute('data-allowed'), 'sftp,s3,s3compatible');
       assert.doesNotMatch(capable.text(), /S3 storages are not offered/);
       assert.match(capable.text(), /The Agent writes this plan directly to S3/);
-      assert.match(capable.dom.window.document.querySelector('[data-replication-settings]')!.getAttribute('data-unavailable')!, /S3-to-SFTP replication is the next stage/);
+      // Stage 2: an S3 primary offers SFTP replicas instead of refusing replication.
+      const replication = capable.dom.window.document.querySelector('[data-replication-settings]')!;
+      assert.equal(replication.getAttribute('data-unavailable'), '');
+      assert.equal(replication.getAttribute('data-primary-type'), 's3compatible');
    } finally {
       await capable.cleanup();
    }

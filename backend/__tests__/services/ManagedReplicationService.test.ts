@@ -41,22 +41,24 @@ function fixture() {
 	const plans: any = { getById: jest.fn(() => plan), getAll: jest.fn(() => []) };
 	const repositories: any = { getByPlanId: jest.fn(() => repository) };
 	const agents: any = { getAgentById: jest.fn(() => ({ agentId: 'agent-01', deviceId: 'device-01' })) };
-	const storages: any = { getById: jest.fn(id => ({ id, name: 'Mirror', type: 's3compatible', settings: { hcp_mode: true } })) };
+	// The SFTP primary replicates to S3 replicas; tests override only the mirror records.
+	const mirrorStorage: any = jest.fn((id: string) => ({ id, name: 'Mirror', type: 's3compatible', settings: { hcp_mode: true } }));
+	const storages: any = { getById: jest.fn((id: string) => id === 'primary' ? { id, name: 'Primary', type: 'sftp', settings: {} } : mirrorStorage(id)) };
 	const remote: any = { getSftpRecoveryOptions: jest.fn(() => ({ host: 'sftp.example.internal', user: 'fixture', pass: 'synthetic-pass' })) };
 	const proof = { repositoryConfigId: 'b'.repeat(64), snapshot: { id: snapshotId, tree: 'f'.repeat(64), paths: ['/srv/example-app'], tags: ['pluton-plan-plan-01', 'pluton-backup-backup-01'] } };
 	const executor: any = { inspectSource: jest.fn(async () => proof), copy: jest.fn(async () => ({ snapshotId: 'e'.repeat(64), repositoryConfigId: 'c'.repeat(64) })) };
 	const create = () => new ManagedReplicationService(jobs, backups, plans, repositories, agents, storages, remote, executor, secret);
-	return { service: create(), create, plan, backup, repository, rows, jobs, backups, plans, agents, storages, executor, proof, destinations };
+	return { service: create(), create, plan, backup, repository, rows, jobs, backups, plans, agents, storages, mirrorStorage, executor, proof, destinations, remote };
 }
 
 describe('Managed Agent server replication', () => {
 	it.each([undefined, false, 'false'])('refuses managed custom S3 without protected existing-bucket mode (%s)', async hcp_mode => {
-		const f = fixture(); f.storages.getById.mockImplementation((id: string) => ({ id, type: 's3compatible', settings: { hcp_mode } }));
+		const f = fixture(); f.mirrorStorage.mockImplementation((id: string) => ({ id, type: 's3compatible', settings: { hcp_mode } }));
 		await expect(f.service.validatePlan(f.plan)).rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining('protected HCP') });
 		await f.service.enqueueBackup('backup-01'); expect(f.jobs.enqueue).not.toHaveBeenCalled();
 	});
 	it('refuses an HCP endpoint disguised as the AWS provider, but admits the ordinary AWS endpoint', async () => {
-		const f = fixture(); f.storages.getById.mockImplementation((id: string) => ({ id, type: 's3', settings: {} }));
+		const f = fixture(); f.mirrorStorage.mockImplementation((id: string) => ({ id, type: 's3', settings: {} }));
 		await expect(f.service.validatePlan(f.plan)).rejects.toMatchObject({ statusCode: 400 });
 		jest.mocked(storageRcloneOptions).mockReturnValueOnce({ type: 's3', endpoint: 'https://s3.us-east-1.amazonaws.com' });
 		await expect(f.service.validatePlan(f.plan)).resolves.toBeUndefined();
@@ -76,7 +78,7 @@ describe('Managed Agent server replication', () => {
 			(f: ReturnType<typeof fixture>) => { f.plan.settings.replication.storages = []; },
 			(f: ReturnType<typeof fixture>) => { f.plan.settings.replication.storages = [replica(), replica()]; },
 			(f: ReturnType<typeof fixture>) => { f.plan.settings.replication.storages[0].storageId = 'primary'; },
-			(f: ReturnType<typeof fixture>) => { f.storages.getById.mockReturnValue({ type: 'ftp' }); },
+			(f: ReturnType<typeof fixture>) => { f.mirrorStorage.mockReturnValue({ type: 'ftp' }); },
 		]) { const f = fixture(); change(f); await expect(f.service.validatePlan(f.plan)).rejects.toMatchObject({ statusCode: 400 }); }
 	});
 	it('verifies completed source before enqueue and idempotently projects each destination', async () => {

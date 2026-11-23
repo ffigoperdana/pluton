@@ -41,8 +41,6 @@ export function isAgentS3StorageType(
 	return type === 's3' || type === 's3compatible';
 }
 
-export const AGENT_S3_REPLICATION_MESSAGE =
-	'Replication is not available for an S3 primary repository yet.';
 export const AGENT_S3_OVERLAP_MESSAGE =
 	'The S3 repository prefix overlaps another plan or replica. Select a separate prefix.';
 export const AGENT_S3_SCOPE_UNVERIFIED_MESSAGE =

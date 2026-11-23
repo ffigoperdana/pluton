@@ -7,6 +7,7 @@ import { getBinaryPath } from '../binaryPathResolver';
 import { appPaths } from '../AppPaths';
 import { processManager } from '../../managers/ProcessManager';
 import { fullSnapshotId, type ManagedSftpAccess } from './ManagedSftpRepositorySession';
+import { MANAGED_S3_ACCESS_OPTION_KEYS } from './ManagedS3RecoverySession';
 import {
 	ArchiveBackendRetries,
 	classifyBackendError,
@@ -65,13 +66,17 @@ export type ReplicationSnapshot = {
 	original?: string;
 };
 export type ReplicationSource = {
+	/** SFTP options (`host`, `port`, `user`, `pass`) or S3 options keyed by `type: 's3'`. */
 	access: ManagedSftpAccess;
+	/** Operator CA trust (`SSL_CERT_FILE`, `RCLONE_CA_CERT`) for an S3 source. */
+	environment?: Record<string, string>;
 	planId: string;
 	backupId: string;
 	snapshotId: string;
 	artifacts: Pick<DatabaseArtifact, 'path' | 'bytes' | 'sha256'>[];
 };
 export type ReplicationDestinationAccess = {
+	/** S3 options keyed by `type: 's3'`, or SFTP options (`host`, `port`, `user`, `pass`). */
 	options: Record<string, string>;
 	repositoryPath: string;
 	environment?: Record<string, string>;
@@ -104,6 +109,23 @@ const snapshotSchema = z.object({
 const configSchema = z.object({ id: fullSnapshotId });
 const hasControlCharacters = (value: string) =>
 	Array.from(value).some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127);
+
+export type ReplicationRemoteKind = 's3' | 'sftp';
+/** S3 access always carries `type: 's3'`; SFTP access never carries `type`. */
+export function replicationRemoteKind(
+	options: Record<string, string>
+): ReplicationRemoteKind | undefined {
+	if (options.type === 's3') return 's3';
+	return options.type === undefined ? 'sftp' : undefined;
+}
+function isHttpsEndpoint(value: string | undefined): boolean {
+	try {
+		const url = new URL(value || '');
+		return url.protocol === 'https:' && !url.username && !url.password;
+	} catch {
+		return false;
+	}
+}
 
 /**
  * Restic's temporary packs live on the persistent data volume. `appPaths.getTempDir()` is not
@@ -218,9 +240,7 @@ export class ManagedReplicationExecutor implements ManagedReplicationExecutorCon
 		signal?: AbortSignal
 	): Promise<ReplicationSourceProof> {
 		this.assertSource(source);
-		const env = await this.at('credentials', () =>
-			this.environment(source.access, undefined, signal)
-		);
+		const env = await this.at('credentials', () => this.environment(source, undefined, signal));
 		return this.inspectSourceWith(source, env, signal);
 	}
 
@@ -293,7 +313,7 @@ export class ManagedReplicationExecutor implements ManagedReplicationExecutorCon
 		)
 			throw new ManagedReplicationError('destination-unowned');
 		const env = await this.at('credentials', () =>
-			this.environment(source.access, destination, signal)
+			this.environment(source, destination, signal)
 		);
 		env.TMPDIR = workspace;
 		if (process.platform === 'win32') env.TEMP = env.TMP = workspace;
@@ -317,14 +337,27 @@ export class ManagedReplicationExecutor implements ManagedReplicationExecutorCon
 			)
 				throw error;
 			// A missing config alone is not ownership: refuse any pre-existing objects.
-			const listing = await this.at('destination-list', () =>
-				this.command(
-					'rclone',
-					['lsf', `destination:${destination.repositoryPath}`, '--max-depth', '1'],
-					env,
-					signal
-				)
-			);
+			const listing = await this.at('destination-list', async () => {
+				try {
+					return await this.command(
+						'rclone',
+						['lsf', `destination:${destination.repositoryPath}`, '--max-depth', '1'],
+						env,
+						signal
+					);
+				} catch (error) {
+					// An absent SFTP folder is empty: rclone exits 3 ("directory not found").
+					// S3 has no folders and lists an unused prefix as empty instead.
+					if (
+						replicationRemoteKind(destination.options) === 'sftp' &&
+						error instanceof ManagedReplicationError &&
+						error.detail.exitCode === 3 &&
+						!error.detail.signal
+					)
+						return '';
+					throw error;
+				}
+			});
 			if (listing.trim())
 				throw new ManagedReplicationError('destination-not-empty', { step: 'destination-list' });
 			await input.beginInitialization(); // durable BEFORE any destination mutation
@@ -507,23 +540,33 @@ export class ManagedReplicationExecutor implements ManagedReplicationExecutorCon
 	}
 
 	private async environment(
-		source: ManagedSftpAccess,
+		source: ReplicationSource,
 		destination?: ReplicationDestinationAccess,
 		signal?: AbortSignal
 	) {
+		const access = source.access;
+		const sourceKind = replicationRemoteKind(access.options);
 		if (
-			!source.password ||
-			!source.repositoryPath ||
-			source.repositoryPath.includes('\\') ||
-			source.repositoryPath.split('/').includes('..') ||
-			hasControlCharacters(source.repositoryPath) ||
-			Object.values(source.options).some(hasControlCharacters) ||
-			Object.keys(source.options).some(key => !['host', 'port', 'user', 'pass'].includes(key)) ||
-			!source.options.host ||
-			!source.options.user ||
-			!source.options.pass
+			!sourceKind ||
+			!access.password ||
+			!access.repositoryPath ||
+			access.repositoryPath.includes('\\') ||
+			access.repositoryPath.split('/').includes('..') ||
+			hasControlCharacters(access.repositoryPath)
 		)
 			throw new ManagedReplicationError('source-configuration-invalid');
+		const destinationKind = destination ? replicationRemoteKind(destination.options) : undefined;
+		if (
+			destination &&
+			(!destinationKind ||
+				// A replica uses the other storage type (S3_PRIMARY_REPLICATION.md 2).
+				destinationKind === sourceKind ||
+				!destination.repositoryPath ||
+				destination.repositoryPath.split('/').includes('..') ||
+				destination.repositoryPath.includes('\\') ||
+				hasControlCharacters(destination.repositoryPath))
+		)
+			throw new ManagedReplicationError('destination-configuration-invalid');
 		const env: NodeJS.ProcessEnv = {
 			GOMAXPROCS: '2',
 			GOMEMLIMIT: '256MiB',
@@ -534,38 +577,86 @@ export class ManagedReplicationExecutor implements ManagedReplicationExecutorCon
 		};
 		for (const key of ['PATH', 'SYSTEMROOT', 'SystemRoot', 'TEMP', 'TMP', 'TMPDIR'])
 			if (process.env[key]) env[key] = process.env[key];
-		const obscured = (
-			await this.command('rclone', ['obscure', '-'], env, signal, `${source.options.pass}\n`)
-		).trim();
-		if (!/^[A-Za-z0-9_-]+$/.test(obscured))
-			throw new ManagedReplicationError('credentials-unavailable');
-		for (const [key, value] of Object.entries({ type: 'sftp', ...source.options, pass: obscured }))
-			env[`RCLONE_CONFIG_SOURCE_${key.toUpperCase()}`] = value;
-		if (destination) {
-			if (
-				!destination.repositoryPath ||
-				destination.repositoryPath.split('/').includes('..') ||
-				destination.repositoryPath.includes('\\') ||
-				hasControlCharacters(destination.repositoryPath) ||
-				destination.options.type !== 's3'
-			)
-				throw new ManagedReplicationError('destination-configuration-invalid');
-			for (const [key, value] of Object.entries(destination.options)) {
-				if (!/^[a-z0-9_]+$/.test(key) || hasControlCharacters(value))
-					throw new ManagedReplicationError('destination-configuration-invalid');
-				env[`RCLONE_CONFIG_DESTINATION_${key.toUpperCase()}`] = value;
-			}
-			// Artifact verification reads the replica by Range; never let it receive gzip bodies.
-			env.RCLONE_CONFIG_DESTINATION_USE_ACCEPT_ENCODING_GZIP = 'false';
-			for (const [key, value] of Object.entries(destination.environment || {})) {
-				if (!['SSL_CERT_FILE', 'RCLONE_CA_CERT'].includes(key) || !path.isAbsolute(value))
-					throw new ManagedReplicationError('destination-configuration-invalid');
-				env[key] = value;
-			}
+		await this.configureRemote(env, 'SOURCE', sourceKind, access.options, signal);
+		this.applyTrust(env, sourceKind === 's3' ? source.environment : undefined, 'source');
+		if (destination && destinationKind) {
+			await this.configureRemote(env, 'DESTINATION', destinationKind, destination.options, signal);
+			this.applyTrust(
+				env,
+				destinationKind === 's3' ? destination.environment : undefined,
+				'destination'
+			);
 		}
-		env.RESTIC_PASSWORD = source.password;
-		env.RESTIC_FROM_PASSWORD = source.password;
+		env.RESTIC_PASSWORD = access.password;
+		env.RESTIC_FROM_PASSWORD = access.password;
 		return env;
+	}
+
+	/** One rclone remote from environment variables; secrets never reach argv. */
+	private async configureRemote(
+		env: NodeJS.ProcessEnv,
+		name: 'SOURCE' | 'DESTINATION',
+		kind: ReplicationRemoteKind,
+		options: Record<string, string>,
+		signal?: AbortSignal
+	) {
+		const invalid = () =>
+			new ManagedReplicationError(
+				name === 'SOURCE' ? 'source-configuration-invalid' : 'destination-configuration-invalid'
+			);
+		if (Object.values(options).some(value => typeof value !== 'string' || hasControlCharacters(value)))
+			throw invalid();
+		if (kind === 'sftp') {
+			if (
+				Object.keys(options).some(key => !['host', 'port', 'user', 'pass'].includes(key)) ||
+				!options.host ||
+				!options.user ||
+				!options.pass
+			)
+				throw invalid();
+			const obscured = (
+				await this.command('rclone', ['obscure', '-'], env, signal, `${options.pass}\n`)
+			).trim();
+			if (!/^[A-Za-z0-9_-]+$/.test(obscured))
+				throw new ManagedReplicationError('credentials-unavailable');
+			for (const [key, value] of Object.entries({ type: 'sftp', ...options, pass: obscured }))
+				env[`RCLONE_CONFIG_${name}_${key.toUpperCase()}`] = value;
+			return;
+		}
+		// An S3 source is the plan's primary: the read-path allowlist with explicit credentials,
+		// HTTPS and path style. An S3 destination keeps the existing replica projection.
+		if (
+			name === 'SOURCE' &&
+			(Object.keys(options).some(key => !MANAGED_S3_ACCESS_OPTION_KEYS.has(key)) ||
+				!options.access_key_id ||
+				!options.secret_access_key ||
+				options.env_auth === 'true' ||
+				options.force_path_style !== 'true' ||
+				!isHttpsEndpoint(options.endpoint))
+		)
+			throw invalid();
+		for (const [key, value] of Object.entries(options)) {
+			if (!/^[a-z0-9_]+$/.test(key)) throw invalid();
+			env[`RCLONE_CONFIG_${name}_${key.toUpperCase()}`] = value;
+		}
+		// Artifact verification reads by Range; never let either side receive gzip bodies.
+		env[`RCLONE_CONFIG_${name}_USE_ACCEPT_ENCODING_GZIP`] = 'false';
+	}
+
+	private applyTrust(
+		env: NodeJS.ProcessEnv,
+		trust: Record<string, string> | undefined,
+		side: 'source' | 'destination'
+	) {
+		for (const [key, value] of Object.entries(trust || {})) {
+			if (
+				!['SSL_CERT_FILE', 'RCLONE_CA_CERT'].includes(key) ||
+				!path.isAbsolute(value) ||
+				(env[key] !== undefined && env[key] !== value)
+			)
+				throw new ManagedReplicationError(`${side}-configuration-invalid`);
+			env[key] = value;
+		}
 	}
 
 	private parse<T>(schema: z.ZodType<T>, output: string): T {

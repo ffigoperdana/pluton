@@ -346,7 +346,7 @@ test('Automatic Failover waits for an explicit start, then reports the automatic
    const content = () => ui.dom.window.document.body.textContent || '';
    try {
       await ui.waitFor(() => ui.button('Start recovery'), 'explicit start');
-      assert.match(content(), /continues automatically with the first S3 replica that passes identity and integrity checks/);
+      assert.match(content(), /continues automatically with the first replica that passes identity and integrity checks/);
       assert.ok(s.calls.every((call) => call.method === 'GET'), 'opening the dialog must not start a recovery');
       await ui.click('Start recovery');
       await ui.waitFor(() => s.calls.some((call) => call.method === 'POST'), 'start request');
@@ -354,10 +354,10 @@ test('Automatic Failover waits for an explicit start, then reports the automatic
       s.set([automaticCompleted()]);
       await ui.click('Refresh recovery status');
       await ui.waitFor(() => /Automatic failover succeeded/.test(content()), 'automatic success');
-      assert.match(content(), /staged recovery from S3 Replica 2 passed file integrity verification/);
+      assert.match(content(), /staged recovery from Replica 2 passed file integrity verification/);
       assert.match(
          content(),
-         /Recovery source: S3 Replica 2, chosen automatically after the primary was network unavailable · S3 Replica 1 failed: timeout\./
+         /Recovery source: Replica 2, chosen automatically after the primary was network unavailable · Replica 1 failed: timeout\./
       );
       assert.match(content(), /Verified: 22 files · 4,851,462 bytes/);
       const steps = [...ui.dom.window.document.querySelectorAll('[data-step-state]')].map(
@@ -367,14 +367,14 @@ test('Automatic Failover waits for an explicit start, then reports the automatic
          'done:Checking primary repository',
          'done:Primary repository unavailable (network unavailable)',
          'done:Failover initiated',
-         'done:S3 Replica 1 verified',
-         'done:S3 Replica 2 verified',
-         'failed:Recovering from S3 Replica 1 (timeout)',
-         'done:Recovering from S3 Replica 2',
+         'done:Replica 1 verified',
+         'done:Replica 2 verified',
+         'failed:Recovering from Replica 1 (timeout)',
+         'done:Recovering from Replica 2',
          'done:Verifying restored files',
          'done:Integrity verified',
       ]);
-      assert.equal(ui.button('Continue with S3 Replica'), undefined);
+      assert.equal(ui.button('Continue with Replica'), undefined);
       assert.ok(ui.button('Discard staged result'));
    } finally {
       await ui.close();
@@ -395,8 +395,8 @@ test('Automatic Failover progression reflects only server state', () => {
          'done:Checking primary repository',
          'done:Primary repository unavailable (timeout)',
          'done:Failover initiated',
-         'failed:S3 Replica 1 rejected (replica unverified)',
-         'active:Checking S3 Replica 2',
+         'failed:Replica 1 rejected (replica unverified)',
+         'active:Checking Replica 2',
       ],
    );
    assert.deepEqual(
@@ -411,8 +411,8 @@ test('Automatic Failover progression reflects only server state', () => {
       selected: 'replica-01',
       sourceSelection: { mode: 'automatic', reason: 'timeout', attempts: [{ replicationId: 'replica-01', position: 1, outcome: 'selected', at: 1 }] },
    });
-   assert.deepEqual(states(verifying).slice(-2), ['done:Recovering from S3 Replica 1', 'active:Verifying restored files']);
-   assert.match(recoveryStatus(verifying), /Automatic failover in progress: recovering from S3 Replica 1/);
+   assert.deepEqual(states(verifying).slice(-2), ['done:Recovering from Replica 1', 'active:Verifying restored files']);
+   assert.match(recoveryStatus(verifying), /Automatic failover in progress: recovering from Replica 1/);
 });
 
 test('final automatic states read distinctly and decisions name the operator when approved manually', () => {
@@ -423,7 +423,7 @@ test('final automatic states read distinctly and decisions name the operator whe
    assert.match(recoveryStatus(failed('automatic-failover-blocked')), /did not start/);
    assert.equal(
       recoveryDecision(row({ sourceSelection: { mode: 'operator', attempts: [{ replicationId: 'replica-01', position: 1, outcome: 'selected', at: 1 }] } })),
-      'Recovery source: S3 Replica 1, approved by the operator.',
+      'Recovery source: Replica 1, approved by the operator.',
    );
    assert.equal(recoveryDecision(row()), undefined);
 });
@@ -434,7 +434,7 @@ test('GET rediscovery restores pending approval after refresh without creating o
    try {
       await ui.waitFor(() => ui.dom.window.document.body.textContent.includes('Awaiting your approval'), 'recovered approval');
       assert(s.calls.every((call) => call.method === 'GET'));
-      assert.equal(ui.button('Continue with S3 Replica')?.disabled, false);
+      assert.equal(ui.button('Continue with Replica')?.disabled, false);
       await ui.click('Close');
       assert.equal(ui.closed(), 1);
       assert(s.calls.every((call) => call.method === 'GET'));
@@ -443,7 +443,7 @@ test('GET rediscovery restores pending approval after refresh without creating o
    }
    const next = await mount(s.fetcher, false);
    try {
-      await next.waitFor(() => next.button('Continue with S3 Replica'), 'reopened job');
+      await next.waitFor(() => next.button('Continue with Replica'), 'reopened job');
       assert(s.calls.every((call) => call.method === 'GET'));
    } finally {
       await next.close();
@@ -473,8 +473,8 @@ test('an explicit click approves one selected replica, displays indeterminate wo
    const s = server([row()]);
    const ui = await mount(s.fetcher);
    try {
-      await ui.waitFor(() => ui.button('Continue with S3 Replica') && !ui.button('Continue with S3 Replica')!.disabled, 'candidate selected');
-      await ui.click('Continue with S3 Replica');
+      await ui.waitFor(() => ui.button('Continue with Replica') && !ui.button('Continue with Replica')!.disabled, 'candidate selected');
+      await ui.click('Continue with Replica');
       await ui.waitFor(() => ui.dom.window.document.body.textContent.includes('Closing this window does not cancel'), 'server running');
       assert.equal(s.calls.filter((c) => c.path.endsWith('/approve')).length, 1);
       assert.equal(s.calls.find((c) => c.path.endsWith('/approve'))!.body.replicationId, 'replica-01');
@@ -493,7 +493,7 @@ test('expired approval and invalid first replica cannot be approved; valid secon
    const s = server([row({ candidates: [bad, good] })]);
    let ui = await mount(s.fetcher);
    try {
-      await ui.waitFor(() => ui.button('Continue with S3 Replica') && !ui.button('Continue with S3 Replica')!.disabled, 'second candidate');
+      await ui.waitFor(() => ui.button('Continue with Replica') && !ui.button('Continue with Replica')!.disabled, 'second candidate');
       const radios = ui.dom.window.document.querySelectorAll('input[type=radio]');
       assert.equal((radios[0] as HTMLInputElement).disabled, true);
       assert.equal((radios[1] as HTMLInputElement).checked, true);
@@ -504,7 +504,7 @@ test('expired approval and invalid first replica cannot be approved; valid secon
    ui = await mount(s.fetcher);
    try {
       await ui.waitFor(() => ui.dom.window.document.body.textContent.includes('Approval expired'), 'expiry');
-      assert.equal(ui.button('Continue with S3 Replica')?.disabled, true);
+      assert.equal(ui.button('Continue with Replica')?.disabled, true);
       assert(s.calls.every((c) => c.method === 'GET'));
    } finally {
       await ui.close();
@@ -583,7 +583,7 @@ test('granular restore intent is preserved, and a different pending selection ca
    const s = server();
    let ui = await mount(s.fetcher, false, false, [path]);
    try {
-      await ui.waitFor(() => ui.button('Continue with S3 Replica') && !ui.button('Continue with S3 Replica')!.disabled, 'granular admission');
+      await ui.waitFor(() => ui.button('Continue with Replica') && !ui.button('Continue with Replica')!.disabled, 'granular admission');
       assert.deepEqual(s.calls.find((call) => call.method === 'POST')!.body.includes, [path]);
    } finally {
       await ui.close();
@@ -593,7 +593,7 @@ test('granular restore intent is preserved, and a different pending selection ca
    ui = await mount(s.fetcher, false, false, [path]);
    try {
       await ui.waitFor(() => ui.dom.window.document.body.textContent.includes('different selection'), 'selection conflict');
-      assert.equal(ui.button('Continue with S3 Replica')?.disabled, true);
+      assert.equal(ui.button('Continue with Replica')?.disabled, true);
       assert(s.calls.slice(before).every((call) => call.method === 'GET'));
    } finally {
       await ui.close();
@@ -607,7 +607,7 @@ test('restart uncertainty and pending cleanup are rediscovered with GET only', a
       try {
          await ui.waitFor(() => ui.dom.window.document.body.textContent.includes('cleanup needs attention'), 'pending cleanup');
          assert(s.calls.every((call) => call.method === 'GET'));
-         assert.equal(ui.button('Continue with S3 Replica'), undefined);
+         assert.equal(ui.button('Continue with Replica'), undefined);
       } finally {
          await ui.close();
       }

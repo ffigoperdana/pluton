@@ -41,7 +41,8 @@ def run(image, openssl):
         args += ["--entrypoint", "node", image, "/app/backend/node_modules/tsx/dist/cli.mjs", "/app/backend/__tests__/integration/replicaRecovery.lab.ts"]
         try:
             with private_key.open("rb") as key_input:
-                subprocess.run(args, stdin=key_input, timeout=300, check=True)
+                # Includes the stage 2 S3-to-SFTP scenario (docs/S3_PRIMARY_REPLICATION.md).
+                subprocess.run(args, stdin=key_input, timeout=420, check=True)
         finally:
             # The only mutable resource is this exact locally generated test name.
             subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=30, check=False)

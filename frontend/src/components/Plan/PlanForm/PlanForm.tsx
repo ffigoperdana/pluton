@@ -16,7 +16,6 @@ import { useGetDevice, useGetDevices } from '../../../services/devices';
 import { useGetStorages } from '../../../services/storage';
 import type { Device } from '../../../@types/devices';
 import {
-   AGENT_S3_REPLICATION_NOTICE,
    agentRepositoryStorageTypes,
    agentS3HiddenNotice,
    isAgentS3Primary,
@@ -294,7 +293,8 @@ const PlanForm = ({
                         onUpdate={(s: { storage: { name: string; id: string; type: string }; path: string }) => {
                            const replication = replicationForAgentPrimary(
                               planSettings.settings.replication,
-                              isAgentS3Primary(isRemoteFilesystemSource, s.storage.type),
+                              isRemoteFilesystemSource,
+                              s.storage.type,
                            );
                            onPlanSettingsChange({
                               ...planSettings,
@@ -317,9 +317,9 @@ const PlanForm = ({
                      replication={planSettings.settings.replication}
                      primaryStorageId={planSettings.storage.id}
                      primaryStoragePath={planSettings.storagePath}
+                     primaryStorageType={primaryStorageType}
                      deviceId={isRemoteFilesystemSource ? 'main' : planSettings.sourceId || 'main'}
                      managedAgent={isRemoteFilesystemSource}
-                     unavailableReason={s3Primary ? AGENT_S3_REPLICATION_NOTICE : undefined}
                      isEditing={type === 'edit'}
                      planID={planId}
                      onUpdate={(replication) =>

@@ -125,6 +125,7 @@ import {
 	isS3Storage,
 } from './utils/storageSecurity';
 import { configureReplicaScopeResolver } from './utils/managedReplicationPolicy';
+import { replicaRepositoryScope } from './utils/managedReplicaIdentity';
 import { McpStore } from './mcp/McpStore';
 import { OperationalReadService } from './mcp/OperationalReadService';
 import { mcpConfig, mcpConfigurationStatus } from './mcp/authorization';
@@ -144,7 +145,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	initializeLogger();
 	// Explicit startup ownership, including compiled ESM: no lazy CommonJS DB loading.
 	configureProtectedStorageDatabase(sqlite);
-	configureReplicaScopeResolver(s3RepositoryScope);
+	configureReplicaScopeResolver(replicaRepositoryScope);
 	configureExportNamespaceSecurity({
 		canonicalS3Location,
 		s3RepositoryScope,
@@ -217,7 +218,10 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		remoteManagedRepositoryStore,
 		agentStore,
 		storageStore,
-		path.join(appPaths.getDataDir(), 'replica-recovery-indexes')
+		path.join(appPaths.getDataDir(), 'replica-recovery-indexes'),
+		undefined,
+		undefined,
+		storageId => remoteBackupService.getSftpRecoveryOptions(storageId)
 	);
 	const assistedRecoveryService = new AssistedRecoveryService(
 		new AssistedRecoveryStore(sqlite),
