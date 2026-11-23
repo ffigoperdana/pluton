@@ -24,7 +24,6 @@ import {
 } from '../utils/storageSecurity';
 import {
 	AGENT_S3_OVERLAP_MESSAGE,
-	AGENT_S3_REPLICATION_MESSAGE,
 	AGENT_S3_SCOPE_UNVERIFIED_MESSAGE,
 	AGENT_S3_UNSUPPORTED_MESSAGE,
 	assertAgentS3RepositoryPath,
@@ -186,16 +185,6 @@ function commandReference(payload: Record<string, unknown>): CommandReference {
 function hasEnabledScripts(plan: Pick<Plan | NewPlan, 'settings'>): boolean {
 	return Object.values(plan.settings?.scripts || {}).some(
 		items => Array.isArray(items) && items.length > 0
-	);
-}
-
-/** Stage 1 has no replication from an S3 primary; listed but disabled replicas are refused too. */
-function hasReplicationSettings(plan: Pick<Plan | NewPlan, 'settings'>): boolean {
-	const replication = plan.settings?.replication;
-	return Boolean(
-		replication?.enabled ||
-			replication?.storages?.length ||
-			(replication?.recoveryPolicy && replication.recoveryPolicy !== 'primary-only')
 	);
 }
 
@@ -995,10 +984,7 @@ export class RemoteBackupService {
 		setPreparationStage?.('storage-lookup');
 		const storage = await this.storageStore.getById(plan.storageId as string);
 		const s3Primary = Boolean(storage && isAgentS3StorageType(storage.type));
-		if (s3Primary && hasReplicationSettings(plan)) {
-			setPreparationStage?.('repository-backend');
-			throw new AppError(400, AGENT_S3_REPLICATION_MESSAGE);
-		}
+		// Stage 2: an S3 primary replicates to SFTP; validatePlan enforces the replica type.
 		setPreparationStage?.('plan-shape');
 		if (plan.settings.replication?.enabled) {
 			if (!this.replicationService)

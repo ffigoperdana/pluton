@@ -1,12 +1,13 @@
 import type { PlanReplicationSettings } from '../@types/plans';
 import type { BackupMirror } from '../@types/backups';
+import { AGENT_S3_STORAGE_TYPES, managedReplicaStorageTypes } from './agentRepository.ts';
 
 export const MAX_REPLICATION_DESTINATIONS = 2;
 
 /** UI validation supplements the server's storage identity and ownership checks. */
 export function replicationSettingsError(
    settings: PlanReplicationSettings | undefined,
-   primary: { storageId: string; storagePath: string },
+   primary: { storageId: string; storagePath: string; storageType?: string },
    managedAgent = false,
 ): string | undefined {
    if (!settings) return;
@@ -21,8 +22,12 @@ export function replicationSettingsError(
    const seen = new Set<string>();
    for (const destination of settings.storages) {
       if (!destination.storageId) return 'Select a storage for each replication destination.';
-      if (managedAgent && !['s3', 's3compatible'].includes(destination.storageType))
-         return 'Managed Agent replication requires S3 or S3-compatible storage.';
+      // An SFTP primary replicates to S3 and an S3 primary to SFTP; unknown primaries leave it to the server.
+      const allowed = managedReplicaStorageTypes(primary.storageType);
+      if (managedAgent && allowed.length && !allowed.includes(destination.storageType))
+         return AGENT_S3_STORAGE_TYPES.includes(primary.storageType || '')
+            ? 'An S3 primary replicates to SFTP storage.'
+            : 'Managed Agent replication requires S3 or S3-compatible storage.';
       if (managedAgent && !destination.storagePath?.trim()) return 'A dedicated repository path is required for each replication destination.';
       const identity = JSON.stringify([destination.storageId, destination.storagePath]);
       if (seen.has(identity)) return 'Each replication destination must use a different repository path.';

@@ -1,6 +1,6 @@
 # Replikasi untuk Managed Agent Backup
 
-Pada Managed Agent, Agent membaca source dan membuat snapshot pada repository SFTP utama. Setelah primary selesai dan snapshot diverifikasi, server Pluton menyalin snapshot tersebut ke nol sampai dua repository S3 tambahan. Source Agent tidak menerima credential replika dan tidak menjalankan copy ke S3.
+Pada Managed Agent, Agent membaca source dan membuat snapshot pada repository utama. Setelah primary selesai dan snapshot diverifikasi, server Pluton menyalin snapshot tersebut ke nol sampai dua repository tambahan dengan tipe yang berlawanan: S3 untuk primary SFTP, atau SFTP untuk primary S3. Source Agent tidak menerima credential replika dan tidak menjalankan copy.
 
 ```text
 Source + dump SQL di Agent
@@ -10,11 +10,27 @@ Source + dump SQL di Agent
 Hasil primary dan hasil setiap replika dicatat terpisah.
 ```
 
+## Primary S3 dengan replika SFTP
+
+Plan dengan primary S3 (HCP) memakai alur yang sama ke arah sebaliknya:
+
+```text
+Source + dump SQL di Agent
+  → repository S3 utama → verifikasi snapshot utama
+  → antrean server Pluton → replika SFTP A → replika SFTP B
+```
+
+- Pilih storage SFTP pada **+ Add Replication Destination** dan isi folder khusus yang baru atau kosong, misalnya `replicas/app-01`. Folder yang sudah berisi apa pun ditolak; folder yang belum ada dibuat saat inisialisasi.
+- Folder relatif dimulai dari home akun SFTP, sedangkan folder berawalan `/` adalah path absolut. Server menganggap keduanya ruang terpisah, jadi tetap pakai satu bentuk yang sama untuk satu server SFTP.
+- Server membaca primary S3 dengan credential storage yang sama seperti Browse, lalu menulis ke SFTP dengan credential storage SFTP. Salinan pertama plan besar melewati server Pluton dua kali (unduh dari S3, unggah ke SFTP), sehingga kecepatannya mengikuti jaringan server.
+- **Assisted Failover** dan pemulihan dari replika bekerja sama seperti replika S3, dengan sumber replika SFTP.
+- Agent tidak perlu di-upgrade; semua langkah berjalan di server.
+
 ## Prasyarat
 
-- Plan **Managed Agent Backup** tersimpan, memakai primary SFTP dedicated, serta Agent/allowed roots yang sesuai. Lihat [plan Managed Agent](/docs/backup-plans/managed-agent) dan [SFTP](/docs/storage/sftp).
+- Plan **Managed Agent Backup** tersimpan, memakai primary SFTP atau S3 dedicated, serta Agent/allowed roots yang sesuai. Lihat [plan Managed Agent](/docs/backup-plans/managed-agent) dan [SFTP](/docs/storage/sftp).
 - Server dapat membaca snapshot primary dan mengakses S3 API HTTPS. Browser atau Agent yang bisa mengakses endpoint belum membuktikan jalur server.
-- Tujuan bertipe S3 atau S3-compatible dengan bucket/namespace existing dan prefix dedicated. Bucket root, prefix yang sama, dan parent/child overlap ditolak, termasuk melalui alias storage.
+- Untuk primary SFTP: tujuan bertipe S3 atau S3-compatible dengan bucket/namespace existing dan prefix dedicated. Untuk primary S3: tujuan SFTP dengan folder dedicated. Root, prefix atau folder yang sama, dan parent/child overlap ditolak, termasuk melalui alias storage.
 - Untuk **semua S3-compatible atau endpoint non-AWS**, aktifkan **HCP / pre-existing namespace mode** pada storage. Ini prasyarat perlindungan namespace, bukan hanya untuk merek HCP. Jika belum, backend menolak dengan **Enable protected HCP / pre-existing namespace mode before using this managed replica.** Ikuti [HCP/namespace](/docs/replication/hcp); jangan melewati penolakan.
 - Gunakan server pada platform yang mendukung executor. Init/copy Managed Agent ditolak pada Windows dengan `platform-not-supported`; keberhasilan menjalankan UI Windows bukan bukti dukungan copy.
 
@@ -22,7 +38,7 @@ Hasil primary dan hasil setiap replika dicatat terpisah.
 
 1. Tambahkan storage sesuai [S3](/docs/storage/s3) atau [HCP](/docs/storage/hcp). Credential asli hanya di UI/config privat dan CA harus dipercaya runtime server.
 2. Buka plan → **Edit**, kemudian bagian **Backup Destination***. Pastikan primary tetap SFTP yang benar.
-3. Centang **Enable Replication**, pilih **+ Add Replication Destination**, lalu pilih storage S3.
+3. Centang **Enable Replication**, pilih **+ Add Replication Destination**, lalu pilih storage S3 (untuk primary SFTP) atau SFTP (untuk primary S3).
 4. Isi subfolder dedicated pada picker. Contoh sintetis: bucket `example-backups` ditampilkan picker dan Anda mengisi `app-01/replica-a`; path akhirnya `example-backups/app-01/replica-a`.
 5. Klik **Confirm** untuk baris tambahan pada plan existing, kemudian **Update Plan**. Tambahkan paling banyak dua tujuan. Mode concurrent tidak tersedia untuk Managed Agent.
 6. Jalankan satu backup baru yang diizinkan, tunggu primary selesai, lalu periksa modal mirrors pada **Backups**. Catat hasil primary dan replica secara terpisah.

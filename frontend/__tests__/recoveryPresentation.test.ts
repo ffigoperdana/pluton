@@ -34,7 +34,7 @@ test('Assisted Recovery uses its themed module instead of browser defaults and i
    assert.match(view, /import classes from '\.\/AssistedRecovery\.module\.scss'/);
    assert.ok(!/style=\{\{/.test(view), 'no inline style objects');
    assert.match(view, /className=\{`\$\{classes\.status\} \$\{classes\[recoveryTone\(job\)\]\}`\}/);
-   assert.match(view, /className=\{classes\.primary\}[\s\S]{0,400}?Continue with S3 Replica/);
+   assert.match(view, /className=\{classes\.primary\}[\s\S]{0,400}?Continue with Replica/);
    assert.match(view, /className=\{classes\.replica\}/);
    assert.match(view, /className=\{classes\.meta\}/);
    const styles = css('components/Restore/AssistedRecovery/AssistedRecovery.module.scss');

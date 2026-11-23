@@ -91,7 +91,7 @@ const SECURITY_STOPS = new Set([
 ]);
 const replicaName = (job: AssistedRecoveryJob, replicationId?: string) => {
    const position = job.candidates.find((candidate) => candidate.replicationId === replicationId)?.position;
-   return position ? `S3 Replica ${position}` : 'the selected replica';
+   return position ? `Replica ${position}` : 'the selected replica';
 };
 export const recoveryActive = (job: AssistedRecoveryJob) => ['checking', 'awaiting-approval', 'running'].includes(job.status);
 /** Interrupted/cleanup-pending jobs are rediscovered, never replaced on mount. */
@@ -200,10 +200,10 @@ export function recoveryDecision(job: AssistedRecoveryJob) {
    const failed = selection.attempts.filter((attempt) => attempt.outcome === 'failed');
    const parts = [
       selection.mode === 'automatic'
-         ? `Recovery source: ${used ? `S3 Replica ${used.position}` : 'none'}, chosen automatically after the primary was ${recoveryLabel(selection.reason || 'unavailable').toLowerCase()}`
-         : `Recovery source: ${used ? `S3 Replica ${used.position}` : 'none'}, approved by the operator`,
+         ? `Recovery source: ${used ? `Replica ${used.position}` : 'none'}, chosen automatically after the primary was ${recoveryLabel(selection.reason || 'unavailable').toLowerCase()}`
+         : `Recovery source: ${used ? `Replica ${used.position}` : 'none'}, approved by the operator`,
    ];
-   for (const attempt of failed) parts.push(`S3 Replica ${attempt.position} failed: ${recoveryLabel(attempt.code || 'unknown').toLowerCase()}`);
+   for (const attempt of failed) parts.push(`Replica ${attempt.position} failed: ${recoveryLabel(attempt.code || 'unknown').toLowerCase()}`);
    return parts.join(' · ') + '.';
 }
 
@@ -226,12 +226,12 @@ export function recoverySteps(job: AssistedRecoveryJob): RecoveryStep[] {
       steps.push({
          label:
             candidate.state === 'passed'
-               ? `S3 Replica ${candidate.position} verified`
-               : `S3 Replica ${candidate.position} rejected (${recoveryLabel(candidate.code || 'unavailable').toLowerCase()})`,
+               ? `Replica ${candidate.position} verified`
+               : `Replica ${candidate.position} rejected (${recoveryLabel(candidate.code || 'unavailable').toLowerCase()})`,
          state: candidate.state === 'passed' ? 'done' : 'failed',
       });
    if (job.status === 'checking') {
-      steps.push({ label: `Checking S3 Replica ${job.candidates.length + 1}`, state: 'active' });
+      steps.push({ label: `Checking Replica ${job.candidates.length + 1}`, state: 'active' });
       return steps;
    }
    if (job.failureCode === 'no-eligible-replica') {
@@ -242,7 +242,7 @@ export function recoverySteps(job: AssistedRecoveryJob): RecoveryStep[] {
       const current = attempt.outcome === 'selected';
       const recovering = job.status === 'running' && current && !VERIFYING_PHASES.has(job.phase);
       steps.push({
-         label: `Recovering from S3 Replica ${attempt.position}${attempt.outcome === 'failed' ? ` (${recoveryLabel(attempt.code || 'failed').toLowerCase()})` : ''}`,
+         label: `Recovering from Replica ${attempt.position}${attempt.outcome === 'failed' ? ` (${recoveryLabel(attempt.code || 'failed').toLowerCase()})` : ''}`,
          state: attempt.outcome === 'failed' ? 'failed' : recovering ? 'active' : job.status === 'completed' || VERIFYING_PHASES.has(job.phase) ? 'done' : job.status === 'running' ? 'active' : 'failed',
       });
    }

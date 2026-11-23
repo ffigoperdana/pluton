@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
    AGENT_S3_HIDDEN_NOTICE,
-   AGENT_S3_REPLICATION_NOTICE,
    agentRepositoryCanMove,
    agentRepositoryStorageTypes,
    agentS3HiddenNotice,
    agentSupportsS3Repository,
    isAgentS3Primary,
    managedDestinationNotice,
+   managedReplicaStorageTypes,
    replicationForAgentPrimary,
 } from '../src/utils/agentRepository.ts';
 import type { PlanReplicationSettings } from '../src/@types/plans.ts';
@@ -41,21 +41,25 @@ test('an S3 primary is an S3 or S3-compatible storage on a managed Agent plan on
    assert.equal(isAgentS3Primary(false, 's3'), false);
 });
 
-test('choosing an S3 primary turns replication off and leaves it untouched otherwise', () => {
-   const replication: PlanReplicationSettings = {
-      enabled: true,
-      concurrent: false,
-      recoveryPolicy: 'assisted',
-      storages: [{ replicationId: 'replica-01', storageId: 'storage-02', storagePath: 'bucket-01/mirror', storageType: 's3compatible', addedAt: 1 }],
-   };
-   assert.deepEqual(replicationForAgentPrimary(replication, true), { enabled: false, concurrent: false, recoveryPolicy: 'primary-only', storages: [] });
-   assert.equal(replicationForAgentPrimary(replication, false), replication);
+test('a Managed Agent replica uses the other storage type than its primary (stage 2)', () => {
+   assert.deepEqual(managedReplicaStorageTypes('sftp'), ['s3', 's3compatible']);
+   assert.deepEqual(managedReplicaStorageTypes('s3'), ['sftp']);
+   assert.deepEqual(managedReplicaStorageTypes('s3compatible'), ['sftp']);
+   assert.deepEqual(managedReplicaStorageTypes(undefined), []);
+});
+
+test('switching the primary type drops only replicas the new primary cannot use', () => {
+   const s3Replica = { replicationId: 'replica-01', storageId: 'storage-02', storagePath: 'bucket-01/mirror', storageType: 's3compatible', addedAt: 1 };
+   const sftpReplica = { replicationId: 'replica-02', storageId: 'storage-03', storagePath: 'replicas/app-01', storageType: 'sftp', addedAt: 2 };
+   const replication: PlanReplicationSettings = { enabled: true, concurrent: false, recoveryPolicy: 'assisted', storages: [s3Replica] };
+   assert.equal(replicationForAgentPrimary(replication, true, 'sftp'), replication);
+   assert.deepEqual(replicationForAgentPrimary(replication, true, 's3compatible'), { enabled: false, concurrent: false, recoveryPolicy: 'primary-only', storages: [] });
+   const mixed: PlanReplicationSettings = { ...replication, storages: [s3Replica, sftpReplica] };
+   assert.deepEqual(replicationForAgentPrimary(mixed, true, 's3'), { ...mixed, storages: [sftpReplica] });
+   assert.equal(replicationForAgentPrimary(replication, false, 's3compatible'), replication);
    const off: PlanReplicationSettings = { enabled: false, concurrent: false, storages: [] };
-   assert.equal(replicationForAgentPrimary(off, true), off);
-   assert.equal(replicationForAgentPrimary(undefined, true), undefined);
-   const assistedOff: PlanReplicationSettings = { enabled: false, concurrent: false, recoveryPolicy: 'assisted', storages: [] };
-   assert.deepEqual(replicationForAgentPrimary(assistedOff, true), { enabled: false, concurrent: false, recoveryPolicy: 'primary-only', storages: [] });
-   assert.equal(replicationForAgentPrimary(assistedOff, false), assistedOff);
+   assert.equal(replicationForAgentPrimary(off, true, 's3'), off);
+   assert.equal(replicationForAgentPrimary(undefined, true, 's3'), undefined);
 });
 
 test('destination wording covers both repository types and states what the Agent receives', () => {
@@ -63,7 +67,8 @@ test('destination wording covers both repository types and states what the Agent
    assert.doesNotMatch(managedDestinationNotice(false), /use SFTP\./);
    assert.match(managedDestinationNotice(true), /writes this plan directly to S3/);
    assert.match(managedDestinationNotice(true), /never any replica key/);
-   assert.match(AGENT_S3_REPLICATION_NOTICE, /S3-to-SFTP replication is the next stage/);
+   assert.match(managedDestinationNotice(true), /Optional SFTP replicas are copied by the Pluton server/);
+   assert.match(managedDestinationNotice(false), /S3 for an SFTP primary, SFTP for an S3 primary/);
 });
 
 test('Move Repository stays SFTP to SFTP', () => {

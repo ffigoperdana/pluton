@@ -6,6 +6,35 @@ import {
 	type ManagedSftpAccess,
 } from './ManagedSftpRepositorySession';
 
+/** S3 rclone options a server-side managed repository read may carry (recovery and replication). */
+export const MANAGED_S3_ACCESS_OPTION_KEYS: ReadonlySet<string> = new Set([
+	'type',
+	'provider',
+	'access_key_id',
+	'secret_access_key',
+	'session_token',
+	'region',
+	'endpoint',
+	'force_path_style',
+	'env_auth',
+	'no_check_bucket',
+	'acl',
+	'storage_class',
+	'location_constraint',
+	'server_side_encryption',
+	'sse_kms_key_id',
+	'sse_customer_algorithm',
+	'sse_customer_key',
+	'sse_customer_key_base64',
+	'sse_customer_key_md5',
+	'bucket_acl',
+	'requester_pays',
+	'disable_http2',
+	'list_version',
+	'list_chunk',
+	'use_accept_encoding_gzip',
+]);
+
 /** Read/staging-only operations inherited from the fixed repository session.
  * No init/copy/tag/unlock/forget/prune/delete command is exposed. */
 export class ManagedS3RecoverySession extends ManagedSftpRepositorySession {
@@ -13,33 +42,7 @@ export class ManagedS3RecoverySession extends ManagedSftpRepositorySession {
 		super();
 	}
 	protected validateAccess(access: ManagedSftpAccess) {
-		const allowed = new Set([
-			'type',
-			'provider',
-			'access_key_id',
-			'secret_access_key',
-			'session_token',
-			'region',
-			'endpoint',
-			'force_path_style',
-			'env_auth',
-			'no_check_bucket',
-			'acl',
-			'storage_class',
-			'location_constraint',
-			'server_side_encryption',
-			'sse_kms_key_id',
-			'sse_customer_algorithm',
-			'sse_customer_key',
-			'sse_customer_key_base64',
-			'sse_customer_key_md5',
-			'bucket_acl',
-			'requester_pays',
-			'disable_http2',
-			'list_version',
-			'list_chunk',
-			'use_accept_encoding_gzip',
-		]);
+		const allowed = MANAGED_S3_ACCESS_OPTION_KEYS;
 		const bad = (value: string) =>
 			typeof value !== 'string' ||
 			[...value].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127);

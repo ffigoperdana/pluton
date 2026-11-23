@@ -16,18 +16,21 @@ import {
    replicationSettingsError,
 } from '../../../utils/replication';
 import DeleteDependencyNotice from '../../common/ActionModal/DeleteDependencyNotice';
+import { AGENT_S3_STORAGE_TYPES, managedReplicaStorageTypes } from '../../../utils/agentRepository';
 
 interface PlanReplicationSettingsProps {
    replication?: ReplicationSettings;
    primaryStorageId: string;
    primaryStoragePath?: string;
+   /** Storage type of the primary; a Managed Agent replica uses the other type (S3 or SFTP). */
+   primaryStorageType?: string;
    deviceId: string;
    excludeStorageIds?: string[];
    isEditing?: boolean;
    planID?: string;
    maxReplications?: number;
    managedAgent?: boolean;
-   /** Set when replication cannot be used for this primary (an S3 primary in stage 1). */
+   /** Set when replication cannot be used for this primary. */
    unavailableReason?: string;
    onUpdate: (replication: ReplicationSettings) => void;
 }
@@ -42,6 +45,7 @@ const PlanReplicationSettings = ({
    replication,
    primaryStorageId,
    primaryStoragePath,
+   primaryStorageType,
    deviceId,
    excludeStorageIds,
    isEditing = false,
@@ -59,10 +63,21 @@ const PlanReplicationSettings = ({
    const deleteStorageMutation = useDeleteReplicationStorage();
    const settings = replication || defaultReplication;
    const maxReplications = Math.min(MAX_REPLICATION_DESTINATIONS, maxReplicationsProp ?? MAX_REPLICATION_DESTINATIONS);
-   const validationError = replicationSettingsError(settings, { storageId: primaryStorageId, storagePath: primaryStoragePath || '' }, managedAgent);
-   /** Either failover policy needs at least one S3 replica; the server re-validates identity and ownership. */
+   const validationError = replicationSettingsError(
+      settings,
+      { storageId: primaryStorageId, storagePath: primaryStoragePath || '', storageType: primaryStorageType },
+      managedAgent,
+   );
+   /** S3 replicas for an SFTP primary, SFTP replicas for an S3 primary (S3_PRIMARY_REPLICATION.md). */
+   // Until the primary type is known (storages still loading) the established S3 replica flow applies.
+   const replicaStorageTypes = managedAgent
+      ? primaryStorageType
+         ? managedReplicaStorageTypes(primaryStorageType)
+         : AGENT_S3_STORAGE_TYPES
+      : undefined;
+   /** Either failover policy needs at least one compatible replica; the server re-validates identity and ownership. */
    const failoverReplicas =
-      settings.storages.length > 0 && settings.storages.every((storage) => ['s3', 's3compatible'].includes(storage.storageType));
+      settings.storages.length > 0 && settings.storages.every((storage) => (replicaStorageTypes || []).includes(storage.storageType));
 
    /** Check if a storage+path combination already exists in committed or temp storages */
    const isDuplicateStorage = useCallback(
@@ -232,8 +247,8 @@ const PlanReplicationSettings = ({
                            {settings.recoveryPolicy === 'automatic'
                               ? 'Recovery starts on the primary repository. If it is unreachable, Pluton continues automatically with the first replica that passes identity and integrity checks, restoring only into isolated staging. Selecting this does not prove a replica is recoverable, and nothing is restored to production or imported into a database automatically.'
                               : settings.recoveryPolicy === 'assisted'
-                                ? 'Prefer the primary repository. A verified S3 replica requires your explicit approval and restores only into isolated staging. Database import keeps its existing separate approval.'
-                                : 'Recovery uses the primary repository only. Choose a failover policy to allow verified S3 replicas as a recovery source.'}
+                                ? 'Prefer the primary repository. A verified replica requires your explicit approval and restores only into isolated staging. Database import keeps its existing separate approval.'
+                                : 'Recovery uses the primary repository only. Choose a failover policy to allow verified replicas as a recovery source.'}
                         </p>
                      </fieldset>
                   )}
@@ -285,7 +300,7 @@ const PlanReplicationSettings = ({
                            storageId={mirror.storageId}
                            deviceId={deviceId}
                            excludeStorageIds={excludeStorageIds}
-                           allowedStorageTypes={managedAgent ? ['s3', 's3compatible'] : undefined}
+                           allowedStorageTypes={replicaStorageTypes}
                            requirePath={managedAgent}
                            disabled={isEditing}
                            onUpdate={(s) => {
@@ -334,7 +349,7 @@ const PlanReplicationSettings = ({
                               storageId={tempStorage.storageId}
                               deviceId={deviceId}
                               excludeStorageIds={excludeStorageIds}
-                              allowedStorageTypes={managedAgent ? ['s3', 's3compatible'] : undefined}
+                              allowedStorageTypes={replicaStorageTypes}
                               requirePath={managedAgent}
                               disabled={false}
                               onUpdate={(s) => {

@@ -8,9 +8,6 @@ export const AGENT_S3_STORAGE_TYPES = ['s3', 's3compatible'];
 export const AGENT_S3_HIDDEN_NOTICE =
    'S3 storages are not offered for this machine because its Agent does not report S3 repository support. Update the Agent to 0.8.0 or later to back up directly to S3.';
 
-export const AGENT_S3_REPLICATION_NOTICE =
-   'Replication is not available for an S3 primary repository yet. S3-to-SFTP replication is the next stage.';
-
 type AgentCapabilitiesView = Pick<AgentInfo, 'capabilities'> | null | undefined;
 
 /** Section 10.1: both fields are required; an Agent that omits them is SFTP-only. */
@@ -31,24 +28,32 @@ export function isAgentS3Primary(managedAgent: boolean, storageType: string | un
    return managedAgent && AGENT_S3_STORAGE_TYPES.includes(storageType || '');
 }
 
-/** Stage 1 refuses replication settings for an S3 primary, so choosing one clears them. */
+/** Replica storage types a Managed Agent primary may use: the other type (S3_PRIMARY_REPLICATION.md). */
+export function managedReplicaStorageTypes(primaryStorageType: string | undefined): string[] {
+   if (primaryStorageType === 'sftp') return [...AGENT_S3_STORAGE_TYPES];
+   if (AGENT_S3_STORAGE_TYPES.includes(primaryStorageType || '')) return ['sftp'];
+   return [];
+}
+
+/** Switching the primary between SFTP and S3 drops replicas of the type the new primary cannot use. */
 export function replicationForAgentPrimary(
    replication: PlanReplicationSettings | undefined,
-   s3Primary: boolean,
+   managedAgent: boolean,
+   primaryStorageType: string | undefined,
 ): PlanReplicationSettings | undefined {
-   if (
-      !s3Primary ||
-      !replication ||
-      (!replication.enabled && !replication.storages.length && (replication.recoveryPolicy ?? 'primary-only') === 'primary-only')
-   )
-      return replication;
-   return { ...replication, enabled: false, storages: [], recoveryPolicy: 'primary-only' };
+   if (!managedAgent || !replication) return replication;
+   const allowed = managedReplicaStorageTypes(primaryStorageType);
+   const storages = replication.storages.filter((storage) => allowed.includes(storage.storageType));
+   if (storages.length === replication.storages.length) return replication;
+   return storages.length
+      ? { ...replication, storages }
+      : { ...replication, enabled: false, storages: [], recoveryPolicy: 'primary-only' };
 }
 
 export function managedDestinationNotice(s3Primary: boolean): string {
    return s3Primary
-      ? "The Agent writes this plan directly to S3. For each backup it receives this storage's S3 key in sealed form, and never any replica key. Use a dedicated prefix inside the bucket: the Agent refuses a prefix that already contains data. Database dumps and constrained hooks can be configured under Advanced → Database & Hooks. Agent prune and arbitrary scripts remain unavailable."
-      : 'Remote managed backups write to an SFTP or S3 primary repository; S3 needs an Agent that reports S3 support. Database dumps and constrained hooks can be configured under Advanced → Database & Hooks. Optional replicas of an SFTP primary are copied by the Pluton server after snapshot verification, and replica credentials stay on the server. Native database recovery continues to use the trusted primary repository. Agent prune and arbitrary scripts remain unavailable.';
+      ? "The Agent writes this plan directly to S3. For each backup it receives this storage's S3 key in sealed form, and never any replica key. Use a dedicated prefix inside the bucket: the Agent refuses a prefix that already contains data. Optional SFTP replicas are copied by the Pluton server after snapshot verification. Database dumps and constrained hooks can be configured under Advanced → Database & Hooks. Agent prune and arbitrary scripts remain unavailable."
+      : 'Remote managed backups write to an SFTP or S3 primary repository; S3 needs an Agent that reports S3 support. Database dumps and constrained hooks can be configured under Advanced → Database & Hooks. Optional replicas (S3 for an SFTP primary, SFTP for an S3 primary) are copied by the Pluton server after snapshot verification, and replica credentials stay on the server. Native database recovery continues to use the trusted primary repository. Agent prune and arbitrary scripts remain unavailable.';
 }
 
 /** Move Repository copies SFTP to SFTP only; the server refuses other primaries. */

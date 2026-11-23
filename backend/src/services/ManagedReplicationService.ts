@@ -29,6 +29,13 @@ import {
 import { REPLICATION_PROGRESS } from '../utils/restic/replicationProgress';
 import { fullSnapshotId } from '../utils/restic/ManagedSftpRepositorySession';
 import { lifecycleDatabases, parseRemoteLifecycle } from '../utils/remoteLifecycle';
+import {
+	replicaRepositoryIdentity,
+	replicaRepositoryScope,
+	replicaStorageKind,
+	requiredReplicaKind,
+	type ReplicaRepositoryIdentity,
+} from '../utils/managedReplicaIdentity';
 import { serverLogger } from '../utils/logger';
 import type { BackupMirror } from '../types/backups';
 
@@ -61,6 +68,8 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 		private readonly storages: StorageStore,
 		private readonly remoteBackups: {
 			getSftpRecoveryOptions(storageId: string): Promise<Record<string, string>>;
+			/** SFTP or S3 (`type: 's3'`) read access of a plan's primary repository. */
+			getRepositoryAccessOptions?(storageId: string): Promise<Record<string, string>>;
 		},
 		private readonly executor: ManagedReplicationExecutorContract = new ManagedReplicationExecutor(),
 		private readonly secret = configService.config.SECRET
@@ -87,7 +96,12 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 				400,
 				'Managed Agent replicas run sequentially within the shared resource limit.'
 			);
-		const identities: ReturnType<typeof canonicalS3RepositoryIdentity>[] = [];
+		// An SFTP primary replicates to S3, an S3 primary to SFTP (S3_PRIMARY_REPLICATION.md 2).
+		const primary = plan.storageId ? await this.storages.getById(plan.storageId) : null;
+		const required = requiredReplicaKind(primary?.type);
+		if (!required)
+			throw new AppError(400, 'Managed Agent replication requires an SFTP or S3 primary.');
+		const identities: ReplicaRepositoryIdentity[] = [];
 		const ids = new Set<string>();
 		for (const replica of replication.storages) {
 			if (
@@ -98,18 +112,20 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 				throw new AppError(400, 'Replica identities and primary storage must be distinct.');
 			ids.add(replica.replicationId);
 			const storage = await this.storages.getById(replica.storageId);
-			if (!storage || !['s3', 's3compatible'].includes(storage.type || ''))
+			if (!storage || replicaStorageKind(storage.type) !== required)
 				throw new AppError(
 					400,
-					'Managed Agent replication requires an HTTPS S3-compatible destination.'
+					required === 's3'
+						? 'Managed Agent replication requires an HTTPS S3-compatible destination.'
+						: 'An S3 primary replicates to an SFTP destination.'
 				);
-			this.destinationOptions(storage); // decrypt/allowlist validation stays server side
-			const identity = canonicalS3RepositoryIdentity(storage, replica.storagePath);
+			await this.destinationAccess(storage); // decrypt/allowlist validation stays server side
+			const identity = replicaRepositoryIdentity(storage, replica.storagePath);
 			if (identities.some(other => this.overlaps(identity, other)))
 				throw new AppError(409, 'Replica repository prefixes overlap.');
 			identities.push(identity);
 		}
-		// Compare actual endpoint/bucket identities, not merely storage record IDs.
+		// Compare actual endpoint/bucket or host/account identities, not merely storage record IDs.
 		for (const other of (await this.plans.getAll(false)) || []) {
 			if (other.id === plan.id) continue;
 			const references = [
@@ -119,8 +135,21 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 			for (const reference of references) {
 				if (!reference.storageId || !reference.storagePath) continue;
 				const storage = await this.storages.getById(reference.storageId);
-				if (!storage || !['s3', 's3compatible'].includes(storage.type || '')) continue;
-				const existing = canonicalS3RepositoryIdentity(storage, reference.storagePath);
+				if (!storage || replicaStorageKind(storage.type) !== required) continue;
+				let existing: { authority: string; prefix: string };
+				try {
+					existing =
+						required === 's3'
+							? canonicalS3RepositoryIdentity(storage, reference.storagePath)
+							: replicaRepositoryScope(storage, reference.storagePath);
+				} catch (error) {
+					// An SFTP primary path that the server cannot normalize cannot be compared.
+					if (required === 's3') throw error;
+					throw new AppError(
+						409,
+						'Another plan uses an SFTP location that cannot be verified, so the replica folder cannot be checked for overlap.'
+					);
+				}
 				if (identities.some(identity => this.overlaps(identity, existing)))
 					throw new AppError(409, 'Replica repository overlaps another plan.');
 			}
@@ -169,7 +198,7 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 			for (const replica of missing) {
 				const storage = await this.storages.getById(replica.storageId);
 				if (!storage) throw new ManagedReplicationError('destination-unavailable');
-				const identity = canonicalS3RepositoryIdentity(storage, replica.storagePath);
+				const identity = replicaRepositoryIdentity(storage, replica.storagePath);
 				await this.jobs.reserveDestination({
 					destinationFingerprint: identity.fingerprint,
 					planId: plan.id,
@@ -264,7 +293,7 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 				const storage = await this.storages.getById(job.destinationStorageId);
 				if (
 					!storage ||
-					canonicalS3RepositoryIdentity(storage, job.destinationStoragePath).fingerprint !==
+					replicaRepositoryIdentity(storage, job.destinationStoragePath).fingerprint !==
 						job.destinationFingerprint
 				)
 					throw new ManagedReplicationError('destination-binding-changed');
@@ -282,9 +311,8 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 					proof,
 					signal: controller.signal,
 					destination: {
-						options: this.destinationOptions(storage),
+						...(await this.destinationAccess(storage)),
 						repositoryPath: job.destinationStoragePath,
-						environment: trustEnvironment(),
 					},
 					state: {
 						repositoryConfigId: destination.actualRepositoryId,
@@ -478,12 +506,13 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 		} catch {
 			throw new ManagedReplicationError('credentials-unavailable');
 		}
+		// The same server read path as Browse/Restore: SFTP options, or S3 options keyed by type.
+		const options = this.remoteBackups.getRepositoryAccessOptions
+			? await this.remoteBackups.getRepositoryAccessOptions(repository.storageId)
+			: await this.remoteBackups.getSftpRecoveryOptions(repository.storageId);
 		const source: ReplicationSource = {
-			access: {
-				options: await this.remoteBackups.getSftpRecoveryOptions(repository.storageId),
-				repositoryPath: repository.storagePath,
-				password,
-			},
+			access: { options, repositoryPath: repository.storagePath, password },
+			...(options.type === 's3' ? { environment: trustEnvironment() } : {}),
 			planId: plan.id,
 			backupId,
 			snapshotId: snapshotId!,
@@ -558,6 +587,18 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 			verifiedAt: row.verifiedAt,
 		};
 	}
+	/** Validated destination access; replica credentials stay on the server. */
+	private async destinationAccess(
+		storage: Storage
+	): Promise<{ options: Record<string, string>; environment?: Record<string, string> }> {
+		const kind = replicaStorageKind(storage.type);
+		if (kind === 'sftp')
+			return { options: await this.remoteBackups.getSftpRecoveryOptions(storage.id) };
+		if (kind === 's3')
+			return { options: this.destinationOptions(storage), environment: trustEnvironment() };
+		throw new ManagedReplicationError('destination-configuration-invalid');
+	}
+
 	private destinationOptions(storage: Storage): Record<string, string> {
 		const options = storageRcloneOptions(storage);
 		const hostname = new URL(options.endpoint).hostname;

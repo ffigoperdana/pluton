@@ -19,7 +19,13 @@ import { promisify } from 'node:util';
 import { Writable } from 'node:stream';
 import { replicaFixture } from '../fixtures/replicaRecovery.fixture';
 import { exerciseReplicaArchiveFaults } from './replicaArchiveFaults.fixture';
-import { ManagedReplicationExecutor } from '../../src/utils/restic/ManagedReplicationExecutor';
+import {
+	ManagedReplicationError,
+	ManagedReplicationExecutor,
+} from '../../src/utils/restic/ManagedReplicationExecutor';
+import { VerifiedReplicaRecoveryService } from '../../src/services/VerifiedReplicaRecoveryService';
+import { sftpRepositoryIdentity } from '../../src/utils/managedReplicaIdentity';
+import { replicaSourceBinding } from '../../src/utils/replicaSourceBinding';
 import { storageRcloneOptions, trustEnvironment } from '../../src/utils/storageSecurity';
 import { restic, rclone, port, ready, hashTree } from './managedDownloadRecovery.helpers';
 const exec = promisify(execFile);
@@ -532,6 +538,271 @@ try {
 		signal,
 	});
 	assert.deepEqual(await hashTree(s3root), before);
+	// docs/S3_PRIMARY_REPLICATION.md (stage 2): an S3 primary written directly by Restic, as the
+	// Agent writes it, copied by the server to an SFTP replica and recovered from that replica.
+	// Its own S3 and SFTP servers keep every earlier repository and hash assertion untouched.
+	console.log('CHECK stage 2: S3 primary to SFTP replica');
+	const stage2Signal = AbortSignal.timeout(150_000);
+	const stage2S3Root = path.join(root, 'stage2-s3'),
+		stage2SftpRoot = path.join(root, 'stage2-sftp');
+	await fs.mkdir(path.join(stage2S3Root, 'bucket-01'), { recursive: true });
+	await fs.mkdir(path.join(stage2SftpRoot, 'occupied'), { recursive: true });
+	await fs.writeFile(path.join(stage2SftpRoot, 'occupied', 'foreign.txt'), 'not a repository\n');
+	const stage2S3Port = await port(),
+		stage2SftpPort = await port(),
+		stage2SftpPassword = crypto.randomBytes(32).toString('hex');
+	await start([
+		'serve',
+		's3',
+		stage2S3Root,
+		'--addr',
+		'127.0.0.1:' + stage2S3Port,
+		'--auth-key',
+		'synthetic-access-key,synthetic-secret-key',
+		'--cert',
+		caPath,
+		'--key',
+		keyPath,
+		'--cache-dir',
+		path.join(root, 'stage2-s3-cache'),
+	]);
+	await ready(stage2S3Port);
+	await start([
+		'serve',
+		'sftp',
+		stage2SftpRoot,
+		'--addr',
+		'127.0.0.1:' + stage2SftpPort,
+		'--user',
+		'replica-user',
+		'--pass',
+		stage2SftpPassword,
+		'--cache-dir',
+		path.join(root, 'stage2-sftp-cache'),
+	]);
+	await ready(stage2SftpPort);
+	const stage2Storage = {
+		...f.storage,
+		id: 'stage2-s3',
+		settings: { ...f.storage.settings, endpoint: 'https://127.0.0.1:' + stage2S3Port },
+	};
+	const stage2Prefix = 'bucket-01/agents/stage2';
+	const primaryEnv: NodeJS.ProcessEnv = {
+		...process.env,
+		RESTIC_PASSWORD: password,
+		RCLONE_CONFIG: '/dev/null',
+		...trustEnvironment(),
+	};
+	for (const [key, value] of Object.entries({
+		...storageRcloneOptions(stage2Storage),
+		force_path_style: 'true',
+	}))
+		primaryEnv['RCLONE_CONFIG_PRIMARY_' + key.toUpperCase()] = value;
+	const primaryRestic = async (args: string[]) => {
+		try {
+			return (
+				await exec(
+					restic,
+					['--no-cache', '-r', 'rclone:primary:' + stage2Prefix, '-o', 'rclone.program=' + rclone, ...args],
+					{ env: primaryEnv, cwd: workspace, encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 ** 2 }
+				)
+			).stdout;
+		} catch {
+			throw new Error('Disposable stage 2 Restic command failed.');
+		}
+	};
+	await primaryRestic(['init']);
+	await primaryRestic([
+		'backup',
+		source,
+		'pluton/database/example.sql',
+		'--tag',
+		'pluton-plan-plan-01',
+		'--tag',
+		'pluton-backup-backup-01',
+	]);
+	const stage2Snapshots = JSON.parse(await primaryRestic(['snapshots', '--json']));
+	assert.equal(stage2Snapshots.length, 1);
+	assert.equal(stage2Snapshots[0].original, undefined, 'the stage 2 primary snapshot is an original backup');
+	const stage2Remote = Object.assign(Object.create(RemoteBackupService.prototype), {
+		storageStore: { getById: async (id: string) => (id === stage2Storage.id ? stage2Storage : null) },
+		encryptionSecret: configService.config.SECRET,
+	}) as RemoteBackupService;
+	const sftpReplicaOptions = {
+		host: '127.0.0.1',
+		port: String(stage2SftpPort),
+		user: 'replica-user',
+		pass: stage2SftpPassword,
+	};
+	const stage2Source = {
+		access: {
+			options: await stage2Remote.getRepositoryAccessOptions(stage2Storage.id),
+			repositoryPath: stage2Prefix,
+			password,
+		},
+		environment: trustEnvironment(),
+		planId: 'plan-01',
+		backupId: 'backup-01',
+		snapshotId: stage2Snapshots[0].id as string,
+		artifacts: [f.backup.completionStats.lifecycle.database],
+	};
+	const stage2Proof = await executor.inspectSource(stage2Source, stage2Signal);
+	assert.equal(stage2Proof.snapshot.id, stage2Snapshots[0].id);
+	const uninitialized = { repositoryConfigId: null, initialization: 'uninitialized' as const };
+	await assert.rejects(
+		executor.copy({
+			source: stage2Source,
+			proof: stage2Proof,
+			destination: { options: sftpReplicaOptions, repositoryPath: 'occupied' },
+			state: uninitialized,
+			beginInitialization: async () => assert.fail('an occupied SFTP folder must never be initialized'),
+			bindRepository: async () => assert.fail('an occupied SFTP folder must never be bound'),
+			stage2Signal,
+		}),
+		error => error instanceof ManagedReplicationError && error.code === 'destination-not-empty'
+	);
+	assert.deepEqual(await fs.readdir(path.join(stage2SftpRoot, 'occupied')), ['foreign.txt']);
+	console.log('PASS stage 2 refuses an occupied SFTP folder before any write');
+	let stage2Initialized = false,
+		stage2Bound: string | undefined;
+	const stage2Copy = await executor.copy({
+		source: stage2Source,
+		proof: stage2Proof,
+		destination: { options: sftpReplicaOptions, repositoryPath: 'replicas/plan-01' },
+		state: uninitialized,
+		beginInitialization: async () => {
+			stage2Initialized = true;
+		},
+		bindRepository: async id => {
+			assert(stage2Initialized);
+			stage2Bound = id;
+		},
+		stage2Signal,
+	});
+	assert(stage2Bound);
+	assert.equal(stage2Copy.repositoryConfigId, stage2Bound);
+	assert.notEqual(stage2Copy.snapshotId, stage2Source.snapshotId);
+	const again = await executor.copy({
+		source: stage2Source,
+		proof: stage2Proof,
+		destination: { options: sftpReplicaOptions, repositoryPath: 'replicas/plan-01' },
+		state: { repositoryConfigId: stage2Bound, initialization: 'ready' },
+		beginInitialization: async () => assert.fail('a ready replica is not initialized again'),
+		bindRepository: async () => assert.fail('a ready replica is not bound again'),
+		stage2Signal,
+	});
+	assert.equal(again.snapshotId, stage2Copy.snapshotId, 'a repeated copy keeps one replica snapshot');
+	console.log(
+		'PASS real Restic S3-to-SFTP copy: absent folder initialized, SQL artifact verified, repeat is idempotent'
+	);
+	const sftpReplicaStorage: any = {
+		id: 'stage2-sftp',
+		type: 'sftp',
+		settings: {},
+		credentials: Object.fromEntries(
+			Object.entries(sftpReplicaOptions).map(([key, value]) => [
+				key,
+				new Cryptr(configService.config.SECRET!).encrypt(value),
+			])
+		),
+	};
+	const sftpReplica = {
+		replicationId: 'replica-sftp',
+		storageId: sftpReplicaStorage.id,
+		storagePath: 'replicas/plan-01',
+		storageName: 'SFTP replica',
+		storageType: 'sftp',
+		addedAt: 1,
+	};
+	const stage2Backup = {
+		...s3PrimaryBackup,
+		storageId: stage2Storage.id,
+		storagePath: stage2Prefix,
+		completionStats: { ...s3PrimaryBackup.completionStats, snapshot_id: stage2Source.snapshotId },
+	};
+	const stage2Plan = {
+		...s3PrimaryPlan,
+		storageId: stage2Storage.id,
+		storagePath: stage2Prefix,
+		settings: {
+			replication: { enabled: true, concurrent: false, recoveryPolicy: 'assisted', storages: [sftpReplica] },
+		},
+	};
+	const stage2Repository = { ...s3PrimaryRepository, storageId: stage2Storage.id, storagePath: stage2Prefix };
+	const replicaIdentity = sftpRepositoryIdentity(sftpReplicaStorage, sftpReplica.storagePath);
+	const stage2Receipt = {
+		...f.receipt,
+		id: 'receipt-stage2',
+		repositoryId: stage2Repository.id,
+		sourceStorageId: stage2Storage.id,
+		sourceStoragePath: stage2Prefix,
+		sourceSnapshotId: stage2Source.snapshotId,
+		sourceRepositoryConfigId: stage2Proof.repositoryConfigId,
+		sourceTreeId: stage2Proof.snapshot.tree,
+		sourceBindingHash: replicaSourceBinding(stage2Backup as any),
+		replicationId: sftpReplica.replicationId,
+		destinationStorageId: sftpReplicaStorage.id,
+		destinationStoragePath: sftpReplica.storagePath,
+		destinationFingerprint: replicaIdentity.fingerprint,
+		destinationSnapshotId: stage2Copy.snapshotId,
+	};
+	const stage2Destination = {
+		...f.destination,
+		fingerprint: replicaIdentity.fingerprint,
+		replicationId: sftpReplica.replicationId,
+		sourceRepositoryId: stage2Repository.id,
+		destinationStorageId: sftpReplicaStorage.id,
+		destinationStoragePath: sftpReplica.storagePath,
+		destinationAuthority: replicaIdentity.authority,
+		destinationPrefix: replicaIdentity.prefix,
+		actualRepositoryId: stage2Bound,
+	};
+	const stage2Replicas = new VerifiedReplicaRecoveryService(
+		{ listByBackup: () => [stage2Receipt], getDestination: () => stage2Destination } as any,
+		{ getById: async () => stage2Backup } as any,
+		{ getById: async () => stage2Plan } as any,
+		{ getByPlanId: async () => stage2Repository } as any,
+		f.stores.agents as any,
+		{
+			getById: async (id: string) =>
+				id === stage2Storage.id ? stage2Storage : id === sftpReplicaStorage.id ? sftpReplicaStorage : null,
+		} as any,
+		path.join(root, 'stage2-indexes'),
+		configService.config.SECRET!,
+		undefined,
+		async () => sftpReplicaOptions
+	);
+	const replicaBefore = await hashTree(path.join(stage2SftpRoot, 'replicas'));
+	const stage2Preflight = await stage2Replicas.preflight('backup-01', 'plan-01', 'replica-sftp', stage2Signal);
+	assert.equal(stage2Preflight.destinationSnapshotId, stage2Copy.snapshotId);
+	const stage2Target = await fs.mkdtemp(path.join(root, 'stage2-staged-'));
+	const stage2Result = await stage2Replicas.withReplica(
+		'backup-01',
+		'plan-01',
+		'replica-sftp',
+		stage2Signal,
+		async recovery =>
+			recovery.replicaStage(
+				await recovery.testBinding('backup-01', 'plan-01'),
+				{ target: '', overwrite: 'never', delete: false, includes: [], excludes: [] },
+				stage2Target,
+				stage2Signal,
+				() => {},
+				async () => {}
+			),
+		stage2Preflight.fingerprint
+	);
+	assert.equal(stage2Result.integrity, 'sha256-readback-and-restic-restore');
+	assert.deepEqual(await hashTree(path.join(stage2Target, source.slice(1))), await hashTree(source));
+	assert.equal(await fs.readFile(path.join(stage2Target, 'pluton/database/example.sql'), 'utf8'), sql);
+	assert.deepEqual(
+		await hashTree(path.join(stage2SftpRoot, 'replicas')),
+		replicaBefore,
+		'SFTP replica reads must not mutate it'
+	);
+	console.log(
+		'PASS stage 2 recovery from the verified SFTP replica: full staged restore and SQL artifact with SHA256'
+	);
 	console.log(
 		'PROFILE',
 		JSON.stringify({

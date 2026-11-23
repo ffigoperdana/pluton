@@ -13,15 +13,17 @@ import { AppError } from '../utils/AppError';
 import { configService } from './ConfigService';
 import { replicaSourceBinding } from '../utils/replicaSourceBinding';
 import { recoveryArtifacts } from '../utils/recoveryValidation';
+import { isHcpMode, storageRcloneOptions, trustEnvironment } from '../utils/storageSecurity';
 import {
-	canonicalS3RepositoryIdentity,
-	isHcpMode,
-	storageRcloneOptions,
-	trustEnvironment,
-} from '../utils/storageSecurity';
+	replicaRepositoryIdentity,
+	replicaStorageKind,
+	requiredReplicaKind,
+	type ReplicaStorageKind,
+} from '../utils/managedReplicaIdentity';
 import { ManagedS3RecoverySession } from '../utils/restic/ManagedS3RecoverySession';
 import {
 	fullSnapshotId,
+	ManagedSftpRepositorySession,
 	type ManagedRepositorySession,
 	type ManagedRepositorySessionProvider,
 } from '../utils/restic/ManagedSftpRepositorySession';
@@ -60,6 +62,7 @@ type ResolvedReplica = {
 	context: RecoveryContext;
 	binding: ReplicaRecoveryBinding;
 	trust: Record<string, string>;
+	kind: ReplicaStorageKind;
 };
 
 /** Server-only resolver. A cosmetic mirror status is never an authorization source.
@@ -81,8 +84,12 @@ export class VerifiedReplicaRecoveryService {
 		private readonly root: string,
 		private readonly secret = configService.config.SECRET!,
 		private readonly sessionFactory: (
-			trust: Record<string, string>
-		) => ManagedRepositorySessionProvider = trust => new ManagedS3RecoverySession(trust)
+			trust: Record<string, string>,
+			kind: ReplicaStorageKind
+		) => ManagedRepositorySessionProvider = (trust, kind) =>
+			kind === 'sftp' ? new ManagedSftpRepositorySession() : new ManagedS3RecoverySession(trust),
+		/** SFTP replica access with the server's SFTP allowlist (RemoteBackupService). */
+		private readonly sftpOptions?: (storageId: string) => Promise<Record<string, string>>
 	) {}
 
 	private async resolve(
@@ -169,10 +176,12 @@ export class VerifiedReplicaRecoveryService {
 			receipt.destinationStoragePath !== replica.storagePath
 		)
 			fail('destination-changed');
+		// SFTP primary with S3 replicas, or S3 primary with SFTP replicas (S3_PRIMARY_REPLICATION.md).
 		const sourceStorage = await this.storages.getById(repository!.storageId);
-		if (sourceStorage?.type !== 'sftp') fail('source-binding-invalid');
+		const kind = requiredReplicaKind(sourceStorage?.type);
+		if (!kind) fail('source-binding-invalid');
 		const storage = await this.storages.getById(replica.storageId);
-		if (!storage) fail('destination-changed');
+		if (!storage || replicaStorageKind(storage.type) !== kind) fail('destination-changed');
 		const trust = trustEnvironment();
 		const caHashes = await Promise.all(
 			Object.entries(trust).map(async ([key, file]) => [
@@ -236,25 +245,40 @@ export class VerifiedReplicaRecoveryService {
 			)
 			.digest('hex');
 		if (reuse?.revision === revision) return reuse;
-		const scope = canonicalS3RepositoryIdentity(storage!, replica.storagePath);
+		let scope: { authority: string; prefix: string; fingerprint: string } | undefined;
+		try {
+			scope = replicaRepositoryIdentity(storage!, replica.storagePath);
+		} catch {
+			fail('destination-changed');
+		}
 		if (
-			scope.fingerprint !== receipt.destinationFingerprint ||
-			scope.authority !== destination!.destinationAuthority ||
-			scope.prefix !== destination!.destinationPrefix
+			scope!.fingerprint !== receipt.destinationFingerprint ||
+			scope!.authority !== destination!.destinationAuthority ||
+			scope!.prefix !== destination!.destinationPrefix
 		)
 			fail('destination-changed');
-		const options = storageRcloneOptions(storage!);
-		const endpoint = new URL(options.endpoint);
-		if (
-			!(
-				(storage!.type === 's3' &&
-					/^s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com$/.test(endpoint.hostname)) ||
-				isHcpMode(storage!.settings)
+		let options: Record<string, string> = {};
+		if (kind === 'sftp') {
+			if (!this.sftpOptions) fail('destination-changed');
+			try {
+				options = await this.sftpOptions!(storage!.id);
+			} catch {
+				fail('destination-changed');
+			}
+		} else {
+			options = storageRcloneOptions(storage!);
+			const endpoint = new URL(options.endpoint);
+			if (
+				!(
+					(storage!.type === 's3' &&
+						/^s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com$/.test(endpoint.hostname)) ||
+					isHcpMode(storage!.settings)
+				)
 			)
-		)
-			fail('destination-changed');
-		if (options.force_path_style === 'false') fail('destination-changed');
-		options.force_path_style = 'true';
+				fail('destination-changed');
+			if (options.force_path_style === 'false') fail('destination-changed');
+			options.force_path_style = 'true';
+		}
 		let password: string;
 		try {
 			password = new Cryptr(this.secret).decrypt(repository!.encryptedPassword);
@@ -286,7 +310,7 @@ export class VerifiedReplicaRecoveryService {
 			treeId: receipt.sourceTreeId,
 			fingerprint,
 		};
-		return { revision, context, binding, trust };
+		return { revision, context, binding, trust, kind: kind! };
 	}
 
 	/** Read-only live identity checks. No recovery writes until the caller's separate approval. */
@@ -334,7 +358,7 @@ export class VerifiedReplicaRecoveryService {
 				throw new ReplicaRecoveryError('snapshot-identity-mismatch');
 		};
 		const cacheRoot = await this.cacheWorkspace.create(operationId);
-		const provider = this.sessionFactory(pinned.trust);
+		const provider = this.sessionFactory(pinned.trust, pinned.kind);
 		const guarded: ManagedRepositorySessionProvider = {
 			withSession: (access, work, requestedSignal, limits) =>
 				provider.withSession(

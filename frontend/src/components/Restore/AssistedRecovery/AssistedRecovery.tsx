@@ -255,7 +255,7 @@ export default function AssistedRecovery({
             <div className={classes.manual}>
                <p className={classes.note}>
                   This plan uses Automatic Failover. Pluton checks the primary repository first and opens the normal restore when it is available. If
-                  the primary is unreachable, Pluton continues automatically with the first S3 replica that passes identity and integrity checks,
+                  the primary is unreachable, Pluton continues automatically with the first replica that passes identity and integrity checks,
                   restoring only into isolated staging. No database is imported and no live target is overwritten.
                </p>
                <button type="button" className={classes.primary} disabled={busy || jobs.isPending || !!jobs.error} onClick={beginRecovery}>
@@ -363,7 +363,7 @@ export default function AssistedRecovery({
                                  onChange={() => setSelected(candidate.replicationId)}
                               />
                               <span>
-                                 S3 Replica {candidate.position} —{' '}
+                                 Replica {candidate.position} —{' '}
                                  {candidate.state === 'passed' ? (
                                     'Replica verified; recovery preflight passed'
                                  ) : (
@@ -405,7 +405,7 @@ export default function AssistedRecovery({
                         disabled={busy || !intentMatches || !recoveryCanApprove(job, selected)}
                         onClick={() => approve.mutate()}
                      >
-                        Continue with S3 Replica
+                        Continue with Replica
                      </button>
                   )}
                   {job.status !== 'cancelled' && (

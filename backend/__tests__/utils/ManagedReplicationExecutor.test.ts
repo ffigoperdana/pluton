@@ -167,3 +167,77 @@ describe('Managed replication fixed Restic executor', () => {
 		await expect(f.run(undefined, controller.signal)).rejects.toMatchObject({ code: 'cancelled' }); expect(f.events).toEqual([]);
 	});
 });
+
+describe('Managed replication from an S3 primary to an SFTP replica (S3_PRIMARY_REPLICATION.md)', () => {
+	const s3Source = () => ({
+		type: 's3', provider: 'Other', endpoint: 'https://s3.example.internal', access_key_id: 'synthetic-access',
+		secret_access_key: 'synthetic-secret', force_path_style: 'true', no_check_bucket: 'true', env_auth: 'false',
+	});
+	const sftpDestination = () => ({ host: 'sftp.example.internal', port: '22', user: 'fixture', pass: 'synthetic-replica-password' });
+	function reversed(listing: (args: string[]) => Promise<string> = async () => '') {
+		const f = fixture();
+		f.source.access.options = s3Source();
+		f.source.access.repositoryPath = 'bucket-01/agents/plan-01';
+		f.source.environment = { SSL_CERT_FILE: '/operator/ca.pem', RCLONE_CA_CERT: '/operator/ca.pem' };
+		(f.destination as any).options = sftpDestination();
+		f.destination.repositoryPath = 'replicas/plan-01';
+		delete (f.destination as any).environment;
+		const previous = f.command.getMockImplementation()!;
+		f.command.mockImplementation(async (...args: any[]) => (args[0] === 'rclone' && args[1][0] === 'lsf' ? listing(args[1]) : previous(...args)));
+		return f;
+	}
+	it('reads the S3 primary with its trust and writes the SFTP replica with an obscured password', async () => {
+		const f = reversed();
+		await expect(f.run()).resolves.toMatchObject({ snapshotId: 'e'.repeat(64) });
+		const copy = f.command.mock.calls.find(([, args]: any) => args.includes('copy'))!;
+		expect(copy[1]).toEqual(expect.arrayContaining(['--repo', 'rclone:destination:replicas/plan-01', '--from-repo', 'rclone:source:bucket-01/agents/plan-01', snapshotId]));
+		expect(copy[2]).toMatchObject({
+			RCLONE_CONFIG_SOURCE_TYPE: 's3', RCLONE_CONFIG_SOURCE_SECRET_ACCESS_KEY: 'synthetic-secret',
+			RCLONE_CONFIG_SOURCE_USE_ACCEPT_ENCODING_GZIP: 'false', SSL_CERT_FILE: '/operator/ca.pem',
+			RCLONE_CONFIG_DESTINATION_TYPE: 'sftp', RCLONE_CONFIG_DESTINATION_HOST: 'sftp.example.internal',
+			RCLONE_CONFIG_DESTINATION_PASS: 'synthetic_obscured',
+		});
+		expect(copy[2].RCLONE_CONFIG_DESTINATION_USE_ACCEPT_ENCODING_GZIP).toBeUndefined();
+		const obscure = f.command.mock.calls.filter(([binary, args]: any) => binary === 'rclone' && args[0] === 'obscure');
+		expect(obscure.map(([, , , , input]: any) => input)).toEqual(['synthetic-replica-password\n']);
+		expect(JSON.stringify(f.command.mock.calls.map(([, args]) => args))).not.toMatch(/synthetic-(secret|replica-password)/);
+	});
+	it('initializes an absent SFTP folder (rclone exit 3) but never a folder that lists anything', async () => {
+		const absent = reversed(async () => { throw new ManagedReplicationError('storage-object-missing', { exitCode: 3 }); });
+		absent.absent();
+		await expect(absent.run({ initialization: 'uninitialized', repositoryConfigId: null })).resolves.toMatchObject({ repositoryConfigId: 'd'.repeat(64) });
+		expect(absent.events).toEqual(['durable-init', 'init', 'durable-bind', 'copy']);
+		const occupied = reversed(async () => 'config\n');
+		occupied.absent();
+		await expect(occupied.run({ initialization: 'uninitialized', repositoryConfigId: null })).rejects.toMatchObject({ code: 'destination-not-empty' });
+		expect(occupied.events).toEqual([]);
+		const unreachable = reversed(async () => { throw new ManagedReplicationError('storage-unreachable', { exitCode: 1 }); });
+		unreachable.absent();
+		await expect(unreachable.run({ initialization: 'uninitialized', repositoryConfigId: null })).rejects.toMatchObject({ code: 'storage-unreachable', detail: { step: 'destination-list' } });
+		expect(unreachable.events).toEqual([]);
+	});
+	it('does not treat exit 3 as empty for an S3 replica', async () => {
+		const f = fixture(); f.absent();
+		const previous = f.command.getMockImplementation()!;
+		f.command.mockImplementation(async (...args: any[]) => {
+			if (args[0] === 'rclone' && args[1][0] === 'lsf') throw new ManagedReplicationError('storage-object-missing', { exitCode: 3 });
+			return previous(...args);
+		});
+		await expect(f.run({ initialization: 'uninitialized', repositoryConfigId: null })).rejects.toMatchObject({ code: 'storage-object-missing' });
+		expect(f.events).toEqual([]);
+	});
+	it.each([
+		['an S3 replica of an S3 primary', (f: any) => { f.destination.options = { type: 's3', endpoint: 'https://s3.example.internal', access_key_id: 'a', secret_access_key: 'b' }; }, 'destination-configuration-invalid'],
+		['an SFTP replica of an SFTP primary', (f: any) => { f.source.access.options = { host: 'sftp.example.internal', user: 'fixture', pass: 'synthetic' }; }, 'destination-configuration-invalid'],
+		['an S3 primary read through environment credentials', (f: any) => { f.source.access.options.env_auth = 'true'; }, 'source-configuration-invalid'],
+		['an S3 primary over plain HTTP', (f: any) => { f.source.access.options.endpoint = 'http://s3.example.internal'; }, 'source-configuration-invalid'],
+		['an S3 primary with an option outside the read allowlist', (f: any) => { f.source.access.options.shared_credentials_file = '/root/.aws/credentials'; }, 'source-configuration-invalid'],
+		['an S3 primary without path style', (f: any) => { delete f.source.access.options.force_path_style; }, 'source-configuration-invalid'],
+		['an SFTP replica with an extra option', (f: any) => { f.destination.options.key_file = '/root/.ssh/id_rsa'; }, 'destination-configuration-invalid'],
+		['a relative trust file', (f: any) => { f.source.environment = { SSL_CERT_FILE: 'ca.pem' }; }, 'source-configuration-invalid'],
+	])('refuses %s before any repository command', async (_name, change, code) => {
+		const f = reversed(); change(f);
+		await expect(f.run()).rejects.toMatchObject({ code, detail: { step: 'credentials' } });
+		expect(f.command.mock.calls.some(([binary]: any) => binary === 'restic')).toBe(false);
+	});
+});

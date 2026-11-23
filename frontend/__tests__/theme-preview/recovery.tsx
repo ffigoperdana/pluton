@@ -95,7 +95,7 @@ const mirrors = [
    {
       replicationId: 'replica-1',
       storageId: 's3-primary-copy',
-      storageName: 'Example S3 Replica',
+      storageName: 'Example Replica',
       storagePath: 'example-app',
       storageType: 's3',
       status: 'completed' as const,

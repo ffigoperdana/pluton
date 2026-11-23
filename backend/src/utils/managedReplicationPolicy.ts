@@ -4,7 +4,7 @@ import { AppError } from './AppError';
 import type Database from 'better-sqlite3';
 import type { NewPlan, Plan } from '../db/schema/plans';
 import type { Storage } from '../db/schema/storages';
-import { providers } from './providers';
+import { replicaStorageKind, type ReplicaStorageKind } from './replicaStorageKind';
 
 type ReplicaScope = { authority: string; prefix: string };
 type ReplicaScopeResolver = (storage: Storage, repositoryPath?: string | null) => ReplicaScope;
@@ -42,9 +42,19 @@ const hasDestinations = (sqlite: Database.Database) =>
 		)
 		.get();
 
+/** The storage kind a registered destination authority belongs to. */
+const authorityKind = (authority: string): ReplicaStorageKind =>
+	authority.startsWith('sftp://') ? 'sftp' : 's3';
+
+/**
+ * Only kinds that can overlap are resolved: an SFTP reference is compared only when an SFTP
+ * destination exists or is being reserved, so installations without SFTP replicas keep the
+ * stage 1 behavior exactly (S3_PRIMARY_REPLICATION.md 3).
+ */
 function storedScope(
 	sqlite: Database.Database,
 	reference: PlanReference,
+	kinds: ReadonlySet<ReplicaStorageKind>,
 	override?: Storage
 ): ReplicaScope | null {
 	if (!reference.storageId) return null;
@@ -54,7 +64,8 @@ function storedScope(
 			: (sqlite.prepare('SELECT * FROM storages WHERE id=?').get(reference.storageId) as
 					| Storage
 					| undefined);
-	if (!row || (row.type !== 's3' && providers[row.type || '']?.type !== 's3')) return null;
+	const kind = row ? replicaStorageKind(row.type) : undefined;
+	if (!row || !kind || !kinds.has(kind)) return null;
 	if (!replicaScopeResolver)
 		throw new AppError(503, 'Managed replica scope verification is not configured.');
 	const storage = {
@@ -84,8 +95,9 @@ export function assertPlanReplicaIsolation(
 		.prepare('SELECT * FROM managed_replication_destinations')
 		.all() as Array<any>;
 	if (!destinations.length) return;
+	const kinds = new Set(destinations.map(row => authorityKind(row.destination_authority)));
 	for (const reference of references(plan)) {
-		const scope = storedScope(sqlite, reference, override);
+		const scope = storedScope(sqlite, reference, kinds, override);
 		if (!scope) continue;
 		for (const destination of destinations) {
 			if (
@@ -117,6 +129,7 @@ export function assertReplicaNotPlanOwned(
 	const plans = sqlite
 		.prepare('SELECT id,storage_id,storage_path,settings FROM plans WHERE id!=?')
 		.all(candidate.planId) as Array<any>;
+	const kinds = new Set([authorityKind(candidate.authority)]);
 	for (const row of plans) {
 		const plan = {
 			...row,
@@ -125,7 +138,7 @@ export function assertReplicaNotPlanOwned(
 			settings: JSON.parse(row.settings || '{}'),
 		} as Plan;
 		for (const reference of references(plan)) {
-			const scope = storedScope(sqlite, reference);
+			const scope = storedScope(sqlite, reference, kinds);
 			if (scope && overlaps(candidate, scope)) throw isolationError();
 		}
 	}
