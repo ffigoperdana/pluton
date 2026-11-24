@@ -37,7 +37,7 @@ import {
 	type ReplicaRepositoryIdentity,
 } from '../utils/managedReplicaIdentity';
 import { serverLogger } from '../utils/logger';
-import type { BackupMirror } from '../types/backups';
+import type { BackupMirror, BackupMirrorFailover } from '../types/backups';
 
 /** The class name of an unexpected error, never its message. */
 const errorType = (error: unknown) => {
@@ -50,9 +50,25 @@ export interface ManagedReplicationCompletionHook {
 	enqueueBackup(backupId: string): Promise<void>;
 }
 
-/** Server-side only: no replica credentials or commands are sent to an Agent. */
+/** Open failovers (docs/BACKUP_FAILOVER.md) that replication must respect. */
+export interface ManagedFailoverGuard {
+	/** A failover backup whose snapshot is not in the primary yet has no source to copy from. */
+	awaitingCopyBack(backupId: string): boolean;
+	/** Replicas that still hold a failover snapshot waiting to be copied back. */
+	openReplicas(planId: string): { replicationId: string; storageId: string; storagePath: string }[];
+	/** Copy-back holds the replication slot while it runs. */
+	executing(): boolean;
+	/** The failover state shown on the replica mirror of a failover backup. */
+	describe(backupId: string): (BackupMirrorFailover & { replicationId: string }) | undefined;
+}
+
+/**
+ * Server-side replication. Replica credentials reach an Agent only inside the sealed field of a
+ * failover backup command (docs/BACKUP_FAILOVER.md); replication itself never sends them.
+ */
 export class ManagedReplicationService implements ManagedReplicationCompletionHook {
 	private readonly active = new Map<string, AbortController>();
+	private failoverGuard?: ManagedFailoverGuard;
 	private ticking?: Promise<void>;
 	private stopping = false;
 	private readonly admissions = new Map<
@@ -85,6 +101,31 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 			throw new AppError(
 				400,
 				`${replication.recoveryPolicy === 'automatic' ? 'Automatic' : 'Assisted'} Failover requires a managed remote filesystem backup.`
+			);
+		if (
+			replication.backupFailover === 'automatic' &&
+			(plan.sourceType !== 'device' || plan.sourceId === 'main' || plan.method !== 'backup')
+		)
+			throw new AppError(400, 'Backup failover requires a managed remote filesystem backup.');
+		if (replication.backupFailover === 'automatic' && !replication.enabled)
+			throw new AppError(400, 'Backup failover requires enabled replicas.');
+		// A pending copy-back still reads its replica (docs/BACKUP_FAILOVER.md).
+		const pinned = plan.id ? this.failoverGuard?.openReplicas(plan.id) || [] : [];
+		if (
+			pinned.some(
+				open =>
+					!replication.enabled ||
+					!replication.storages?.some(
+						item =>
+							item.replicationId === open.replicationId &&
+							item.storageId === open.storageId &&
+							item.storagePath === open.storagePath
+					)
+			)
+		)
+			throw new AppError(
+				409,
+				'A failover backup still waits to be copied back from this replica. Keep the replica until the copy-back completes.'
 			);
 		if (!Array.isArray(replication.storages) || replication.storages.length > 2)
 			throw new AppError(400, 'Managed Agent plans support at most two replica destinations.');
@@ -156,6 +197,27 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 		}
 	}
 
+	setFailoverGuard(guard: ManagedFailoverGuard): void {
+		this.failoverGuard = guard;
+	}
+
+	/** Rebuilds the mirror projection of one backup from the durable rows. */
+	async refreshMirrors(backupId: string): Promise<void> {
+		await this.project(backupId);
+	}
+
+	/** True while a replication copy runs; copy-back waits for the shared slot. */
+	executing(): boolean {
+		return this.active.size > 0;
+	}
+
+	/** Read and write access to a repository on S3 or SFTP storage, as used for replicas. */
+	async repositoryAccess(
+		storage: Storage
+	): Promise<{ options: Record<string, string>; environment?: Record<string, string> }> {
+		return this.destinationAccess(storage);
+	}
+
 	/** A startup rescan closes the completion-to-enqueue crash window. */
 	async rescanCompleted(): Promise<void> {
 		for (const id of this.jobs.completedBackupCandidates(10)) await this.enqueueBackup(id);
@@ -182,6 +244,8 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 		if (!backup?.planId) return;
 		const plan = await this.plans.getById(backup.planId);
 		if (!plan?.settings.replication?.enabled) return;
+		// Its snapshot is only in the replica until copy-back; copy-back enqueues it again.
+		if (this.failoverGuard?.awaitingCopyBack(backupId)) return;
 		try {
 			await this.validatePlan(plan);
 			const context = await this.source(backupId);
@@ -256,6 +320,8 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 	}
 
 	private async runTick(): Promise<void> {
+		// One heavy copy at a time: a failover copy-back holds the slot while it runs.
+		if (this.failoverGuard?.executing()) return;
 		for (const pending of await this.jobs.listRunnable()) {
 			if (this.stopping) break;
 			const token = crypto.randomBytes(32).toString('hex');
@@ -527,6 +593,12 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 		const backup = await this.backups.getById(backupId);
 		const plan = backup?.planId ? await this.plans.getById(backup.planId) : null;
 		const mirrors: BackupMirror[] = [];
+		const failover = this.failoverGuard?.describe(backupId);
+		const failoverFor = (replicationId: string) => {
+			if (!failover || failover.replicationId !== replicationId) return {};
+			const { replicationId: _replica, ...state } = failover;
+			return { failover: state };
+		};
 		for (const row of rows) {
 			const storage = await this.storages.getById(row.destinationStorageId);
 			mirrors.push({
@@ -545,6 +617,7 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 					? { error: `Replication needs attention (${row.lastErrorCode}).` }
 					: {}),
 				...this.details(row),
+				...failoverFor(row.replicationId),
 			});
 		}
 		for (const replica of plan?.settings.replication?.storages || []) {
@@ -555,6 +628,14 @@ export class ManagedReplicationService implements ManagedReplicationCompletionHo
 					mirror.storageId === replica.storageId &&
 					mirror.storagePath === replica.storagePath
 			);
+			if (failover?.replicationId === replica.replicationId) {
+				mirrors.push({
+					...replica,
+					status: ['backup-failed', 'failed'].includes(failover.status) ? 'failed' : 'pending',
+					...failoverFor(replica.replicationId),
+				});
+				continue;
+			}
 			mirrors.push(
 				admissionFailureCode
 					? {

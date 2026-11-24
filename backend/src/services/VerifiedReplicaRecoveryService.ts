@@ -55,6 +55,12 @@ export type ReplicaRecoveryBinding = {
 	repositoryConfigId: string;
 	treeId: string;
 	fingerprint: string;
+	/**
+	 * A failover backup copied back to the primary (docs/BACKUP_FAILOVER.md): the replica holds
+	 * the original snapshot and the primary holds the copy, so the replica snapshot has no
+	 * `original` pointing at the primary snapshot.
+	 */
+	originalInReplica?: boolean;
 };
 
 type ResolvedReplica = {
@@ -89,7 +95,11 @@ export class VerifiedReplicaRecoveryService {
 		) => ManagedRepositorySessionProvider = (trust, kind) =>
 			kind === 'sftp' ? new ManagedSftpRepositorySession() : new ManagedS3RecoverySession(trust),
 		/** SFTP replica access with the server's SFTP allowlist (RemoteBackupService). */
-		private readonly sftpOptions?: (storageId: string) => Promise<Record<string, string>>
+		private readonly sftpOptions?: (storageId: string) => Promise<Record<string, string>>,
+		/** Copied-back failover backups: replica original and primary copy snapshot IDs. */
+		private readonly copiedBackFailover?: (
+			backupId: string
+		) => { replicaSnapshotId: string | null; primarySnapshotId: string | null } | undefined
 	) {}
 
 	private async resolve(
@@ -310,6 +320,12 @@ export class VerifiedReplicaRecoveryService {
 			treeId: receipt.sourceTreeId,
 			fingerprint,
 		};
+		const copiedBack = this.copiedBackFailover?.(backupId);
+		if (
+			copiedBack?.replicaSnapshotId === receipt.destinationSnapshotId &&
+			copiedBack?.primarySnapshotId === receipt.sourceSnapshotId
+		)
+			binding.originalInReplica = true;
 		return { revision, context, binding, trust, kind: kind! };
 	}
 
@@ -349,7 +365,8 @@ export class VerifiedReplicaRecoveryService {
 				snapshot.id !== pinned.binding.destinationSnapshotId ||
 				snapshot.tree !== pinned.binding.treeId ||
 				(snapshot.id !== pinned.binding.sourceSnapshotId &&
-					snapshot.original !== pinned.binding.sourceSnapshotId) ||
+					snapshot.original !== pinned.binding.sourceSnapshotId &&
+					!(pinned.binding.originalInReplica && snapshot.original === undefined)) ||
 				snapshot.tags.filter(t => t.startsWith('pluton-plan-')).length !== 1 ||
 				snapshot.tags.filter(t => t.startsWith('pluton-backup-')).length !== 1 ||
 				!snapshot.tags.includes('pluton-plan-' + planId) ||

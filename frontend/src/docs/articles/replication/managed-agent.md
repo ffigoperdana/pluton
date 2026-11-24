@@ -26,6 +26,25 @@ Source + dump SQL di Agent
 - **Assisted Failover** dan pemulihan dari replika bekerja sama seperti replika S3, dengan sumber replika SFTP.
 - Agent tidak perlu di-upgrade; semua langkah berjalan di server.
 
+## Backup failover saat primary tidak terjangkau
+
+**Backup failover** (bagian **Recovery & Failover**, default **Off**) menjaga backup tetap berjalan ketika primary mati. Dengan pilihan **Automatic**:
+
+1. Backup ke primary gagal sebelum upload karena repository tidak terjangkau (Agent melapor sekitar 35 detik).
+2. Server Pluton mencoba membaca primary sendiri. Failover hanya terjadi bila server juga gagal; bila server masih bisa, tidak ada perpindahan.
+3. Server membuat backup baru **Failover backup** yang ditulis Agent langsung ke replika pertama yang sudah punya salinan terverifikasi dan terjangkau. Karena replika memakai password dan chunker yang sama, hanya data yang berubah yang diunggah.
+4. Server memverifikasi snapshot itu di replika (tag, tree, ukuran dan SHA-256 artefak SQL). Sejak saat itu backup bisa dipulihkan lewat **Manual Verified Replica Recovery** di modal mirrors.
+5. Setelah primary terjangkau lagi, server **menyalin balik** snapshot ke primary dan memverifikasinya. Badge **Failover → <replika>** berubah hijau saat salin balik selesai.
+
+Hal yang perlu diketahui:
+
+- Berlaku dua arah: primary SFTP dengan replika S3, dan primary S3 dengan replika SFTP. Butuh Agent 0.8.0 atau lebih baru.
+- Selama run failover, Agent menerima credential storage replika di dalam field tersegel. Untuk replika HCP, kunci itu berlaku untuk seluruh namespace; gunakan user HCP khusus untuk folder replika bila host lain ikut memakai failover.
+- Gangguan **di tengah upload** tidak dideteksi: run itu gagal seperti biasa dan run berikutnya yang pindah ke replika.
+- Sebelum salin balik, **Browse** dan restore dari primary belum menemukan snapshot failover; gunakan pemulihan dari replika.
+- Replika yang masih menyimpan backup failover menunggu salin balik tidak bisa dilepas dari plan, dan primary/plan tidak bisa dipindah atau dihapus sampai salin balik selesai.
+- Bila primary yang kembali ternyata repository lain (identitas berbeda), salin balik ditolak dengan `primary-changed` dan snapshot tetap aman di replika.
+
 ## Prasyarat
 
 - Plan **Managed Agent Backup** tersimpan, memakai primary SFTP atau S3 dedicated, serta Agent/allowed roots yang sesuai. Lihat [plan Managed Agent](/docs/backup-plans/managed-agent) dan [SFTP](/docs/storage/sftp).

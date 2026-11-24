@@ -135,6 +135,8 @@ export interface PlanReplicationStorage {
 
 export interface PlanReplicationSettings {
    recoveryPolicy?: 'primary-only' | 'assisted' | 'automatic';
+   /** Stage 3: write a backup into a verified replica while the primary is unreachable. */
+   backupFailover?: 'off' | 'automatic';
    enabled: boolean;
    concurrent: boolean;
    storages: PlanReplicationStorage[];

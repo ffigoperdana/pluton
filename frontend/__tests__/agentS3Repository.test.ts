@@ -53,7 +53,7 @@ test('switching the primary type drops only replicas the new primary cannot use'
    const sftpReplica = { replicationId: 'replica-02', storageId: 'storage-03', storagePath: 'replicas/app-01', storageType: 'sftp', addedAt: 2 };
    const replication: PlanReplicationSettings = { enabled: true, concurrent: false, recoveryPolicy: 'assisted', storages: [s3Replica] };
    assert.equal(replicationForAgentPrimary(replication, true, 'sftp'), replication);
-   assert.deepEqual(replicationForAgentPrimary(replication, true, 's3compatible'), { enabled: false, concurrent: false, recoveryPolicy: 'primary-only', storages: [] });
+   assert.deepEqual(replicationForAgentPrimary(replication, true, 's3compatible'), { enabled: false, concurrent: false, recoveryPolicy: 'primary-only', backupFailover: 'off', storages: [] });
    const mixed: PlanReplicationSettings = { ...replication, storages: [s3Replica, sftpReplica] };
    assert.deepEqual(replicationForAgentPrimary(mixed, true, 's3'), { ...mixed, storages: [sftpReplica] });
    assert.equal(replicationForAgentPrimary(replication, false, 's3compatible'), replication);

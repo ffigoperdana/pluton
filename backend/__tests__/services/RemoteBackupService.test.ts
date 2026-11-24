@@ -1731,6 +1731,89 @@ describe('RemoteBackupService', () => {
 			);
 			expect(replication.enqueueBackup).not.toHaveBeenCalled();
 		});
+
+		describe('backup failover (docs/BACKUP_FAILOVER.md)', () => {
+			const replicaPath = 'bucket-01/replicas/app-01';
+			const failoverHook = (target?: { storageId: string; storagePath: string }) => ({
+				failoverTarget: jest.fn(async () => target),
+				isFailoverBackup: jest.fn(() => !!target),
+				afterFailure: jest.fn(async () => undefined),
+				afterSuccess: jest.fn(async () => undefined),
+			});
+
+			it('writes a failover backup of an SFTP primary into its S3 replica with every secret sealed', async () => {
+				const hook = failoverHook({ storageId: s3Plan.storageId, storagePath: replicaPath });
+				service.setFailoverService(hook);
+				repositories.getById.mockResolvedValue({
+					...(await repositories.getById()),
+					initializedAt: new Date(1),
+				});
+				const command = backupCommand();
+				const payload: any = await service.materializeCommand(capableAgent.agentId, command, sealing);
+				expect(hook.failoverTarget).toHaveBeenCalledWith('backup-example-01');
+				expect(payload.repository).toEqual({ remoteName: 'pluton', path: replicaPath, initialize: false });
+				expect(payload.rclone.type).toBe('s3');
+				const serialized = JSON.stringify(payload);
+				for (const value of [repositoryPassword, s3AccessKey, s3SecretKey, encryptionSecret])
+					expect(serialized).not.toContain(value);
+				expect(
+					openAgentCommandSecrets(sealing.agentSecret, command.id, sealing.leaseToken, payload.sealed)
+				).toEqual({
+					repositoryPassword,
+					rclone: { access_key_id: s3AccessKey, secret_access_key: s3SecretKey },
+				});
+			});
+
+			it('keeps a primary backup on its own repository when no failover is queued', async () => {
+				service.setFailoverService(failoverHook(undefined));
+				const payload: any = await service.materializeCommand(capableAgent.agentId, backupCommand(), sealing);
+				expect(payload.repository).toEqual({
+					remoteName: 'pluton',
+					path: plan.storagePath,
+					initialize: true,
+				});
+			});
+
+			it('refuses a failover backup for an Agent without sealed version 5 payloads', async () => {
+				service.setFailoverService(failoverHook({ storageId: s3Plan.storageId, storagePath: replicaPath }));
+				agentStore.getAgentByDeviceId.mockResolvedValue({ ...capableAgent, lastSeen: new Date() });
+				const error = await service
+					.materializeCommand(capableAgent.agentId, backupCommand(), sealing)
+					.then(() => null)
+					.catch(caught => caught);
+				expect(error).toBeInstanceOf(RemoteCommandPreparationError);
+				expect(error).toMatchObject({ stage: 'repository-backend' });
+			});
+
+			it('hands a failed run to the failover decision and a failover success to verification only', async () => {
+				const hook = failoverHook({ storageId: s3Plan.storageId, storagePath: replicaPath });
+				service.setFailoverService(hook);
+				const replication = {
+					validatePlan: jest.fn(async () => undefined),
+					enqueueBackup: jest.fn(async () => undefined),
+				};
+				service.setReplicationService(replication);
+				planStore.update = jest.fn();
+				planStore.getById.mockResolvedValue({
+					...plan,
+					settings: { ...plan.settings, replication: { enabled: true, concurrent: false, storages: [] } },
+				});
+				await service.completeCommand(backupCommand(), {
+					success: false,
+					failureStage: 'repository-check',
+					failureCode: 'repository-check-failed',
+				} as any);
+				expect(hook.afterFailure).toHaveBeenCalledWith('backup-example-01');
+				(service as any).eventService.onBackupFailure.mockClear?.();
+				backupStore.getById = jest.fn().mockResolvedValue(null);
+				const id = 'c'.repeat(64);
+				const summary = { message_type: 'summary', snapshot_id: id, total_bytes_processed: 512 } as any;
+				await service.completeCommand(backupCommand(), { success: true, result: { snapshotId: id, summary } });
+				expect(hook.afterSuccess).toHaveBeenCalledWith('backup-example-01');
+				expect(repositories.markInitialized).not.toHaveBeenCalled();
+				expect(replication.enqueueBackup).not.toHaveBeenCalled();
+			});
+		});
 	});
 
 	describe('Server read access by storage type (S3_AGENT_REPOSITORY_DESIGN.md 6.1.3)', () => {

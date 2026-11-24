@@ -959,7 +959,11 @@ export class PlanService {
 			...replication,
 			storages: updatedStorages,
 			// Disable replication if no storages remain
-			...(updatedStorages.length === 0 && { enabled: false, recoveryPolicy: 'primary-only' as const }),
+			...(updatedStorages.length === 0 && {
+				enabled: false,
+				recoveryPolicy: 'primary-only' as const,
+				backupFailover: 'off' as const,
+			}),
 		};
 		const updatedSettings = { ...plan.settings, replication: updatedReplication };
 		await this.planStore.update(planId, { settings: updatedSettings } as any);

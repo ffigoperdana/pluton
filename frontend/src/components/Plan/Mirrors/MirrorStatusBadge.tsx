@@ -4,7 +4,7 @@ import Icon from '../../common/Icon/Icon';
 import classes from './MirrorStatusBadge.module.scss';
 import MirrorDetails from './MirrorDetails';
 import { PlanReplicationSettings } from '../../../@types';
-import { mirrorSummary } from '../../../utils/replication';
+import { failoverSummary, mirrorSummary } from '../../../utils/replication';
 
 interface MirrorStatusBadgeProps {
    mirrors: BackupMirror[];
@@ -19,6 +19,8 @@ const MirrorStatusBadge = ({ mirrors, planId, backupId, replicationSettings, man
    const expected = replicationSettings?.enabled ? replicationSettings.storages.length : mirrors.length;
    if (!mirrors.length && !expected) return null;
    const summary = mirrorSummary(mirrors, expected);
+   const failover = failoverSummary(mirrors);
+   const tooltip = failover ? `${failover.detail} ${summary.label}` : summary.label;
 
    let badgeClass = classes.badge;
    if (summary.state === 'pending') {
@@ -34,15 +36,21 @@ const MirrorStatusBadge = ({ mirrors, planId, backupId, replicationSettings, man
          <button
             type="button"
             className={badgeClass}
-            aria-label={summary.label}
-            title={summary.label}
+            aria-label={tooltip}
+            title={tooltip}
             data-tooltip-id="appTooltip"
             data-tooltip-place="top"
-            data-tooltip-content={summary.label}
+            data-tooltip-content={tooltip}
             onClick={() => setShowMirrorDetails(true)}
          >
             <Icon type={'mirrors'} size={13} />
-            {summary.incomplete && <span>Redundancy incomplete</span>}
+            {failover ? (
+               <span className={failover.state === 'failed' ? classes.badgeFailed : failover.state === 'success' ? classes.badgeSuccess : classes.badgeProgress}>
+                  {failover.label}
+               </span>
+            ) : (
+               summary.incomplete && <span>Redundancy incomplete</span>
+            )}
          </button>
          {showMirrorDetails && (
             <MirrorDetails

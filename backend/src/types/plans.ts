@@ -168,6 +168,11 @@ export interface PlanReplicationStorage {
 export interface PlanReplicationSettings {
 	/** Recovery source policy. Missing means primary-only; automatic still restores only to staging. */
 	recoveryPolicy?: 'primary-only' | 'assisted' | 'automatic';
+	/**
+	 * Stage 3 (docs/BACKUP_FAILOVER.md): while the primary is unreachable, write the backup into
+	 * a verified replica and copy it back later. Missing means off.
+	 */
+	backupFailover?: 'off' | 'automatic';
 	enabled: boolean;
 	concurrent: boolean;
 	storages: PlanReplicationStorage[];
