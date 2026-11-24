@@ -117,6 +117,8 @@ import { parseWebOrigins } from './utils/webOrigins';
 import { webAccess, originAwareSession, sameOriginCors } from './middlewares/webAccess';
 import { ManagedReplicationStore } from './stores/ManagedReplicationStore';
 import { ManagedReplicationService } from './services/ManagedReplicationService';
+import { BackupFailoverService } from './services/BackupFailoverService';
+import { BackupFailoverStore } from './stores/BackupFailoverStore';
 import {
 	configureProtectedStorageDatabase,
 	s3RepositoryScope,
@@ -203,6 +205,21 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		remoteBackupService
 	);
 	remoteBackupService.setReplicationService(managedReplicationService);
+	// Stage 3 backup failover (docs/BACKUP_FAILOVER.md).
+	const backupFailoverStore = new BackupFailoverStore(sqlite);
+	const backupFailoverService = new BackupFailoverService(
+		backupFailoverStore,
+		managedReplicationStore,
+		backupStore,
+		planStore,
+		remoteManagedRepositoryStore,
+		agentStore,
+		storageStore,
+		remoteBackupService,
+		managedReplicationService
+	);
+	remoteBackupService.setFailoverService(backupFailoverService);
+	managedReplicationService.setFailoverGuard(backupFailoverService);
 	const remoteRecoveryService = new RemoteRepositoryRecoveryService(
 		remoteManagedRepositoryStore,
 		backupStore,
@@ -221,7 +238,11 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		path.join(appPaths.getDataDir(), 'replica-recovery-indexes'),
 		undefined,
 		undefined,
-		storageId => remoteBackupService.getSftpRecoveryOptions(storageId)
+		storageId => remoteBackupService.getSftpRecoveryOptions(storageId),
+		backupId => {
+			const failover = backupFailoverStore.getByBackup(backupId);
+			return failover?.status === 'copied-back' ? failover : undefined;
+		}
 	);
 	const assistedRecoveryService = new AssistedRecoveryService(
 		new AssistedRecoveryStore(sqlite),
@@ -604,6 +625,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 			.finally(() => {
 				replicationReconcileRunning = false;
 			});
+		void backupFailoverService.tick();
 	}, 30000);
 	replicationReconcile.unref();
 	jobQueue.add('RecoveryTest', undefined, 1);
@@ -617,6 +639,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 			await notificationManager.shutdown();
 			clearInterval(recoveryTick);
 			clearInterval(replicationReconcile);
+			await backupFailoverService.shutdown();
 			await managedReplicationService.shutdown();
 			await managedExportService?.shutdown();
 			await recoveryTestService.shutdown();

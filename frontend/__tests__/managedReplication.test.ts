@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { hasPendingMirrors, mirrorSummary, needsReplicationOffConfirmation, replicationOffNotice, replicationSettingsError } from '../src/utils/replication.ts';
+import { failoverSummary, hasPendingMirrors, mirrorSummary, needsReplicationOffConfirmation, replicationOffNotice, replicationSettingsError } from '../src/utils/replication.ts';
 import type { PlanReplicationSettings } from '../src/@types/plans.ts';
 
 const require = createRequire(new URL('../package.json', import.meta.url));
@@ -138,6 +138,22 @@ test('actual managed settings use server storage, mandatory path, sequential def
       assert.equal(view.dom.window.document.querySelectorAll('[data-allowed="s3,s3compatible"]').length, 2);
       assert.equal(view.dom.window.document.querySelector('input[aria-label="Run replications concurrently"]'), null);
       assert.match(view.text(), /Managed copies are serialized/);
+   } finally { await view.cleanup(); }
+});
+
+test('the managed settings offer Backup failover only with compatible replicas and explain what the Agent receives', async () => {
+   const updates: PlanReplicationSettings[] = [];
+   const view = await fixture(Settings, { replication: settings(1), primaryStorageId: primary.storageId, primaryStoragePath: primary.storagePath, primaryStorageType: 'sftp', managedAgent: true, deviceId: 'main', onUpdate(next: PlanReplicationSettings) { updates.push(next); } });
+   try {
+      const select = [...view.dom.window.document.querySelectorAll<HTMLSelectElement>('select')].find(item => item.closest('label')?.textContent?.includes('Backup failover'))!;
+      assert.equal(select.value, 'off');
+      assert.equal(select.querySelector<HTMLOptionElement>('option[value="automatic"]')!.disabled, false);
+      assert.match(view.text(), /A backup fails while the primary is unreachable/);
+      await act(async () => {
+         select.value = 'automatic';
+         select.dispatchEvent(new view.dom.window.Event('change', { bubbles: true }));
+      });
+      assert.equal(updates.at(-1)?.backupFailover, 'automatic');
    } finally { await view.cleanup(); }
 });
 
@@ -299,4 +315,28 @@ test('failover policy wording names the primary repository, not a storage type',
          assert.doesNotMatch(view.text(), /primary SFTP/i);
       } finally { await view.cleanup(); }
    }
+});
+
+test('backup failover needs enabled managed replicas and an allowed value (docs/BACKUP_FAILOVER.md)', () => {
+   assert.equal(replicationSettingsError({ ...settings(1), backupFailover: 'automatic' }, primary, true), undefined);
+   assert.match(replicationSettingsError({ ...settings(1), backupFailover: 'automatic' }, primary, false)!, /Backup failover requires/);
+   assert.match(replicationSettingsError({ ...settings(0), backupFailover: 'automatic' }, primary, true)!, /Backup failover requires/);
+   assert.match(replicationSettingsError({ ...settings(1), backupFailover: 'always' as never }, primary, true)!, /Invalid backup failover/);
+   assert.equal(replicationSettingsError({ ...settings(0), backupFailover: 'off' }, primary, true), undefined);
+});
+
+test('a failover backup names its replica and whether it is back on the primary', () => {
+   const mirror = (status: NonNullable<ReturnType<typeof destination> & { failover?: unknown }>['failover'] | string, lastErrorCode?: string) =>
+      [{ ...destination(1), status: 'completed' as const, failover: { failedBackupId: 'backup-01', status: status as never, lastErrorCode } }];
+   assert.equal(failoverSummary([{ ...destination(1), status: 'completed' }]), undefined);
+   assert.deepEqual(failoverSummary(mirror('queued')), {
+      label: 'Failover → Replica 1',
+      detail: 'Failover backup queued to Replica 1.',
+      state: 'pending',
+      failedBackupId: 'backup-01',
+   });
+   assert.match(failoverSummary(mirror('verified', 'primary-unreachable'))!.detail, /copy-back waits until the primary is reachable \(primary-unreachable\)/);
+   assert.equal(failoverSummary(mirror('copied-back'))!.state, 'success');
+   assert.equal(failoverSummary(mirror('backup-failed'))!.state, 'failed');
+   assert.match(failoverSummary(mirror('failed', 'primary-changed'))!.detail, /needs attention \(primary-changed\)\. The snapshot stays in Replica 1/);
 });

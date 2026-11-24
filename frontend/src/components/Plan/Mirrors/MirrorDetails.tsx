@@ -6,7 +6,7 @@ import { formatBytes, formatDuration } from '../../../utils';
 import Icon from '../../common/Icon/Icon';
 import Modal from '../../common/Modal/Modal';
 import classes from './MirrorDetails.module.scss';
-import { mirrorStatusLabel, mirrorSummary } from '../../../utils/replication';
+import { failoverSummary, mirrorStatusLabel, mirrorSummary } from '../../../utils/replication';
 
 interface MirrorDetailsProps {
    mirrors: Backup['mirrors'];
@@ -99,6 +99,11 @@ const MirrorDetails = ({ mirrors = [], replicationSettings, managedAgent, backup
                            {mirror.sourceSnapshotId && (
                               <div className={classes.mirrorMetadata}>
                                  Source snapshot: <code>{mirror.sourceSnapshotId}</code>
+                              </div>
+                           )}
+                           {mirror.failover && (
+                              <div className={classes.mirrorMetadata}>
+                                 Failover backup of <code>{mirror.failover.failedBackupId}</code>: {failoverSummary([mirror])?.detail}
                               </div>
                            )}
                            {mirror.attempts !== undefined && <div className={classes.mirrorMetadata}>Attempts: {mirror.attempts}</div>}

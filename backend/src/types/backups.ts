@@ -116,6 +116,23 @@ export interface BackupMirror {
 	attempts?: number;
 	lastErrorCode?: string | null;
 	verifiedAt?: number | null;
+	/** Set on the replica that received a failover backup (docs/BACKUP_FAILOVER.md). */
+	failover?: BackupMirrorFailover;
+}
+
+export interface BackupMirrorFailover {
+	failedBackupId: string;
+	status:
+		| 'queued'
+		| 'backup-failed'
+		| 'verify-pending'
+		| 'verifying'
+		| 'verified'
+		| 'copying'
+		| 'copied-back'
+		| 'failed';
+	lastErrorCode?: string | null;
+	copiedBackAt?: number | null;
 }
 
 export type BackupRunConfig = {

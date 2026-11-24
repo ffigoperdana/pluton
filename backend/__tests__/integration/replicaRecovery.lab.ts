@@ -803,6 +803,169 @@ try {
 	console.log(
 		'PASS stage 2 recovery from the verified SFTP replica: full staged restore and SQL artifact with SHA256'
 	);
+	// docs/BACKUP_FAILOVER.md (stage 3): while the S3 primary is unreachable the Agent writes the
+	// next backup straight into the verified SFTP replica. The server verifies it there, copies it
+	// back to the primary, and replica recovery still proves the replica original afterwards.
+	console.log('CHECK stage 3: failover backup into the SFTP replica, copy-back and replica recovery');
+	const stage3Signal = AbortSignal.timeout(150_000);
+	const obscuredReplicaPassword = (
+		await exec(rclone, ['obscure', stage2SftpPassword], {
+			env: { ...process.env, RCLONE_CONFIG: '/dev/null' },
+			encoding: 'utf8',
+		})
+	).stdout.trim();
+	// The Agent's version 5 SFTP remote: host, port and user plain, the password from the sealed field.
+	const agentEnv: NodeJS.ProcessEnv = {
+		...process.env,
+		RESTIC_PASSWORD: password,
+		RCLONE_CONFIG: '/dev/null',
+		RCLONE_CONFIG_PLUTON_TYPE: 'sftp',
+		RCLONE_CONFIG_PLUTON_HOST: '127.0.0.1',
+		RCLONE_CONFIG_PLUTON_PORT: String(stage2SftpPort),
+		RCLONE_CONFIG_PLUTON_USER: 'replica-user',
+		RCLONE_CONFIG_PLUTON_PASS: obscuredReplicaPassword,
+	};
+	const agentRestic = async (args: string[]) => {
+		try {
+			return (
+				await exec(
+					restic,
+					['--no-cache', '-r', 'rclone:pluton:replicas/plan-01', '-o', 'rclone.program=' + rclone, ...args],
+					{ env: agentEnv, cwd: workspace, encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 ** 2 }
+				)
+			).stdout;
+		} catch {
+			throw new Error('Disposable stage 3 Restic command failed.');
+		}
+	};
+	await agentRestic([
+		'backup',
+		source,
+		'pluton/database/example.sql',
+		'--tag',
+		'pluton-plan-plan-01',
+		'--tag',
+		'pluton-backup-backup-02',
+	]);
+	const failoverSnapshots = JSON.parse(
+		await agentRestic(['snapshots', '--json', '--tag', 'pluton-backup-backup-02'])
+	);
+	assert.equal(failoverSnapshots.length, 1);
+	assert.equal(failoverSnapshots[0].original, undefined, 'a failover snapshot is an original');
+	const failoverSnapshotId = failoverSnapshots[0].id as string;
+	const replicaAsSource = {
+		access: { options: sftpReplicaOptions, repositoryPath: 'replicas/plan-01', password },
+		planId: 'plan-01',
+		backupId: 'backup-02',
+		snapshotId: failoverSnapshotId,
+		artifacts: [f.backup.completionStats.lifecycle.database],
+	};
+	const failoverProof = await executor.inspectSource(replicaAsSource, stage3Signal);
+	assert.equal(failoverProof.repositoryConfigId, stage2Bound, 'written into the bound replica repository');
+	assert.equal(failoverProof.snapshot.original, undefined);
+	console.log('PASS failover backup written into the replica and verified there with the SQL artifact SHA-256');
+
+	const primaryDestination = {
+		options: { ...storageRcloneOptions(stage2Storage), force_path_style: 'true' },
+		repositoryPath: stage2Prefix,
+		environment: trustEnvironment(),
+	};
+	const copyBack = () =>
+		executor.copy({
+			source: replicaAsSource,
+			proof: failoverProof,
+			destination: primaryDestination,
+			state: { repositoryConfigId: stage2Proof.repositoryConfigId, initialization: 'ready' },
+			beginInitialization: async () => assert.fail('copy-back never initializes the primary'),
+			bindRepository: async () => assert.fail('copy-back never binds the primary'),
+			signal: stage3Signal,
+		});
+	const copiedBack = await copyBack();
+	assert.equal(copiedBack.repositoryConfigId, stage2Proof.repositoryConfigId);
+	const backInPrimary = (JSON.parse(await primaryRestic(['snapshots', '--json'])) as any[]).filter(
+		snapshot => snapshot.original === failoverSnapshotId
+	);
+	assert.equal(backInPrimary.length, 1);
+	assert.equal(backInPrimary[0].id, copiedBack.snapshotId);
+	assert.equal((await copyBack()).snapshotId, copiedBack.snapshotId, 'a repeated copy-back is idempotent');
+	await primaryRestic(['check']);
+	await agentRestic(['check']);
+	console.log('PASS copy-back from the SFTP replica into the S3 primary: one copy, repeat idempotent, both repositories check');
+
+	const stage3Backup = {
+		...stage2Backup,
+		id: 'backup-02',
+		completionStats: { ...stage2Backup.completionStats, snapshot_id: copiedBack.snapshotId },
+	};
+	const stage3Receipt = {
+		...stage2Receipt,
+		id: 'receipt-stage3',
+		backupId: 'backup-02',
+		sourceSnapshotId: copiedBack.snapshotId,
+		sourceTreeId: failoverProof.snapshot.tree,
+		sourceBindingHash: replicaSourceBinding(stage3Backup as any),
+		destinationSnapshotId: failoverSnapshotId,
+	};
+	const stage3Replicas = (
+		copiedBackFailover?: (
+			backupId: string
+		) => { replicaSnapshotId: string; primarySnapshotId: string } | undefined
+	) =>
+		new VerifiedReplicaRecoveryService(
+			{ listByBackup: () => [stage3Receipt], getDestination: () => stage2Destination } as any,
+			{ getById: async () => stage3Backup } as any,
+			{ getById: async () => stage2Plan } as any,
+			{ getByPlanId: async () => stage2Repository } as any,
+			f.stores.agents as any,
+			{
+				getById: async (id: string) =>
+					id === stage2Storage.id ? stage2Storage : id === sftpReplicaStorage.id ? sftpReplicaStorage : null,
+			} as any,
+			path.join(root, 'stage3-indexes'),
+			configService.config.SECRET!,
+			undefined,
+			async () => sftpReplicaOptions,
+			copiedBackFailover
+		);
+	// The replica original alone does not prove the primary copy; only the failover record does.
+	await assert.rejects(stage3Replicas().preflight('backup-02', 'plan-01', 'replica-sftp', stage3Signal), error =>
+		String((error as { code?: string }).code || (error as Error).message).includes('snapshot-identity-mismatch')
+	);
+	const copiedBackReplicas = stage3Replicas(id =>
+		id === 'backup-02'
+			? { replicaSnapshotId: failoverSnapshotId, primarySnapshotId: copiedBack.snapshotId }
+			: undefined
+	);
+	const stage3Preflight = await copiedBackReplicas.preflight(
+		'backup-02',
+		'plan-01',
+		'replica-sftp',
+		stage3Signal
+	);
+	assert.equal(stage3Preflight.destinationSnapshotId, failoverSnapshotId);
+	const stage3Target = await fs.mkdtemp(path.join(root, 'stage3-staged-'));
+	const stage3Result = await copiedBackReplicas.withReplica(
+		'backup-02',
+		'plan-01',
+		'replica-sftp',
+		stage3Signal,
+		async recovery =>
+			recovery.replicaStage(
+				await recovery.testBinding('backup-02', 'plan-01'),
+				{ target: '', overwrite: 'never', delete: false, includes: [], excludes: [] },
+				stage3Target,
+				stage3Signal,
+				() => {},
+				async () => {}
+			),
+		stage3Preflight.fingerprint
+	);
+	assert.equal(stage3Result.integrity, 'sha256-readback-and-restic-restore');
+	assert.deepEqual(await hashTree(path.join(stage3Target, source.slice(1))), await hashTree(source));
+	assert.equal(await fs.readFile(path.join(stage3Target, 'pluton/database/example.sql'), 'utf8'), sql);
+	console.log(
+		'PASS stage 3 recovery of a copied-back failover backup from its replica original: full staged restore with SHA256'
+	);
 	console.log(
 		'PROFILE',
 		JSON.stringify({

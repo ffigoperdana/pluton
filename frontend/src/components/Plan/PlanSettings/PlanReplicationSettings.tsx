@@ -97,7 +97,7 @@ const PlanReplicationSettings = ({
    );
 
    const applyEnabled = (enabled: boolean) => {
-      onUpdate({ ...settings, enabled, ...(!enabled && { recoveryPolicy: 'primary-only' }) });
+      onUpdate({ ...settings, enabled, ...(!enabled && { recoveryPolicy: 'primary-only', backupFailover: 'off' }) });
    };
 
    const updateEnabled = (enabled: boolean) => {
@@ -182,7 +182,7 @@ const PlanReplicationSettings = ({
                   onUpdate({
                      ...settings,
                      storages: updated,
-                     ...(updated.length === 0 && { enabled: false, recoveryPolicy: 'primary-only' as const }),
+                     ...(updated.length === 0 && { enabled: false, recoveryPolicy: 'primary-only' as const, backupFailover: 'off' as const }),
                   });
                   setShowRemoveModal(false);
                   setRemoveStorageData(false);
@@ -216,7 +216,7 @@ const PlanReplicationSettings = ({
                <div className={mirrorClasses.mirrorSettings}>
                   <p className={classes.fieldNotice}>
                      Replication runs sequentially by default. Use a dedicated repository path for each destination.
-                     {managedAgent && ' The Pluton server performs the copy; the source Agent does not receive replica credentials.'}
+                     {managedAgent && ' The Pluton server performs the copy; the source Agent does not receive replica credentials, except during a failover backup.'}
                   </p>
                   {validationError && (
                      <p role="alert" className={mirrorClasses.validationError}>
@@ -249,6 +249,23 @@ const PlanReplicationSettings = ({
                               : settings.recoveryPolicy === 'assisted'
                                 ? 'Prefer the primary repository. A verified replica requires your explicit approval and restores only into isolated staging. Database import keeps its existing separate approval.'
                                 : 'Recovery uses the primary repository only. Choose a failover policy to allow verified replicas as a recovery source.'}
+                        </p>
+                        <label>
+                           Backup failover
+                           <select
+                              value={settings.backupFailover || 'off'}
+                              onChange={(event) => onUpdate({ ...settings, backupFailover: event.target.value as 'off' | 'automatic' })}
+                           >
+                              <option value="off">Off (default)</option>
+                              <option value="automatic" disabled={!failoverReplicas}>
+                                 Automatic (write to a verified replica while the primary is down)
+                              </option>
+                           </select>
+                        </label>
+                        <p>
+                           {settings.backupFailover === 'automatic'
+                              ? 'When a backup fails before upload because the primary is unreachable, and the Pluton server cannot reach it either, the Agent writes a new backup into the first verified replica it can reach. Pluton verifies it there and copies it back to the primary once the primary is reachable. During that run the Agent receives the replica storage credentials, sealed. An outage during an upload is not detected; that run fails and the next one fails over. Requires Agent 0.8.0 or later.'
+                              : 'Backups use the primary repository only. A backup fails while the primary is unreachable.'}
                         </p>
                      </fieldset>
                   )}

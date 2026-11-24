@@ -202,6 +202,15 @@ function isSafeSnapshotId(value: unknown): value is string {
 	return typeof value === 'string' && /^[A-Fa-f0-9]{8,128}$/.test(value);
 }
 
+/** Stage 3 backup failover (docs/BACKUP_FAILOVER.md), seen from the backup command path. */
+export interface BackupFailoverHook {
+	/** The verified replica a queued failover backup writes to; undefined for a primary backup. */
+	failoverTarget(backupId: string): Promise<{ storageId: string; storagePath: string } | undefined>;
+	isFailoverBackup(backupId: string): boolean;
+	afterFailure(backupId: string): Promise<void>;
+	afterSuccess(backupId: string): Promise<void>;
+}
+
 /**
  * A narrow orchestration path for a managed remote filesystem backup. It is
  * intentionally not a replacement for RemoteStrategy: repair, unlock, prune,
@@ -212,6 +221,7 @@ export class RemoteBackupService {
 	private readonly cronManager: CronManager<any>;
 	private readonly eventService: BackupEventService;
 	private replicationService?: ManagedReplicationCompletionHook;
+	private failoverService?: BackupFailoverHook;
 	private sourceAccessService?: AgentSourceAccessService;
 
 	constructor(
@@ -234,6 +244,10 @@ export class RemoteBackupService {
 
 	setReplicationService(service: ManagedReplicationCompletionHook): void {
 		this.replicationService = service;
+	}
+
+	setFailoverService(service: BackupFailoverHook): void {
+		this.failoverService = service;
 	}
 
 	setSourceAccessService(service: AgentSourceAccessService): void {
@@ -387,6 +401,51 @@ export class RemoteBackupService {
 	}
 
 	/**
+	 * Queues the failover backup of a failed run (docs/BACKUP_FAILOVER.md). The row keeps the
+	 * plan's primary binding like every backup of the plan; the command writes into the replica
+	 * named by the failover record, which `record` inserts in the same transaction.
+	 */
+	async queueFailoverBackup(
+		failed: Backup,
+		agentId: string,
+		repositoryId: string,
+		replicaName: string,
+		record: (backupId: string) => void
+	): Promise<string> {
+		const plan = failed.planId ? await this.planStore.getById(failed.planId) : null;
+		if (!plan) throw new NotFoundError('Plan not found.');
+		const backupId = generateUID();
+		await this.repositories.createBackupAndCommand({
+			backup: {
+				id: backupId,
+				title: 'Failover backup',
+				description: `Failover of ${failed.id} to ${replicaName}.`,
+				status: 'queued',
+				inProgress: true,
+				started: new Date(),
+				planId: plan.id,
+				storageId: plan.storageId,
+				storagePath: failed.storagePath,
+				sourceId: plan.sourceId,
+				sourceType: plan.sourceType,
+				sourceConfig: plan.sourceConfig,
+				method: 'backup',
+				encryption: true,
+				compression: Boolean(plan.settings.compression),
+				taskStats: null,
+			},
+			command: {
+				id: `remote-backup-${backupId}`,
+				agentId,
+				idempotencyKey: `remote-backup:${backupId}`,
+				payload: { backupId, planId: plan.id, repositoryId },
+			},
+			beforeCommit: () => record(backupId),
+		});
+		return backupId;
+	}
+
+	/**
 	 * A failed run that recorded no snapshot leaves the server nothing to forget,
 	 * so only its history row may go. Completed snapshots still need a future
 	 * Agent forget capability. This never touches the repository: a partial
@@ -496,8 +555,14 @@ export class RemoteBackupService {
 			}
 			await this.assertSupportedPlan(plan, setStage, false);
 			setStage('repository-path');
-			validateRepositoryPath(repository.storagePath);
-			const target = await this.materializeRepositoryStorage(repository.storageId, setStage);
+			// A failover backup writes into its verified replica (docs/BACKUP_FAILOVER.md).
+			const failover = await this.failoverService?.failoverTarget(backup.id);
+			const repositoryPath = failover ? failover.storagePath : repository.storagePath;
+			validateRepositoryPath(repositoryPath);
+			const target = await this.materializeRepositoryStorage(
+				failover ? failover.storageId : repository.storageId,
+				setStage
+			);
 			setStage('repository-secret-decryption');
 			let repositoryPassword: string;
 			try {
@@ -571,10 +636,24 @@ export class RemoteBackupService {
 				excludes,
 				repository: {
 					remoteName: 'pluton',
-					path: repository.storagePath,
-					initialize: !repository.initializedAt,
+					path: repositoryPath,
+					initialize: failover ? false : !repository.initializedAt,
 				},
 			};
+			if (failover) {
+				// Replica secrets travel sealed only; S3 needs an Agent that writes S3 repositories.
+				setStage('repository-backend');
+				if (agentBackupPayloadVersion(agent.capabilities) !== 5)
+					throw new AppError(
+						409,
+						'Backup failover requires an Agent with sealed version 5 payloads.'
+					);
+				if (target.type === 's3') {
+					if (!agentSupportsS3Repository(agent.capabilities))
+						throw new AppError(409, AGENT_S3_UNSUPPORTED_MESSAGE);
+					assertAgentS3RepositoryPath(repositoryPath);
+				}
+			}
 			if (agentBackupPayloadVersion(agent.capabilities) !== 5) {
 				// Versions 1 to 4 are unchanged and SFTP-only (section 10.2).
 				if (target.type !== 'sftp') {
@@ -773,6 +852,7 @@ export class RemoteBackupService {
 				planId: reference.planId,
 				backupId: reference.backupId,
 			});
+			this.afterFailover(reference.backupId);
 			return;
 		}
 		if (!completion.success) {
@@ -792,6 +872,8 @@ export class RemoteBackupService {
 						}
 					: {}),
 			});
+			// Stage 3: a pre-upload outage of the primary may move this run to a replica.
+			this.afterFailover(reference.backupId);
 			return;
 		}
 		const summary = completion.result?.summary;
@@ -884,7 +966,9 @@ export class RemoteBackupService {
 				'Snapshot completed with lifecycle warnings'
 			);
 		}
-		await this.repositories.markInitialized(reference.repositoryId);
+		const failoverBackup = this.failoverService?.isFailoverBackup(reference.backupId) === true;
+		// A failover run wrote into the replica; the primary repository was not touched.
+		if (!failoverBackup) await this.repositories.markInitialized(reference.repositoryId);
 		if (plan) {
 			const snapshotIds = new Set([...(plan.stats?.snapshots || []), snapshotId]);
 			await this.planStore.update(plan.id, {
@@ -894,6 +978,16 @@ export class RemoteBackupService {
 				},
 				lastBackupTime: new Date(),
 			});
+		}
+		if (failoverBackup) {
+			// Verified in the replica, then copied back; replication follows the copy-back.
+			void this.failoverService?.afterSuccess(reference.backupId).catch(() => {
+				serverLogger?.warn(
+					{ event: 'backup_failover_verification_interrupted', backupId: reference.backupId },
+					'Failover verification needs reconciliation.'
+				);
+			});
+			return;
 		}
 		if (plan?.settings.replication?.enabled) {
 			// The primary result stays independent from replica admission/execution.
@@ -905,6 +999,15 @@ export class RemoteBackupService {
 				);
 			});
 		}
+	}
+
+	private afterFailover(backupId: string): void {
+		void this.failoverService?.afterFailure(backupId).catch(() => {
+			serverLogger?.warn(
+				{ event: 'backup_failover_decision_interrupted', backupId },
+				'Backup failover decision needs reconciliation.'
+			);
+		});
 	}
 
 	async reconcileSchedules(): Promise<void> {

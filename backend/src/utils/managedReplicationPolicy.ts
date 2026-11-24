@@ -211,7 +211,22 @@ export function validateReplicationSettings(
 		concurrent?: unknown;
 		storages?: unknown;
 		recoveryPolicy?: unknown;
+		backupFailover?: unknown;
 	};
+	if (
+		value.backupFailover !== undefined &&
+		!['off', 'automatic'].includes(value.backupFailover as string)
+	)
+		throw new AppError(400, 'Invalid backup failover setting.');
+	if (value.backupFailover === 'automatic') {
+		if (
+			scope &&
+			(scope.sourceType !== 'device' || scope.sourceId === 'main' || scope.method !== 'backup')
+		)
+			throw new AppError(400, 'Backup failover requires a managed remote filesystem backup.');
+		if (!value.enabled || !Array.isArray(value.storages) || !value.storages.length)
+			throw new AppError(400, 'Backup failover requires enabled replicas.');
+	}
 	if (
 		value.recoveryPolicy !== undefined &&
 		!['primary-only', 'assisted', 'automatic'].includes(value.recoveryPolicy as string)

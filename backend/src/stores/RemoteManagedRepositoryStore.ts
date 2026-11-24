@@ -61,6 +61,8 @@ export class RemoteManagedRepositoryStore {
 			idempotencyKey: string;
 			payload: { backupId: string; planId: string; repositoryId: string };
 		};
+		/** Same-connection statements that must commit with the backup and its command. */
+		beforeCommit?: () => void;
 	}): Promise<{ backup: Backup; command: AgentCommand }> {
 		const planId = input.backup.planId;
 		if (!planId) throw new Error('Remote backup requires a plan ID.');
@@ -87,6 +89,7 @@ export class RemoteManagedRepositoryStore {
 				.returning()
 				.get();
 			if (!command) throw new Error('Could not enqueue remote backup command.');
+			input.beforeCommit?.();
 			return { backup, command };
 		});
 	}

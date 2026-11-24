@@ -14,6 +14,9 @@ export function replicationSettingsError(
    if (settings.recoveryPolicy && !['primary-only', 'assisted', 'automatic'].includes(settings.recoveryPolicy)) return 'Invalid recovery source policy.';
    if (settings.recoveryPolicy === 'assisted' && (!managedAgent || !settings.enabled || !settings.storages.length))
       return 'Assisted Failover requires enabled compatible managed Agent replicas.';
+   if (settings.backupFailover && !['off', 'automatic'].includes(settings.backupFailover)) return 'Invalid backup failover setting.';
+   if (settings.backupFailover === 'automatic' && (!managedAgent || !settings.enabled || !settings.storages.length))
+      return 'Backup failover requires enabled compatible managed Agent replicas.';
    if (settings.recoveryPolicy === 'automatic' && (!managedAgent || !settings.enabled || !settings.storages.length))
       return 'Automatic Failover requires enabled compatible managed Agent replicas.';
    if (settings.storages.length > MAX_REPLICATION_DESTINATIONS) return 'A backup plan supports at most two replication destinations.';
@@ -45,6 +48,31 @@ export function mirrorSummary(mirrors: BackupMirror[], expectedDestinations = mi
    if (completed === total && total > 0) return { state: 'success' as const, label: `${completed}/${total} mirrors complete`, incomplete: false };
    if (failed > 0) return { state: 'failed' as const, label: `Redundancy incomplete: ${completed}/${total} mirrors complete`, incomplete: true };
    return { state: 'pending' as const, label: `Replication pending: ${pending}/${total} mirrors incomplete`, incomplete: true };
+}
+
+/** A failover backup (docs/BACKUP_FAILOVER.md): where it was written and whether it is back on the primary. */
+export function failoverSummary(mirrors: BackupMirror[] | undefined) {
+   const mirror = mirrors?.find((item) => item.failover);
+   if (!mirror?.failover) return undefined;
+   const { status, lastErrorCode } = mirror.failover;
+   const name = mirror.storageName;
+   const detail =
+      status === 'queued'
+         ? `Failover backup queued to ${name}.`
+         : status === 'backup-failed'
+           ? `The failover backup to ${name} failed.`
+           : status === 'verify-pending' || status === 'verifying'
+             ? `Written to ${name}; Pluton is verifying it there.`
+             : status === 'verified'
+               ? `Verified in ${name}; copy-back waits until the primary is reachable${lastErrorCode ? ` (${lastErrorCode})` : ''}.`
+               : status === 'copying'
+                 ? `Copying back from ${name} to the primary.`
+                 : status === 'copied-back'
+                   ? `Written to ${name} during a primary outage and copied back to the primary.`
+                   : `Failover needs attention${lastErrorCode ? ` (${lastErrorCode})` : ''}. The snapshot stays in ${name}.`;
+   const state: 'pending' | 'success' | 'failed' =
+      status === 'copied-back' ? 'success' : status === 'failed' || status === 'backup-failed' ? 'failed' : 'pending';
+   return { label: `Failover → ${name}`, detail, state, failedBackupId: mirror.failover.failedBackupId };
 }
 
 export function mirrorStatusLabel(status: BackupMirror['status']) {

@@ -47,7 +47,7 @@ export function replicationForAgentPrimary(
    if (storages.length === replication.storages.length) return replication;
    return storages.length
       ? { ...replication, storages }
-      : { ...replication, enabled: false, storages: [], recoveryPolicy: 'primary-only' };
+      : { ...replication, enabled: false, storages: [], recoveryPolicy: 'primary-only', backupFailover: 'off' };
 }
 
 export function managedDestinationNotice(s3Primary: boolean): string {
