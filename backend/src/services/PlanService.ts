@@ -327,6 +327,23 @@ export class PlanService {
 		if (this.relocations?.activeForPlan(planId)) throw new AppError(409, message);
 	}
 
+	private promotions?: { activeForPlan(planId: string): { status: string } | null };
+
+	/** Stage 4 promotions (docs/PRIMARY_PROMOTION.md) freeze the plan binding until they end. */
+	setPromotionGuard(promotions: { activeForPlan(planId: string): { status: string } | null }) {
+		this.promotions = promotions;
+	}
+
+	/**
+	 * Settings and removal wait for any active promotion. Backups and resume wait only for its
+	 * final step, while the plan is paused for the switch.
+	 */
+	private assertNotPromoting(planId: string, scope: 'binding' | 'final', message: string) {
+		const active = this.promotions?.activeForPlan(planId);
+		if (active && (scope === 'binding' || active.status === 'switching'))
+			throw new AppError(409, message);
+	}
+
 	/**
 	 * Updates a plan's configuration and its underlying schedule.
 	 */
@@ -336,6 +353,11 @@ export class PlanService {
 		this.assertNotRelocating(
 			planId,
 			'Plan settings are locked while its repository is being moved to another Storage.'
+		);
+		this.assertNotPromoting(
+			planId,
+			'binding',
+			'Plan settings are locked while a replica of this plan is being promoted to primary.'
 		);
 		const currentPlan = await this.planStore.getById(planId);
 		if (!currentPlan) {
@@ -564,6 +586,11 @@ export class PlanService {
 			planId,
 			'Finish or cancel the repository relocation of this plan before removing it.'
 		);
+		this.assertNotPromoting(
+			planId,
+			'binding',
+			'Finish or cancel the replica promotion of this plan before removing it.'
+		);
 		this.planStore.assertNoRetainedDatabaseRestores({ planId });
 		this.managedReplications?.assertPlanIdle(planId);
 		if (
@@ -676,6 +703,11 @@ export class PlanService {
 			planId,
 			'Backups resume after the repository relocation of this plan finishes.'
 		);
+		this.assertNotPromoting(
+			planId,
+			'final',
+			'Backups resume after the replica promotion of this plan switches.'
+		);
 
 		if (await this.planStore.hasActiveBackups(planId)) {
 			throw new AppError(500, 'A backup is already in progress for this plan.');
@@ -752,6 +784,11 @@ export class PlanService {
 		this.assertNotRelocating(
 			planId,
 			'The plan resumes automatically after its repository relocation finishes.'
+		);
+		this.assertNotPromoting(
+			planId,
+			'final',
+			'The plan resumes automatically after the replica promotion switches.'
 		);
 		if (RemoteBackupService.isRemoteFilesystemPlan(plan)) {
 			const resumed = await this.requireRemoteBackupService().resumePlan(planId);

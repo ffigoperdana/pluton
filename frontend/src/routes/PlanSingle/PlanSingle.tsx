@@ -17,6 +17,7 @@ import PlanBackups from '../../components/Plan/PlanBackups/PlanBackups';
 import PlanIntegrity from '../../components/Plan/PlanIntegrity/PlanIntegrity';
 import PlanRepair from '../../components/Plan/PlanRepair/PlanRepair';
 import PlanRelocationModal from '../../components/Plan/PlanRelocation/PlanRelocationModal';
+import PlanPromotionModal from '../../components/Plan/PlanPromotion/PlanPromotionModal';
 import { useExclusiveMenu } from '../../hooks/useExclusiveMenu';
 import { PlanVerifiedResult } from '../..';
 import { getBackupIconName } from '../../utils';
@@ -27,6 +28,7 @@ const PlanSingle = () => {
    const [showIntegrityModal, setShowIntegrityModal] = useState(false);
    const [showRepoRepair, setShowRepoRepair] = useState('');
    const [showRelocationModal, setShowRelocationModal] = useState(false);
+   const [showPromotionModal, setShowPromotionModal] = useState(false);
    const { id } = useParams();
 
    const EditPlanModal = useComponentOverride('EditPlan', EditPlan);
@@ -81,6 +83,8 @@ const PlanSingle = () => {
       const remoteManaged = method === 'backup' && plan.sourceType === 'device' && plan.sourceId !== 'main';
       // Move Repository copies SFTP to SFTP only; the server refuses an S3 primary as well.
       const movableRepository = remoteManaged && agentRepositoryCanMove(plan.storage?.type);
+      // Stage 4: a managed plan with a replica can promote it to primary (server enforces the rest).
+      const promotableReplica = remoteManaged && !!settings.replication?.enabled && (settings.replication?.storages?.length || 0) > 0;
 
       return (
          <div className={classes.planSingle}>
@@ -181,6 +185,17 @@ const PlanSingle = () => {
                                        <Icon size={14} type="arrow-right" /> Move Repository
                                     </li>
                                  )}
+                                 {promotableReplica && (
+                                    <li
+                                       className={classes.actionBtn}
+                                       onClick={() => {
+                                          setShowPromotionModal(true);
+                                          setShowMoreOptions(false);
+                                       }}
+                                    >
+                                       <Icon size={14} type="mirrors" /> Promote Replica
+                                    </li>
+                                 )}
                                  <li
                                     className={classes.actionBtn}
                                     onClick={() => {
@@ -234,6 +249,14 @@ const PlanSingle = () => {
                   planTitle={title}
                   currentPath={plan.storagePath || ''}
                   close={() => setShowRelocationModal(false)}
+                  onBindingChanged={refetchPlan}
+               />
+            )}
+            {showPromotionModal && (
+               <PlanPromotionModal
+                  planId={id}
+                  primaryName={plan.storage?.name || 'the current primary'}
+                  close={() => setShowPromotionModal(false)}
                   onBindingChanged={refetchPlan}
                />
             )}

@@ -42,7 +42,7 @@ def run(image, openssl):
         try:
             with private_key.open("rb") as key_input:
                 # Includes the stage 2 S3-to-SFTP scenario (docs/S3_PRIMARY_REPLICATION.md).
-                subprocess.run(args, stdin=key_input, timeout=540, check=True)
+                subprocess.run(args, stdin=key_input, timeout=600, check=True)
         finally:
             # The only mutable resource is this exact locally generated test name.
             subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=30, check=False)

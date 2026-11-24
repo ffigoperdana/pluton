@@ -154,8 +154,8 @@ jobs:
           docker build --target build -f Dockerfile.source -t pluton-replica-build:local .
           docker build -f backend/__tests__/fixtures/replica-recovery/Dockerfile -t pluton-replica-recovery:local .
 
-      - name: Verify real SFTP/S3 replica copies, backup failover, assisted recovery and one-time approval
-        timeout-minutes: 11
+      - name: Verify real SFTP/S3 replica copies, backup failover, replica promotion, assisted recovery and one-time approval
+        timeout-minutes: 12
         run: python3 scripts/validate-replica-recovery.py pluton-replica-recovery:local
 
       - name: Build isolated database-only fixture

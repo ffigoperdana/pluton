@@ -278,7 +278,7 @@ export class BackupFailoverStore {
 					.run(primarySnapshotId, failover.backupId, failover.replicaSnapshotId);
 				const receipt = this.sqlite
 					.prepare(
-						`UPDATE managed_replication_jobs SET source_snapshot_id=?,source_binding_hash=?,updated_at=? WHERE id=? AND backup_id=? AND status='completed' AND destination_snapshot_id=?`
+						`UPDATE managed_replication_jobs SET source_snapshot_id=?,source_binding_hash=?,destination_original=1,updated_at=? WHERE id=? AND backup_id=? AND status='completed' AND destination_snapshot_id=?`
 					)
 					.run(
 						primarySnapshotId,

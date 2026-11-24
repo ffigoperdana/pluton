@@ -332,6 +332,13 @@ describe('BackupFailoverService', () => {
 		expect(context.failovers.getByFailedBackup('backup-02')).toBeNull();
 	});
 
+	it('does not fail over while a replica of the plan is being promoted', async () => {
+		context = setup();
+		context.service.setPromotionGuard(planId => planId === 'plan-01');
+		expect(await context.service.consider('backup-02')).toBe('promotion-active');
+		expect(context.failovers.getByFailedBackup('backup-02')).toBeNull();
+	});
+
 	it('verifies the failover snapshot in the replica, waits for the primary, then copies it back', async () => {
 		context = setup();
 		await context.service.consider('backup-02');

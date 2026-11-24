@@ -3,6 +3,10 @@ import { PlanRepositoryRelocationStore } from './stores/PlanRepositoryRelocation
 import { PlanRepositoryRelocationService } from './services/PlanRepositoryRelocationService';
 import { PlanRepositoryRelocationController } from './controllers/PlanRepositoryRelocationController';
 import { createPlanRelocationRouter } from './routes/planRelocations';
+import { PrimaryPromotionStore } from './stores/PrimaryPromotionStore';
+import { PrimaryPromotionService } from './services/PrimaryPromotionService';
+import { PrimaryPromotionController } from './controllers/PrimaryPromotionController';
+import { createPrimaryPromotionRouter } from './routes/primaryPromotions';
 import { AssistedRecoveryService } from './services/AssistedRecoveryService';
 import { VerifiedReplicaRecoveryService } from './services/VerifiedReplicaRecoveryService';
 import { AssistedRecoveryController } from './controllers/AssistedRecoveryController';
@@ -322,6 +326,28 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		},
 		planId => managedExportService?.hasActiveForPlan(planId) ?? false
 	);
+	// Stage 4 primary promotion (docs/PRIMARY_PROMOTION.md).
+	const primaryPromotionService = new PrimaryPromotionService(
+		new PrimaryPromotionStore(sqlite),
+		managedReplicationStore,
+		backupStore,
+		planStore,
+		remoteManagedRepositoryStore,
+		agentStore,
+		storageStore,
+		remoteBackupService,
+		managedReplicationService,
+		{
+			pause: planId => planService.pauseBackup(planId),
+			resume: planId => planService.resumeBackup(planId),
+		},
+		planId => relocationStore.assertPlanIdle(planId),
+		planId => managedExportService?.hasActiveForPlan(planId) ?? false
+	);
+	planService.setPromotionGuard(primaryPromotionService);
+	backupFailoverService.setPromotionGuard(
+		planId => !!primaryPromotionService.activeForPlan(planId)
+	);
 	const backupService = new BackupService(
 		localBackupAgent,
 		localPlanAgent,
@@ -548,6 +574,10 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		'/api/plan-relocations',
 		createPlanRelocationRouter(new PlanRepositoryRelocationController(relocationService))
 	);
+	app.use(
+		'/api/plan-promotions',
+		createPrimaryPromotionRouter(new PrimaryPromotionController(primaryPromotionService))
+	);
 	app.use('/api/settings', createSettingsRouter(settingsController));
 	app.use('/api/notifications', createNotificationRouter(notificationStore));
 	app.use('/api/legacy-repositories', createLegacyRepositoryRouter(legacyRepositoryController));
@@ -626,6 +656,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 				replicationReconcileRunning = false;
 			});
 		void backupFailoverService.tick();
+		void primaryPromotionService.tick();
 	}, 30000);
 	replicationReconcile.unref();
 	jobQueue.add('RecoveryTest', undefined, 1);
@@ -639,6 +670,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 			await notificationManager.shutdown();
 			clearInterval(recoveryTick);
 			clearInterval(replicationReconcile);
+			await primaryPromotionService.shutdown();
 			await backupFailoverService.shutdown();
 			await managedReplicationService.shutdown();
 			await managedExportService?.shutdown();

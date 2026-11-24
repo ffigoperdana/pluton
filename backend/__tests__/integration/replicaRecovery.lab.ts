@@ -24,7 +24,11 @@ import {
 	ManagedReplicationExecutor,
 } from '../../src/utils/restic/ManagedReplicationExecutor';
 import { VerifiedReplicaRecoveryService } from '../../src/services/VerifiedReplicaRecoveryService';
-import { sftpRepositoryIdentity } from '../../src/utils/managedReplicaIdentity';
+import {
+	replicaRepositoryIdentity,
+	sftpRepositoryIdentity,
+} from '../../src/utils/managedReplicaIdentity';
+import { repositoryReader, verifyPromotion } from '../../src/services/PrimaryPromotionService';
 import { replicaSourceBinding } from '../../src/utils/replicaSourceBinding';
 import { storageRcloneOptions, trustEnvironment } from '../../src/utils/storageSecurity';
 import { restic, rclone, port, ready, hashTree } from './managedDownloadRecovery.helpers';
@@ -965,6 +969,311 @@ try {
 	assert.equal(await fs.readFile(path.join(stage3Target, 'pluton/database/example.sql'), 'utf8'), sql);
 	console.log(
 		'PASS stage 3 recovery of a copied-back failover backup from its replica original: full staged restore with SHA256'
+	);
+	// docs/PRIMARY_PROMOTION.md (stage 4): promote the SFTP replica to primary. The server reads
+	// both repositories without writing; the Agent then backs up into the new primary, the server
+	// copies that backup into the previous primary, and an old backup is restored from the
+	// previous primary, which now holds its original.
+	console.log(
+		'CHECK stage 4: promote the SFTP replica, back up into it, replicate back and recover'
+	);
+	const stage4Signal = AbortSignal.timeout(150_000);
+	// backup-03 exists only in the S3 primary: it was never copied, so it is left behind.
+	await primaryRestic([
+		'backup',
+		source,
+		'pluton/database/example.sql',
+		'--tag',
+		'pluton-plan-plan-01',
+		'--tag',
+		'pluton-backup-backup-03',
+	]);
+	const leftSnapshot = (
+		JSON.parse(
+			await primaryRestic(['snapshots', '--json', '--tag', 'pluton-backup-backup-03'])
+		) as any[]
+	)[0];
+	const promotionReader = repositoryReader(async storageId =>
+		storageId === stage2Storage.id
+			? stage2Remote.getRepositoryAccessOptions(storageId)
+			: sftpReplicaOptions
+	);
+	const promotionReceipt = (
+		id: string,
+		backupId: string,
+		sourceSnapshotId: string,
+		destinationSnapshotId: string,
+		sourceTreeId: string,
+		original: boolean
+	) =>
+		({
+			...stage2Receipt,
+			id,
+			backupId,
+			sourceSnapshotId,
+			destinationSnapshotId,
+			sourceTreeId,
+			destinationOriginal: original ? 1 : 0,
+		}) as any;
+	const leftBackup = {
+		...stage2Backup,
+		id: 'backup-03',
+		completionStats: { ...stage2Backup.completionStats, snapshot_id: leftSnapshot.id },
+	};
+	const promotedBefore = await hashTree(path.join(stage2SftpRoot, 'replicas'));
+	const verification = (promotedRepositoryConfigId: string) =>
+		verifyPromotion(promotionReader, {
+			promotion: {
+				planId: 'plan-01',
+				replicationId: sftpReplica.replicationId,
+				promotedStoragePath: sftpReplica.storagePath,
+				promotedRepositoryConfigId,
+				previousStoragePath: stage2Prefix,
+				previousRepositoryConfigId: stage2Proof.repositoryConfigId,
+			},
+			promotedStorage: sftpReplicaStorage,
+			previousStorage: stage2Storage as any,
+			password,
+			signal: stage4Signal,
+			swapped: [
+				{
+					job: promotionReceipt(
+						'receipt-stage2',
+						'backup-01',
+						stage2Source.snapshotId,
+						stage2Copy.snapshotId,
+						stage2Proof.snapshot.tree,
+						false
+					),
+					backup: stage2Backup as any,
+				},
+				{
+					// The copied-back failover backup: the replica holds its original.
+					job: promotionReceipt(
+						'receipt-stage3',
+						'backup-02',
+						copiedBack.snapshotId,
+						failoverSnapshotId,
+						failoverProof.snapshot.tree,
+						true
+					),
+					backup: stage3Backup as any,
+				},
+			],
+			resident: [],
+			leftBehind: [
+				{ backupId: 'backup-03', code: 'artifact-binding-mismatch', backup: leftBackup as any },
+			],
+		});
+	await assert.rejects(verification('f'.repeat(64)), error =>
+		(error as Error).message.includes('repository-identity-mismatch')
+	);
+	const promotionProof = await verification(stage2Bound!);
+	assert.deepEqual(
+		promotionProof.swapped.map(row => [
+			row.backupId,
+			row.promotedSnapshotId,
+			row.destinationOriginal,
+		]),
+		[
+			['backup-01', stage2Copy.snapshotId, true],
+			['backup-02', failoverSnapshotId, false],
+		]
+	);
+	assert.deepEqual(promotionProof.record, [
+		{ backupId: 'backup-03', code: 'artifact-binding-mismatch', restorable: true },
+	]);
+	assert.equal(promotionProof.leftBehind[0].treeId, leftSnapshot.tree);
+	assert.deepEqual(
+		await hashTree(path.join(stage2SftpRoot, 'replicas')),
+		promotedBefore,
+		'promotion verification must not write to the promoted repository'
+	);
+	console.log(
+		'PASS stage 4 verification on both real repositories: replica copies, a copied-back original and a left-behind backup'
+	);
+
+	// After the switch the Agent writes into the promoted repository: unchanged data is not uploaded.
+	const agentSummary = (
+		await agentRestic([
+			'backup',
+			source,
+			'pluton/database/example.sql',
+			'--json',
+			'--tag',
+			'pluton-plan-plan-01',
+			'--tag',
+			'pluton-backup-backup-04',
+		])
+	)
+		.split('\n')
+		.filter(line => line.trim().startsWith('{'))
+		.map(line => JSON.parse(line))
+		.find(message => message.message_type === 'summary');
+	assert.equal(agentSummary.files_new, 0, 'the promoted repository already holds every file');
+	assert.equal(agentSummary.files_changed, 0);
+	assert(
+		agentSummary.data_added < 1024 * 1024,
+		'only metadata is uploaded into the promoted repository'
+	);
+	const promotedBackupId = agentSummary.snapshot_id as string;
+	const promotedSource = {
+		access: { options: sftpReplicaOptions, repositoryPath: 'replicas/plan-01', password },
+		planId: 'plan-01',
+		backupId: 'backup-04',
+		snapshotId: promotedBackupId,
+		artifacts: [f.backup.completionStats.lifecycle.database],
+	};
+	const promotedProof = await executor.inspectSource(promotedSource, stage4Signal);
+	assert.equal(promotedProof.repositoryConfigId, stage2Bound);
+	const replicateBack = await executor.copy({
+		source: promotedSource,
+		proof: promotedProof,
+		destination: primaryDestination,
+		state: { repositoryConfigId: stage2Proof.repositoryConfigId, initialization: 'ready' },
+		beginInitialization: async () => assert.fail('the previous primary is never initialized'),
+		bindRepository: async () => assert.fail('the previous primary is never bound again'),
+		signal: stage4Signal,
+	});
+	assert.equal(replicateBack.repositoryConfigId, stage2Proof.repositoryConfigId);
+	const inPrevious = (JSON.parse(await primaryRestic(['snapshots', '--json'])) as any[]).filter(
+		snapshot => snapshot.original === promotedBackupId
+	);
+	assert.equal(inPrevious.length, 1);
+	await primaryRestic(['check']);
+	await agentRestic(['check']);
+	console.log(
+		'PASS after promotion: Agent backup into the SFTP primary uploads no file data, replication into the previous S3 primary, both repositories check'
+	);
+
+	// backup-01 now points at its copy in the SFTP primary; the S3 replica holds the original.
+	const promotedStorageView = { ...sftpReplicaStorage };
+	const previousAsReplica = {
+		replicationId: sftpReplica.replicationId,
+		storageId: stage2Storage.id,
+		storagePath: stage2Prefix,
+		storageName: 'S3 replica',
+		storageType: stage2Storage.type,
+		addedAt: 2,
+	};
+	const promotedPlan = {
+		...stage2Plan,
+		storageId: promotedStorageView.id,
+		storagePath: sftpReplica.storagePath,
+		settings: {
+			replication: {
+				enabled: true,
+				concurrent: false,
+				recoveryPolicy: 'assisted',
+				storages: [previousAsReplica],
+			},
+		},
+	};
+	const promotedRepository = {
+		...stage2Repository,
+		storageId: promotedStorageView.id,
+		storagePath: sftpReplica.storagePath,
+	};
+	const promotedBackup = {
+		...stage2Backup,
+		storageId: promotedStorageView.id,
+		storagePath: sftpReplica.storagePath,
+		completionStats: { ...stage2Backup.completionStats, snapshot_id: stage2Copy.snapshotId },
+	};
+	const previousIdentity = replicaRepositoryIdentity(stage2Storage as any, stage2Prefix);
+	const invertedReceipt = (destinationOriginal: number) => ({
+		...stage2Receipt,
+		id: 'receipt-stage4',
+		repositoryId: promotedRepository.id,
+		sourceStorageId: promotedStorageView.id,
+		sourceStoragePath: sftpReplica.storagePath,
+		sourceSnapshotId: stage2Copy.snapshotId,
+		sourceRepositoryConfigId: stage2Bound!,
+		sourceTreeId: stage2Proof.snapshot.tree,
+		sourceBindingHash: replicaSourceBinding(promotedBackup as any),
+		destinationStorageId: stage2Storage.id,
+		destinationStoragePath: stage2Prefix,
+		destinationFingerprint: previousIdentity.fingerprint,
+		destinationSnapshotId: stage2Source.snapshotId,
+		destinationOriginal,
+	});
+	const previousDestination = {
+		...stage2Destination,
+		fingerprint: previousIdentity.fingerprint,
+		sourceRepositoryId: promotedRepository.id,
+		destinationStorageId: stage2Storage.id,
+		destinationStoragePath: stage2Prefix,
+		destinationAuthority: previousIdentity.authority,
+		destinationPrefix: previousIdentity.prefix,
+		actualRepositoryId: stage2Proof.repositoryConfigId,
+	};
+	const stage4Replicas = (destinationOriginal: number) =>
+		new VerifiedReplicaRecoveryService(
+			{
+				listByBackup: () => [invertedReceipt(destinationOriginal)],
+				getDestination: () => previousDestination,
+			} as any,
+			{ getById: async () => promotedBackup } as any,
+			{ getById: async () => promotedPlan } as any,
+			{ getByPlanId: async () => promotedRepository } as any,
+			f.stores.agents as any,
+			{
+				getById: async (id: string) =>
+					id === stage2Storage.id
+						? stage2Storage
+						: id === promotedStorageView.id
+							? promotedStorageView
+							: null,
+			} as any,
+			path.join(root, `stage4-indexes-${destinationOriginal}`),
+			configService.config.SECRET!,
+			undefined,
+			async () => sftpReplicaOptions
+		);
+	// Without the receipt flag the original in the replica is not proof of the primary copy.
+	await assert.rejects(
+		stage4Replicas(0).preflight('backup-01', 'plan-01', sftpReplica.replicationId, stage4Signal),
+		error =>
+			String((error as { code?: string }).code || (error as Error).message).includes(
+				'snapshot-identity-mismatch'
+			)
+	);
+	const flagged = stage4Replicas(1);
+	const stage4Preflight = await flagged.preflight(
+		'backup-01',
+		'plan-01',
+		sftpReplica.replicationId,
+		stage4Signal
+	);
+	assert.equal(stage4Preflight.destinationSnapshotId, stage2Source.snapshotId);
+	const stage4Target = await fs.mkdtemp(path.join(root, 'stage4-staged-'));
+	const stage4Result = await flagged.withReplica(
+		'backup-01',
+		'plan-01',
+		sftpReplica.replicationId,
+		stage4Signal,
+		async recovery =>
+			recovery.replicaStage(
+				await recovery.testBinding('backup-01', 'plan-01'),
+				{ target: '', overwrite: 'never', delete: false, includes: [], excludes: [] },
+				stage4Target,
+				stage4Signal,
+				() => {},
+				async () => {}
+			),
+		stage4Preflight.fingerprint
+	);
+	assert.equal(stage4Result.integrity, 'sha256-readback-and-restic-restore');
+	assert.deepEqual(
+		await hashTree(path.join(stage4Target, source.slice(1))),
+		await hashTree(source)
+	);
+	assert.equal(
+		await fs.readFile(path.join(stage4Target, 'pluton/database/example.sql'), 'utf8'),
+		sql
+	);
+	console.log(
+		'PASS stage 4 recovery of an old backup from the previous S3 primary, which holds its original: full staged restore with SHA256'
 	);
 	console.log(
 		'PROFILE',
