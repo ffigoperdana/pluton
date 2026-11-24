@@ -144,7 +144,10 @@ const decode = (raw: unknown): PrimaryPromotion | null => {
 
 /** SQLite trigger refusals become operator-readable conflicts. */
 function translate(error: unknown): never {
-	const message = error instanceof Error ? error.message : '';
+	// Read the message without `instanceof Error`: a SqliteError can come from another realm
+	// (better-sqlite3 binds its error constructor once per process).
+	const raw = (error as { message?: unknown } | null)?.message;
+	const message = typeof raw === 'string' ? raw : '';
 	if (message.includes('MANAGED_PROMOTION_BUSY'))
 		throw conflict(
 			'Finish the repository relocation or the open backup failover of this plan before promoting a replica.'

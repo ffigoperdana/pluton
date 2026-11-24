@@ -457,6 +457,35 @@ describe('primary promotion start', () => {
 		expect(t.remoteBackups.validatePlanCreation).toHaveBeenCalledTimes(2);
 	});
 
+	it('recognizes a trigger refusal whose SqliteError comes from another realm', () => {
+		// Under Jest, better-sqlite3 binds its error constructor in the first test file of a worker,
+		// so later files receive errors that are not `instanceof Error` there.
+		const foreign = Object.create(null);
+		foreign.message = 'MANAGED_PROMOTION_BUSY';
+		const store = new PrimaryPromotionStore({
+			prepare: () => ({
+				run: () => {
+					throw foreign;
+				},
+			}),
+		} as any);
+		expect(() =>
+			store.create({
+				id: 'a'.repeat(24),
+				planId: 'plan-01',
+				repositoryId: 'repo-01',
+				replicationId: 'replica-s3',
+				previousStorageId: 'storage-01',
+				previousStoragePath: PRIMARY_PATH,
+				previousRepositoryConfigId: PRIMARY_ID,
+				promotedStorageId: 'storage-s3',
+				promotedStoragePath: REPLICA_PATH,
+				promotedFingerprint: 'f'.repeat(64),
+				promotedRepositoryConfigId: REPLICA_ID,
+			})
+		).toThrow('open backup failover');
+	});
+
 	it('never runs together with a relocation or an open failover', async () => {
 		const t = setup();
 		t.sqlite
@@ -467,6 +496,7 @@ describe('primary promotion start', () => {
 		await expect(
 			t.service.start({ planId: 'plan-01', replicationId: 'replica-s3' })
 		).rejects.toThrow('open backup failover');
+		expect(t.store.activeForPlan('plan-01')).toBeNull();
 	});
 });
 
