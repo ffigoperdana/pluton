@@ -34,9 +34,15 @@ export type ManagedReplicationJob = {
 	createdAt: number;
 	updatedAt: number;
 	verifiedAt: number | null;
+	/**
+	 * 1 when the replica holds the original snapshot and the primary holds the copy: after a
+	 * primary promotion (docs/PRIMARY_PROMOTION.md) or a failover copy-back.
+	 */
+	destinationOriginal?: number;
 };
 export type ManagedReplicationEnqueue = Omit<
 	ManagedReplicationJob,
+	| 'destinationOriginal'
 	| 'destinationSnapshotId'
 	| 'status'
 	| 'ownerToken'

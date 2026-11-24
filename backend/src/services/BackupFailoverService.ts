@@ -148,6 +148,13 @@ export class BackupFailoverService implements ManagedFailoverGuard, BackupFailov
 		this.probe = probe || ((...args) => this.identity(...args));
 	}
 
+	private promotionActive?: (planId: string) => boolean;
+
+	/** Stage 4 promotions of the plan (docs/PRIMARY_PROMOTION.md). */
+	setPromotionGuard(active: (planId: string) => boolean): void {
+		this.promotionActive = active;
+	}
+
 	// ---- BackupFailoverHook (backup command path) ----
 
 	isFailoverBackup(backupId: string): boolean {
@@ -257,6 +264,8 @@ export class BackupFailoverService implements ManagedFailoverGuard, BackupFailov
 		const replication = plan?.settings.replication;
 		if (!plan || !replication?.enabled || replication.backupFailover !== 'automatic')
 			return 'disabled';
+		// A promotion swaps primary and replica (docs/PRIMARY_PROMOTION.md); never both at once.
+		if (this.promotionActive?.(plan.id)) return 'promotion-active';
 		if (
 			this.failovers.hasNewerBackup(plan.id, backup.id) ||
 			(await this.plans.hasActiveBackups(plan.id))

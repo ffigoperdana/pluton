@@ -1718,4 +1718,47 @@ describe('PlanService', () => {
 			expect(result).toEqual({ backups: [], restores: [], plans: [] });
 		});
 	});
+	// -------------------------------
+	// Stage 4 replica promotion guard (docs/PRIMARY_PROMOTION.md)
+	// -------------------------------
+	describe('replica promotion guard', () => {
+		const planId = 'plan-123';
+		const promote = (status: string) =>
+			planService.setPromotionGuard({
+				activeForPlan: (id: string) => (id === planId ? { status } : null),
+			});
+
+		beforeEach(() => {
+			mockPlanStore.getById.mockResolvedValue({
+				id: planId,
+				title: 'Plan',
+				sourceId: 'app-01',
+				sourceType: 'device',
+			} as any);
+		});
+
+		it('locks settings and removal for the whole promotion', async () => {
+			promote('catching-up');
+			await expect(planService.updatePlan(planId, { title: 'Renamed' } as any)).rejects.toThrow(
+				'being promoted to primary'
+			);
+			await expect(planService.deletePlan(planId, false)).rejects.toThrow(
+				'replica promotion of this plan before removing it'
+			);
+		});
+
+		it('refuses backups and resume only in the final step', async () => {
+			promote('switching');
+			await expect(planService.performBackup(planId)).rejects.toThrow(
+				'Backups resume after the replica promotion'
+			);
+			await expect(planService.resumeBackup(planId)).rejects.toThrow(
+				'resumes automatically after the replica promotion'
+			);
+			promote('catching-up');
+			await expect(planService.performBackup(planId)).rejects.not.toThrow(
+				'Backups resume after the replica promotion'
+			);
+		});
+	});
 });

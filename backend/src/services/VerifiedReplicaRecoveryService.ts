@@ -56,9 +56,9 @@ export type ReplicaRecoveryBinding = {
 	treeId: string;
 	fingerprint: string;
 	/**
-	 * A failover backup copied back to the primary (docs/BACKUP_FAILOVER.md): the replica holds
-	 * the original snapshot and the primary holds the copy, so the replica snapshot has no
-	 * `original` pointing at the primary snapshot.
+	 * The replica holds the original snapshot and the primary holds the copy, so the replica
+	 * snapshot has no `original` pointing at the primary snapshot: a failover backup copied back
+	 * (docs/BACKUP_FAILOVER.md) or a backup whose primary was promoted (docs/PRIMARY_PROMOTION.md).
 	 */
 	originalInReplica?: boolean;
 };
@@ -322,8 +322,9 @@ export class VerifiedReplicaRecoveryService {
 		};
 		const copiedBack = this.copiedBackFailover?.(backupId);
 		if (
-			copiedBack?.replicaSnapshotId === receipt.destinationSnapshotId &&
-			copiedBack?.primarySnapshotId === receipt.sourceSnapshotId
+			receipt.destinationOriginal === 1 ||
+			(copiedBack?.replicaSnapshotId === receipt.destinationSnapshotId &&
+				copiedBack?.primarySnapshotId === receipt.sourceSnapshotId)
 		)
 			binding.originalInReplica = true;
 		return { revision, context, binding, trust, kind: kind! };

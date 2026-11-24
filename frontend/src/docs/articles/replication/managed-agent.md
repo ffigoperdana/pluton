@@ -45,6 +45,22 @@ Hal yang perlu diketahui:
 - Replika yang masih menyimpan backup failover menunggu salin balik tidak bisa dilepas dari plan, dan primary/plan tidak bisa dipindah atau dihapus sampai salin balik selesai.
 - Bila primary yang kembali ternyata repository lain (identitas berbeda), salin balik ditolak dengan `primary-changed` dan snapshot tetap aman di replika.
 
+## Promote replika menjadi primary
+
+**Promote Replica** (menu aksi di halaman plan) menjadikan replika terverifikasi sebagai primary secara permanen, misalnya untuk memindah plan dari primary S3 ke SFTP atau sebaliknya tanpa membuat plan baru dan tanpa upload ulang dari nol. Primary lama otomatis menjadi replika di slot yang sama; tidak ada yang dihapus.
+
+1. Server memastikan replika memegang semua backup yang bisa disalin. Backup lama yang belum ada disalin lewat antrean replikasi biasa, satu per satu. Plan tetap berjalan selama tahap ini.
+2. Plan di-pause sebentar: backup yang selesai di tengah jalan ikut disalin, lalu server memeriksa identitas repository replika dan setiap snapshot (tree, tag, relasi original) tanpa menulis apa pun.
+3. Dalam satu transaksi, replika menjadi primary dan primary lama menjadi replika. Plan di-resume. Backup berikutnya dari Agent langsung ke primary baru dan hanya mengunggah data yang berubah.
+
+Hal yang perlu diketahui:
+
+- Berlaku untuk storage SFTP mana pun dan S3/S3-compatible mana pun yang menjadi replika plan, dua arah. Untuk pindah ke storage yang belum menjadi replika, tambahkan dulu sebagai replika, tunggu salinannya, lalu promote.
+- Promote ke S3 butuh Agent 0.8.0 atau lebih baru; promote ke SFTP tidak menambah syarat. Agent harus online saat promote dimulai karena plan divalidasi dalam bentuk sesudah switch.
+- Hanya untuk plan dengan tepat satu replika. Tidak bisa berjalan bersamaan dengan Move Repository atau failover yang belum selesai; selama promote, pengaturan plan terkunci.
+- Backup yang tidak bisa disalin (misalnya `artifact-binding-mismatch` dari backup sebelum database dump dikonfigurasi) tetap di primary lama dan dicantumkan di dialog. Bila server bisa membacanya di sana, backup itu tetap bisa dipulihkan lewat **Manual Verified Replica Recovery**.
+- Untuk kembali, promote sisi satunya lagi.
+
 ## Prasyarat
 
 - Plan **Managed Agent Backup** tersimpan, memakai primary SFTP atau S3 dedicated, serta Agent/allowed roots yang sesuai. Lihat [plan Managed Agent](/docs/backup-plans/managed-agent) dan [SFTP](/docs/storage/sftp).
