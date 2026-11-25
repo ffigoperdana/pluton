@@ -3,7 +3,11 @@ import { randomBytes } from 'node:crypto';
 import Cryptr from 'cryptr';
 import { AppError } from '../utils/AppError';
 import { parseChannel, parseSubscription } from '../notifications/deliveryPolicy';
-import { terminalPayload } from '../notifications/terminalPayload';
+import {
+	agentPayload,
+	replicationPayload,
+	terminalPayload,
+} from '../notifications/terminalPayload';
 import {
 	deliveryMessages,
 	type Channel,
@@ -217,7 +221,8 @@ export class NotificationDeliveryStore {
 				logicalKey,
 				payload.event_type,
 				payload.plan?.id || null,
-				payload.plan?.name || null,
+				// Agent events have no plan; history shows the Agent instead.
+				payload.plan?.name || (payload.agent ? `Agent ${payload.agent.name}` : null),
 				JSON.stringify(payload),
 				now
 			);
@@ -252,17 +257,22 @@ export class NotificationDeliveryStore {
 			 SELECT s.id AS source_id,s.kind,s.job_id FROM notification_sources s JOIN recovery_tests r ON s.kind='recovery' AND s.job_id=r.id JOIN plans p ON p.id=r.plan_id
 			 WHERE s.ready=1 AND r.status IN ('passed','passed_with_warning','failed','cancelled')
 			 AND COALESCE(CASE WHEN json_valid(r.result) THEN json_extract(r.result,'$.cleanup.infrastructure') END,1) <> 0
+			 UNION ALL
+			 SELECT s.id AS source_id,s.kind,s.job_id FROM notification_sources s JOIN managed_replication_jobs j ON s.kind='replication' AND s.job_id=j.id JOIN plans p ON p.id=j.plan_id
+			 WHERE s.ready=1 AND j.status IN ('failed','uncertain')
 			 ORDER BY source_id LIMIT ?`
 				)
 				.all(limit) as Row[];
 			let processed = 0;
 			for (const projection of rows) {
-				const kind = projection.kind as 'backup' | 'recovery';
+				const kind = projection.kind as 'backup' | 'recovery' | 'replication';
 				const row = this.sqlite
 					.prepare(
 						kind === 'backup'
 							? 'SELECT b.*,p.title AS plan_name FROM backups b JOIN plans p ON p.id=b.plan_id WHERE b.id=?'
-							: 'SELECT r.*,p.title AS plan_name FROM recovery_tests r JOIN plans p ON p.id=r.plan_id WHERE r.id=?'
+							: kind === 'replication'
+								? 'SELECT j.*,p.title AS plan_name,st.name AS replica_name FROM managed_replication_jobs j JOIN plans p ON p.id=j.plan_id LEFT JOIN storages st ON st.id=j.destination_storage_id WHERE j.id=?'
+								: 'SELECT r.*,p.title AS plan_name FROM recovery_tests r JOIN plans p ON p.id=r.plan_id WHERE r.id=?'
 					)
 					.get(projection.job_id) as Row;
 				if (
@@ -276,7 +286,10 @@ export class NotificationDeliveryStore {
 					processed++;
 					continue;
 				}
-				const payload = terminalPayload(kind, row, id('ne'), this.clock());
+				const payload =
+					kind === 'replication'
+						? replicationPayload(row, id('ne'), this.clock())
+						: terminalPayload(kind, row, id('ne'), this.clock());
 				const subscription = this.sqlite
 					.prepare(
 						'SELECT * FROM notification_subscriptions WHERE plan_id=? AND enabled=1 AND source_floor<?'
@@ -306,6 +319,103 @@ export class NotificationDeliveryStore {
 			}
 			return processed;
 		})();
+	}
+	/**
+	 * Agent liveness as the UI shows it: a fresh heartbeat, or a live command lease (a busy Agent
+	 * sends no heartbeat). An Agent offline for longer than `graceMs` raises `agent.offline` once;
+	 * its return raises `agent.online`. An outage that predates the first observation, and the
+	 * downtime of the Pluton server itself (`watchingSince`), never raise an alert.
+	 */
+	reconcileAgents(input: { timeoutMs: number; graceMs: number; watchingSince: number }): number {
+		return this.sqlite.transaction(() => {
+			const now = this.clock();
+			const agents = this.sqlite
+				.prepare(
+					`SELECT a.agent_id,a.device_id,a.last_seen,d.name AS device_name,
+					 EXISTS(SELECT 1 FROM agent_commands c WHERE c.agent_id=a.agent_id AND c.state IN ('leased','acknowledged','running') AND c.lease_expires_at>?) AS busy
+					 FROM agent_identities a LEFT JOIN devices d ON d.id=a.device_id WHERE a.revoked_at IS NULL`
+				)
+				.all(Math.floor(now / 1000)) as Row[];
+			this.sqlite
+				.prepare(
+					'DELETE FROM notification_agent_states WHERE agent_id NOT IN (SELECT agent_id FROM agent_identities WHERE revoked_at IS NULL)'
+				)
+				.run();
+			const save = this.sqlite.prepare(
+				'INSERT INTO notification_agent_states(agent_id,offline_since,notified,updated_at) VALUES (?,?,?,?) ON CONFLICT(agent_id) DO UPDATE SET offline_since=excluded.offline_since,notified=excluded.notified,updated_at=excluded.updated_at'
+			);
+			let emitted = 0;
+			for (const agent of agents) {
+				const lastSeenMs = typeof agent.last_seen === 'number' ? agent.last_seen * 1000 : null;
+				const online = !!agent.busy || (lastSeenMs !== null && now - lastSeenMs <= input.timeoutMs);
+				const state = this.sqlite
+					.prepare('SELECT * FROM notification_agent_states WHERE agent_id=?')
+					.get(agent.agent_id) as Row | undefined;
+				const subject = {
+					id: agent.agent_id as string,
+					name: (agent.device_name as string) || (agent.device_id as string),
+					lastSeenMs,
+				};
+				if (online) {
+					if (state?.notified && state.offline_since !== null) {
+						const sent = this.emitAgentEvent('agent.online', agent.device_id, {
+							...subject,
+							offlineSinceMs: state.offline_since,
+						});
+						if (sent === undefined) continue; // Backpressure: keep the state and retry.
+						emitted += sent;
+					}
+					if (!state || state.offline_since !== null || state.notified)
+						save.run(agent.agent_id, null, 0, now);
+					continue;
+				}
+				const since = lastSeenMs === null ? now : lastSeenMs + input.timeoutMs;
+				if (!state) {
+					// First observation of an outage that already exists: baseline, no alert.
+					save.run(agent.agent_id, since, 1, now);
+					continue;
+				}
+				if (state.offline_since === null) {
+					save.run(agent.agent_id, Math.max(since, input.watchingSince), 0, now);
+					continue;
+				}
+				if (state.notified || now - state.offline_since < input.graceMs) continue;
+				const sent = this.emitAgentEvent('agent.offline', agent.device_id, {
+					...subject,
+					offlineSinceMs: state.offline_since,
+				});
+				if (sent === undefined) continue;
+				emitted += sent;
+				save.run(agent.agent_id, state.offline_since, 1, now);
+			}
+			return emitted;
+		})();
+	}
+	/**
+	 * One event per Agent state change, delivered to the channels that any plan of that Agent
+	 * subscribes for this event. Undefined when the queue is full (the caller retries later).
+	 */
+	private emitAgentEvent(
+		eventType: 'agent.offline' | 'agent.online',
+		deviceId: string,
+		agent: { id: string; name: string; lastSeenMs: number | null; offlineSinceMs: number }
+	): number | undefined {
+		const wanted = new Set<string>();
+		for (const subscription of this.sqlite
+			.prepare(
+				"SELECT s.channel_ids,s.events FROM notification_subscriptions s JOIN plans p ON p.id=s.plan_id WHERE s.enabled=1 AND p.source_type='device' AND p.source_id=?"
+			)
+			.all(deviceId) as Row[])
+			if (JSON.parse(subscription.events).includes(eventType))
+				for (const channelId of JSON.parse(subscription.channel_ids)) wanted.add(channelId);
+		const channels = this.channels().filter(
+			channel => channel.enabled && wanted.has(channel.id) && channel.events.includes(eventType)
+		);
+		if (!channels.length) return 0;
+		if (this.pendingCount() + channels.length > maxPending) return undefined;
+		const payload = agentPayload(eventType, agent, id('ne'), this.clock());
+		this.insertEvent(payload, `agent:${agent.id}:${eventType}:${agent.offlineSinceMs}`, channels);
+		return 1;
 	}
 	test(channelId: string): Delivery {
 		return this.sqlite.transaction(() => {

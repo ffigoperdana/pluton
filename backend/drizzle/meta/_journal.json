@@ -183,6 +183,13 @@
       "when": 1796083200000,
       "tag": "0025_primary_promotion",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1796688000000,
+      "tag": "0026_operational_notifications",
+      "breakpoints": true
     }
   ]
 }

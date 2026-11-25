@@ -3,17 +3,30 @@ import { NotificationDeliveryStore } from '../stores/NotificationDeliveryStore';
 import { deliverNotification } from './outboundDelivery';
 import { serverLogger } from '../utils/logger';
 import type { Delivery } from '../types/notificationDelivery';
+
+/** Agent liveness for operational notifications (docs/OPERATIONAL_NOTIFICATIONS.md). */
+export type AgentWatch = {
+	/** The UI offline threshold (AGENT_OFFLINE_TIMEOUT_SECONDS). */
+	offline: number;
+	/** How long an Agent stays offline before `agent.offline` is sent. */
+	grace: number;
+};
+export const AGENT_OFFLINE_GRACE_MS = 10 * 60_000;
 export class NotificationDeliveryManager {
 	private timer?: ReturnType<typeof setInterval>;
 	private active = new Set<Promise<void>>();
 	private stopped = true;
+	private watchingSince = Date.now();
 	constructor(
 		private store: NotificationDeliveryStore,
-		private deliver = deliverNotification
+		private deliver = deliverNotification,
+		private agents: AgentWatch = { offline: 90_000, grace: AGENT_OFFLINE_GRACE_MS }
 	) {}
 	start() {
 		if (!this.stopped) return;
 		this.stopped = false;
+		// Heartbeats missed while this server was down are not an Agent outage.
+		this.watchingSince = Date.now();
 		this.timer = setInterval(() => this.tick(), 5000);
 		this.timer.unref();
 		this.tick();
@@ -23,6 +36,19 @@ export class NotificationDeliveryManager {
 		if (this.stopped) return;
 		try {
 			this.store.reconcile();
+			try {
+				this.store.reconcileAgents({
+					timeoutMs: this.agents.offline,
+					graceMs: this.agents.grace,
+					watchingSince: this.watchingSince,
+				});
+			} catch {
+				// Agent watching never blocks backup and recovery deliveries.
+				serverLogger?.warn(
+					{ event: 'notification_agent_watch_failed' },
+					'Agent availability could not be evaluated for notifications.'
+				);
+			}
 			this.store.maintenance();
 			while (this.active.size < 2) {
 				const row = this.store.claim(randomBytes(16).toString('hex'));
