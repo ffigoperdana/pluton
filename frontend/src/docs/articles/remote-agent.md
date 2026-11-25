@@ -1,14 +1,14 @@
 # Mencadangkan mesin lain dengan Remote Agent
 
-Remote Agent memungkinkan Pluton mencadangkan folder pada mesin Linux lain tanpa membuka port inbound untuk protokol agent. Anda memasang satu service pada mesin sumber, mengizinkan folder tertentu, lalu memilih mesin itu saat membuat Backup Plan.
+Remote Agent memungkinkan GoRecover mencadangkan folder pada mesin Linux lain tanpa membuka port inbound untuk protokol agent. Anda memasang satu service pada mesin sumber, mengizinkan folder tertentu, lalu memilih mesin itu saat membuat Backup Plan.
 
-Contoh penggunaan: aplikasi fiktif berada pada `app-01` di `/srv/example-app`, sementara Pluton berjalan pada VM pengelola. Mulailah dengan folder contoh sebelum menambahkan database atau hooks.
+Contoh penggunaan: aplikasi fiktif berada pada `app-01` di `/srv/example-app`, sementara GoRecover berjalan pada VM pengelola. Mulailah dengan folder contoh sebelum menambahkan database atau hooks.
 
 ## Komunikasi
 
-Agent menghubungi Pluton secara outbound untuk heartbeat, mengambil pekerjaan, dan mengirim progress serta hasil. Browser administrator berkomunikasi dengan server. Untuk data backup, agent mengakses repository primer (SFTP, atau S3 untuk Agent 0.8.0) yang dipilih plan; server juga perlu mengakses primer untuk verifikasi dan pekerjaan lanjutan.
+Agent menghubungi GoRecover secara outbound untuk heartbeat, mengambil pekerjaan, dan mengirim progress serta hasil. Browser administrator berkomunikasi dengan server. Untuk data backup, agent mengakses repository primer (SFTP, atau S3 untuk Agent 0.8.0) yang dipilih plan; server juga perlu mengakses primer untuk verifikasi dan pekerjaan lanjutan.
 
-Layanan SFTP dapat berada di VM Pluton bila operator menyediakannya. Pada mode ini primer tetap bertipe SFTP. Salinan opsional ke S3/HCP dikerjakan oleh server sesudah snapshot diverifikasi, dan kredensial replika tidak pernah dikirim ke agent. Agent hanya menerima kunci S3 milik plan yang primernya S3, dalam bentuk tersegel per backup.
+Layanan SFTP dapat berada di VM GoRecover bila operator menyediakannya. Pada mode ini primer tetap bertipe SFTP. Salinan opsional ke S3/HCP dikerjakan oleh server sesudah snapshot diverifikasi, dan kredensial replika tidak pernah dikirim ke agent. Agent hanya menerima kunci S3 milik plan yang primernya S3, dalam bentuk tersegel per backup.
 
 ## Menyiapkan mesin
 

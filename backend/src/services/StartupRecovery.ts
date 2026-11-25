@@ -1,5 +1,6 @@
 import { PlanService } from './PlanService';
 import { planLogger } from '../utils/logger';
+import { BRAND_NAME } from '../utils/brand';
 
 /**
  * Clears orphaned in-progress rows at startup.
@@ -18,13 +19,13 @@ export class StartupRecovery {
 
 			for (const backup of backups) {
 				planLogger('backup', backup.planId ?? undefined, backup.id).warn(
-					"This backup didn't finish because Pluton restarted while it was running. Marked as failed."
+					`This backup didn't finish because ${BRAND_NAME} restarted while it was running. Marked as failed.`
 				);
 			}
 
 			for (const restore of restores) {
 				planLogger('restore', restore.planId ?? undefined, restore.backupId ?? undefined).warn(
-					"This restore didn't finish because Pluton restarted while it was running. Marked as failed."
+					`This restore didn't finish because ${BRAND_NAME} restarted while it was running. Marked as failed.`
 				);
 			}
 

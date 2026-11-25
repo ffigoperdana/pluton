@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { createReadStream } from 'fs';
 import { SettingsService } from '../services/SettingsService';
 import { AppSettings, IntegrationTypes } from '../types/settings';
+import { BRAND_NAME } from '../utils/brand';
 
 export class SettingsController {
 	constructor(protected settingsService: SettingsService) {}
@@ -218,7 +219,7 @@ export class SettingsController {
 		} catch (error: any) {
 			res.status(error.statusCode || 500).json({
 				success: false,
-				error: error instanceof Error ? error.message : 'Failed to get Pluton backup status',
+				error: error instanceof Error ? error.message : `Failed to get ${BRAND_NAME} backup status`,
 			});
 		}
 	}
@@ -230,7 +231,7 @@ export class SettingsController {
 		} catch (error: any) {
 			res.status(error.statusCode || 500).json({
 				success: false,
-				error: error instanceof Error ? error.message : 'Failed to list Pluton backups',
+				error: error instanceof Error ? error.message : `Failed to list ${BRAND_NAME} backups`,
 			});
 		}
 	}
@@ -265,7 +266,7 @@ export class SettingsController {
 		} catch (error: any) {
 			res.status(error.statusCode || 500).json({
 				success: false,
-				error: error instanceof Error ? error.message : 'Failed to download Pluton backup',
+				error: error instanceof Error ? error.message : `Failed to download ${BRAND_NAME} backup`,
 			});
 		}
 	}
@@ -274,11 +275,11 @@ export class SettingsController {
 		try {
 			await this.settingsService.runSelfBackupNow();
 			// 202: the job is queued, not done. The UI polls the status endpoint.
-			res.status(202).json({ success: true, result: 'Pluton backup queued.' });
+			res.status(202).json({ success: true, result: `${BRAND_NAME} backup queued.` });
 		} catch (error: any) {
 			res.status(error.statusCode || 500).json({
 				success: false,
-				error: error instanceof Error ? error.message : 'Failed to queue Pluton backup',
+				error: error instanceof Error ? error.message : `Failed to queue ${BRAND_NAME} backup`,
 			});
 		}
 	}

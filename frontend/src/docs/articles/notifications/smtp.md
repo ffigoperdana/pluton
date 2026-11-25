@@ -1,6 +1,6 @@
 # Mengatur SMTP relay dan TLS
 
-Channel SMTP mengirim hasil backup dan recovery melalui relay yang disetujui. Siapkan hostname, port, mode keamanan, pengirim yang diperbolehkan, 1–20 penerima, dan kredensial jika diperlukan. Server Pluton harus dapat mengakses relay; konektivitas dari laptop operator saja belum cukup.
+Channel SMTP mengirim hasil backup dan recovery melalui relay yang disetujui. Siapkan hostname, port, mode keamanan, pengirim yang diperbolehkan, 1–20 penerima, dan kredensial jika diperlukan. Server GoRecover harus dapat mengakses relay; konektivitas dari laptop operator saja belum cukup.
 
 ## Channel
 
@@ -17,6 +17,10 @@ Channel SMTP mengirim hasil backup dan recovery melalui relay yang disetujui. Si
 STARTTLS harus berhasil; tidak ada fallback plain bila peningkatan gagal. CA dan hostname sertifikat diverifikasi, dengan TLS minimum 1.2. **SMTP hostname** harus cocok dengan sertifikat walau DNS menuju alamat privat. CA privat membutuhkan trust yang benar pada runtime server, dipasang administrator.
 
 **Plain SMTP — explicitly trusted LAN only** hanya untuk LAN yang disetujui secara eksplisit dan tidak mengenkripsi isi/kredensial. Jangan memilihnya untuk menghindari error sertifikat atau untuk jaringan publik. Loopback, link-local, dan metadata tetap ditolak; jangan memperluas CIDR sekadar agar tes lolos.
+
+## Isi email
+
+Email channel berformat HTML dengan alternatif teks biasa. Untuk kegagalan, email menjelaskan apa yang terjadi, langkah perbaikan, dan tautan ke panduan troubleshooting, lalu tabel detail (waktu, durasi, ukuran, snapshot, kode kegagalan, ID). Penjelasan dibuat server dari kode kategori; pesan error mentah, path source, nama database, dan kredensial tidak pernah dikirim. Detail lengkap tetap ada di halaman plan. Tombol dan tautan memakai `APP_URL`, jadi pastikan nilainya alamat HTTPS dashboard yang benar.
 
 ## Test Email
 

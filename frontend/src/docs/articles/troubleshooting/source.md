@@ -1,6 +1,6 @@
 # Troubleshooting: Source Files or Directories Are Inaccessible
 
-Panduan untuk operator Ubuntu/Linux dengan standalone Pluton Agent. Gunakan saat Error Details menampilkan `source-entry-inaccessible`, kegagalan source lain, atau detail path yang perlu ditinjau. Semua contoh memakai identitas sintetis `app-01` dan `/srv/example-app`; ganti dengan source yang **sudah disetujui**, bukan menambah scope. Pluton tidak menjalankan command di panduan ini. Tombol salin hanya membantu contoh diagnostik statis read-only; baca dan sesuaikan sebelum menjalankannya sendiri.
+Panduan untuk operator Ubuntu/Linux dengan standalone Agent. Gunakan saat Error Details menampilkan `source-entry-inaccessible`, kegagalan source lain, atau detail path yang perlu ditinjau. Semua contoh memakai identitas sintetis `app-01` dan `/srv/example-app`; ganti dengan source yang **sudah disetujui**, bukan menambah scope. GoRecover tidak menjalankan command di panduan ini. Tombol salin hanya membantu contoh diagnostik statis read-only; baca dan sesuaikan sebelum menjalankannya sendiri.
 
 ## 1. Understand the error
 
@@ -116,7 +116,7 @@ Jika `getfacl` tidak tersedia, utilitas itu disediakan paket Ubuntu **acl**, buk
 sudo apt-get install acl
 ```
 
-Instalasi paket bukan diagnostik read-only. Pluton tidak menjalankannya dan panduan tidak menyediakan tombol salin command mutasi.
+Instalasi paket bukan diagnostik read-only. GoRecover tidak menjalankannya dan panduan tidak menyediakan tombol salin command mutasi.
 
 ## 7. Safely grant read-only access
 
@@ -236,7 +236,7 @@ Ini **manual sample scanner, bukan bukti exact Restic exclusion behavior**. Root
 6. Periksa terminal **Complete**. Failed/cancelled tetap gagal/dibatalkan, bukan sukses karena popup lebih informatif.
 7. Verifikasi exact snapshot dan intended protected data lewat Browse/metadata, termasuk coverage exclusions yang diterima owner.
 8. Jalankan [isolated Recovery Test](/docs/recovery-testing/validation) dan [restore staging](/docs/restore/staging). Filesystem Complete tidak membuktikan SQL import, replication atau recovery lulus.
-9. Pertahankan SYS MON/legacy backups selama Pluton masih SHADOW hingga validasi independen dan cutover disetujui. Jangan memodifikasi scripts atau repository lama untuk diagnosis ini.
+9. Pertahankan SYS MON/legacy backups selama GoRecover masih SHADOW hingga validasi independen dan cutover disetujui. Jangan memodifikasi scripts atau repository lama untuk diagnosis ini.
 
 ## 12. Troubleshooting reference
 

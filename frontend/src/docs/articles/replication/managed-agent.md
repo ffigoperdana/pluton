@@ -1,11 +1,11 @@
 # Replikasi untuk Managed Agent Backup
 
-Pada Managed Agent, Agent membaca source dan membuat snapshot pada repository utama. Setelah primary selesai dan snapshot diverifikasi, server Pluton menyalin snapshot tersebut ke nol sampai dua repository tambahan dengan tipe yang berlawanan: S3 untuk primary SFTP, atau SFTP untuk primary S3. Source Agent tidak menerima credential replika dan tidak menjalankan copy.
+Pada Managed Agent, Agent membaca source dan membuat snapshot pada repository utama. Setelah primary selesai dan snapshot diverifikasi, server GoRecover menyalin snapshot tersebut ke nol sampai dua repository tambahan dengan tipe yang berlawanan: S3 untuk primary SFTP, atau SFTP untuk primary S3. Source Agent tidak menerima credential replika dan tidak menjalankan copy.
 
 ```text
 Source + dump SQL di Agent
   → repository SFTP utama → verifikasi snapshot utama
-  → antrean server Pluton → replika S3 A → replika S3 B
+  → antrean server GoRecover → replika S3 A → replika S3 B
 
 Hasil primary dan hasil setiap replika dicatat terpisah.
 ```
@@ -17,12 +17,12 @@ Plan dengan primary S3 (HCP) memakai alur yang sama ke arah sebaliknya:
 ```text
 Source + dump SQL di Agent
   → repository S3 utama → verifikasi snapshot utama
-  → antrean server Pluton → replika SFTP A → replika SFTP B
+  → antrean server GoRecover → replika SFTP A → replika SFTP B
 ```
 
 - Pilih storage SFTP pada **+ Add Replication Destination** dan isi folder khusus yang baru atau kosong, misalnya `replicas/app-01`. Folder yang sudah berisi apa pun ditolak; folder yang belum ada dibuat saat inisialisasi.
 - Folder relatif dimulai dari home akun SFTP, sedangkan folder berawalan `/` adalah path absolut. Server menganggap keduanya ruang terpisah, jadi tetap pakai satu bentuk yang sama untuk satu server SFTP.
-- Server membaca primary S3 dengan credential storage yang sama seperti Browse, lalu menulis ke SFTP dengan credential storage SFTP. Salinan pertama plan besar melewati server Pluton dua kali (unduh dari S3, unggah ke SFTP), sehingga kecepatannya mengikuti jaringan server.
+- Server membaca primary S3 dengan credential storage yang sama seperti Browse, lalu menulis ke SFTP dengan credential storage SFTP. Salinan pertama plan besar melewati server GoRecover dua kali (unduh dari S3, unggah ke SFTP), sehingga kecepatannya mengikuti jaringan server.
 - **Assisted Failover** dan pemulihan dari replika bekerja sama seperti replika S3, dengan sumber replika SFTP.
 - Agent tidak perlu di-upgrade; semua langkah berjalan di server.
 
@@ -31,7 +31,7 @@ Source + dump SQL di Agent
 **Backup failover** (bagian **Recovery & Failover**, default **Off**) menjaga backup tetap berjalan ketika primary mati. Dengan pilihan **Automatic**:
 
 1. Backup ke primary gagal sebelum upload karena repository tidak terjangkau (Agent melapor sekitar 35 detik).
-2. Server Pluton mencoba membaca primary sendiri. Failover hanya terjadi bila server juga gagal; bila server masih bisa, tidak ada perpindahan.
+2. Server GoRecover mencoba membaca primary sendiri. Failover hanya terjadi bila server juga gagal; bila server masih bisa, tidak ada perpindahan.
 3. Server membuat backup baru **Failover backup** yang ditulis Agent langsung ke replika pertama yang sudah punya salinan terverifikasi dan terjangkau. Karena replika memakai password dan chunker yang sama, hanya data yang berubah yang diunggah.
 4. Server memverifikasi snapshot itu di replika (tag, tree, ukuran dan SHA-256 artefak SQL). Sejak saat itu backup bisa dipulihkan lewat **Manual Verified Replica Recovery** di modal mirrors.
 5. Setelah primary terjangkau lagi, server **menyalin balik** snapshot ke primary dan memverifikasinya. Badge **Failover → <replika>** berubah hijau saat salin balik selesai.

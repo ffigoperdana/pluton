@@ -1,6 +1,7 @@
 import * as path from 'path';
 import * as os from 'os';
 import { AppError } from './AppError';
+import { BRAND_NAME } from './brand';
 
 /**
  * Sanitizes and formats a storage path based on the storage type and operating system.
@@ -53,7 +54,7 @@ export function sanitizeStoragePath(
 			if (/^[\\/]{2}/.test(trimmedPath) || parsedRoot.startsWith('\\\\')) {
 				throw new AppError(
 					400,
-					'Invalid Storage Destination path: Network (UNC) destinations are not supported. Map the share to a drive letter on the Pluton host, or add the share as an SMB storage.'
+					`Invalid Storage Destination path: Network (UNC) destinations are not supported. Map the share to a drive letter on the ${BRAND_NAME} host, or add the share as an SMB storage.`
 				);
 			}
 			// Refuse a rootless path (no drive letter). Also fixes '/mnt/data' -> 'F:\mnt\data' defect.

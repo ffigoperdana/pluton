@@ -4,12 +4,15 @@ import { comlink } from 'vite-plugin-comlink';
 import { VitePWA } from 'vite-plugin-pwa';
 import { createHash } from 'crypto';
 import { basename } from 'path';
+import { BRAND_NAME } from './src/utils/brand.ts';
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
    const env = loadEnv(mode, process.cwd(), '');
+   const appName = env.VITE_APP_NAME || BRAND_NAME;
    return {
       plugins: [
+         { name: 'app-name-html', transformIndexHtml: { order: 'pre', handler: (html: string) => html.replaceAll('%APP_NAME%', appName) } },
          comlink(),
          react(),
          VitePWA({
@@ -17,8 +20,8 @@ export default defineConfig(({ mode }) => {
             registerType: 'autoUpdate',
             // This will generate the manifest.json for you
             manifest: {
-               name: 'Pluton Backup',
-               short_name: 'Pluton',
+               name: `${appName} Backup`,
+               short_name: appName,
                description: 'A modern backup and restore solution.',
                theme_color: '#575aff', // Matches your primary color
                background_color: '#f5f8ff',
@@ -67,7 +70,7 @@ export default defineConfig(({ mode }) => {
                      sizes: '1280x720',
                      type: 'image/png',
                      form_factor: 'wide',
-                     label: 'Pluton Dashboard View',
+                     label: `${appName} Dashboard View`,
                   },
                   {
                      src: 'screenshots/screenshot-mobile.png',

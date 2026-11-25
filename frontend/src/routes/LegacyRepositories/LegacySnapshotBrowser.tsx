@@ -13,6 +13,7 @@ import {
 } from '../../services/legacyRepositories';
 import { formatBytes, formatDateTime } from '../../utils/helpers';
 import classes from './LegacyRepositories.module.scss';
+import { APP_NAME } from '../../utils/brand';
 
 const MAX_SELECTED_PATHS = 20;
 
@@ -132,7 +133,7 @@ const LegacySnapshotBrowser = ({ repositoryId, snapshot, close }: LegacySnapshot
             <div className={classes.browserIntro}>
                <div>
                   <strong>READ ONLY REPOSITORY</strong>
-                  <p>Browsing reads structured snapshot metadata. A selected restore writes only to an isolated Pluton staging area.</p>
+                  <p>Browsing reads structured snapshot metadata. A selected restore writes only to an isolated {APP_NAME} staging area.</p>
                </div>
                <div className={classes.snapshotSummary}>
                   <span>{formatDateTime(snapshot.time)}</span>
@@ -257,7 +258,7 @@ const LegacySnapshotBrowser = ({ repositoryId, snapshot, close }: LegacySnapshot
                closeModal={() => setShowConfirmation(false)}
                message={
                   <div>
-                     <p>This restore reads the repository and writes only to an isolated staging area controlled by Pluton. It does not modify repository contents.</p>
+                     <p>This restore reads the repository and writes only to an isolated staging area controlled by {APP_NAME}. It does not modify repository contents.</p>
                      <p><strong>Snapshot:</strong> <code>{snapshot.id}</code></p>
                      <p><strong>Selected paths:</strong></p>
                      <ul className={classes.restorePaths}>

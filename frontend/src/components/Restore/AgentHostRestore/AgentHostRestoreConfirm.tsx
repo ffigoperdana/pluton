@@ -11,6 +11,7 @@ import {
    agentHostRestoreTarget,
    agentHostSelectionProblem,
 } from '../../../utils/agentHostRestore';
+import { APP_NAME } from '../../../utils/brand';
 
 interface AgentHostRestoreConfirmProps {
    backupId: string;
@@ -61,7 +62,7 @@ const AgentHostRestoreConfirm = ({
             </p>
             <p className={classes.note}>
                While it runs the folder is <code>{mutation.data.target}.partial</code>. Only a folder without <code>.partial</code> is complete
-               and verified. Pluton never moves, chowns or deletes it. After it completes, the host administrator typically runs:
+               and verified. {APP_NAME} never moves, chowns or deletes it. After it completes, the host administrator typically runs:
             </p>
             <ol className={classes.steps}>
                {agentHostOperatorSteps(mutation.data.target, databasePath).map((step) => (

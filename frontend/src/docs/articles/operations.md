@@ -14,7 +14,7 @@ Contoh sintetis: plan `app-01` dijadwalkan malam hari. Backup terakhir sukses te
 
 ## Review dependency
 
-Periksa **Remote Agent**, **Last seen**, versi, **Allowed roots configured**, dan **Agent capabilities** pada perangkat. **ONLINE** belum menjamin seluruh source terbaca. Periksa kapasitas storage, permission, mount, expiry sertifikat, dump client, grant database, serta ruang volume Pluton dan staging. Jangan menjalankan aplikasi ke data nyata hanya untuk menguji perubahan dokumentasi.
+Periksa **Remote Agent**, **Last seen**, versi, **Allowed roots configured**, dan **Agent capabilities** pada perangkat. **ONLINE** belum menjamin seluruh source terbaca. Periksa kapasitas storage, permission, mount, expiry sertifikat, dump client, grant database, serta ruang volume GoRecover dan staging. Jangan menjalankan aplikasi ke data nyata hanya untuk menguji perubahan dokumentasi.
 
 ## Review recovery
 

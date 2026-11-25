@@ -2,7 +2,7 @@
 
 Sebelum membuka formulir backup, tentukan mesin sumber, tempat penyimpanan, dan tempat pemulihan uji. Ketiganya membutuhkan akses serta ruang yang berbeda. Contoh di halaman ini adalah folder `/srv/example-app` pada `app-01` dan tujuan backup yang disediakan khusus untuk latihan.
 
-## Pluton Server
+## GoRecover Server
 
 Jalur deployment server yang dicakup repository adalah image Docker yang dibangun dari source untuk Linux amd64, dengan Compose plugin dan volume persisten `/data`. Container berjalan sebagai pengguna non-root. Ikuti [deployment Docker](/docs/deployment/docker) untuk langkah pemasangan; jangan menyalin konfigurasi pengembangan ke produksi tanpa meninjaunya.
 
@@ -18,8 +18,8 @@ Sediakan satu folder contoh yang memang boleh dibaca agent, bukan seluruh disk. 
 
 ## Infrastruktur
 
-1. Pastikan browser administrator dapat mengakses Pluton melalui alamat HTTPS yang benar.
-2. Pastikan agent dapat menghubungi Pluton secara outbound. Port inbound pada agent tidak diperlukan untuk protokol agent.
+1. Pastikan browser administrator dapat mengakses GoRecover melalui alamat HTTPS yang benar.
+2. Pastikan agent dapat menghubungi GoRecover secara outbound. Port inbound pada agent tidak diperlukan untuk protokol agent.
 3. Untuk Managed Agent, pastikan agent dan server dapat menjangkau repository primer (SFTP, atau S3 untuk Agent 0.8.0). Untuk SFTP, akun perlu menulis pada lokasi repository baru yang terisolasi.
 4. Jika memakai replika S3, pastikan server dapat mengakses endpoint serta bucket. Kredensial S3 replika disimpan dan digunakan server; agent tidak menerimanya.
 5. Sediakan staging pemulihan yang terpisah dari source dan repository, dengan kapasitas serta izin yang sesuai.

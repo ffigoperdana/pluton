@@ -12,7 +12,7 @@ Administrator harus memasang klien yang sesuai sebelum Anda menyimpan konfiguras
 | MySQL (mysqldump) | Klien MySQL asli | Alias mysqldump MariaDB tidak membuktikan dukungan MySQL |
 | PostgreSQL (pg_dump) | pg_dump dengan keluaran plain SQL | Kompatibilitas versi server dan trust CA |
 
-Klien backup pada agent berbeda dari klien import atau worker pada Pluton Server. Backup sukses belum memastikan server pemulihan mempunyai semua kebutuhan tersebut.
+Klien backup pada agent berbeda dari klien import atau worker pada GoRecover Server. Backup sukses belum memastikan server pemulihan mempunyai semua kebutuhan tersebut.
 
 ## Pilihan DB
 
@@ -28,7 +28,7 @@ Setiap kartu memilih satu logical database. Beberapa engine dapat dipakai dalam 
 
 Backup native mencatat database ID, engine, nama logical database, path artefak, ukuran, dan SHA-256 pada hasil pekerjaan yang terikat snapshot. Catatan ini digunakan untuk [Restore Database](/docs/database-restores) dan [import Recovery Test](/docs/recovery-testing/import).
 
-Berkas .sql yang berada dalam folder sumber dicadangkan sebagai berkas biasa. Pluton tidak menebak engine atau identitas database dari filename atau isi SQL untuk mengaktifkan import native. Gunakan [Restore berkas](/docs/restore) atau Download, kemudian ikuti prosedur DBA yang direview untuk penanganan manual.
+Berkas .sql yang berada dalam folder sumber dicadangkan sebagai berkas biasa. GoRecover tidak menebak engine atau identitas database dari filename atau isi SQL untuk mengaktifkan import native. Gunakan [Restore berkas](/docs/restore) atau Download, kemudian ikuti prosedur DBA yang direview untuk penanganan manual.
 
 ## Acceptance
 

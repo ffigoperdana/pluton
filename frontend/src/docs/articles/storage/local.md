@@ -1,12 +1,12 @@
 # Menggunakan disk lokal sebagai tujuan backup
 
-Storage **Local** menyimpan backup pada filesystem yang dilihat proses Pluton. Pilihan ini cocok untuk latihan atau disk tujuan yang memang dipasang pada host Pluton. Jika Pluton berada di container, path yang Anda pilih adalah path di dalam container; folder pada host perlu dipasang terlebih dahulu.
+Storage **Local** menyimpan backup pada filesystem yang dilihat proses GoRecover. Pilihan ini cocok untuk latihan atau disk tujuan yang memang dipasang pada host GoRecover. Jika GoRecover berada di container, path yang Anda pilih adalah path di dalam container; folder pada host perlu dipasang terlebih dahulu.
 
-Untuk source pada Managed Agent, gunakan [SFTP primer](/docs/storage/sftp), atau S3 primer bila Agent 0.8.0 melaporkan dukungan S3. Disk pada VM Pluton dapat melayani repository agent melalui SFTP yang disiapkan operator, tetapi memilih **Local** pada form bukan pengganti layanan SFTP itu.
+Untuk source pada Managed Agent, gunakan [SFTP primer](/docs/storage/sftp), atau S3 primer bila Agent 0.8.0 melaporkan dukungan S3. Disk pada VM GoRecover dapat melayani repository agent melalui SFTP yang disiapkan operator, tetapi memilih **Local** pada form bukan pengganti layanan SFTP itu.
 
 ## Sebelum mulai
 
-Administrator perlu menyediakan folder repository yang terpisah dari source, dapat ditulis oleh pengguna non-root Pluton, serta berada pada penyimpanan persisten. Contoh fiktif: source `/srv/example-app` dan tujuan `/srv/example-backups/app-01`. Jangan memilih source sebagai destination, atau menyimpan repository di dalam source yang akan dicadangkan.
+Administrator perlu menyediakan folder repository yang terpisah dari source, dapat ditulis oleh pengguna non-root GoRecover, serta berada pada penyimpanan persisten. Contoh fiktif: source `/srv/example-app` dan tujuan `/srv/example-backups/app-01`. Jangan memilih source sebagai destination, atau menyimpan repository di dalam source yang akan dicadangkan.
 
 Pastikan ruang cukup untuk pertumbuhan backup dan pekerjaan restore. Dua folder pada disk fisik yang sama tetap mempunyai risiko kegagalan disk yang sama. Siapkan salinan pada lokasi berbeda bila tujuan Anda mencakup perlindungan terhadap kegagalan host.
 
@@ -15,7 +15,7 @@ Pastikan ruang cukup untuk pertumbuhan backup dan pekerjaan restore. Dua folder 
 1. Buka **Storages → + New** untuk menampilkan **Add New Remote Storage**.
 2. Isi **Storage Name***, misalnya `Disk backup contoh`, lalu pilih **Local** pada **Storage Type***. Nama panel tetap menyebut remote meskipun tipe yang dipilih lokal.
 3. Tinjau **Advanced Options** hanya bila diperlukan. Klik **Add Storage** dan pastikan storage muncul.
-4. Buka **Backup Plans → + New**. Pada **Source & Destination**, pilih source host Pluton pada **Select Device*** dan tentukan **Backup Sources***.
+4. Buka **Backup Plans → + New**. Pada **Source & Destination**, pilih source host GoRecover pada **Select Device*** dan tentukan **Backup Sources***.
 5. Pada **Backup Destination***, pilih storage Local tadi. Isi path absolut tujuan atau gunakan ikon folder untuk membuka **Select Path**.
 6. Gunakan folder repository baru khusus plan. Tinjau jadwal dan pengaturan, lalu simpan lewat **Create Plan**.
 

@@ -12,6 +12,7 @@ import {
    storageKindLabel,
 } from '../../../utils/primaryPromotion';
 import classes from '../PlanRelocation/PlanRelocation.module.scss';
+import { APP_NAME } from '../../../utils/brand';
 
 interface PlanPromotionModalProps {
    planId: string;
@@ -69,7 +70,7 @@ const PlanPromotionModal = ({ planId, primaryName, close, onBindingChanged }: Pl
                      <span className={classes.detail}>
                         {promotion.status === 'switching'
                            ? 'Backups wait until the switch finishes; the plan resumes afterwards.'
-                           : 'Backups keep running. Copies run one at a time on the Pluton server.'}
+                           : `Backups keep running. Copies run one at a time on the ${APP_NAME} server.`}
                      </span>
                   </span>
                </div>
@@ -106,7 +107,7 @@ const PlanPromotionModal = ({ planId, primaryName, close, onBindingChanged }: Pl
                            {promotion.status === 'switched' &&
                               (item.restorable
                                  ? ' · restorable through Verified Replica Recovery'
-                                 : ' · the previous primary was unreachable; not restorable from Pluton until it is promoted again')}
+                                 : ` · the previous primary was unreachable; not restorable from ${APP_NAME} until it is promoted again`)}
                         </li>
                      ))}
                   </ul>

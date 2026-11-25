@@ -8,9 +8,9 @@ Untuk setup awal server sampai replikasi dan recovery database, ikuti
 [panduan lengkap](/docs/getting-started/complete-backup-setup). Latihan ini sengaja
 lebih pendek dan tidak membuktikan SQL import, replica atau application recovery.
 
-Pastikan [Pluton Server sudah terpasang](/docs/deployment), Anda dapat login, dan [kebutuhan sistem](/docs/getting-started/requirements) terpenuhi. Jika data berada pada mesin lain, lakukan [enrollment agent](/docs/remote-agent/enrollment) dan pastikan mesin **ONLINE**. Jika data berada pada host Pluton, pastikan folder terlihat serta terbaca dari lingkungan server atau container.
+Pastikan [GoRecover Server sudah terpasang](/docs/deployment), Anda dapat login, dan [kebutuhan sistem](/docs/getting-started/requirements) terpenuhi. Jika data berada pada mesin lain, lakukan [enrollment agent](/docs/remote-agent/enrollment) dan pastikan mesin **ONLINE**. Jika data berada pada host GoRecover, pastikan folder terlihat serta terbaca dari lingkungan server atau container.
 
-Pilih alur sesuai lokasi source. Contoh utama berikut memakai Managed Agent dengan SFTP primer (S3 primer juga tersedia untuk Agent 0.8.0). Untuk filesystem host Pluton, gunakan panduan [Backup Plan](/docs/backup-plans); pilihan primer dapat berupa Local, SFTP, atau S3 sesuai konfigurasi yang tersedia.
+Pilih alur sesuai lokasi source. Contoh utama berikut memakai Managed Agent dengan SFTP primer (S3 primer juga tersedia untuk Agent 0.8.0). Untuk filesystem host GoRecover, gunakan panduan [Backup Plan](/docs/backup-plans); pilihan primer dapat berupa Local, SFTP, atau S3 sesuai konfigurasi yang tersedia.
 
 ## Setup aplikasi
 

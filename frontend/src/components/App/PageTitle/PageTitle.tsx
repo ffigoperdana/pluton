@@ -7,7 +7,7 @@ const PageTitle = ({ title = '' }: { title: string }) => {
 
    useEffect(() => {
       // if the provided title is
-      document.title = title + (title ? ' | ' : '') + (APP_NAME || 'Pluton');
+      document.title = title + (title ? ' | ' : '') + APP_NAME;
    }, [location, title]);
 
    return null;

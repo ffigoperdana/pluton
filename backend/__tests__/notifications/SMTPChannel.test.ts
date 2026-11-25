@@ -2,6 +2,7 @@ import { SMTPChannel } from '../../src/notifications/channels/SMTPChannel';
 import { BaseNotification } from '../../src/notifications/BaseNotification';
 import { SmtpSettings } from '../../src/types/settings';
 import nodemailer from 'nodemailer';
+import { BRAND_NAME } from '../../src/utils/brand';
 
 // Mock nodemailer
 jest.mock('nodemailer');
@@ -116,7 +117,7 @@ describe('SMTPChannel', () => {
 
 			expect(nodemailer.createTransport).toHaveBeenCalledWith(
 				expect.objectContaining({
-					from: 'Pluton Backup <sender@example.com>',
+					from: `${BRAND_NAME} Backup <sender@example.com>`,
 				})
 			);
 		});

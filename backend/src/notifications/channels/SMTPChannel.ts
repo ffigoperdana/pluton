@@ -4,6 +4,7 @@ import { NotificationChannel } from '../NotificationChannel';
 import { SmtpSettings } from '../../types/settings';
 import { secureSmtpOptions } from './secureSmtp';
 import { z } from 'zod';
+import { BRAND_NAME } from '../../utils/brand';
 
 export class SMTPChannel implements NotificationChannel {
 	private transporter!: nodemailer.Transporter;
@@ -15,7 +16,7 @@ export class SMTPChannel implements NotificationChannel {
 
 	async initialize() {
 		const smtpConfig = this.smtpSettings;
-		const senderName = smtpConfig?.senderName || 'Pluton Backup';
+		const senderName = smtpConfig?.senderName || `${BRAND_NAME} Backup`;
 
 		const security = smtpConfig.security || (smtpConfig.port === 465 ? 'tls' : 'starttls');
 		if (

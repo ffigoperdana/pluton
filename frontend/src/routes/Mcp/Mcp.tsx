@@ -7,6 +7,7 @@ import { useMcpOverview, useMcpTools, useMcpClients, useMcpActivity, mcpRequest 
 import { authorizationStatus, connectionInstructions, type McpGrant, type McpGrantInput } from '../../utils/mcp';
 import classes from './Mcp.module.scss';
 import McpV2Panel from './McpV2Panel';
+import { APP_NAME } from '../../utils/brand';
 
 const blank: McpGrantInput = {
    name: '',
@@ -59,7 +60,8 @@ function ClientForm({
    return (
       <form className={classes.form} onSubmit={submit}>
          <p>
-            Register an existing OAuth user and client. Pluton stores permission grants and does not issue model-provider keys or OAuth credentials.
+            Register an existing OAuth user and client. {APP_NAME} stores permission grants and does not issue model-provider keys or OAuth
+            credentials.
          </p>
          <label>
             Friendly name

@@ -21,7 +21,7 @@ Akun backup memerlukan hak untuk database dan objek yang dicadangkan, termasuk S
 
 ## Routines dan Events
 
-**Include routines (extra DB privileges)** dan **Include events (extra DB privileges)** meminta objek tambahan pada dump MariaDB/MySQL. Pluton tidak mematikannya otomatis jika dump ditolak. Bila aplikasi memakainya, perbaiki grant dan uji dump lengkap. Mematikan opsi dapat membuat backup kurang lengkap untuk memulihkan aplikasi.
+**Include routines (extra DB privileges)** dan **Include events (extra DB privileges)** meminta objek tambahan pada dump MariaDB/MySQL. GoRecover tidak mematikannya otomatis jika dump ditolak. Bila aplikasi memakainya, perbaiki grant dan uji dump lengkap. Mematikan opsi dapat membuat backup kurang lengkap untuk memulihkan aplikasi.
 
 Untuk PostgreSQL, kedua opsi tidak tersedia. Owner, role, ekstensi, dan kompatibilitas tetap perlu ditinjau saat menyiapkan recovery.
 

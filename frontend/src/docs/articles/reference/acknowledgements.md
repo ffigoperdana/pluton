@@ -1,6 +1,6 @@
 # About dan Open Source Acknowledgements
 
-Pluton pada repository ini adalah fork independen dari proyek open-source `plutonhq/pluton`. Nama aplikasi dan attribution upstream tetap dipertahankan. Fork ini tidak mengklaim layanan resmi maupun endorsement upstream.
+GoRecover adalah fork independen dari proyek open-source Pluton (`plutonhq/pluton`) yang dirilis dengan Apache License, Version 2.0. Fork ini memakai nama dan logo sendiri pada antarmuka, sedangkan attribution upstream tetap dipertahankan. GoRecover tidak berafiliasi dengan proyek Pluton dan tidak mengklaim layanan resmi maupun endorsement upstream.
 
 ## Fork independen
 
@@ -10,11 +10,11 @@ Panduan operasional ini ditulis untuk perilaku public source yang tersedia. Riwa
 
 File `LICENSE` repository memuat Apache License, Version 2.0. Pertahankan attribution, copyright, license, dan NOTICE yang berlaku ketika mendistribusikan source atau artefak. Panduan ini tidak menggantikan teks lisensi yang disertakan bersama source.
 
-Nama package/import yang memakai namespace upstream dipertahankan untuk kompatibilitas, bukan sebagai klaim integrasi komersial.
+Nama package/import yang memakai namespace upstream dipertahankan untuk kompatibilitas, bukan sebagai klaim integrasi komersial. Hal yang sama berlaku untuk identifier teknis bernama `pluton`, misalnya service dan user `pluton-agent`, path `/etc/pluton-agent`, tag Restic, header webhook `X-Pluton-*`, dan key penyimpanan browser: semuanya tetap agar instalasi, backup, dan Agent yang sudah berjalan tetap kompatibel.
 
 ## Komponen open-source
 
-Pluton memakai komponen seperti Restic, Rclone, Node.js, React, SQLite/better-sqlite3, Express, Drizzle, marked, dan Nodemailer. Dokumentasi memakai Fumadocs serta dependency open-source dengan license notices yang dibundel pada hasil build.
+GoRecover dibangun di atas source Pluton dan memakai komponen seperti Restic, Rclone, Node.js, React, SQLite/better-sqlite3, Express, Drizzle, marked, dan Nodemailer. Dokumentasi memakai Fumadocs serta dependency open-source dengan license notices yang dibundel pada hasil build.
 
 Tidak ada dependency baru yang dipasang oleh penulisan ulang panduan ini. Runtime docs tetap terpisah dari runtime React aplikasi.
 

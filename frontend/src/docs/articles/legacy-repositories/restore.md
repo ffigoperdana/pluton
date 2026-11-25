@@ -1,6 +1,6 @@
 # Mengambil berkas dari snapshot Legacy ke staging
 
-Gunakan restore Legacy untuk memulihkan berkas atau direktori historis ke area terpisah yang dikelola Pluton. Anda tidak perlu mengubah repository atau source aplikasi untuk meninjau hasilnya. Contoh /srv/example-app dan berkas uploads/example.txt berikut sepenuhnya fiktif.
+Gunakan restore Legacy untuk memulihkan berkas atau direktori historis ke area terpisah yang dikelola GoRecover. Anda tidak perlu mengubah repository atau source aplikasi untuk meninjau hasilnya. Contoh /srv/example-app dan berkas uploads/example.txt berikut sepenuhnya fiktif.
 
 ## Read-only source
 

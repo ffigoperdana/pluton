@@ -1,4 +1,4 @@
-# Memelihara panduan Pluton
+# Memelihara panduan GoRecover
 
 Panduan yang baik mengikuti tugas pengguna dan UI yang benar-benar tersedia. Perubahan source, tombol baru, atau batas operasional baru perlu diikuti pembaruan panduan yang relevan.
 

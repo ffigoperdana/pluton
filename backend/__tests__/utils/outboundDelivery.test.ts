@@ -146,6 +146,12 @@ describe('safe outbound delivery', () => {
 			);
 			expect(close).toHaveBeenCalled();
 			expect(JSON.stringify(sendMail.mock.calls[0][0])).not.toContain(fixtureSecret);
+			// Multipart: readable HTML inside the shared wrapper plus a plain-text alternative.
+			const message = sendMail.mock.calls[0][0];
+			expect(message.text).toContain('Details:');
+			expect(message.html).toContain('<html><body>');
+			expect(message.html).toContain('Details</div>');
+			expect(message.html).not.toContain('{{EMAIL_BODY_CONTENT}}');
 		}
 	);
 	it('SMTP rejection / timeout / connection failure classify safely and partial recipient acceptance is not success', async () => {

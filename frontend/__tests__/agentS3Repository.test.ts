@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { APP_NAME } from '../src/utils/brand.ts';
 import {
    AGENT_S3_HIDDEN_NOTICE,
    agentRepositoryCanMove,
@@ -67,7 +68,7 @@ test('destination wording covers both repository types and states what the Agent
    assert.doesNotMatch(managedDestinationNotice(false), /use SFTP\./);
    assert.match(managedDestinationNotice(true), /writes this plan directly to S3/);
    assert.match(managedDestinationNotice(true), /never any replica key/);
-   assert.match(managedDestinationNotice(true), /Optional SFTP replicas are copied by the Pluton server/);
+   assert.match(managedDestinationNotice(true), new RegExp(`Optional SFTP replicas are copied by the ${APP_NAME} server`));
    assert.match(managedDestinationNotice(false), /S3 for an SFTP primary, SFTP for an S3 primary/);
 });
 

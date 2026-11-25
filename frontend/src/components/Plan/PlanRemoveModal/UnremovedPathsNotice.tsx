@@ -2,6 +2,7 @@ import { useState } from 'react';
 import Icon from '../../common/Icon/Icon';
 import { UnremovedStoragePath } from '../../../services/plans';
 import classes from './UnremovedPathsNotice.module.scss';
+import { APP_NAME } from '../../../utils/brand';
 
 interface UnremovedPathsNoticeProps {
    paths: UnremovedStoragePath[];
@@ -27,7 +28,7 @@ const UnremovedPathsNotice = ({ paths, reason, disposition }: UnremovedPathsNoti
       <div className={classes.unremovedNotice}>
          <strong>Plan Removed</strong>
          {disposition === 'retained_intentionally' ? <>
-            <p>Repository intentionally retained. No remote repository deletion was attempted. Its encrypted recovery credential was archived in Pluton.</p>
+            <p>Repository intentionally retained. No remote repository deletion was attempted. Its encrypted recovery credential was archived in {APP_NAME}.</p>
             <p>No cleanup is required to finish removing this plan. Keep the repository unless an operator separately verifies ownership and authorizes deletion.</p>
          </> : disposition === 'cleanup_failed' ? <>
             <p>Storage cleanup failed for the paths below; other paths may already have been removed. Plan metadata was removed.</p>

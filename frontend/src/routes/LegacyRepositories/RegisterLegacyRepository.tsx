@@ -4,6 +4,7 @@ import Icon from '../../components/common/Icon/Icon';
 import SidePanel from '../../components/common/SidePanel/SidePanel';
 import { useRegisterLegacyRepository } from '../../services/legacyRepositories';
 import classes from './LegacyRepositories.module.scss';
+import { APP_NAME } from '../../utils/brand';
 
 type RegisterLegacyRepositoryProps = {
    close: () => void;
@@ -45,7 +46,7 @@ const RegisterLegacyRepository = ({ close }: RegisterLegacyRepositoryProps) => {
                <Icon type="lock" size={16} />
                <div>
                   <strong>READ ONLY</strong>
-                  <p>Pluton validates access and browses snapshots. Selected content can be restored only to isolated staging; it will not create, retain, delete, or modify this repository.</p>
+                  <p>{APP_NAME} validates access and browses snapshots. Selected content can be restored only to isolated staging; it will not create, retain, delete, or modify this repository.</p>
                </div>
             </div>
             <div className={classes.field}>
@@ -69,7 +70,7 @@ const RegisterLegacyRepository = ({ close }: RegisterLegacyRepositoryProps) => {
                   autoComplete="off"
                   placeholder="C:\\backups\\legacy-repository"
                />
-               <small>The path must be absolute on this Pluton server.</small>
+               <small>The path must be absolute on this {APP_NAME} server.</small>
             </div>
             <div className={classes.field}>
                <label htmlFor="legacy-repository-password">Repository password</label>

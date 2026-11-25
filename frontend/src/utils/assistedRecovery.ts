@@ -1,3 +1,4 @@
+import { APP_NAME } from './brand.ts';
 /** Closed server summary of Restic backend retries; it never carries provider text. */
 export type AssistedRecoveryBackendRetries = {
    retryCount: number;
@@ -143,7 +144,7 @@ export function recoveryStatus(job: AssistedRecoveryJob) {
    if (job.status === 'failed' && job.failureCode === 'automatic-failover-blocked')
       return 'Automatic failover did not start: another recovery holds the execution slot or the request expired. Nothing was restored.';
    if (job.status === 'failed' && job.failureCode && SECURITY_STOPS.has(job.failureCode))
-      return 'Recovery stopped due to a security or identity restriction. Pluton does not switch sources for this kind of failure.';
+      return `Recovery stopped due to a security or identity restriction. ${APP_NAME} does not switch sources for this kind of failure.`;
    if (job.status === 'uncertain')
       return 'Recovery was interrupted. It will not restart automatically. Review staging and cancel before creating a fresh request.';
    if (job.status === 'failed' && job.diagnostic?.timeoutCategory === 'archive-backend-retrying')
@@ -167,9 +168,9 @@ export function recoveryWorkDetail(job: AssistedRecoveryJob) {
       case 'validating-archive-output':
          return 'Reading archive data and verifying snapshot entries.';
       case 'archive-output-paused':
-         return 'No recent archive output. Pluton is still waiting for the repository read.';
+         return `No recent archive output. ${APP_NAME} is still waiting for the repository read.`;
       case 'archive-backend-retrying':
-         return 'Restic is retrying a repository read. Pluton keeps waiting up to the inactivity limit.';
+         return `Restic is retrying a repository read. ${APP_NAME} keeps waiting up to the inactivity limit.`;
       case 'archive-consumer-pending':
          return 'Waiting for local archive validation to finish processing data.';
       case 'archive-exit-pending':
@@ -184,8 +185,8 @@ export function recoveryFailureAdvice(job: AssistedRecoveryJob) {
    const category = job.diagnostic?.timeoutCategory;
    if (category === 'archive-backend-retrying')
       return 'Review the retried repository object, its error class and the storage behavior with an operator before starting a new check.';
-   if (category === 'archive-consumer-idle') return 'Review Pluton resource usage and local archive processing before starting a new check.';
-   if (category === 'archive-exit-idle') return 'Review native process shutdown and Pluton resource usage before starting a new check.';
+   if (category === 'archive-consumer-idle') return `Review ${APP_NAME} resource usage and local archive processing before starting a new check.`;
+   if (category === 'archive-exit-idle') return `Review native process shutdown and ${APP_NAME} resource usage before starting a new check.`;
    if (job.failureCode === 'timeout' || job.failureCode === 'network-unavailable' || category)
       return 'Review the recorded phase and storage connectivity with an operator before starting a new check.';
    if (job.failureCode === 'no-eligible-replica') return 'Review the diagnostics for each replica before starting a new check.';

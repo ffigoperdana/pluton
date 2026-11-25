@@ -1,6 +1,6 @@
 # Masuk dan menemukan pekerjaan di halaman utama
 
-Sesudah membuka alamat Pluton, masuk melalui **Username**, **Password**, dan **Login**. Halaman utama membantu Anda menemukan plan, mesin sumber, serta storage. Gunakan halaman ini untuk menentukan pekerjaan yang perlu ditindaklanjuti, lalu buka detailnya untuk memastikan hasil.
+Sesudah membuka alamat GoRecover, masuk melalui **Username**, **Password**, dan **Login**. Halaman utama membantu Anda menemukan plan, mesin sumber, serta storage. Gunakan halaman ini untuk menentukan pekerjaan yang perlu ditindaklanjuti, lalu buka detailnya untuk memastikan hasil.
 
 ## Autentikasi awal
 

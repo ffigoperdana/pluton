@@ -8,6 +8,7 @@ import { parseSourceRoots } from '../../../utils/agentSourceAccess';
 import { buildStandaloneAgentCommand } from '../../../utils/agentEnrollment';
 import { copyToClipboard } from '../../../utils/clipboard';
 import type { SourceAuthorizationMode } from '../../../@types/agentSourceAccess';
+import { APP_NAME } from '../../../utils/brand';
 
 type AgentEnrollmentProps = {
    close: () => void;
@@ -97,7 +98,7 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
          {!enrollment ? (
             <div className={classes.content}>
                <p>
-                  Create a single-use enrollment token for a self-hosted Pluton Agent. A capable agent can run the limited remote filesystem backup
+                  Create a single-use enrollment token for a self-hosted Agent. A capable agent can run the limited remote filesystem backup
                   workflow.
                </p>
                {createEnrollment.isError && (
@@ -126,7 +127,7 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
                         }}
                      />
                      <strong>Server-Managed</strong>
-                     <span>Manage backup source directories directly from Pluton after the host administrator delegates the allowed scope.</span>
+                     <span>Manage backup source directories directly from {APP_NAME} after the host administrator delegates the allowed scope.</span>
                   </label>
                   <label>
                      <input
@@ -164,7 +165,7 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
                         </p>
                      )}
                      <p>
-                        Every Pluton administrator can enable readable directories within the host's delegated scope. Start with narrow prefixes.
+                        Every {APP_NAME} administrator can enable readable directories within the host's delegated scope. Start with narrow prefixes.
                         Installation starts in Host-Approved mode; after the agent is online, request and copy the one-time host setup from Source
                         Access. This choice alone grants no access.
                      </p>
@@ -273,7 +274,7 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
                <label className={classes.label}>Agent service commands</label>
                <p className={classes.help}>
                   After enrollment, open the machine's Source Access section to validate paths and manage enabled roots. Additional directories
-                  require host approval followed by an explicit enable action in Pluton. A pending request cannot be used for backup.
+                  require host approval followed by an explicit enable action in {APP_NAME}. A pending request cannot be used for backup.
                </p>
                {authorizationMode === 'server-managed' && (
                   <div className={classes.setup} role="status">
@@ -286,7 +287,7 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
                      <pre className={classes.command}>{delegated.roots.join('\n')}</pre>
                      <p>
                         The installation uses only the reviewed initial static roots. It does not silently delegate this scope. Once host setup is
-                        confirmed, future readable directories inside the scope can be validated and applied entirely in Pluton.
+                        confirmed, future readable directories inside the scope can be validated and applied entirely in {APP_NAME}.
                      </p>
                   </div>
                )}

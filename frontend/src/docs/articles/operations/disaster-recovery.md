@@ -4,7 +4,7 @@ Gunakan runbook ini untuk menyiapkan dan menjalankan drill pemulihan yang teriso
 
 ## Persiapan offline
 
-Simpan di lokasi terkontrol off-host: image digest/revisi rilis, prosedur deployment, salinan database aplikasi yang konsisten, konfigurasi/key yang sesuai, kredensial repository, identitas Agent, trust CA, dan kontak penanggung jawab. Jangan menyimpan plaintext pada repository publik. Periksa bahwa orang yang berwenang dapat mengaksesnya ketika host Pluton hilang.
+Simpan di lokasi terkontrol off-host: image digest/revisi rilis, prosedur deployment, salinan database aplikasi yang konsisten, konfigurasi/key yang sesuai, kredensial repository, identitas Agent, trust CA, dan kontak penanggung jawab. Jangan menyimpan plaintext pada repository publik. Periksa bahwa orang yang berwenang dapat mengaksesnya ketika host GoRecover hilang.
 
 Contoh drill memakai `app-01` dan snapshot yang dicatat privat. Dokumen publik memakai `/srv/example-app` dan `example.internal`; tidak memuat IP atau username nyata. Siapkan target staging dan database uji yang tidak terhubung ke aplikasi hidup, serta ruang untuk dump/restore/import.
 

@@ -6,6 +6,8 @@ import { BackupNotificationJSONPayload, BackupTaskStats } from '../../../../type
 import { formatBytes, formatDuration, formatNumberToK } from '../../../../utils/formatter';
 import { BaseNotification } from '../../../BaseNotification';
 import { loadBackupTemplate } from '../../../templateLoader';
+import { BRAND_NAME } from '../../../../utils/brand';
+import { problemFromErrorText } from '../../../problemExplanations';
 
 export interface BackupFailedNotificationPayload {
 	appTitle: string;
@@ -106,9 +108,18 @@ export class BackupFailedNotification extends BaseNotification {
 			? providers[data.storageType]?.name || data.storageType
 			: '';
 
+		const problem = problemFromErrorText(data.error);
+		const appUrl = configService.config.APP_URL || '';
 		const templateString = this.loadHTMLTemplate();
 		const renderedBody = ejs.render(templateString, {
 			...data,
+			// The template reads `stats?.…`; keep the name defined when a caller omits it.
+			stats: data.stats,
+			problem: problem && {
+				...problem,
+				steps: problem.steps.map(step => step.replace(/`/g, '')),
+				guideUrl: /^https?:\/\//.test(appUrl) ? appUrl.replace(/\/+$/, '') + problem.guide : '',
+			},
 			appUrl: configService.config.APP_URL,
 			storageTypeName,
 			startDate,
@@ -123,7 +134,7 @@ export class BackupFailedNotification extends BaseNotification {
 		});
 
 		return this.applyEmailTemplate(renderedBody, {
-			appTitle: configService.config.APP_TITLE || 'Pluton',
+			appTitle: configService.config.APP_TITLE || BRAND_NAME,
 			preHeader: `Backup Failed: ${data.plan.title}`,
 			className: 'content--error',
 		});

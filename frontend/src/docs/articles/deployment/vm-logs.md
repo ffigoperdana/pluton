@@ -4,11 +4,11 @@ Gunakan pemeriksaan ini ketika menilai kesehatan instalasi atau menyusun laporan
 
 ## Prasyarat
 
-Anda perlu akses baca yang disetujui ke host atau akun administrator Pluton. Gunakan lokasi, port, dan kontrak Compose instalasi yang sebenarnya; contoh di bawah adalah contoh fiktif pada host latihan.
+Anda perlu akses baca yang disetujui ke host atau akun administrator GoRecover. Gunakan lokasi, port, dan kontrak Compose instalasi yang sebenarnya; contoh di bawah adalah contoh fiktif pada host latihan.
 
 ## Pemeriksaan dasar
 
-1. Buka Pluton melalui origin yang biasa dipakai pengguna. Pastikan halaman login, plan, dan dokumentasi dapat diakses.
+1. Buka GoRecover melalui origin yang biasa dipakai pengguna. Pastikan halaman login, plan, dan dokumentasi dapat diakses.
 2. Periksa respons GET `/api/health`. Respons sehat adalah JSON `{"status":"healthy"}` dengan HTTP 200.
 3. Periksa container/service dan restart count melalui alat operator yang disetujui.
 4. Buka **Settings → App Logs** untuk melihat tahap/kode error yang relevan. Ambil potongan tersanitasi, bukan seluruh konfigurasi.

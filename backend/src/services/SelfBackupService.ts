@@ -20,6 +20,7 @@ import { normalizeStorageName } from '../utils/helpers';
 import { IntegrationTypes, SelfBackupSettings } from '../types/settings';
 import { NotificationChannelResolver } from '../notifications/channels/NotificationChannelResolver';
 import { SelfBackupFailedNotification } from '../notifications/templates/email/backup/SelfBackupFailedNotification';
+import { BRAND_NAME } from '../utils/brand';
 
 const RCLONE_TIMEOUT_MS = 120_000;
 
@@ -201,7 +202,7 @@ export class SelfBackupService {
 
 			const channel = await NotificationChannelResolver.getChannel(channelType);
 			const notification = new SelfBackupFailedNotification({
-				appTitle: appSettings?.title || 'Pluton',
+				appTitle: appSettings?.title || BRAND_NAME,
 				error: error?.message || 'Unknown error',
 				hostname: os.hostname(),
 				storageName: selfBackup.storageName,
@@ -243,7 +244,7 @@ export class SelfBackupService {
 		if (!storage) {
 			throw new AppError(
 				400,
-				`The storage selected for Pluton backup no longer exists (id: ${settings.storageId}).`
+				`The storage selected for ${BRAND_NAME} backup no longer exists (id: ${settings.storageId}).`
 			);
 		}
 		return {
@@ -274,7 +275,7 @@ export class SelfBackupService {
 
 		const dir = targetPath.replace(/\/+$/g, '');
 		if (!dir) {
-			throw new AppError(400, 'Select a folder on the local storage for Pluton backup.');
+			throw new AppError(400, `Select a folder on the local storage for ${BRAND_NAME} backup.`);
 		}
 
 		try {
@@ -284,7 +285,7 @@ export class SelfBackupService {
 		} catch {
 			throw new AppError(
 				400,
-				`The Pluton backup folder "${dir}" does not exist or is not writable. In Docker, bind-mount it into the container as a read-write volume.`
+				`The ${BRAND_NAME} backup folder "${dir}" does not exist or is not writable. In Docker, bind-mount it into the container as a read-write volume.`
 			);
 		}
 	}

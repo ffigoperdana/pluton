@@ -1,12 +1,12 @@
-# Cara kerja Pluton
+# Cara kerja GoRecover
 
-Pluton menghubungkan sumber data, tempat penyimpanan backup, dan alat verifikasi pemulihan. Memahami peran setiap komponen membantu Anda menentukan mesin mana yang perlu diberi akses, tempat SQL dump dibuat, dan lokasi hasil Restore.
+GoRecover menghubungkan sumber data, tempat penyimpanan backup, dan alat verifikasi pemulihan. Memahami peran setiap komponen membantu Anda menentukan mesin mana yang perlu diberi akses, tempat SQL dump dibuat, dan lokasi hasil Restore.
 
 ## Komponen arsitektur
 
 | Komponen | Pekerjaan | Yang perlu disiapkan operator |
 | --- | --- | --- |
-| Pluton Server dan Web UI | Menyimpan konfigurasi, menjadwalkan pekerjaan, menampilkan hasil | Volume data persisten, origin HTTPS, akses administrator |
+| GoRecover Server dan Web UI | Menyimpan konfigurasi, menjadwalkan pekerjaan, menampilkan hasil | Volume data persisten, origin HTTPS, akses administrator |
 | Agent | Membaca file dan menjalankan backup pada mesin sumber yang dikelola | Identitas Agent, direktori yang diizinkan, akses repository primer (SFTP atau S3) |
 | Primary Storage | Menyimpan repository utama dan snapshot | Ruang, kredensial, prefix yang tidak berbagi dengan plan lain |
 | Replication Destination | Menyimpan salinan tambahan sesuai jenis plan | Kredensial dan kapasitas tujuan yang terpisah |
@@ -21,7 +21,7 @@ Contoh fiktif: Agent pada `app-01` membaca `/srv/example-app`, lalu menulis ke r
 ```text
 Sumber aplikasi → Agent → Primary Storage
                               ↓
-                         Pluton Server → Replication Destination opsional
+                         GoRecover Server → Replication Destination opsional
                               ↓
                          Staging / target recovery terpisah
 ```

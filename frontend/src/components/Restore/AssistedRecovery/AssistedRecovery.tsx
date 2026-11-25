@@ -2,6 +2,7 @@ import { createTemporaryId } from '../../../utils/temporaryId';
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { API_URL } from '../../../utils/constants';
+import { APP_NAME } from '../../../utils/brand';
 import { mutationResponse } from '../../../utils/httpResponse';
 import {
    recoveryRequestId,
@@ -254,8 +255,8 @@ export default function AssistedRecovery({
          {awaitingStart && (
             <div className={classes.manual}>
                <p className={classes.note}>
-                  This plan uses Automatic Failover. Pluton checks the primary repository first and opens the normal restore when it is available. If
-                  the primary is unreachable, Pluton continues automatically with the first replica that passes identity and integrity checks,
+                  This plan uses Automatic Failover. {APP_NAME} checks the primary repository first and opens the normal restore when it is available. If
+                  the primary is unreachable, {APP_NAME} continues automatically with the first replica that passes identity and integrity checks,
                   restoring only into isolated staging. No database is imported and no live target is overwritten.
                </p>
                <button type="button" className={classes.primary} disabled={busy || jobs.isPending || !!jobs.error} onClick={beginRecovery}>

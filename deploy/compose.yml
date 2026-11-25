@@ -22,7 +22,7 @@ services:
       ENCRYPTION_KEY: "${ENCRYPTION_KEY:?Set ENCRYPTION_KEY in the VM-only .env}"
       USER_NAME: "${USER_NAME:?Set USER_NAME in the VM-only .env}"
       USER_PASSWORD: "${USER_PASSWORD:?Set USER_PASSWORD in the VM-only .env}"
-      APP_TITLE: "${APP_TITLE:-Pluton}"
+      APP_TITLE: "${APP_TITLE:-GoRecover}"
       APP_URL: "${APP_URL:-http://localhost:5173}"
       APP_ALLOWED_ORIGINS: "${APP_ALLOWED_ORIGINS:-}"
       AGENT_SERVER_URL: "${AGENT_SERVER_URL:-}"

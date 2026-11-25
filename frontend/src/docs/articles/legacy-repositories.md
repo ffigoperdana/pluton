@@ -4,9 +4,9 @@ Gunakan **Legacy Repositories** untuk melihat dan mengambil data dari repository
 
 ## Sebelum mulai
 
-Administrator harus menyediakan repository pada filesystem lokal yang dapat dibaca Pluton Server, password yang sah, dan akses storage read-only. Contoh path /srv/example-backups/restic pada panduan ini fiktif. Folder sumber aplikasi, misalnya /srv/example-app, harus terpisah dari repository dan staging.
+Administrator harus menyediakan repository pada filesystem lokal yang dapat dibaca GoRecover Server, password yang sah, dan akses storage read-only. Contoh path /srv/example-backups/restic pada panduan ini fiktif. Folder sumber aplikasi, misalnya /srv/example-app, harus terpisah dari repository dan staging.
 
-Jika backup lama dijalankan SYS MON, pertahankan SYS MON beserta source dan jadwalnya sebagai acuan utama selama pilot. Membuka repository di Pluton tidak mengambil alih tugas tersebut.
+Jika backup lama dijalankan SYS MON, pertahankan SYS MON beserta source dan jadwalnya sebagai acuan utama selama pilot. Membuka repository di GoRecover tidak mengambil alih tugas tersebut.
 
 ## Pemisahan wajib
 

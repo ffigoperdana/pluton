@@ -46,6 +46,7 @@ import {
 	discoverLegacyWorkloads,
 	getLegacySnapshotGroupings,
 } from '../utils/legacySnapshotGrouping';
+import { BRAND_NAME } from '../utils/brand';
 
 const registrationSchema = z
 	.object({
@@ -723,7 +724,7 @@ export class LegacyRepositoryService {
 	private encryptPassword(password: string): string {
 		const secret = configService.config.SECRET;
 		if (!secret) {
-			throw new AppError(503, 'Legacy repository credentials are unavailable until Pluton setup is complete.');
+			throw new AppError(503, `Legacy repository credentials are unavailable until ${BRAND_NAME} setup is complete.`);
 		}
 		return new Cryptr(secret).encrypt(password);
 	}
@@ -731,7 +732,7 @@ export class LegacyRepositoryService {
 	private decryptPassword(repository: LegacyRepository): string {
 		const secret = configService.config.SECRET;
 		if (!secret) {
-			throw new AppError(503, 'Legacy repository credentials are unavailable until Pluton setup is complete.');
+			throw new AppError(503, `Legacy repository credentials are unavailable until ${BRAND_NAME} setup is complete.`);
 		}
 		try {
 			return new Cryptr(secret).decrypt(repository.encryptedPassword);

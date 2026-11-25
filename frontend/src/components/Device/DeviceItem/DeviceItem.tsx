@@ -60,7 +60,7 @@ const DeviceItem = ({ device, layout }: DeviceItemProps) => {
                <div
                   className={classes.version}
                   data-tooltip-id="appTooltip"
-                  data-tooltip-content={`Pluton Agent version: ${agentVersion ? 'v' + agentVersion : 'latest'}`}
+                  data-tooltip-content={`Agent version: ${agentVersion ? 'v' + agentVersion : 'latest'}`}
                >
                   <Icon type="logo" size={13} /> <i>{agentVersion ? 'v' + agentVersion : 'latest'}</i>
                </div>

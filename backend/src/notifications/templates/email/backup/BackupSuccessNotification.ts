@@ -10,6 +10,7 @@ import {
 import { formatBytes, formatDuration, formatNumberToK } from '../../../../utils/formatter';
 import { BaseNotification } from '../../../BaseNotification';
 import { loadBackupTemplate } from '../../../templateLoader';
+import { BRAND_NAME } from '../../../../utils/brand';
 
 export interface BackupSuccessNotificationPayload {
 	appTitle: string;
@@ -127,7 +128,7 @@ export class BackupSuccessNotification extends BaseNotification {
 		});
 
 		return this.applyEmailTemplate(renderedBody, {
-			appTitle: configService.config.APP_TITLE || 'Pluton',
+			appTitle: configService.config.APP_TITLE || BRAND_NAME,
 			preHeader: `Backup Success: ${data.plan.title}`,
 		});
 	}

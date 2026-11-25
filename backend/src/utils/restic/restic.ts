@@ -17,6 +17,7 @@ import {
 	trustEnvironment,
 	redactStorageOutput,
 } from '../storageSecurity';
+import { BRAND_NAME } from '../brand';
 
 export type ResticCommandError = Error & {
 	code?: number;
@@ -437,7 +438,7 @@ export function handleResticCheckResult(
 		fix = `Login to your Machine ${device}.
       Run this command:
       \`prestic repair index -r ${repo}\`
-      When asked for the password, use the Pluton Encryption key.
+      When asked for the password, use the ${BRAND_NAME} Encryption key.
       `;
 	}
 

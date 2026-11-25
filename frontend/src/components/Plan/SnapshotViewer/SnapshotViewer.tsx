@@ -20,6 +20,7 @@ import { useSnapshotNavigation } from '../../common/SnapshotBrowser/hooks/useSna
 import { useSnapshotSort } from '../../common/SnapshotBrowser/hooks/useSnapshotSort';
 import classes from '../../common/SnapshotBrowser/SnapshotBrowser.module.scss';
 import ManagedSnapshotViewer from './ManagedSnapshotViewer';
+import { APP_NAME } from '../../../utils/brand';
 
 export interface SnapshotViewerProps {
    comparison?: { enabled: boolean; initialFilter?: import('../../../utils/snapshotReview').ChangeFilter; onPrevious?: (backupId: string) => void };
@@ -340,7 +341,7 @@ const LocalSnapshotViewer = ({
                      </p>
                      <p>
                         {stagingOnly
-                           ? 'This restores into a new private staging workspace on the Pluton server. The remote source is never modified.'
+                           ? `This restores into a new private staging workspace on the ${APP_NAME} server. The remote source is never modified.`
                            : 'This action will overwrite the existing file/directory with the same name in the source.'}
                      </p>
                   </>

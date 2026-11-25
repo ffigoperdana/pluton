@@ -8,7 +8,7 @@ Mulailah pemulihan dengan menentukan data dan waktu yang dibutuhkan. Untuk kehil
 | --- | --- | --- |
 | Melihat berkas yang tersimpan | Browse | Daftar isi snapshot |
 | Mengambil seluruh snapshot managed remote | Download | Arsip TAR pada perangkat pengunduh; tersedia sampai 200 GiB data logical. Snapshot yang lebih besar diunduh per folder atau berkas lewat Browse |
-| Memulihkan berkas atau direktori terpilih | Restore | Berkas pada staging privat Pluton Server untuk managed remote |
+| Memulihkan berkas atau direktori terpilih | Restore | Berkas pada staging privat GoRecover Server untuk managed remote |
 | Mempertahankan satu database native | Restore Database | Database terpisah dengan TTL dan pengelolaan ownership |
 | Menguji pemulihan snapshot | Run Recovery Test | Hasil validasi dan cleanup target sementara |
 
@@ -26,7 +26,7 @@ Untuk managed remote, pekerjaan terikat pada plan, backup, repository primary, d
 
 ## Mode restore
 
-Managed remote selalu menulis ke staging privat baru pada Pluton Server. Tidak ada penulisan kembali ke source agent. Repository primary adalah sumber recovery yang didukung; mirror managed tidak menyediakan Browse/Restore/Download atau recovery database melalui jalur ini.
+Managed remote selalu menulis ke staging privat baru pada GoRecover Server. Tidak ada penulisan kembali ke source agent. Repository primary adalah sumber recovery yang didukung; mirror managed tidak menyediakan Browse/Restore/Download atau recovery database melalui jalur ini.
 
 Plan lokal mempunyai pengaturan berbeda, termasuk original path dan overwrite. Untuk latihan pemulihan, pilih **Restore to a Custom Path**, tujuan kosong yang disetujui, **Never Overwrite**, dan biarkan penghapusan berkas tidak aktif. Jangan menerapkan perlindungan staging remote sebagai asumsi pada dialog lokal.
 
@@ -34,7 +34,7 @@ Plan lokal mempunyai pengaturan berbeda, termasuk original path dan overwrite. U
 
 ## Akses
 
-Anda perlu masuk ke Pluton, mempunyai akses backup, dan memastikan storage masih dapat dijangkau server dengan credential yang benar. Source agent managed remote tidak perlu dihubungi untuk recovery. Periksa kapasitas berdasarkan data logical yang dipulihkan, bukan hanya ukuran repository terkompresi.
+Anda perlu masuk ke GoRecover, mempunyai akses backup, dan memastikan storage masih dapat dijangkau server dengan credential yang benar. Source agent managed remote tidak perlu dihubungi untuk recovery. Periksa kapasitas berdasarkan data logical yang dipulihkan, bukan hanya ukuran repository terkompresi.
 
 ## Verifikasi
 

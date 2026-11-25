@@ -8,7 +8,7 @@ Replikasi menyalin snapshot repository utama ke repository tambahan. Gunakan sal
 | --- | --- | --- |
 | Jalur backup utama | Lifecycle Restic standar pada sumber yang didukung | Agent membuat backup ke repository SFTP utama terkelola |
 | Tujuan tambahan | Storage yang didukung jalur standar, dengan repository dedicated | Hanya S3 atau S3-compatible HTTPS, 0–2 tujuan |
-| Pelaksana penyalinan | Lifecycle backup standar | Server Pluton setelah snapshot utama diverifikasi |
+| Pelaksana penyalinan | Lifecycle backup standar | Server GoRecover setelah snapshot utama diverifikasi |
 | Paralelisme | Berurutan secara default; **Run replications concurrently** tersedia bila lebih dari satu tujuan | Satu pekerjaan salinan secara global di server; tidak ada opsi concurrent |
 | Retry | Retry sesuai pengaturan plan dan aksi retry untuk mirror gagal | Retry terminal failed/cancelled harus eksplisit; uncertain ditolak |
 | Lifecycle repository | Memiliki jalur init/copy serta retention/maintenance standar | Copy terverifikasi; tidak menyediakan physical cleanup/prune |

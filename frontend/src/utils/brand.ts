@@ -1,0 +1,31 @@
+/**
+ * Product identity shown in the UI. Change the name and mark here only.
+ *
+ * This fork is based on Pluton (Apache-2.0). Identifiers that existing
+ * installations, backups and Agents depend on keep the `pluton` name on
+ * purpose (service names, paths, tags, storage keys, headers); see
+ * docs/REBRANDING.md before renaming anything outside this module.
+ */
+export const BRAND_NAME = 'GoRecover';
+
+// `import.meta.env` is undefined under plain Node (tests, vite.config.ts).
+const env = (import.meta as ImportMeta & { env?: { VITE_APP_NAME?: string } }).env;
+export const APP_NAME: string = env?.VITE_APP_NAME || BRAND_NAME;
+
+/**
+ * Single-colour "g" mark (120x120 grid) drawn with currentColor so it follows
+ * the active theme. Colour variants live in /public/brand.
+ */
+export const BRAND_MARK_VIEWBOX = '0 0 120 120';
+export const BRAND_MARK_PATHS: readonly string[] = [
+   // upper sync arrow
+   'M20.43 34.79A39.5 39.5 0 0 1 86.41 19.56L92.89 13.31L92.16 34.87L74.19 31.37L77.06 28.59A26.5 26.5 0 0 0 32.8 38.81Z',
+   // lower sync arrow
+   'M95.57 59.21A39.5 39.5 0 0 1 21.38 61.8L13.03 65.17L21.78 45.45L37.14 55.43L33.43 56.93A26.5 26.5 0 0 0 83.2 55.19Z',
+   // stem and descender
+   'M84.5 52H97.5V84C97.5 104 78 115.5 60 115.5C49 115.5 39 111 33 105.5C30 102.5 30.5 98 33.5 95.5C36.5 93 40.5 93 43.5 95.5C48 99.5 53.5 102.5 60 102.5C71 102.5 84.5 96 84.5 84Z',
+   // database
+   'M43 33.5A15 5.5 0 1 0 73 33.5A15 5.5 0 1 0 43 33.5Z',
+   'M43 39.5A15 5.5 0 0 0 73 39.5V47.5A15 5.5 0 0 1 43 47.5Z',
+   'M43 51.5A15 5.5 0 0 0 73 51.5V59.5A15 5.5 0 0 1 43 59.5Z',
+];

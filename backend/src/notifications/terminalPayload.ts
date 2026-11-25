@@ -1,4 +1,5 @@
 import type { NotificationPayload, NotificationEventType } from '../types/notificationDelivery';
+import { notificationMessage } from './notificationMessage';
 // Deliberately project closed, documented metadata. Never spread a job/config/error.
 type Row = Record<string, any>;
 const json = (value: unknown): Row => {
@@ -101,6 +102,22 @@ const safeCodes = new Set([
 	'hook-failed',
 	'hook-timeout',
 	'cleanup-failed',
+	'internal-operator-unavailable',
+	'internal-provisioning-timeout',
+	'recovery-workload-busy',
+	'internal-target-not-provisioned',
+	'internal-target-unsafe',
+	'internal-resources-insufficient',
+	'internal-cleanup-required',
+	'mysql-worker-not-configured',
+	'mysql-worker-unavailable',
+	'mysql-worker-busy',
+	'mysql-worker-protocol-failed',
+	'mysql-worker-resource-limit',
+	'restored-file-hash-mismatch',
+	'restored-link-target-mismatch',
+	'database-out-of-memory',
+	'database-storage-full',
 ]);
 function category(value: unknown, fallback = 'job-failed'): string {
 	return typeof value === 'string' && safeCodes.has(value) ? value : fallback;
@@ -272,99 +289,8 @@ export function agentPayload(
 	};
 }
 
+/** Subject and plain text of a notification email (see notificationMessage for the HTML part). */
 export function notificationText(payload: NotificationPayload): { subject: string; text: string } {
-	const labels: Record<string, string> = {
-		'backup.completed': 'Backup Successful',
-		'backup.completed_with_warning': 'Backup Completed with Warning',
-		'backup.failed': 'Backup Failed',
-		'backup.cancelled': 'Backup Cancelled',
-		'recovery.passed': 'Recovery Test Passed',
-		'recovery.passed_with_warning': 'Recovery Test Passed with Warning',
-		'recovery.failed': 'Recovery Test Failed',
-		'recovery.cancelled': 'Recovery Test Cancelled',
-		'replication.failed': 'Replica Copy Needs Attention',
-		'agent.offline': 'Agent Offline',
-		'agent.online': 'Agent Back Online',
-		'notification.test': 'Test Notification',
-	};
-	const lines = [
-		`Pluton — ${labels[payload.event_type]}`,
-		`Event: ${payload.event_type}`,
-		`Event ID: ${payload.event_id}`,
-	];
-	if (payload.plan) lines.push(`Plan: ${payload.plan.name} (${payload.plan.id})`);
-	if (payload.agent) {
-		lines.push(
-			`Agent: ${payload.agent.name} (${payload.agent.id})`,
-			`Last heartbeat: ${payload.agent.last_seen || 'Never'}`,
-			`Offline since: ${payload.agent.offline_since}`
-		);
-		lines.push(
-			payload.event_type === 'agent.offline'
-				? 'Scheduled backups of this Agent wait in the queue while it is offline; they are not reported as failed. Check the host, its network and the pluton-agent service.'
-				: 'The Agent is reachable again. Queued backups continue; check that the next scheduled runs complete.'
-		);
-		return {
-			subject: `[Pluton] ${labels[payload.event_type]} — ${payload.agent.name}`,
-			text: lines.join('\n'),
-		};
-	}
-	if (payload.replication) {
-		lines.push(
-			`Backup: ${payload.backup?.id || 'Not available'}`,
-			`Replica: ${payload.replication.replica_name} (${payload.replication.replication_id})`,
-			`Result: ${payload.replication.status}`,
-			`Attempts: ${payload.replication.attempts ?? 'Not available'}`,
-			`Failure classification: ${payload.error?.category || 'replication-failed'}`,
-			payload.replication.status === 'uncertain'
-				? 'The copy stopped without a provable outcome. Pluton does not retry it automatically and holds the replication queue; review it in the backup mirror details.'
-				: 'The backup itself is safe in the primary repository. Retry the copy from the backup mirror details after fixing the cause.'
-		);
-		return {
-			subject: `[Pluton] ${labels[payload.event_type]}${payload.plan ? ` — ${payload.plan.name}` : ''}`,
-			text: lines.join('\n'),
-		};
-	}
-	if (payload.backup)
-		lines.push(
-			`Backup: ${payload.backup.id}`,
-			`Result: ${payload.backup.status}`,
-			`Snapshot: ${payload.backup.snapshot_id || 'Not available'}`
-		);
-	if (payload.recovery)
-		lines.push(
-			`Recovery test: ${payload.recovery.id}`,
-			`Backup: ${payload.recovery.backup_id}`,
-			`Result: ${payload.recovery.status}`,
-			`Exact snapshot tested: ${payload.recovery.snapshot_id}`
-		);
-	lines.push(
-		`Started: ${payload.started_at || 'Not available'}`,
-		`Completed: ${payload.completed_at || payload.timestamp}`,
-		`Duration: ${payload.duration_seconds ?? 'Not available'} seconds`
-	);
-	if (payload.error) lines.push(`Failure classification: ${payload.error.category}`);
-	if (payload.summary) {
-		lines.push(
-			`Regular files: ${payload.summary.files ?? 'Not available'}`,
-			`Bytes: ${payload.summary.bytes ?? 'Not available'}`
-		);
-		for (const db of payload.summary.databases || [])
-			lines.push(
-				`Database artifact ${db.database_id || ''} (${db.engine || 'database'}): ${db.bytes} bytes; artifact integrity ${db.artifact_integrity}; SQL import ${db.sql_import === 'not_tested' ? 'NOT TESTED' : db.sql_import}`
-			);
-		if (payload.summary.cleanup)
-			lines.push(
-				`Cleanup: workspace ${payload.summary.cleanup.workspace ? 'complete' : 'incomplete'}, databases ${payload.summary.cleanup.databases ? 'complete' : 'incomplete'}`
-			);
-	}
-	for (const warning of payload.warnings || []) lines.push(`Warning: ${warning.category}`);
-	if (payload.recovery)
-		lines.push(
-			'Structural restore / artifact integrity is not a guarantee of semantic application recovery. SQL import is validated only when explicitly reported passed.'
-		);
-	return {
-		subject: `[Pluton] ${labels[payload.event_type]}${payload.plan ? ` — ${payload.plan.name}` : ''}`,
-		text: lines.join('\n'),
-	};
+	const { subject, text } = notificationMessage(payload);
+	return { subject, text };
 }

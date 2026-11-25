@@ -16,7 +16,12 @@ These instructions apply to the entire public fork of `plutonhq/pluton`.
   both tracked and untracked changes before committing; `.gitignore` does not
   protect files already tracked or replace a review for sensitive content.
 - Preserve upstream Apache-2.0 licensing, attribution, copyright notices, and
-  acknowledgments. Do not rename the application or imply upstream endorsement.
+  acknowledgments. The user-facing name and logo (GoRecover) live only in
+  `frontend/src/utils/brand.ts` and `backend/src/utils/brand.ts`; keep the
+  acknowledgements page stating that the application is based on Pluton, and
+  never imply upstream endorsement. Do not rename `pluton` identifiers that
+  installations, backups or Agents depend on; see
+  [docs/REBRANDING.md](docs/REBRANDING.md).
 - Never use, copy, reverse engineer, reproduce, or depend on proprietary Pluton
   PRO/Business source code or binaries. Implement extensions independently using
   this open-source codebase, public Restic/Rclone interfaces, and independently

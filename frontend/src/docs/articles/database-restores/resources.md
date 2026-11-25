@@ -21,7 +21,7 @@ Panduan ini tidak mengukur kapasitas workload nyata. Ketersediaan fitur atau dep
 | RAM efektif total | Minimal 3.800 MiB pada envelope yang diperiksa |
 | RAM tersedia MariaDB/PostgreSQL | Minimal 2.560 MiB |
 | RAM tersedia MySQL | Minimal 2.944 MiB, termasuk headroom worker |
-| CPU Pluton / host operator | Minimal 1 CPU pada Pluton dan 2 CPU pada envelope operator yang diperiksa |
+| CPU GoRecover / host operator | Minimal 1 CPU pada GoRecover dan 2 CPU pada envelope operator yang diperiksa |
 | Swap | Host/operator maksimal 128 MiB; penggunaan swap cgroup harus nol |
 | Memory pressure | Maksimal 1% pada pengukuran yang diperiksa |
 | Cgroup server | Batas RAM minimal 768 MiB dan pemakaian maksimal 85% batas |

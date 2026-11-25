@@ -33,6 +33,7 @@ import {
 	rcloneLsJson,
 	rcloneErrorMessage,
 } from '../utils/rclone/helpers';
+import { BRAND_NAME } from '../utils/brand';
 
 export interface StorageBrowseItem {
 	name: string;
@@ -114,7 +115,7 @@ export class StorageService {
 		} catch (error: any) {
 			throw new AppError(
 				500,
-				'Could not decrypt your Storage Credentials Settings. Your Pluton Secret key may have changed or missing.'
+				`Could not decrypt your Storage Credentials Settings. Your ${BRAND_NAME} Secret key may have changed or missing.`
 			);
 		}
 	}
@@ -523,7 +524,7 @@ export class StorageService {
 			if (selfBackup.enabled && selfBackup.storageId === id) {
 				throw new AppError(
 					400,
-					`This Storage is used by Pluton's self-backup. Please disable self-backup or choose a different storage before deleting it.`
+					`This Storage is used by ${BRAND_NAME}'s self-backup. Please disable self-backup or choose a different storage before deleting it.`
 				);
 			}
 
@@ -564,7 +565,7 @@ export class StorageService {
 			} catch (error: any) {
 				throw new AppError(
 					500,
-					'Could not decrypt your Storage Credentials Settings. Your Pluton Secret key may have changed or missing.'
+					`Could not decrypt your Storage Credentials Settings. Your ${BRAND_NAME} Secret key may have changed or missing.`
 				);
 			}
 			const bucketName = decryptedCreds?.bucket as string;

@@ -12,7 +12,7 @@ jangan menyalin satu perintah ke instalasi existing tanpa memeriksa kontraknya.
 ## 1. Pahami arsitektur dan siapa yang menjalankan operasi
 
 ```text
-Browser administrator --HTTPS/session--> Pluton Server (frontend + API + SQLite)
+Browser administrator --HTTPS/session--> GoRecover Server (frontend + API + SQLite)
                                              |
 Linux Agent --outbound HTTPS/poll------------>|
   | baca source yang diizinkan                | verifikasi snapshot primary
@@ -330,7 +330,7 @@ pasangan access key/secret S3 siap pakai. Operator HCP menyediakan versi API,
 namespace existing, S3 enabled, ACL/izin dan key terbatas.
 
 Mode **HCP / pre-existing namespace mode** memaksa no-check-bucket, bukan bypass
-auth atau verifikasi namespace: Pluton tetap menguji listing dengan credentials.
+auth atau verifikasi namespace: GoRecover tetap menguji listing dengan credentials.
 Path-style tersedia dalam konfigurasi provider; region mengikuti kontrak operator,
 bukan janji bahwa `us-east-1` cocok pada semua HCP. Certificate endpoint harus
 cocok dengan hostname/CA server; namespace hostname bisa mismatch meskipun tenant
@@ -338,7 +338,7 @@ endpoint yang disetujui valid. Jangan gunakan `curl -k`/skip verify.
 
 Retensi/WORM/Object Lock, quotas, multipart capability dan izin delete harus
 ditinjau sebelum penggunaan Restic. HCP DPL dan cluster replication bukan copy
-Pluton dan tidak membuktikan recovery aplikasi. **Real HCP interoperability belum
+GoRecover dan tidak membuktikan recovery aplikasi. **Real HCP interoperability belum
 diuji**; isi tabel acceptance pada [replikasi HCP](/docs/replication/hcp).
 
 ## 12. Uji recovery pada lingkungan terisolasi
@@ -427,7 +427,7 @@ Agent ID, effective scope, database/hooks dan satu shadow cycle sebelum resume.
 
 Pertahankan platform lama authoritative selama SHADOW. Buat inventory privat
 aplikasi/DB/source/options/exclusions/interval/retention/RPO/RTO dan owner;
-bandingkan coverage, bukan hanya jumlah plan. Gunakan repository Pluton baru
+bandingkan coverage, bukan hanya jumlah plan. Gunakan repository GoRecover baru
 independen. Repository Legacy tetap read-only, tanpa init/prune/unlock/migrate.
 
 Gate CUTOVER: scheduled cycles representatif; snapshot/content dan semua DB

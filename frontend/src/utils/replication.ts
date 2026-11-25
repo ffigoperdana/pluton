@@ -1,6 +1,7 @@
 import type { PlanReplicationSettings } from '../@types/plans';
 import type { BackupMirror } from '../@types/backups';
 import { AGENT_S3_STORAGE_TYPES, managedReplicaStorageTypes } from './agentRepository.ts';
+import { APP_NAME } from './brand.ts';
 
 export const MAX_REPLICATION_DESTINATIONS = 2;
 
@@ -62,7 +63,7 @@ export function failoverSummary(mirrors: BackupMirror[] | undefined) {
          : status === 'backup-failed'
            ? `The failover backup to ${name} failed.`
            : status === 'verify-pending' || status === 'verifying'
-             ? `Written to ${name}; Pluton is verifying it there.`
+             ? `Written to ${name}; ${APP_NAME} is verifying it there.`
              : status === 'verified'
                ? `Verified in ${name}; copy-back waits until the primary is reachable${lastErrorCode ? ` (${lastErrorCode})` : ''}.`
                : status === 'copying'

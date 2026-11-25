@@ -1,6 +1,6 @@
 # Memahami istilah pada backup dan pemulihan
 
-Gunakan halaman ini saat menemukan istilah pada formulir atau riwayat Pluton. Contoh berikut memakai satu aplikasi fiktif pada `app-01` dengan source `/srv/example-app`. Tujuannya agar Anda dapat memilih tindakan yang benar tanpa harus memahami seluruh implementasi Restic.
+Gunakan halaman ini saat menemukan istilah pada formulir atau riwayat GoRecover. Contoh berikut memakai satu aplikasi fiktif pada `app-01` dengan source `/srv/example-app`. Tujuannya agar Anda dapat memilih tindakan yang benar tanpa harus memahami seluruh implementasi Restic.
 
 ## Istilah inti
 
@@ -9,7 +9,7 @@ Gunakan halaman ini saat menemukan istilah pada formulir atau riwayat Pluton. Co
 | Source | File atau mesin yang ingin dicadangkan. Untuk Managed Agent, satu path absolut berada dalam allowed roots |
 | Storage | Konfigurasi koneksi ke tempat penyimpanan, misalnya Local, SFTP, atau S3 |
 | Backup Plan | Aturan satu workload: nama, source, tujuan, jadwal, dan pengaturan backup |
-| Repository | Kumpulan data backup Restic pada path tujuan. Berbeda dari database kontrol Pluton |
+| Repository | Kumpulan data backup Restic pada path tujuan. Berbeda dari database kontrol GoRecover |
 | Snapshot | Representasi data dari satu backup yang dapat dipilih kembali untuk browse/restore |
 | Primary | Repository utama yang menerima backup sebelum replikasi dilakukan |
 | Replica / mirror | Salinan snapshot pada repository tambahan; keberhasilannya dicatat terpisah |

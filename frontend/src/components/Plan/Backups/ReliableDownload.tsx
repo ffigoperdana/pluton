@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { API_URL } from '../../../utils/constants';
+import { APP_NAME } from '../../../utils/brand';
 import type { DownloadMode } from '../../../utils/downloadPreparation';
 import { reliableAuthorization, reliableActive, reliableFailure, checkReliableContent, startReliableTransfer } from '../../../utils/reliableDownload';
 import { downloadBytes, downloadDuration, downloadStep, uploadPercent } from '../../../utils/downloadProgress';
@@ -280,7 +281,7 @@ export default function ReliableDownload({backupId,
             <p>Cleanup is pending. Its storage reservation remains counted until deletion is verified. Status checks continue automatically.</p>
          )}
          {job?.confidentiality === 'application-encrypted' && (
-            <p>Temporary storage holds an encrypted archive. Downloading through Pluton returns the original TAR.</p>
+            <p>Temporary storage holds an encrypted archive. Downloading through {APP_NAME} returns the original TAR.</p>
          )}
          <div className={styles.connection}>
             {actionError && !confirm && <p role="alert">{actionError}</p>}
@@ -318,7 +319,7 @@ export default function ReliableDownload({backupId,
                </p>
                {job.transport === 'authenticated-proxy' && (
                   <p>
-                     Resuming requires an authenticated Pluton session. The server checks object identity on every Range request. Verify the final
+                     Resuming requires an authenticated {APP_NAME} session. The server checks object identity on every Range request. Verify the final
                      file size and SHA-256 after download.
                   </p>
                )}
@@ -329,7 +330,7 @@ export default function ReliableDownload({backupId,
                   <div>
                      <p>
                         {authorization.transport === 'authenticated-proxy'
-                           ? 'This link requires your authenticated Pluton session.'
+                           ? `This link requires your authenticated ${APP_NAME} session.`
                            : 'Private bearer link expires: ' +
                              new Date(authorization.expiresAt).toLocaleString() +
                              '. Keep it out of logs and shared messages.'}

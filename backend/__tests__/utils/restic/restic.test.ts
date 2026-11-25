@@ -38,6 +38,7 @@ import { getRcloneConfigPath } from '../../../src/utils/rclone/helpers';
 import { appPaths } from '../../../src/utils/AppPaths';
 import { generateResticRepoPath } from '../../../src/utils/restic/helpers';
 import { killProcessTree } from '../../../src/utils/processTree';
+import { BRAND_NAME } from '../../../src/utils/brand';
 
 const mockSpawn = spawn as jest.MockedFunction<typeof spawn>;
 const mockKillProcessTree = killProcessTree as jest.MockedFunction<typeof killProcessTree>;
@@ -1189,7 +1190,7 @@ error: index file corrupted`;
 			expect(result.fix).toContain('restic repair index');
 			expect(result.fix).toContain(testContext.repo);
 			expect(result.fix).toContain(testContext.device);
-			expect(result.fix).toContain('Pluton Encryption key');
+			expect(result.fix).toContain(`${BRAND_NAME} Encryption key`);
 		});
 
 		it('should provide proper repair command for damaged index', () => {

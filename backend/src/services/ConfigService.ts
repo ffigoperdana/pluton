@@ -7,6 +7,7 @@ import { isCliCommandInvocation } from '../utils/cliCommands';
 import { verifyFilePermissions } from '../utils/envFileHelpers';
 import { credentialManager } from './CredentialManager';
 import { parseWebOrigins, WebOriginConfigError } from '../utils/webOrigins';
+import { BRAND_NAME } from '../utils/brand';
 
 // Schema for the .env config file (with optional sensitive fields for setup mode)
 const baseConfigSchema = z.object({
@@ -15,7 +16,7 @@ const baseConfigSchema = z.object({
 	SERVER_PORT: z.coerce.number().int().positive().default(5173),
 	APP_URL: z.string().default('http://localhost:5173'),
 	APP_ALLOWED_ORIGINS: z.string().optional(),
-	APP_TITLE: z.string().min(1).default('Pluton'),
+	APP_TITLE: z.string().min(1).default(BRAND_NAME),
 	MAX_CONCURRENT_BACKUPS: z.coerce.number().int().positive().default(2),
 	LICENSE_KEY: z.string().optional(),
 

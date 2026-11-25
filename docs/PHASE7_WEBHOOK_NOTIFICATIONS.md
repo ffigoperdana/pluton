@@ -126,8 +126,14 @@ imports become `sql_import: "not_tested"`, not Passed. Backup artifact metadata
 means archived in the snapshot, not recovery-tested. Failure/warning categories
 come from closed classifications, never raw errors. No source path, database name,
 SQL, credential, agent inventory, stack trace or private configuration is spread
-into a payload. Plain-text email subjects/bodies use the same safe projection and
-explicitly avoid a semantic application-recovery guarantee.
+into a payload. Email subjects and bodies use the same safe projection and
+explicitly avoid a semantic application-recovery guarantee. Each SMTP channel email
+is multipart: an HTML part inside the shared `email.html` wrapper and a plain-text
+part (`notificationMessage.ts`). Failure categories are explained in plain language,
+with steps and a documentation link, from the server-authored map in
+`problemExplanations.ts`; a new closed category needs an entry there (a test
+enforces it). The legacy Backup Failed email shows the same explanation when its
+recorded error carries a closed category.
 
 ## Webhook authentication and transport
 

@@ -10,6 +10,7 @@ import { AppError } from '../../src/utils/AppError';
 import { NewStorage, Storage } from '../../src/db/schema/storages';
 import { generateUID } from '../../src/utils/helpers';
 import { spawnRcloneAuthorize } from '../../src/utils/rclone/helpers';
+import { BRAND_NAME } from '../../src/utils/brand';
 
 jest.mock('../../src/utils/rclone/helpers');
 
@@ -461,7 +462,7 @@ describe('StorageService', () => {
 
 			await expect(storageService.deleteStorage(storageId)).rejects.toThrow(AppError);
 			await expect(storageService.deleteStorage(storageId)).rejects.toThrow(
-				"This Storage is used by Pluton's self-backup. Please disable self-backup or choose a different storage before deleting it."
+				`This Storage is used by ${BRAND_NAME}'s self-backup. Please disable self-backup or choose a different storage before deleting it.`
 			);
 			expect(mockStorageManager.deleteRemote).not.toHaveBeenCalled();
 		});

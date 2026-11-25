@@ -17,6 +17,7 @@ import {
   supportLabels,
 } from "../../frontend/src/docs/manifest.ts";
 import { buildIdentity } from "../../frontend/src/utils/buildIdentity.ts";
+import { APP_NAME } from "../../frontend/src/utils/brand.ts";
 import { tree, loadArticle } from "./source.ts";
 import { mdxComponents } from "./mdx.tsx";
 import { ThemeCompatibility } from "./theme.tsx";
@@ -56,7 +57,7 @@ function Footer() {
   }, []);
   return (
     <footer className="pluton-footer text-center">
-      Pluton | <a href="/docs">Documentation</a> |{" "}
+      {APP_NAME} | <a href="/docs">Documentation</a> |{" "}
       <a href="/docs/changelog">Changelog</a> |{" "}
       <a href="/docs/reference/version">{identity}</a> |{" "}
       <a href="/docs/reference/acknowledgements">About</a>
@@ -98,7 +99,7 @@ export function DocsShell({ children }: { children: ReactNode }) {
           title: (
             <>
               <BookOpen className="size-5" />
-              <span>Pluton Documentation</span>
+              <span>{APP_NAME} Documentation</span>
             </>
           ),
         }}
@@ -137,7 +138,7 @@ export default function Docs() {
   >;
   const location = useLocation();
   useEffect(() => {
-    document.title = `${article?.metadata.title || "Documentation"} · Pluton`;
+    document.title = `${article?.metadata.title || "Documentation"} · ${APP_NAME}`;
     try {
       const anchor = decodeURIComponent(location.hash.slice(1));
       if (anchor) document.getElementById(anchor)?.scrollIntoView();
@@ -155,14 +156,14 @@ export default function Docs() {
           footer={{ enabled: false }}
           breadcrumb={{ enabled: false }}
         >
-          <DocsTitle>Pluton Documentation</DocsTitle>
+          <DocsTitle>{APP_NAME} Documentation</DocsTitle>
           <DocsDescription>
             Mulai dari backup pertama, periksa hasilnya, lalu pelajari pemulihan
             dan operasi yang aman.
           </DocsDescription>
           <DocsBody>
             <p>
-              Pluton membantu Anda menjadwalkan backup, menemukan snapshot, dan
+              {APP_NAME} membantu Anda menjadwalkan backup, menemukan snapshot, dan
               memeriksa hasil pemulihan. Siapkan Storage lebih dahulu, lalu
               source dan Backup Plan. Gunakan Ctrl+K / Cmd+K untuk mencari tugas
               atau pesan error.
@@ -170,7 +171,7 @@ export default function Docs() {
             <h2>Mulai di sini</h2>
             <ol>
               <li><a href="/docs/getting-started/complete-backup-setup">Complete Backup Setup: dari server baru sampai recovery terverifikasi</a>.</li>
-              <li><a href="/docs/getting-started">Kenali Pluton dan pilih jenis backup</a>.</li>
+              <li><a href="/docs/getting-started">Kenali {APP_NAME} dan pilih jenis backup</a>.</li>
               <li><a href="/docs/storage">Tambahkan Primary Storage</a>, lalu <a href="/docs/remote-agent">siapkan source atau Agent</a>.</li>
               <li><a href="/docs/getting-started/quick-start">Buat Backup Plan dan jalankan backup pertama</a>.</li>
               <li><a href="/docs/restore/browse">Browse snapshot</a>, kemudian <a href="/docs/restore/staging">verifikasi hasil Restore di staging</a>.</li>

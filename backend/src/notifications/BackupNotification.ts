@@ -10,6 +10,7 @@ import { NotificationChannelResolver } from '../notifications/channels/Notificat
 import { SlackChannel } from '../notifications/channels/SlackChannel';
 import { DiscordChannel } from '../notifications/channels/DiscordChannel';
 import { configService } from '../services/ConfigService';
+import { BRAND_NAME } from '../utils/brand';
 
 interface BackupDataType {
 	id?: string;
@@ -236,7 +237,7 @@ export class BackupNotification {
 		switch (notificationType) {
 			case 'replication_failure':
 				notificationClass = new this.ReplicationFailedNotificationClass({
-					appTitle: configService.config.APP_TITLE || 'Pluton',
+					appTitle: configService.config.APP_TITLE || BRAND_NAME,
 					plan,
 					deviceName,
 					storageName,
@@ -250,7 +251,7 @@ export class BackupNotification {
 				break;
 			case 'start':
 				notificationClass = new this.BackupStartedNotificationClass({
-					appTitle: configService.config.APP_TITLE || 'Pluton',
+					appTitle: configService.config.APP_TITLE || BRAND_NAME,
 					plan,
 					deviceName,
 					storageName,
@@ -262,7 +263,7 @@ export class BackupNotification {
 				break;
 			case 'success':
 				notificationClass = new this.BackupSuccessNotificationClass({
-					appTitle: configService.config.APP_TITLE || 'Pluton',
+					appTitle: configService.config.APP_TITLE || BRAND_NAME,
 					plan,
 					deviceName,
 					storageName,
@@ -276,7 +277,7 @@ export class BackupNotification {
 				break;
 			case 'failure':
 				notificationClass = new this.BackupFailedNotificationClass({
-					appTitle: configService.config.APP_TITLE || 'Pluton',
+					appTitle: configService.config.APP_TITLE || BRAND_NAME,
 					plan,
 					deviceName,
 					storageName,
@@ -291,7 +292,7 @@ export class BackupNotification {
 			case 'end':
 				if (backupData?.error) {
 					notificationClass = new this.BackupFailedNotificationClass({
-						appTitle: configService.config.APP_TITLE || 'Pluton',
+						appTitle: configService.config.APP_TITLE || BRAND_NAME,
 						plan,
 						deviceName,
 						storageName,
@@ -304,7 +305,7 @@ export class BackupNotification {
 					});
 				} else {
 					notificationClass = new this.BackupSuccessNotificationClass({
-						appTitle: configService.config.APP_TITLE || 'Pluton',
+						appTitle: configService.config.APP_TITLE || BRAND_NAME,
 						plan,
 						deviceName,
 						storageName,

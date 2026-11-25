@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken';
 import { SettingsService } from '../services/SettingsService';
 import crypto from 'crypto';
 import { parseWebOrigins, requestWebOrigin, webCookieOptions } from '../utils/webOrigins';
+import { BRAND_NAME } from '../utils/brand';
 
 export class UserController {
 	constructor(private settingsService: SettingsService) {}
@@ -74,7 +75,7 @@ export class UserController {
 			const decryptedSecret = cryptr.decrypt(totpConfig.secret);
 
 			// 3. Re-create the TOTP instance with the exact same parameters
-			const appName = appSettings?.settings?.title || 'Pluton';
+			const appName = appSettings?.settings?.title || BRAND_NAME;
 			const userIdentifier = 'admin';
 			const totp = new otpauth.TOTP({
 				issuer: appName,

@@ -1,6 +1,6 @@
 # Menjalankan SHADOW dan validasi sebelum cutover
 
-SHADOW menjalankan Pluton sebagai jalur baru yang diamati sementara SYS MON tetap authoritative dan tetap melindungi workload. Tujuannya mengumpulkan bukti yang dapat ditinjau sebelum tanggung jawab backup berpindah. Jangan menghentikan jadwal lama, memodifikasi repository lama, atau menganggap satu backup manual sukses sebagai acceptance.
+SHADOW menjalankan GoRecover sebagai jalur baru yang diamati sementara SYS MON tetap authoritative dan tetap melindungi workload. Tujuannya mengumpulkan bukti yang dapat ditinjau sebelum tanggung jawab backup berpindah. Jangan menghentikan jadwal lama, memodifikasi repository lama, atau menganggap satu backup manual sukses sebagai acceptance.
 
 ## Siapkan cakupan uji
 

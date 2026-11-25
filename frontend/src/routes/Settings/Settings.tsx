@@ -11,6 +11,7 @@ import SidePanel from '../../components/common/SidePanel/SidePanel';
 import GeneralSettings from '../../components/Settings/GeneralSettings/GeneralSettings';
 import SelfBackupSettings from '../../components/Settings/SelfBackupSettings/SelfBackupSettings';
 import NotificationSettings from '../../components/Settings/NotificationSettings/NotificationSettings';
+import { APP_NAME } from '../../utils/brand';
 
 const Settings = () => {
    const [tab, setTab] = useState(() => {
@@ -63,7 +64,7 @@ const Settings = () => {
                      <Icon type="integration" size={13} /> Integrations
                   </li>
                   <li className={`${tab === 'backup' ? classes.tabActive : ''}`} onClick={() => setTab('backup')}>
-                     <Icon type="backup" size={13} /> Backup Pluton
+                     <Icon type="backup" size={13} /> Backup {APP_NAME}
                   </li>
                   <li
                      role="button"
@@ -109,7 +110,7 @@ const Settings = () => {
                </AnimatedWrapper>
                <AnimatedWrapper isVisible={tab === 'backup'} animationType="slide-left" animationDuration={100} absolute={true}>
                   <div className={classes.tabContent}>
-                     <h4>Backup Pluton</h4>
+                     <h4>Backup {APP_NAME}</h4>
                      <SelfBackupSettings
                         settingsID={settingsID}
                         settings={settings}

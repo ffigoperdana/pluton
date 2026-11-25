@@ -1,4 +1,5 @@
 import { TestNtfyNotification } from '../../src/notifications/templates/push/test-ntfy/TestNtfyNotification';
+import { BRAND_NAME } from '../../src/utils/brand';
 
 // Mock dependencies
 jest.mock('../../src/services/ConfigService', () => ({
@@ -58,7 +59,7 @@ describe('TestNtfyNotification', () => {
 			expect(content).toContain('can successfully send push notifications using Ntfy');
 		});
 
-		it('should fallback to Pluton when APP_TITLE is not configured', () => {
+		it('should fall back to the brand name when APP_TITLE is not configured', () => {
 			// Temporarily override the mock
 			const configModule = require('../../src/services/ConfigService');
 			const originalTitle = configModule.configService.config.APP_TITLE;
@@ -70,7 +71,7 @@ describe('TestNtfyNotification', () => {
 			});
 
 			const content = notification.getContent();
-			expect(content).toContain('Pluton');
+			expect(content).toContain(BRAND_NAME);
 
 			// Restore
 			configModule.configService.config.APP_TITLE = originalTitle;

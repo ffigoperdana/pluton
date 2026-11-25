@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { APP_NAME } from '../src/utils/brand.ts';
 import type { SourceAccessView } from '../src/@types/agentSourceAccess.ts';
 
 const require = createRequire(new URL('../package.json', import.meta.url));
@@ -1145,7 +1146,7 @@ test('Server-Managed enrollment is an explicit reviewed intent; installer stays 
          assert.doesNotMatch(command, /--delegat|--source-access|server-managed/);
       }
       assert.match(ui.text(), /It does not silently delegate this scope/);
-      assert.match(ui.text(), /future readable directories inside the scope can be validated and applied entirely in Pluton/);
+      assert.match(ui.text(), new RegExp(`future readable directories inside the scope can be validated and applied entirely in ${APP_NAME}`));
    } finally {
       await ui.cleanup();
    }

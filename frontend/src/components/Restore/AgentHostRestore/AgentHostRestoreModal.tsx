@@ -4,6 +4,7 @@ import classes from './AgentHostRestore.module.scss';
 import AgentHostTargetFields from './AgentHostTargetFields';
 import AgentHostRestoreConfirm from './AgentHostRestoreConfirm';
 import { useAgentHostRestoreOptions } from '../../../services/restores';
+import { APP_NAME } from '../../../utils/brand';
 
 interface AgentHostRestoreModalProps {
    backupId: string;
@@ -27,7 +28,7 @@ const AgentHostRestoreModal = ({ backupId, planId, databasePath, close }: AgentH
       <Modal title="Restore database dump to the Agent host" closeModal={close}>
          <div className={classes.modalBody}>
             <p className={classes.note}>
-               Restores <code>{databasePath}</code> on the Agent host only, without passing it through Pluton or this browser. Load it into a
+               Restores <code>{databasePath}</code> on the Agent host only, without passing it through {APP_NAME} or this browser. Load it into a
                new database afterwards.
             </p>
             {options.data?.supported && !database ? (

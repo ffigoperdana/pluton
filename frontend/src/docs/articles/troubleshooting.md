@@ -79,8 +79,8 @@ Cocokkan identitas plan/source/repository, capabilities Agent, snapshot exact, s
 
 Bila tombol simpan/hapus gagal, lihat permintaan terkait melalui Network pada browser: metode, URL, HTTP status, **Content-Type**, dan waktu. Jangan menyalin cookie, authorization, request body berisi credential, atau response rahasia ke laporan.
 
-- **405 dengan HTML** atau halaman proxy/login dapat berasal dari aturan reverse proxy, WAF, routing SPA, atau upstream yang salah. Administrator perlu mencocokkan log proxy dan route API untuk **metode asli**, termasuk PUT/DELETE bila dipakai fitur. Status 405 saja belum membuktikan Pluton menolak dependensi.
-- **JSON dengan pesan Pluton** perlu ditangani sesuai makna: 401 sesi/akses, 403 origin/kebijakan, atau 409 pekerjaan/dependensi aktif. JSON dari proxy lain juga mungkin, jadi cocokkan sumber dan log.
+- **405 dengan HTML** atau halaman proxy/login dapat berasal dari aturan reverse proxy, WAF, routing SPA, atau upstream yang salah. Administrator perlu mencocokkan log proxy dan route API untuk **metode asli**, termasuk PUT/DELETE bila dipakai fitur. Status 405 saja belum membuktikan GoRecover menolak dependensi.
+- **JSON dengan pesan GoRecover** perlu ditangani sesuai makna: 401 sesi/akses, 403 origin/kebijakan, atau 409 pekerjaan/dependensi aktif. JSON dari proxy lain juga mungkin, jadi cocokkan sumber dan log.
 - HTML yang diterima saat client mengharapkan JSON dapat tampil sebagai parsing error; perbaiki routing dan content type di penyebabnya.
 
 Jangan mengubah DELETE/PUT menjadi POST, membuka backend langsung untuk melewati proxy, mematikan auth/origin/CSRF, atau menghapus data secara manual. Sesudah konfigurasi proxy ditinjau dan diperbaiki administrator, ulangi tindakan yang memang diizinkan dari origin yang sama dan verifikasi hasil di UI. Untuk penghapusan, baca [plan](/docs/backup-plans/delete) atau [Database Restore](/docs/database-restores/delete) sebelum mencoba lagi.

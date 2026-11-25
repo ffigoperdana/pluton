@@ -14,6 +14,7 @@ import {
   preserveCodeCopyPolicy,
 } from "../plugins/content.ts";
 import { copyCode } from "../src/clipboard.ts";
+import { APP_NAME } from "../../frontend/src/utils/brand.ts";
 
 test("React major versions stay isolated across documents", () => {
   const app = createRequire(
@@ -283,10 +284,10 @@ test(
           createElement(RouterProvider, { router }),
         );
         assert(html.includes("Back to Application"), route);
-        assert(html.includes("Pluton Documentation"), route);
+        assert(html.includes(`${APP_NAME} Documentation`), route);
         assert(!/api\/settings|onerror=|javascript:/.test(html), route);
         if (route === "/docs/getting-started")
-          assert(html.includes('id="mengenal-pluton-mandiri"'));
+          assert(html.includes('id="mengenal-gorecover-mandiri"'));
         if (route.startsWith("/docs/troubleshooting/source")) {
           assert(html.includes('id="1-understand-the-error"'));
           assert(html.includes('id="9-configure-backup-exclusions"'));
