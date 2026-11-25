@@ -206,6 +206,72 @@ export function terminalPayload(
 			.map(warning => ({ category: category(warning.code, 'validation-warning') }));
 	return payload;
 }
+const planRef = (row: Row) => ({
+	id: row.plan_id,
+	name: Array.from(String(row.plan_name || 'Backup plan'))
+		.filter(char => char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127)
+		.join('')
+		.slice(0, 120),
+});
+const label = (value: unknown, fallback: string) =>
+	Array.from(String(value || fallback))
+		.filter(char => char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127)
+		.join('')
+		.slice(0, 120) || fallback;
+/** Server-generated categories only: lowercase words joined by dashes. */
+const replicationCode = (value: unknown) =>
+	typeof value === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(value) ? value : 'replication-failed';
+const isoMs = (value: unknown) =>
+	typeof value === 'number' && Number.isFinite(value) ? new Date(value).toISOString() : undefined;
+
+/** A replica copy that failed, or stopped uncertainly (docs/OPERATIONAL_NOTIFICATIONS.md). */
+export function replicationPayload(row: Row, eventId: string, now: number): NotificationPayload {
+	const status = row.status === 'uncertain' ? 'uncertain' : 'failed';
+	return {
+		version: 1,
+		event_id: eventId,
+		event_type: 'replication.failed',
+		timestamp: new Date(now).toISOString(),
+		plan: planRef(row),
+		backup: {
+			id: row.backup_id,
+			status: 'completed',
+			snapshot_id: snapshot(row.source_snapshot_id),
+		},
+		replication: {
+			id: row.id,
+			replication_id: label(row.replication_id, 'replica'),
+			replica_name: label(row.replica_name, 'Replica storage'),
+			status,
+			attempts: count(row.attempts),
+		},
+		started_at: isoMs(row.created_at),
+		completed_at: isoMs(row.updated_at),
+		error: { category: replicationCode(row.last_error_code) },
+	};
+}
+
+/** An Agent that stayed offline past the grace period, or that came back afterwards. */
+export function agentPayload(
+	eventType: 'agent.offline' | 'agent.online',
+	agent: { id: string; name: string; lastSeenMs: number | null; offlineSinceMs: number },
+	eventId: string,
+	now: number
+): NotificationPayload {
+	return {
+		version: 1,
+		event_id: eventId,
+		event_type: eventType,
+		timestamp: new Date(now).toISOString(),
+		agent: {
+			id: agent.id,
+			name: label(agent.name, 'Agent'),
+			last_seen: agent.lastSeenMs === null ? null : new Date(agent.lastSeenMs).toISOString(),
+			offline_since: new Date(agent.offlineSinceMs).toISOString(),
+		},
+	};
+}
+
 export function notificationText(payload: NotificationPayload): { subject: string; text: string } {
 	const labels: Record<string, string> = {
 		'backup.completed': 'Backup Successful',
@@ -216,6 +282,9 @@ export function notificationText(payload: NotificationPayload): { subject: strin
 		'recovery.passed_with_warning': 'Recovery Test Passed with Warning',
 		'recovery.failed': 'Recovery Test Failed',
 		'recovery.cancelled': 'Recovery Test Cancelled',
+		'replication.failed': 'Replica Copy Needs Attention',
+		'agent.offline': 'Agent Offline',
+		'agent.online': 'Agent Back Online',
 		'notification.test': 'Test Notification',
 	};
 	const lines = [
@@ -224,6 +293,38 @@ export function notificationText(payload: NotificationPayload): { subject: strin
 		`Event ID: ${payload.event_id}`,
 	];
 	if (payload.plan) lines.push(`Plan: ${payload.plan.name} (${payload.plan.id})`);
+	if (payload.agent) {
+		lines.push(
+			`Agent: ${payload.agent.name} (${payload.agent.id})`,
+			`Last heartbeat: ${payload.agent.last_seen || 'Never'}`,
+			`Offline since: ${payload.agent.offline_since}`
+		);
+		lines.push(
+			payload.event_type === 'agent.offline'
+				? 'Scheduled backups of this Agent wait in the queue while it is offline; they are not reported as failed. Check the host, its network and the pluton-agent service.'
+				: 'The Agent is reachable again. Queued backups continue; check that the next scheduled runs complete.'
+		);
+		return {
+			subject: `[Pluton] ${labels[payload.event_type]} — ${payload.agent.name}`,
+			text: lines.join('\n'),
+		};
+	}
+	if (payload.replication) {
+		lines.push(
+			`Backup: ${payload.backup?.id || 'Not available'}`,
+			`Replica: ${payload.replication.replica_name} (${payload.replication.replication_id})`,
+			`Result: ${payload.replication.status}`,
+			`Attempts: ${payload.replication.attempts ?? 'Not available'}`,
+			`Failure classification: ${payload.error?.category || 'replication-failed'}`,
+			payload.replication.status === 'uncertain'
+				? 'The copy stopped without a provable outcome. Pluton does not retry it automatically and holds the replication queue; review it in the backup mirror details.'
+				: 'The backup itself is safe in the primary repository. Retry the copy from the backup mirror details after fixing the cause.'
+		);
+		return {
+			subject: `[Pluton] ${labels[payload.event_type]}${payload.plan ? ` — ${payload.plan.name}` : ''}`,
+			text: lines.join('\n'),
+		};
+	}
 	if (payload.backup)
 		lines.push(
 			`Backup: ${payload.backup.id}`,

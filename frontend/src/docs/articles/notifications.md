@@ -18,6 +18,16 @@ Pilihan mencakup **Backup successful**, **Backup completed with warning**, **Bac
 
 Contoh: channel `Peringatan app-01` memilih semua kegagalan, tetapi plan hanya memilih **Backup failed**. Kegagalan recovery tidak terkirim sampai pilihan recovery juga diaktifkan di plan. **Recovery test passed with warning** dapat berarti integritas artefak lulus tetapi SQL import **NOT TESTED**. Baca hasil recovery sebelum menutup insiden.
 
+## Event operasional
+
+Selain hasil backup dan recovery, tersedia tiga event operasional:
+
+- **Replica copy failed or needs review** (`replication.failed`): salinan sebuah backup ke replika gagal, atau berhenti dalam status *uncertain*. Status *uncertain* menahan antrean replikasi sampai ditinjau di detail mirror backup. Satu pesan per salinan dan hasil; retry yang gagal lagi tidak dikirim ulang.
+- **Agent offline for 10 minutes** (`agent.offline`): Agent tidak mengirim heartbeat dan tidak sedang menjalankan perintah selama lebih dari 10 menit setelah batas offline. Backup terjadwalnya hanya menunggu di antrean dan tidak pernah tercatat gagal, jadi event ini satu-satunya peringatan.
+- **Agent back online** (`agent.online`): Agent yang tadi dilaporkan offline sudah kembali.
+
+Event Agent dikirim satu kali per channel ke channel yang dipilih oleh plan mana pun milik Agent itu. Restart singkat, upgrade Agent, dan downtime server Pluton sendiri tidak memicu peringatan. Channel dan kebijakan plan yang sudah ada tidak otomatis memilih event baru ini; centang di channel dan di setiap plan.
+
 ## Delivery
 
 Antrean bertahan saat layanan dimulai ulang. Pengiriman eksternal bersifat *at least once*: penerima dapat menerima event yang sama lagi bila respons hilang. Webhook harus menghapus duplikasi berdasarkan event ID. SMTP memakai Message-ID stabil, tetapi inbox tetap dapat menampilkan duplikat. **succeeded** berarti HTTP 2xx atau relay SMTP menerima pesan, bukan jaminan inbox atau tindakan lanjutan receiver.

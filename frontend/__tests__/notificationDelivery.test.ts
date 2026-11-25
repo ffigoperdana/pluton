@@ -63,7 +63,7 @@ test('network approval and recipient conversion are bounded by backend validatio
 test('event and per-plan channel selection is immutable, independent and defaults opt-in off', () => {
    const value = emptySubscription();
    assert.equal(value.enabled, false);
-   assert.equal(eventChoices.length, 8);
+   assert.equal(eventChoices.length, 11);
    const changed = toggleChoice(value.events, 'backup.failed');
    assert.ok(!changed.includes('backup.failed'));
    assert.ok(value.events.includes('backup.failed'));

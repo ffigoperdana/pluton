@@ -7,6 +7,10 @@ export const notificationEvents = [
 	'recovery.passed_with_warning',
 	'recovery.failed',
 	'recovery.cancelled',
+	// Operational events (docs/OPERATIONAL_NOTIFICATIONS.md).
+	'replication.failed',
+	'agent.offline',
+	'agent.online',
 ] as const;
 export type NotificationEventType = (typeof notificationEvents)[number];
 export type NetworkPolicy = { network: 'public' | 'trusted-lan'; allowedCidrs: string[] };
@@ -52,6 +56,16 @@ export type NotificationPayload = {
 	plan?: { id: string; name: string };
 	backup?: { id: string; status: string; snapshot_id: string | null };
 	recovery?: { id: string; backup_id: string; status: string; snapshot_id: string };
+	/** A replica copy of one backup that failed, or stopped uncertainly and needs review. */
+	replication?: {
+		id: string;
+		replication_id: string;
+		replica_name: string;
+		status: 'failed' | 'uncertain';
+		attempts?: number;
+	};
+	/** An Agent that stayed offline past the grace period, or came back after that. */
+	agent?: { id: string; name: string; last_seen: string | null; offline_since: string };
 	started_at?: string;
 	completed_at?: string;
 	duration_seconds?: number;

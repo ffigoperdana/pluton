@@ -9,6 +9,10 @@ export const eventChoices: { value: NotificationEventType; label: string }[] = [
    { value: 'recovery.passed_with_warning', label: 'Recovery test passed with warning' },
    { value: 'recovery.failed', label: 'Recovery test failed' },
    { value: 'recovery.cancelled', label: 'Recovery test cancelled' },
+   // Operational events (docs/OPERATIONAL_NOTIFICATIONS.md).
+   { value: 'replication.failed', label: 'Replica copy failed or needs review' },
+   { value: 'agent.offline', label: 'Agent offline for 10 minutes' },
+   { value: 'agent.online', label: 'Agent back online' },
 ];
 export function channelDraft(saved?: Channel, kind: 'webhook' | 'smtp' = 'webhook'): ChannelInput {
    if (saved)

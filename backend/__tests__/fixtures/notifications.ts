@@ -8,12 +8,20 @@ export function notificationFixture() {
 	const sqlite = new Database(':memory:');
 	sqlite.pragma('foreign_keys=ON');
 	sqlite.exec(`
-	 CREATE TABLE plans(id TEXT PRIMARY KEY,title TEXT);
+	 CREATE TABLE plans(id TEXT PRIMARY KEY,title TEXT,source_type TEXT,source_id TEXT);
 	 CREATE TABLE backups(id TEXT PRIMARY KEY,plan_id TEXT,status TEXT,in_progress INTEGER,success INTEGER,started_at INTEGER,ended_at INTEGER,created_at INTEGER,error_msg TEXT,completion_stats TEXT,task_stats TEXT,progress_stats TEXT,mirrors TEXT);
 	 CREATE TABLE recovery_tests(id TEXT PRIMARY KEY,plan_id TEXT,backup_id TEXT,status TEXT,snapshot_id TEXT,created_at INTEGER,started_at INTEGER,completed_at INTEGER,result TEXT,warnings TEXT,failure_code TEXT);
-	 INSERT INTO plans VALUES ('plan-01','Example Application');
+	 INSERT INTO plans(id,title,source_type,source_id) VALUES ('plan-01','Example Application','device','app-01');
+	 CREATE TABLE storages(id TEXT PRIMARY KEY,name TEXT);
+	 CREATE TABLE devices(id TEXT PRIMARY KEY,name TEXT);
+	 CREATE TABLE agent_identities(agent_id TEXT PRIMARY KEY,device_id TEXT,last_seen INTEGER,revoked_at INTEGER);
+	 CREATE TABLE agent_commands(id TEXT PRIMARY KEY,agent_id TEXT,state TEXT,lease_expires_at INTEGER);
+	 CREATE TABLE managed_replication_jobs(id TEXT PRIMARY KEY,backup_id TEXT,plan_id TEXT,replication_id TEXT,destination_storage_id TEXT,source_snapshot_id TEXT,status TEXT,attempts INTEGER,last_error_code TEXT,created_at INTEGER,updated_at INTEGER);
+	 INSERT INTO storages VALUES ('storage-02','Example replica');
+	 INSERT INTO devices VALUES ('app-01','app-01');
 	`);
 	sqlite.exec(readFileSync(path.resolve('drizzle/0010_phase7_notification_outbox.sql'), 'utf8'));
+	sqlite.exec(readFileSync(path.resolve('drizzle/0026_operational_notifications.sql'), 'utf8'));
 	let now = Date.UTC(2026, 9, 13);
 	const store = new NotificationDeliveryStore(
 		sqlite,

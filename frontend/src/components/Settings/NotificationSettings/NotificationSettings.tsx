@@ -122,7 +122,7 @@ export default function NotificationSettings() {
                            <td>
                               {row.eventType}
                               <br />
-                              {row.planName || 'Test notification'}
+                              {row.planName || (row.eventType === 'notification.test' ? 'Test notification' : '')}
                               <br />
                               <small>{row.eventId}</small>
                            </td>

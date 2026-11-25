@@ -19,7 +19,7 @@ const safeText = (max: number) =>
 		);
 const eventList = z
 	.array(z.enum(notificationEvents))
-	.max(8)
+	.max(16)
 	.transform(values => [...new Set(values)]);
 const network = {
 	network: z.enum(['public', 'trusted-lan']),

@@ -109,7 +109,10 @@ import { createRecoveryTestRouter } from './routes/recoveryTests';
 import { RecoveryTestTask } from './jobs/tasks/RecoveryTestTask';
 import { jobQueue } from './jobs/JobQueue';
 import { NotificationDeliveryStore } from './stores/NotificationDeliveryStore';
-import { NotificationDeliveryManager } from './notifications/NotificationDeliveryManager';
+import {
+	AGENT_OFFLINE_GRACE_MS,
+	NotificationDeliveryManager,
+} from './notifications/NotificationDeliveryManager';
 import { createNotificationRouter, notificationInputError } from './routes/notifications';
 import { DatabaseRestoreStore } from './stores/DatabaseRestoreStore';
 import { DatabaseRestoreService } from './services/DatabaseRestoreService';
@@ -176,7 +179,10 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	const restoreStore = new RestoreStore(db);
 	const settingsStore = new SettingsStore(db);
 	const notificationStore = new NotificationDeliveryStore(sqlite, configService.config.SECRET);
-	const notificationManager = new NotificationDeliveryManager(notificationStore);
+	const notificationManager = new NotificationDeliveryManager(notificationStore, undefined, {
+		offline: (configService.config.AGENT_OFFLINE_TIMEOUT_SECONDS || 90) * 1000,
+		grace: AGENT_OFFLINE_GRACE_MS,
+	});
 	const legacyRepositoryStore = new LegacyRepositoryStore(db);
 	const legacyRestoreJobStore = new LegacyRestoreJobStore(db);
 	const agentStore = new AgentStore(db);
