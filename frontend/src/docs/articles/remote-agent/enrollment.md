@@ -1,6 +1,6 @@
 # Mendaftarkan dan memasang Remote Agent
 
-Daftarkan mesin agar muncul pada **Sources** dan dapat dipilih sebagai sumber backup. Anda memerlukan akses administrator pada host Linux yang didukung, alamat Pluton yang dapat dijangkau host tersebut, dan satu folder contoh yang boleh dibaca agent.
+Daftarkan mesin agar muncul pada **Sources** dan dapat dipilih sebagai sumber backup. Anda memerlukan akses administrator pada host Linux yang didukung, alamat GoRecover yang dapat dijangkau host tersebut, dan satu folder contoh yang boleh dibaca agent.
 
 Contoh fiktif pada panduan ini adalah `app-01`, server `https://pluton.example.internal`, dan source `/srv/example-app`. Gunakan alamat serta folder milik lingkungan uji Anda tanpa menyalin secret ke tiket atau chat.
 
@@ -10,7 +10,7 @@ Pilih **Authorization Mode** saat menyiapkan pemasangan. **Host-Approved** memak
 persetujuan lokal untuk penambahan di luar root yang sudah disetujui.
 **Server-Managed** memerlukan delegasi host yang eksplisit atas beberapa prefix
 canonical; setelah itu folder di dalamnya dapat ditambah lewat Validate dan Apply
-di Pluton tanpa SSH berulang. Tinjau cakupan delegasi dan peringatannya sebelum
+di GoRecover tanpa SSH berulang. Tinjau cakupan delegasi dan peringatannya sebelum
 menjalankan perintah instalasi. Jangan memilih seluruh filesystem atau direktori
 yang mencampur aplikasi dengan kredensial sistem.
 

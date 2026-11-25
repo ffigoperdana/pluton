@@ -10,6 +10,7 @@ import classes from './LegacyRepositories.module.scss';
 import { CollectionToolbar, CollectionPagination } from '../../components/common/Table/CollectionControls';
 import { useCollectionPage } from '../../components/common/Table/useCollectionPage';
 import { stableCollectionSort } from '../../components/common/Table/collection';
+import { APP_NAME } from '../../utils/brand';
 
 const LegacyRepositories = () => {
    const [showRegistration, setShowRegistration] = useState(false);
@@ -36,7 +37,7 @@ const LegacyRepositories = () => {
             <div>
                <strong>READ ONLY</strong>
                <p>
-                  Legacy repositories remain outside Pluton's backup and retention lifecycle. This area browses snapshots and restores selected
+                  Legacy repositories remain outside {APP_NAME}'s backup and retention lifecycle. This area browses snapshots and restores selected
                   content only to isolated staging.
                </p>
             </div>

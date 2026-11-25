@@ -17,6 +17,7 @@ import {
 } from '../../../utils/replication';
 import DeleteDependencyNotice from '../../common/ActionModal/DeleteDependencyNotice';
 import { AGENT_S3_STORAGE_TYPES, managedReplicaStorageTypes } from '../../../utils/agentRepository';
+import { APP_NAME } from '../../../utils/brand';
 
 interface PlanReplicationSettingsProps {
    replication?: ReplicationSettings;
@@ -216,7 +217,7 @@ const PlanReplicationSettings = ({
                <div className={mirrorClasses.mirrorSettings}>
                   <p className={classes.fieldNotice}>
                      Replication runs sequentially by default. Use a dedicated repository path for each destination.
-                     {managedAgent && ' The Pluton server performs the copy; the source Agent does not receive replica credentials, except during a failover backup.'}
+                     {managedAgent && ` The ${APP_NAME} server performs the copy; the source Agent does not receive replica credentials, except during a failover backup.`}
                   </p>
                   {validationError && (
                      <p role="alert" className={mirrorClasses.validationError}>
@@ -245,7 +246,7 @@ const PlanReplicationSettings = ({
                         </label>
                         <p>
                            {settings.recoveryPolicy === 'automatic'
-                              ? 'Recovery starts on the primary repository. If it is unreachable, Pluton continues automatically with the first replica that passes identity and integrity checks, restoring only into isolated staging. Selecting this does not prove a replica is recoverable, and nothing is restored to production or imported into a database automatically.'
+                              ? `Recovery starts on the primary repository. If it is unreachable, ${APP_NAME} continues automatically with the first replica that passes identity and integrity checks, restoring only into isolated staging. Selecting this does not prove a replica is recoverable, and nothing is restored to production or imported into a database automatically.`
                               : settings.recoveryPolicy === 'assisted'
                                 ? 'Prefer the primary repository. A verified replica requires your explicit approval and restores only into isolated staging. Database import keeps its existing separate approval.'
                                 : 'Recovery uses the primary repository only. Choose a failover policy to allow verified replicas as a recovery source.'}
@@ -264,7 +265,7 @@ const PlanReplicationSettings = ({
                         </label>
                         <p>
                            {settings.backupFailover === 'automatic'
-                              ? 'When a backup fails before upload because the primary is unreachable, and the Pluton server cannot reach it either, the Agent writes a new backup into the first verified replica it can reach. Pluton verifies it there and copies it back to the primary once the primary is reachable. During that run the Agent receives the replica storage credentials, sealed. An outage during an upload is not detected; that run fails and the next one fails over. Requires Agent 0.8.0 or later.'
+                              ? `When a backup fails before upload because the primary is unreachable, and the ${APP_NAME} server cannot reach it either, the Agent writes a new backup into the first verified replica it can reach. ${APP_NAME} verifies it there and copies it back to the primary once the primary is reachable. During that run the Agent receives the replica storage credentials, sealed. An outage during an upload is not detected; that run fails and the next one fails over. Requires Agent 0.8.0 or later.`
                               : 'Backups use the primary repository only. A backup fails while the primary is unreachable.'}
                         </p>
                      </fieldset>
@@ -389,7 +390,7 @@ const PlanReplicationSettings = ({
                      </button>
                   )}
 
-                  {managedAgent && <p>Managed copies are serialized on the Pluton server to bound resource use.</p>}
+                  {managedAgent && <p>Managed copies are serialized on the {APP_NAME} server to bound resource use.</p>}
                   {settings.storages.length > 1 && !managedAgent && (
                      <div className={mirrorClasses.concurrentOption}>
                         <Toggle

@@ -1,6 +1,6 @@
 # Memulihkan ke staging dan memeriksa hasil
 
-Staging adalah ruang terpisah untuk meninjau data hasil pemulihan sebelum digunakan oleh aplikasi. Untuk managed remote, Pluton membuat workspace privat baru di server; source agent tidak ditulis kembali. Contoh subfolder recovery/example-check pada halaman ini sepenuhnya fiktif.
+Staging adalah ruang terpisah untuk meninjau data hasil pemulihan sebelum digunakan oleh aplikasi. Untuk managed remote, GoRecover membuat workspace privat baru di server; source agent tidak ditulis kembali. Contoh subfolder recovery/example-check pada halaman ini sepenuhnya fiktif.
 
 ## Target
 

@@ -1,6 +1,6 @@
 # Menghapus Backup Plan dan memilih nasib data backup
 
-Gunakan **Remove** jika plan memang tidak lagi diperlukan. Untuk penghentian sementara, gunakan **Pause**. Penghapusan plan menghilangkan plan serta riwayat terkait dari Pluton; nasib data repository bergantung pada mode plan dan pilihan pada dialog.
+Gunakan **Remove** jika plan memang tidak lagi diperlukan. Untuk penghentian sementara, gunakan **Pause**. Penghapusan plan menghilangkan plan serta riwayat terkait dari GoRecover; nasib data repository bergantung pada mode plan dan pilihan pada dialog.
 
 Sebelum menghapus plan contoh `Backup contoh app-01`, pastikan file yang dibutuhkan sudah dapat dipulihkan, lokasi repository diketahui, dan tidak ada orang yang masih bergantung pada riwayat itu. Periksa bahwa destination bukan source aplikasi atau folder bersama.
 
@@ -14,7 +14,7 @@ Sebelum menghapus plan contoh `Backup contoh app-01`, pastikan file yang dibutuh
 
 Database hasil restore yang persisten **tidak ikut dihapus secara cascade** ketika plan dihapus. Backend menolak penghapusan dengan HTTP **409** dan kode `RETAINED_DATABASE_RESTORE_DEPENDENCY` sampai cleanup yang diperlukan selesai serta diverifikasi. UI menyediakan **Open Database Restore Management** untuk menanganinya.
 
-Record yang tampak sudah dihapus belum tentu cukup jika cleanup belum verified, masih ada import lease, atau lifecycle otomatis belum menyelesaikan penghapusan resource. Ikuti [pemeriksaan](/docs/database-restores/inspect) dan [cleanup](/docs/database-restores/delete) yang disediakan; jangan mengedit database Pluton atau menghapus record untuk melewati guard.
+Record yang tampak sudah dihapus belum tentu cukup jika cleanup belum verified, masih ada import lease, atau lifecycle otomatis belum menyelesaikan penghapusan resource. Ikuti [pemeriksaan](/docs/database-restores/inspect) dan [cleanup](/docs/database-restores/delete) yang disediakan; jangan mengedit database GoRecover atau menghapus record untuk melewati guard.
 
 ## Menggunakan dialog Remove Backup Plan
 

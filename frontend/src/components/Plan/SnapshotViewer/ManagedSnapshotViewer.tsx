@@ -8,6 +8,7 @@ import { useNavigate } from 'react-router';
 import { toast } from 'react-toastify';
 import type { FileItem } from '../../../@types/system';
 import { API_URL } from '../../../utils/constants';
+import { APP_NAME } from '../../../utils/brand';
 import { fetchManagedSnapshotPage, snapshotParent, type ManagedSnapshotQuery } from '../../../utils/managedSnapshotBrowse';
 import { useRestoreBackup } from '../../../services/restores';
 import { formatBytes, isMobile } from '../../../utils/helpers';
@@ -514,7 +515,7 @@ function ManagedViewer({
                message={
                   <>
                      <p>{selected.path}</p>
-                     <p>Restore into a new private staging workspace on the Pluton server. The remote source is never modified.</p>
+                     <p>Restore into a new private staging workspace on the {APP_NAME} server. The remote source is never modified.</p>
                   </>
                }
                closeModal={() => setSelected(null)}

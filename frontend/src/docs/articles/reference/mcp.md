@@ -1,6 +1,6 @@
 # MCP: token, izin, approval, dan koneksi assistant
 
-MCP menghubungkan assistant ke tool Pluton yang dipilih administrator. Native API Token dapat dipakai tanpa identity provider eksternal. OAuth tetap tersedia sebagai mode terpisah untuk client yang memerlukannya. Token Pluton bukan API key penyedia model dan tidak memberikan langganan AI.
+MCP menghubungkan assistant ke tool GoRecover yang dipilih administrator. Native API Token dapat dipakai tanpa identity provider eksternal. OAuth tetap tersedia sebagai mode terpisah untuk client yang memerlukannya. Token GoRecover bukan API key penyedia model dan tidak memberikan langganan AI.
 
 ## Siapkan server
 
@@ -74,9 +74,9 @@ Buka Settings → Connectors → Add custom connector. Masukkan endpoint. Jika *
 
 ### ChatGPT dan OpenAI API
 
-ChatGPT custom connector memakai flow autentikasi yang didukung plan/UI. Manual native bearer entry belum diverifikasi; jangan menganggap fitur tersebut tersedia. Gunakan external OAuth yang sebenarnya dan grant subject/client read di Pluton. Lihat [autentikasi OpenAI](https://developers.openai.com/plugins/build/auth).
+ChatGPT custom connector memakai flow autentikasi yang didukung plan/UI. Manual native bearer entry belum diverifikasi; jangan menganggap fitur tersebut tersedia. Gunakan external OAuth yang sebenarnya dan grant subject/client read di GoRecover. Lihat [autentikasi OpenAI](https://developers.openai.com/plugins/build/auth).
 
-OpenAI Responses API mendokumentasikan field authorization untuk remote MCP. Aplikasi client memasok token Pluton di memory pada setiap request; API key OpenAI adalah credential terpisah dan tidak disimpan di Pluton. Approval dari provider merupakan kontrol tambahan dan tidak menggantikan approval manusia di Pluton. Lihat [panduan remote MCP OpenAI](https://developers.openai.com/api/docs/guides/tools-connectors-mcp).
+OpenAI Responses API mendokumentasikan field authorization untuk remote MCP. Aplikasi client memasok token GoRecover di memory pada setiap request; API key OpenAI adalah credential terpisah dan tidak disimpan di GoRecover. Approval dari provider merupakan kontrol tambahan dan tidak menggantikan approval manusia di GoRecover. Lihat [panduan remote MCP OpenAI](https://developers.openai.com/api/docs/guides/tools-connectors-mcp).
 
 ## Proxy dan troubleshooting
 

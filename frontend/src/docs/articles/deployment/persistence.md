@@ -1,6 +1,6 @@
-# Menjaga data Pluton dan configuration backup
+# Menjaga data GoRecover dan configuration backup
 
-Backup aplikasi sumber dan backup konfigurasi Pluton melindungi hal berbeda. Agar layanan dapat dipulihkan, Anda memerlukan repository backup serta konfigurasi, riwayat, dan key Pluton yang cocok.
+Backup aplikasi sumber dan backup konfigurasi GoRecover melindungi hal berbeda. Agar layanan dapat dipulihkan, Anda memerlukan repository backup serta konfigurasi, riwayat, dan key GoRecover yang cocok.
 
 ## Data yang wajib bertahan
 
@@ -10,9 +10,9 @@ SQLite menggunakan WAL. Menyalin file `.db` yang sedang ditulis tanpa prosedur k
 
 ## Self-backup
 
-Gunakan **Settings → Backup Pluton** untuk membuat backup konfigurasi terenkripsi. Prasyaratnya adalah Storage yang dapat ditulis, ruang yang cukup, serta salinan key pemulihan melalui saluran privat yang terpisah.
+Gunakan **Settings → Backup GoRecover** untuk membuat backup konfigurasi terenkripsi. Prasyaratnya adalah Storage yang dapat ditulis, ruang yang cukup, serta salinan key pemulihan melalui saluran privat yang terpisah.
 
-1. Aktifkan **Back up Pluton's configuration**.
+1. Aktifkan **Back up GoRecover's configuration**.
 2. Pilih **Where to store backups** dan gunakan lokasi khusus. Contoh fiktif: `pluton-state/latihan` pada storage yang disetujui.
 3. Tentukan **Back up every (hours)** dan **Number of backups to keep** sesuai kebijakan.
 4. Klik **Update** untuk menyimpan pengaturan.

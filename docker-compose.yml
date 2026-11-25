@@ -47,7 +47,7 @@ services:
       USER_PASSWORD: ${USER_PASSWORD} # Admin password for login
 
       # ===== Application Settings =====
-      APP_TITLE: ${APP_TITLE:-Pluton}
+      APP_TITLE: ${APP_TITLE:-GoRecover}
       APP_URL: ${APP_URL:-http://localhost:5173}
       SERVER_PORT: ${SERVER_PORT:-5173}
       MAX_CONCURRENT_BACKUPS: ${MAX_CONCURRENT_BACKUPS:-2}

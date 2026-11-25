@@ -1,8 +1,8 @@
-# Mengenal Pluton mandiri
+# Mengenal GoRecover mandiri
 
-Pluton membantu Anda menjadwalkan backup, menyimpan beberapa versi data, dan mengambilnya kembali melalui Web UI. Mulailah dari satu folder contoh sampai Anda berhasil memulihkannya. Setelah alur itu dipahami, tambahkan database, salinan kedua, dan notifikasi sesuai kebutuhan.
+GoRecover membantu Anda menjadwalkan backup, menyimpan beberapa versi data, dan mengambilnya kembali melalui Web UI. Mulailah dari satu folder contoh sampai Anda berhasil memulihkannya. Setelah alur itu dipahami, tambahkan database, salinan kedua, dan notifikasi sesuai kebutuhan.
 
-Panduan ini ditujukan kepada administrator yang sudah memiliki atau akan menyiapkan Pluton Server. Semua nama mesin, alamat, dan folder contoh bersifat fiktif. Fork ini dipelihara secara independen; nama, lisensi Apache-2.0, dan atribusi upstream Pluton tetap dipertahankan.
+Panduan ini ditujukan kepada administrator yang sudah memiliki atau akan menyiapkan GoRecover Server. Semua nama mesin, alamat, dan folder contoh bersifat fiktif. Fork ini dipelihara secara independen dan berbasis proyek open-source Pluton; lisensi Apache-2.0 dan atribusi upstream tetap dipertahankan. Lihat [About dan Open Source Acknowledgements](/docs/reference/acknowledgements).
 
 ## Kemampuan utama
 
@@ -15,7 +15,7 @@ Alur kerja sehari-hari adalah: **Sources → Storages → Backup Plans → backu
 
 | Kebutuhan Anda | Mulai dari sini |
 | --- | --- |
-| Mencadangkan folder yang dapat dibaca host Pluton | [Backup Plan filesystem](/docs/backup-plans) dan [storage lokal](/docs/storage/local) |
+| Mencadangkan folder yang dapat dibaca host GoRecover | [Backup Plan filesystem](/docs/backup-plans) dan [storage lokal](/docs/storage/local) |
 | Mencadangkan aplikasi pada mesin Linux lain | [Remote Agent](/docs/remote-agent), lalu [plan Managed Agent](/docs/backup-plans/managed-agent) |
 | Menambahkan dump database ke backup mesin remote | [Backup database](/docs/database-backup) |
 | Menyimpan salinan tambahan di S3 atau HCP | [Replikasi](/docs/replication) dan [HCP](/docs/storage/hcp) |
@@ -27,7 +27,7 @@ Alur kerja sehari-hari adalah: **Sources → Storages → Backup Plans → backu
 1. Periksa [persyaratan](/docs/getting-started/requirements), lalu ikuti [deployment](/docs/deployment) bila server belum tersedia.
 2. Masuk ke Web UI dan kenali [halaman utama](/docs/getting-started/dashboard).
 3. Siapkan source contoh `/srv/example-app` pada mesin `app-01`, berisi beberapa file yang aman untuk diuji.
-4. Pilih tujuan khusus backup. Untuk Managed Agent, tujuan primer adalah SFTP, atau S3 bila Agent 0.8.0 melaporkan dukungan S3; layanan SFTP boleh berada pada VM Pluton bila administrator menyiapkannya. Tujuan lokal atau S3 sebagai primer mengikuti alur filesystem pada host Pluton.
+4. Pilih tujuan khusus backup. Untuk Managed Agent, tujuan primer adalah SFTP, atau S3 bila Agent 0.8.0 melaporkan dukungan S3; layanan SFTP boleh berada pada VM GoRecover bila administrator menyiapkannya. Tujuan lokal atau S3 sebagai primer mengikuti alur filesystem pada host GoRecover.
 5. Ikuti [Quick Start](/docs/getting-started/quick-start), jalankan backup, buka **Browse**, lalu pulihkan satu file ke staging terpisah.
 
 Hasil awal yang diharapkan adalah satu backup berstatus **Complete**, isi snapshot sesuai source, dan file hasil pemulihan dapat dibaca. Catat waktu backup serta snapshot yang diperiksa agar hasil dapat diulang.

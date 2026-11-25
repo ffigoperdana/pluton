@@ -1,6 +1,6 @@
-# Menyiapkan instalasi Pluton
+# Menyiapkan instalasi GoRecover
 
-Panduan instalasi ditujukan kepada operator host. Pengguna yang sudah menerima URL Pluton dan akun administrator dapat langsung mengikuti [backup pertama](/docs/getting-started/quick-start).
+Panduan instalasi ditujukan kepada operator host. Pengguna yang sudah menerima URL GoRecover dan akun administrator dapat langsung mengikuti [backup pertama](/docs/getting-started/quick-start).
 
 ## Pilih jalur instalasi
 
@@ -27,7 +27,7 @@ Repository juga menyimpan packaging historis. Jangan mengasumsikan setiap instal
 
 ## Contoh rancangan
 
-Contoh fiktif: satu VM Pluton, volume aplikasi persisten, SFTP primer khusus di VM tersebut, dan Agent pada `app-01`. S3 tambahan baru diaktifkan setelah koneksi dan perilaku vendor diuji pada namespace latihan yang disetujui.
+Contoh fiktif: satu VM GoRecover, volume aplikasi persisten, SFTP primer khusus di VM tersebut, dan Agent pada `app-01`. S3 tambahan baru diaktifkan setelah koneksi dan perilaku vendor diuji pada namespace latihan yang disetujui.
 
 Host 4 GiB tidak otomatis cukup untuk MySQL Internal. Fitur dapat tetap menolak operasi secara aman saat kapasitas kurang; kemampuan menjalankan recovery nyata perlu pengukuran tersendiri.
 

@@ -1,6 +1,6 @@
 # Menjaga isolasi, kunci, dan kapasitas storage
 
-Sebelum menyimpan data penting, pastikan Anda tahu lokasi repository, siapa yang dapat mengaksesnya, dan bagaimana kunci dipulihkan bila server Pluton hilang. Contoh pada halaman ini memakai source `/srv/example-app` dan repository terpisah untuk plan `app-01`.
+Sebelum menyimpan data penting, pastikan Anda tahu lokasi repository, siapa yang dapat mengaksesnya, dan bagaimana kunci dipulihkan bila server GoRecover hilang. Contoh pada halaman ini memakai source `/srv/example-app` dan repository terpisah untuk plan `app-01`.
 
 ## Boundary
 

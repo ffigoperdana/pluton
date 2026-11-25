@@ -1,5 +1,6 @@
 import { buildIdentity } from '../../../utils/buildIdentity';
 import classes from './Footer.module.scss';
+import { APP_NAME } from '../../../utils/brand';
 
 interface FooterProps {
    version?: string;
@@ -13,7 +14,7 @@ interface FooterProps {
 }
 const Footer = ({ version, revision }: FooterProps) => (
    <footer className={classes.footer}>
-      <span>Pluton</span> <i className="pipe">|</i> <a href="/docs">Documentation</a> <i className="pipe">|</i>{' '}
+      <span>{APP_NAME}</span> <i className="pipe">|</i> <a href="/docs">Documentation</a> <i className="pipe">|</i>{' '}
       <a href="/docs/changelog">Changelog</a> <i className="pipe">|</i>{' '}
       <a href="/docs/reference/version" title="Installed local build metadata">
          {buildIdentity(version, revision)}

@@ -6,7 +6,7 @@ Contoh database example_app pada panduan ini fiktif. Kemunculan nama tabel yang 
 
 ## Syarat inspeksi
 
-Restore harus berstatus **Active Restore**, belum melewati **Expires**, dan tidak sedang diminta untuk dihapus. Anda harus masuk sebagai administrator yang berwenang pada Pluton. Koneksi target, TLS, approval, dan ownership tetap diperiksa server.
+Restore harus berstatus **Active Restore**, belum melewati **Expires**, dan tidak sedang diminta untuk dihapus. Anda harus masuk sebagai administrator yang berwenang pada GoRecover. Koneksi target, TLS, approval, dan ownership tetap diperiksa server.
 
 **Stopped**, kedaluwarsa, pembatalan, atau status cleanup tidak memberikan akses inspeksi. Jika target Internal berhenti dan TTL masih berlaku, tinjau [Stop/Resume](/docs/database-restores/stop-resume) sebelum meminta Resume secara eksplisit.
 

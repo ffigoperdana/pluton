@@ -7,6 +7,7 @@ import {
    agentHostRootLabel,
    type AgentHostRestoreOptions,
 } from '../../../utils/agentHostRestore';
+import { APP_NAME } from '../../../utils/brand';
 
 interface AgentHostTargetFieldsProps {
    options?: AgentHostRestoreOptions;
@@ -56,7 +57,7 @@ const AgentHostTargetFields = ({ options, loading, error, root, name, showErrors
          {root && !nameProblem && <div className={classes.target}>{agentHostRestoreTarget(root, name)}</div>}
          <p className={classes.note}>
             The Agent on <strong>{options.agent?.hostname}</strong> reads the backup repository itself and restores into this new folder.
-            Nothing passes through the Pluton server or this browser. It never overwrites or deletes anything: while it runs the folder is
+            Nothing passes through the {APP_NAME} server or this browser. It never overwrites or deletes anything: while it runs the folder is
             named <code>{name || options.suggestedName}.partial</code> and it is renamed only after Restic verified every restored file.
             Restored files are owned by <code>pluton-agent</code>; the host administrator moves them into place and sets owners.
          </p>

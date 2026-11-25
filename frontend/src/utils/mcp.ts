@@ -1,3 +1,4 @@
+import { APP_NAME } from './brand.ts';
 export type McpGrantInput = {
    name: string;
    clientType: 'Claude' | 'Codex' | 'Grok' | 'Custom';
@@ -25,7 +26,7 @@ export function connectionInstructions(type: McpGrantInput['clientType'], endpoi
    if (type === 'Grok')
       return (
          JSON.stringify({ type: 'mcp', server_url: url, server_label: 'pluton', authorization: '<resource-bound MCP access token>' }, null, 2) +
-         '\n\nxAI documents this configuration for its Responses API. A consumer Grok custom connector has not been verified. Model-provider authentication is separate and is not needed by Pluton.'
+         `\n\nxAI documents this configuration for its Responses API. A consumer Grok custom connector has not been verified. Model-provider authentication is separate and is not needed by ${APP_NAME}.`
       );
-   return `Connect using Streamable HTTP to ${url}. Send Authorization: Bearer <resource-bound MCP access token>. Use the OAuth issuer advertised by protected-resource metadata. Never send an Agent enrollment token, device secret or Pluton API key.`;
+   return `Connect using Streamable HTTP to ${url}. Send Authorization: Bearer <resource-bound MCP access token>. Use the OAuth issuer advertised by protected-resource metadata. Never send an Agent enrollment token, device secret or ${APP_NAME} API key.`;
 }

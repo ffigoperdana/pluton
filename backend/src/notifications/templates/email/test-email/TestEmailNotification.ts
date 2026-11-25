@@ -1,6 +1,7 @@
 import { configService } from '../../../../services/ConfigService';
 import { INTEGRATIONS_AVAILABLE, IntegrationTypes } from '../../../../types/settings';
 import { BaseNotification } from '../../../BaseNotification';
+import { BRAND_NAME } from '../../../../utils/brand';
 
 export class TestEmailNotification extends BaseNotification {
 	integrationName = '';
@@ -16,12 +17,12 @@ export class TestEmailNotification extends BaseNotification {
 		const content = `
         <div class="center">
           <h2>${this.integrationName} Integration Successful</h2>
-          <p>${configService.config.APP_TITLE || 'Pluton'} can successfully send notifications using ${this.integrationName}</p>
+          <p>${configService.config.APP_TITLE || BRAND_NAME} can successfully send notifications using ${this.integrationName}</p>
         </div>
       `;
 		return this.applyEmailTemplate(content, {
 			appTitle: data.appTitle,
-			preHeader: `${configService.config.APP_TITLE || 'Pluton'} can successfully send notifications using ${this.integrationName}`,
+			preHeader: `${configService.config.APP_TITLE || BRAND_NAME} can successfully send notifications using ${this.integrationName}`,
 		});
 	}
 }

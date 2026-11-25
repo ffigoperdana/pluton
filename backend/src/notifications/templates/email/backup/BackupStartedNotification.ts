@@ -6,6 +6,7 @@ import { BackupNotificationJSONPayload, BackupTaskStats } from '../../../../type
 import { formatBytes, formatNumberToK } from '../../../../utils/formatter';
 import { BaseNotification } from '../../../BaseNotification';
 import { loadBackupTemplate } from '../../../templateLoader';
+import { BRAND_NAME } from '../../../../utils/brand';
 
 export interface BackupStartedPayload {
 	appTitle: string;
@@ -101,7 +102,7 @@ export class BackupStartedNotification extends BaseNotification {
 		});
 
 		return this.applyEmailTemplate(renderedBody, {
-			appTitle: configService.config.APP_TITLE || 'Pluton',
+			appTitle: configService.config.APP_TITLE || BRAND_NAME,
 			preHeader: `Backup Started: ${data.plan.title}`,
 		});
 	}

@@ -47,6 +47,7 @@ import { validateReplicationSettings } from '../utils/managedReplicationPolicy';
 import type { ManagedReplicationStore } from '../stores/ManagedReplicationStore';
 import type { PlanRepositoryRelocationStore } from '../stores/PlanRepositoryRelocationStore';
 import { canonicalS3RepositoryIdentity, isS3Storage } from '../utils/storageSecurity';
+import { BRAND_NAME } from '../utils/brand';
 
 /**
  * PlanService is the central orchestrator for all business logic related to backup plans.
@@ -1322,9 +1323,9 @@ export class PlanService {
 		plans: Plan[];
 	}> {
 		const backupMsg =
-			'Backup was interrupted because the Pluton service stopped or restarted. It was not completed.';
+			`Backup was interrupted because the ${BRAND_NAME} service stopped or restarted. It was not completed.`;
 		const restoreMsg =
-			'Restore was interrupted because the Pluton service stopped or restarted. It was not completed.';
+			`Restore was interrupted because the ${BRAND_NAME} service stopped or restarted. It was not completed.`;
 
 		// Only rows of this host. A remote device runs its own agent, which keeps
 		// running when Pluton restarts, so its in-progress rows are not orphans.

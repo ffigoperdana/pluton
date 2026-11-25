@@ -6,6 +6,7 @@ import Toggle from '../../common/form/Toggle/Toggle';
 import Tristate from '../../common/form/Tristate/Tristate';
 import TwoFactorSetup from '../TwoFactorSetup/TwoFactorSetup';
 import classes from './GeneralSettings.module.scss';
+import { APP_NAME } from '../../../utils/brand';
 
 interface GeneralSettingsProps {
    settingsID: number;
@@ -87,7 +88,7 @@ const GeneralSettings = ({ settings, settingsID, onUpdate }: GeneralSettingsProp
          {show2FASetupConfirm && (
             <ActionModal
                title={`Enable Two-Factor Authentication (2FA)`}
-               message={`Are you sure you want to enable Two-Factor Authentication (2FA) to secure Pluton Login? You will be required to use an authenticator app to login if you enable this feature.`}
+               message={`Are you sure you want to enable Two-Factor Authentication (2FA) to secure ${APP_NAME} Login? You will be required to use an authenticator app to login if you enable this feature.`}
                closeModal={() => setShow2FASetupConfirm(false)}
                width="420px"
                primaryAction={{

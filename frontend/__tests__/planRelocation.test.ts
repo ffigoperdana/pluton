@@ -11,6 +11,7 @@ import {
    relocationShowsForm,
 } from '../src/utils/planRelocation.ts';
 import type { PlanRelocation, PlanRelocationOverview } from '../src/@types/planRelocations.ts';
+import { APP_NAME } from '../src/utils/brand.ts';
 
 const require = createRequire(new URL('../package.json', import.meta.url)),
    backendRequire = createRequire(new URL('../../backend/package.json', import.meta.url));
@@ -191,7 +192,7 @@ test('a verified copy needs an explicit switch confirmation and refreshes the pl
       await view.click('Switch to new Storage');
       // First click only opens the confirmation; nothing was sent yet.
       assert.equal(view.calls.filter((call) => call.method === 'POST').length, 0);
-      assert.match(view.text(), /Pluton rechecks both copies first/);
+      assert.match(view.text(), new RegExp(`${APP_NAME} rechecks both copies first`));
       await view.click('Switch now');
       await view.waitFor(() => view.button('Move back'), 'switched state');
       const post = view.calls.find((call) => call.method === 'POST')!;

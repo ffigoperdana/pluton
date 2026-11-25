@@ -2,7 +2,7 @@
 
 Atur jadwal agar backup berjalan pada waktu yang dapat dipantau dan tidak mengganggu aplikasi. Tentukan retensi berdasarkan kebutuhan pemulihan serta kapasitas, bukan hanya jumlah file. Contoh di halaman ini adalah plan `Backup contoh app-01` yang dijalankan setiap hari.
 
-Sebelum mengubah kebijakan, pastikan setidaknya satu snapshot telah diperiksa dan satu file sudah dipulihkan. Retensi standar pada host Pluton berbeda dari batas Managed Agent.
+Sebelum mengubah kebijakan, pastikan setidaknya satu snapshot telah diperiksa dan satu file sudah dipulihkan. Retensi standar pada host GoRecover berbeda dari batas Managed Agent.
 
 ## Schedule
 

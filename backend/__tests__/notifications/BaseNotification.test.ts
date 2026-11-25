@@ -1,6 +1,9 @@
 import { BaseNotification } from '../../src/notifications/BaseNotification';
 import { configService } from '../../src/services/ConfigService';
 import { loadEmailWrapperTemplate } from '../../src/notifications/templateLoader';
+import { BRAND_NAME } from '../../src/utils/brand';
+import { readFileSync } from 'fs';
+import path from 'path';
 
 // Mock dependencies
 jest.mock('../../src/services/ConfigService', () => ({
@@ -250,7 +253,55 @@ describe('BaseNotification', () => {
 			const result = notification.testApplyEmailTemplate(content, data);
 
 			expect(result).toContain(content);
-			expect(result).toContain('App & More');
+			expect(result).toContain('App &amp; More');
+		});
+
+		it('escapes the app title and pre-header, which are plain text', () => {
+			const result = notification.testApplyEmailTemplate('<p>Body</p>', {
+				appTitle: '<b>Ops</b>',
+				preHeader: 'Backup Failed: "Payroll" <prod>',
+			});
+
+			expect(result).toContain('<title>&lt;b&gt;Ops&lt;/b&gt;</title>');
+			expect(result).toContain('Backup Failed: &quot;Payroll&quot; &lt;prod&gt;');
+			expect(result).not.toContain('<prod>');
+		});
+
+		it("keeps $&, $' and $$ in the body and title literal", () => {
+			const content = "<p>Error: exit $&#39; at C$\\data, cost $$5, see $&</p>";
+			const result = notification.testApplyEmailTemplate(content, { appTitle: 'Ops $$ $&' });
+
+			expect(result).toContain(content);
+			expect(result).toContain('<title>Ops $$ $&amp;</title>');
+			expect(result).not.toContain('{{EMAIL_BODY_CONTENT}}');
+		});
+
+		it('does not fill placeholders that appear inside the body', () => {
+			const result = notification.testApplyEmailTemplate('<p>{{APP_URL}} {{APP_TITLE}}</p>', {
+				appTitle: 'App',
+			});
+
+			expect(result).toContain('<p>{{APP_URL}} {{APP_TITLE}}</p>');
+		});
+
+		it('fills every placeholder of the real email wrapper, including both footer links', () => {
+			// The loader itself is mocked globally (import.meta), so read the shipped file.
+			const wrapper = readFileSync(
+				path.join(__dirname, '../../src/notifications/templates/email/email.html'),
+				'utf8'
+			);
+			expect(wrapper.match(/\{\{APP_URL\}\}/g)).toHaveLength(2);
+			mockLoadEmailWrapperTemplate.mockReturnValue(wrapper);
+
+			const result = notification.testApplyEmailTemplate('<p>Body</p>', {
+				appTitle: 'Ops',
+				preHeader: 'Pre',
+			});
+
+			expect(result).not.toMatch(/\{\{[A-Z_]+\}\}/);
+			expect(result).toContain('<a href="http://test.com">Visit Dashboard</a>');
+			expect(result).toContain('<a href="http://test.com/docs">Documentation</a>');
+			expect(result).toContain(`<strong>${BRAND_NAME}</strong>`);
 		});
 	});
 

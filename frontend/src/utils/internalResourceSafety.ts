@@ -1,4 +1,5 @@
 import type { RecoveryEngine, RecoveryPreparation } from '../@types/recoveryTests';
+import { APP_NAME } from './brand.ts';
 
 export type ResourceSafety = {
    state: 'ready' | 'warning' | 'blocked' | 'checking';
@@ -14,7 +15,7 @@ export const resourceReasonMessage = (reason?: string) =>
       ({
          'capacity-unknown': 'Capacity could not be verified. Refresh the checks or ask the host operator.',
          'operator-capacity-unknown': 'Fresh host-operator resource measurements are unavailable. Ask the operator to check the lifecycle service.',
-         'cpu-headroom': 'The Pluton cgroup needs at least 1 CPU. Ask the operator to review its CPU limit.',
+         'cpu-headroom': `The ${APP_NAME} cgroup needs at least 1 CPU. Ask the operator to review its CPU limit.`,
          'operator-cpu-headroom': 'The host/operator cgroup needs at least 2 CPUs of capacity.',
          'operator-sql-budget':
             'SQL exceeds the configured Internal import limit. Use an independently approved recovery workflow; acknowledgement cannot raise this limit.',
@@ -26,7 +27,7 @@ export const resourceReasonMessage = (reason?: string) =>
             'Available memory in the host-operator cgroup is below the required headroom, even if the physical host has free RAM.',
          'swap-in-use': 'Swap usage exceeds policy. Wait for pressure to settle or ask the operator to review memory capacity.',
          'memory-pressure': 'Measured memory pressure exceeds policy. No import will start until it settles.',
-         'server-cgroup-headroom': 'The Pluton container has insufficient memory headroom. Ask the operator to review its limit and current usage.',
+         'server-cgroup-headroom': `The ${APP_NAME} container has insufficient memory headroom. Ask the operator to review its limit and current usage.`,
          'staging-capacity': 'Free staging storage is below the required reserve. Ask the operator to review available disk space.',
          'operator-disk-reserve':
             'The host recovery-storage reserve is insufficient. Provisioning requires 3 GiB free before allocating the fixed 2 GiB image.',

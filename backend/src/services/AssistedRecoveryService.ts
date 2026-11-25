@@ -26,6 +26,7 @@ import { RecoveryWorkspace } from '../utils/recoveryWorkspace';
 import { SnapshotComparisonError } from '../utils/restic/SnapshotComparisonPolicy';
 import { AppError } from '../utils/AppError';
 import { managedSnapshotPath } from '../utils/managedSnapshotPath';
+import { BRAND_NAME } from '../utils/brand';
 
 export function assistedFailure(error: unknown): string {
 	if (
@@ -232,7 +233,7 @@ export class AssistedRecoveryService {
 					row.payload.selected === c.replicationId,
 			})),
 			selected: row.payload.selected,
-			target: 'Isolated Pluton staging',
+			target: `Isolated ${BRAND_NAME} staging`,
 			operation: 'File/directory/SQL artifact staging (no database import)',
 			includes: row.payload.includes,
 			excludes: row.payload.excludes,

@@ -1,6 +1,6 @@
 # Menghubungkan HCP dengan namespace yang sudah tersedia
 
-Gunakan panduan ini bila administrator storage sudah menyediakan namespace/bucket HCP dan endpoint S3 API yang disetujui. Pluton mempunyai mode untuk memakai namespace yang sudah ada tanpa mencoba membuat bucket. Mode ini tetap memerlukan pengujian pada lingkungan Anda.
+Gunakan panduan ini bila administrator storage sudah menyediakan namespace/bucket HCP dan endpoint S3 API yang disetujui. GoRecover mempunyai mode untuk memakai namespace yang sudah ada tanpa mencoba membuat bucket. Mode ini tetap memerlukan pengujian pada lingkungan Anda.
 
 **Interoperabilitas dengan HCP nyata belum diuji.** Pengujian unit dan fixture membuktikan perilaku konfigurasi serta guard tertentu, bukan kompatibilitas semua versi HCP, kebijakan retensi, atau konfigurasi tenant.
 
@@ -19,7 +19,7 @@ Operator HCP harus memastikan S3 protocol (**Hitachi API for Amazon S3**) enable
 dan ACL sesuai. Pada HCP 9.7, S3 membutuhkan ACL enabled; dukungan multipart
 tergantung cloud-optimized namespace, dan sebagian bucket-level operations juga
 memerlukan tenant management API. Itu prasyarat vendor/version-specific, bukan
-izin Pluton mengubah protokol/namespace. Koordinasikan perubahan dengan owner
+izin GoRecover mengubah protokol/namespace. Koordinasikan perubahan dengan owner
 infrastruktur berdasarkan [S3 considerations](https://docs.hitachivantara.com/r/en-us/mk-95hcph001-20/managing-a-tenant-and-its-namespaces/managing-namespaces/configuring-namespace-access-protocols/configuring-the-rest-s3-compatible-and-webdav-apis/considerations-for-the-s3-compatible-api).
 
 Login console bukan pasangan S3 Access Key ID/Secret Access Key. Minta operator
@@ -29,7 +29,7 @@ password console, menjanjikan format signature, atau meminta secret lewat chat.
 
 Minta operator menyiapkan endpoint HTTPS API S3, nama bucket/namespace, region bila diperlukan, access key, dan secret key terbatas. Masukkan rahasia hanya melalui formulir privat. Endpoint console bukan endpoint API; jangan memakai port console `8000`, URL dengan kredensial, path tambahan, query, atau fragmen.
 
-Contoh fiktif: endpoint `https://objects.example.internal`, bucket `example-backups`, dan prefix repository `app-01/replica`. Operator perlu memastikan DNS serta certificate cocok dan dipercaya Pluton. Private CA diatur oleh operator server, bukan melalui bypass TLS pada formulir.
+Contoh fiktif: endpoint `https://objects.example.internal`, bucket `example-backups`, dan prefix repository `app-01/replica`. Operator perlu memastikan DNS serta certificate cocok dan dipercaya GoRecover. Private CA diatur oleh operator server, bukan melalui bypass TLS pada formulir.
 
 ## Mengisi konfigurasi
 
@@ -38,7 +38,7 @@ Contoh fiktif: endpoint `https://objects.example.internal`, bucket `example-back
 3. Pada **Account Authentication**, isi **Endpoint**, **Access Key ID**, **Secret Access Key**, **Bucket Name**, dan **Region** sesuai informasi operator.
 4. Buka **Advanced Options** dan aktifkan **HCP / pre-existing namespace mode**.
 5. Jangan aktifkan **Environment Auth** atau mengandalkan file kredensial eksternal pada mode ini. Gunakan kredensial eksplisit yang dilindungi aplikasi.
-6. Klik **Add Storage**. Pluton memeriksa akses namespace dengan listing; keberhasilan tahap ini tidak membuat bucket baru.
+6. Klik **Add Storage**. GoRecover memeriksa akses namespace dengan listing; keberhasilan tahap ini tidak membuat bucket baru.
 7. Pada plan yang sesuai, pilih storage tersebut dan prefix repository yang terpisah. Bila UI sudah menampilkan awalan bucket, isi hanya subfoldernya.
 
 HCP dapat dipakai melalui konfigurasi S3 yang relevan untuk alur standar. Pada Managed Agent, HCP/S3 adalah replika opsional yang dikerjakan server; primer tetap SFTP. Ikuti [replikasi HCP](/docs/replication/hcp) untuk langkah dan batasnya. Kunci replika tidak pernah dikirim ke Agent. Agent hanya menerima kunci S3 milik plan yang primernya S3, dalam bentuk tersegel per backup.
@@ -86,10 +86,10 @@ listing tetap dapat ditolak karena ACL/protocol/key/namespace/kuota.
 Tinjau quota namespace, usage fisik, object/request limits, multipart support dan
 retention/immutability bersama operator. Restic memakai blok, indexes, snapshot
 dan locks; kebijakan yang melarang operasi diperlukan atau menghapus blok hidup
-dapat membuat pekerjaan/restore gagal. Pluton tidak menurunkan WORM/Object Lock
+dapat membuat pekerjaan/restore gagal. GoRecover tidak menurunkan WORM/Object Lock
 atau meminta privilege bypass retention. HCP DPL adalah perlindungan dalam storage
 dan cluster replication adalah mekanisme antar-HCP; keduanya bukan receipt copy
-Pluton ataupun uji restore aplikasi. Lihat [vendor replication](https://docs.hitachivantara.com/r/en-us/mk-95hcph002/latest/managing-a-tenant-and-its-namespaces/tenant-and-namespace-properties/replication?contentId=IwazrQb7XT0mDBfHcbCefQ)
+GoRecover ataupun uji restore aplikasi. Lihat [vendor replication](https://docs.hitachivantara.com/r/en-us/mk-95hcph002/latest/managing-a-tenant-and-its-namespaces/tenant-and-namespace-properties/replication?contentId=IwazrQb7XT0mDBfHcbCefQ)
 dan konfigurasi service plan/version yang berlaku, bukan asumsi nama bucket.
 
 Untuk latihan, gunakan source dan prefix sekali pakai yang disetujui operator. Periksa storage tersimpan, akses listing berhasil, lalu uji pekerjaan yang memang akan digunakan. Untuk replika managed, pastikan snapshot primer terverifikasi dan status replica sesuai; restore langsung dari mirror managed dan physical prune belum didukung.

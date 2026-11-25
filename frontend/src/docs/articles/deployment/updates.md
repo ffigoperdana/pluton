@@ -1,4 +1,4 @@
-# Memperbarui Pluton dengan aman
+# Memperbarui GoRecover dengan aman
 
 Pembaruan aplikasi perlu menjaga plan, repository, kredensial, identitas Agent, dan database hasil Restore yang masih ditahan. Perlakukan upgrade sebagai perubahan operasional yang mempunyai bukti sebelum dan sesudahnya.
 

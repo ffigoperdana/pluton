@@ -1,6 +1,6 @@
 # Mendaftarkan repository lama dan mencari snapshot
 
-Daftarkan repository lama ketika Anda perlu meninjau riwayat Restic yang sudah ada. Siapkan nama tampilan yang mudah dikenali, absolute path pada Pluton Server, dan password repository melalui saluran privat. Contoh Legacy example-app dan /srv/example-backups/restic di halaman ini fiktif.
+Daftarkan repository lama ketika Anda perlu meninjau riwayat Restic yang sudah ada. Siapkan nama tampilan yang mudah dikenali, absolute path pada GoRecover Server, dan password repository melalui saluran privat. Contoh Legacy example-app dan /srv/example-backups/restic di halaman ini fiktif.
 
 ## Registrasi
 

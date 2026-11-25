@@ -1,10 +1,10 @@
-# Beralih dari SYS MON ke Pluton secara bertahap
+# Beralih dari SYS MON ke GoRecover secara bertahap
 
-Peralihan dimulai dengan menambahkan jalur backup baru yang dapat dibuktikan, bukan mematikan backup lama. Selama **SHADOW**, SYS MON tetap jalur yang berwenang. Pluton memakai repository terkelola baru dan mengumpulkan bukti scheduled backup, dump, restore, serta recovery pada workload yang mewakili kebutuhan aplikasi. **CUTOVER** adalah keputusan eksplisit setelah bukti diterima dan rollback siap.
+Peralihan dimulai dengan menambahkan jalur backup baru yang dapat dibuktikan, bukan mematikan backup lama. Selama **SHADOW**, SYS MON tetap jalur yang berwenang. GoRecover memakai repository terkelola baru dan mengumpulkan bukti scheduled backup, dump, restore, serta recovery pada workload yang mewakili kebutuhan aplikasi. **CUTOVER** adalah keputusan eksplisit setelah bukti diterima dan rollback siap.
 
 ```text
 SYS MON tetap authoritative
-  → SHADOW Pluton pada repository baru
+  → SHADOW GoRecover pada repository baru
   → VALIDATION scheduled + dump + staging restore + recovery
   → keputusan CUTOVER eksplisit
   → pemantauan lanjutan atau rollback yang disetujui

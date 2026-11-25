@@ -18,6 +18,7 @@ import {
 	odooAttachmentFromRow,
 } from '../utils/attachmentCatalog/odooAttachments';
 import { catalogDatabase, planSourceRoot } from '../utils/attachmentCatalog/config';
+import { BRAND_NAME } from '../utils/brand';
 
 export const ATTACHMENT_CATALOG_LIMITS = Object.freeze({
 	maxAttachments: 2_000_000,
@@ -360,7 +361,7 @@ export class AttachmentCatalogService {
 		if ((error as { code?: string })?.code === 'SQLITE_FULL')
 			return new AppError(
 				507,
-				'The attachment catalog ran out of disk space or reached its size limit on the Pluton server.'
+				`The attachment catalog ran out of disk space or reached its size limit on the ${BRAND_NAME} server.`
 			);
 		return new AppError(503, 'The attachment catalog is unavailable. Retry.');
 	}
@@ -371,7 +372,7 @@ export class AttachmentCatalogService {
 		const disk = await fs.statfs(this.root);
 		const required = Math.min(this.limits.maxBytes, this.limits.startBytes) + this.limits.diskReserve;
 		if (disk.bavail * disk.bsize < required)
-			throw new AppError(507, 'The attachment catalog needs more free disk space on the Pluton server.');
+			throw new AppError(507, `The attachment catalog needs more free disk space on the ${BRAND_NAME} server.`);
 		entry.directory = path.join(this.root, `catalog-${crypto.randomBytes(12).toString('hex')}`);
 		await fs.mkdir(entry.directory, { mode: 0o700 });
 		const db = new Database(path.join(entry.directory, 'catalog.sqlite'));

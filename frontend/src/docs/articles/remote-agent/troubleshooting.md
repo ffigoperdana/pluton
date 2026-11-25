@@ -6,8 +6,8 @@ Mulai dari gejala pada **Sources**, lalu periksa mesin agent. Hindari menghapus 
 
 1. Buka mesin pada **Sources** dan periksa **Last seen** pada panel **Remote Agent**.
 2. Pada host agent, periksa `systemctl status pluton-agent` dan journal service pada rentang waktu kegagalan.
-3. Periksa DNS, rute, firewall outbound, serta waktu host. Agent harus menjangkau origin Pluton yang dikonfigurasi.
-4. Pastikan certificate HTTPS cocok dengan hostname dan CA dipercaya runtime agent. Keberhasilan browser membuka Pluton tidak membuktikan private Node pada agent memiliki trust yang sama.
+3. Periksa DNS, rute, firewall outbound, serta waktu host. Agent harus menjangkau origin GoRecover yang dikonfigurasi.
+4. Pastikan certificate HTTPS cocok dengan hostname dan CA dipercaya runtime agent. Keberhasilan browser membuka GoRecover tidak membuktikan private Node pada agent memiliki trust yang sama.
 5. Jika memakai private CA, gunakan konfigurasi CA yang didukung installer. Jangan menonaktifkan pemeriksaan certificate atau berpindah ke HTTP untuk melewati error.
 
 Sesudah masalah diperbaiki, tunggu heartbeat baru lalu pastikan status **ONLINE** dan **Last seen** berubah. Jika status tetap OFFLINE, gunakan pemeriksaan koneksi berikut dengan identity yang sama.

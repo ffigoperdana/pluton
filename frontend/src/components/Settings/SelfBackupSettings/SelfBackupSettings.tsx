@@ -7,6 +7,7 @@ import StoragePicker from '../../common/form/StoragePicker/StoragePicker';
 import { useGetSelfBackupStatus, useRunSelfBackup } from '../../../services/settings';
 import BackupsListModal from './BackupsListModal';
 import classes from './SelfBackupSettings.module.scss';
+import { APP_NAME } from '../../../utils/brand';
 
 interface SelfBackupSettingsProps {
    settingsID: number;
@@ -59,7 +60,7 @@ const SelfBackupSettings = ({ settings, settingsID, onUpdate }: SelfBackupSettin
    const canNotifyOnFailure = emailConnected && adminEmailSet;
 
    const statusView = (() => {
-      if (isRunning) return { text: 'Backing up Pluton…', className: classes.statusMuted };
+      if (isRunning) return { text: `Backing up ${APP_NAME}…`, className: classes.statusMuted };
       if (status?.lastError) return { text: 'Last backup failed', className: classes.statusWarn };
       if (isStale) return { text: 'No recent backup', className: classes.statusWarn };
       return { text: `Last backed up ${formatRelative(status?.lastSuccessAt)}`, className: classes.statusOk };
@@ -76,11 +77,11 @@ const SelfBackupSettings = ({ settings, settingsID, onUpdate }: SelfBackupSettin
       <div>
          <div className={classes.field}>
             <Toggle
-               label="Back up Pluton's configuration"
+               label={`Back up ${APP_NAME}'s configuration`}
                fieldValue={selfBackup.enabled}
                onUpdate={(val) => update({ enabled: val })}
                inline={true}
-               hint={`Backs up Pluton's own configuration (plans, storages, credentials and history) as a single encrypted file.`}
+               hint={`Backs up ${APP_NAME}'s own configuration (plans, storages, credentials and history) as a single encrypted file.`}
             />
          </div>
 
@@ -100,7 +101,7 @@ const SelfBackupSettings = ({ settings, settingsID, onUpdate }: SelfBackupSettin
                      fieldValue={selfBackup.intervalHours}
                      onUpdate={(val) => update({ intervalHours: val })}
                      min={1}
-                     hint="Pluton only uploads when something has actually changed."
+                     hint={`${APP_NAME} only uploads when something has actually changed.`}
                      inline={false}
                   />
                </div>

@@ -18,6 +18,7 @@ import { AppError, NotFoundError } from '../utils/AppError';
 import Cryptr from 'cryptr';
 import { configService } from './ConfigService';
 import { createHash, randomBytes } from 'crypto';
+import { BRAND_NAME } from '../utils/brand';
 
 function settingsView(row: Settings | null): Settings | null {
 	if (!row) return null;
@@ -89,7 +90,7 @@ export class SettingsService {
 				if (!parsedSelfBackup.success) {
 					throw new AppError(
 						400,
-						`Invalid Pluton backup settings: ${parsedSelfBackup.error.issues.map(i => i.message).join(', ')}`
+						`Invalid ${BRAND_NAME} backup settings: ${parsedSelfBackup.error.issues.map(i => i.message).join(', ')}`
 					);
 				}
 				parsedSettings.selfBackup = parsedSelfBackup.data;
@@ -157,7 +158,7 @@ export class SettingsService {
 				throw new AppError(500, 'Failed to update settings');
 			}
 			const theAppSettings = updatedSettings.settings as AppSettings;
-			const appTitle = theAppSettings?.title || 'Pluton';
+			const appTitle = theAppSettings?.title || BRAND_NAME;
 			let sendRes = { success: false, result: '' };
 
 			// Send the test notification
@@ -263,7 +264,7 @@ export class SettingsService {
 		if (!appSettings || !appSettings.settings) {
 			throw new Error('Application settings not found.');
 		}
-		const appName = appSettings.settings.title || 'Pluton';
+		const appName = appSettings.settings.title || BRAND_NAME;
 		const userIdentifier = 'admin';
 
 		// 2. Create a new TOTP instance
@@ -350,7 +351,7 @@ export class SettingsService {
 	async runSelfBackupNow(): Promise<void> {
 		const { enabled } = await this.selfBackupService.getStatus();
 		if (!enabled) {
-			throw new AppError(400, 'Pluton backup is not enabled.');
+			throw new AppError(400, `${BRAND_NAME} backup is not enabled.`);
 		}
 		jobQueue.add(SELF_BACKUP_JOB_NAME, { force: true }, 1, 0);
 	}

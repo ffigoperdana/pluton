@@ -30,6 +30,7 @@ import {
 } from './v2Contracts';
 import type { McpActionService } from './McpActionService';
 import { createV2AdminRouter } from './v2AdminRouter';
+import { BRAND_NAME } from '../utils/brand';
 
 export function isMcpMachineRequest(req: Request) {
 	if (
@@ -412,7 +413,7 @@ export function createMcpGateway(
 						description:
 							name === 'status'
 								? 'Read only this token’s action status. No unrelated operational data access.'
-								: `Request ${name} on a granted plan. Separate human approval in Pluton is mandatory. Use one stable idempotency key per intent.`,
+								: `Request ${name} on a granted plan. Separate human approval in ${BRAND_NAME} is mandatory. Use one stable idempotency key per intent.`,
 						inputSchema: name === 'status' ? actionStatusInput : actionSchemas[name],
 						annotations: {
 							readOnlyHint: name === 'status',

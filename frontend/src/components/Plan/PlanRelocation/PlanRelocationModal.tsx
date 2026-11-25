@@ -17,6 +17,7 @@ import {
    shortId,
 } from '../../../utils/planRelocation';
 import classes from './PlanRelocation.module.scss';
+import { APP_NAME } from '../../../utils/brand';
 
 interface PlanRelocationModalProps {
    planId: string;
@@ -165,7 +166,7 @@ const PlanRelocationModal = ({ planId, planTitle, currentPath, close, onBindingC
             {confirming === 'switch' && relocation.actions.switch && (
                <div className={classes.confirm}>
                   <p>
-                     Switch the plan to {location(relocation.destination)}? Pluton rechecks both copies first. Backup history and mirror receipts
+                     Switch the plan to {location(relocation.destination)}? {APP_NAME} rechecks both copies first. Backup history and mirror receipts
                      move with the plan. {relocation.planWasActive ? 'The plan resumes afterwards.' : 'The plan stays paused.'}
                   </p>
                   <div className={classes.actions}>
@@ -181,7 +182,7 @@ const PlanRelocationModal = ({ planId, planTitle, currentPath, close, onBindingC
             {confirming === 'revert' && relocation.actions.revert && (
                <div className={classes.confirm}>
                   <p>
-                     Move the plan back to {location(relocation.source)}? Pluton first checks that the previous copy is unchanged.
+                     Move the plan back to {location(relocation.source)}? {APP_NAME} first checks that the previous copy is unchanged.
                   </p>
                   <div className={classes.actions}>
                      <button type="button" className={classes.primary} disabled={busy} onClick={() => run({ action: 'revert', id: relocation.id })}>
@@ -278,7 +279,7 @@ const PlanRelocationModal = ({ planId, planTitle, currentPath, close, onBindingC
             {overview.data?.supported && showForm && (
                <>
                   <p>
-                     Pluton pauses the plan, copies its Restic repository from the current SFTP Storage to the one you choose, and verifies
+                     {APP_NAME} pauses the plan, copies its Restic repository from the current SFTP Storage to the one you choose, and verifies
                      the copy: identical file list, every file read back by SHA-256, same repository ID and snapshots, and{' '}
                      <code>restic check</code>. You switch the plan afterwards. Snapshot history is kept and the previous copy is not
                      deleted. The Agent needs no update, only network access to the new SFTP server.

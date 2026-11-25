@@ -1,6 +1,6 @@
 # Menambahkan SFTP dan memastikan path repository benar
 
-Gunakan SFTP sebagai storage primer untuk backup dari Managed Agent. Sebelum mulai, administrator SFTP perlu menyediakan akun khusus dan folder tujuan yang dapat ditulis. Agent dan Pluton Server harus dapat mengakses layanan tersebut. Server SFTP boleh berada di VM Pluton; tentukan kapasitas serta dampak kegagalan VM itu terhadap salinan primer.
+Gunakan SFTP sebagai storage primer untuk backup dari Managed Agent. Sebelum mulai, administrator SFTP perlu menyediakan akun khusus dan folder tujuan yang dapat ditulis. Agent dan GoRecover Server harus dapat mengakses layanan tersebut. Server SFTP boleh berada di VM GoRecover; tentukan kapasitas serta dampak kegagalan VM itu terhadap salinan primer.
 
 Contoh fiktif: nama storage `SFTP contoh`, host `sftp.example.internal`, port `22`, dan path plan `daily/app-01`. Password diisi secara privat melalui formulir.
 
@@ -46,7 +46,7 @@ melalui workflow backup/restore; jangan menguji penulisan pada repository existi
 Folder berbeda pada filesystem/VM yang sama memberi isolasi logical tetapi
 tetap berbagi disk, quota dan kegagalan host. Replica independen memerlukan
 failure domain yang benar-benar berbeda dan jalur recovery teruji. Storage
-authentication, password repository Restic dan master key Pluton berbeda.
+authentication, password repository Restic dan master key GoRecover berbeda.
 
 Untuk rotasi password: identifikasi semua consumer (Agent/server/retained
 repository) secara privat, pause/drain, ubah melalui konfigurasi storage yang

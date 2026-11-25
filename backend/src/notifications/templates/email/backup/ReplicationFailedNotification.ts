@@ -5,6 +5,7 @@ import { providers } from '../../../../utils/providers';
 import { formatBytes, formatDuration, formatNumberToK } from '../../../../utils/formatter';
 import { BaseNotification } from '../../../BaseNotification';
 import { loadBackupTemplate } from '../../../templateLoader';
+import { BRAND_NAME } from '../../../../utils/brand';
 
 export interface ReplicationFailedNotificationPayload {
 	appTitle: string;
@@ -106,7 +107,7 @@ export class ReplicationFailedNotification extends BaseNotification {
 		});
 
 		return this.applyEmailTemplate(renderedBody, {
-			appTitle: configService.config.APP_TITLE || 'Pluton',
+			appTitle: configService.config.APP_TITLE || BRAND_NAME,
 			preHeader: `Replication Failed: ${data.plan.title}`,
 			className: 'content--error',
 		});

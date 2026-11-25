@@ -8,7 +8,7 @@ Contoh example_app pada halaman ini sepenuhnya fiktif. Cocokkan restore ID, buka
 
 Pastikan Anda sudah menyimpan bukti pemeriksaan yang diperlukan secara privat. Database yang berhasil dihapus tidak dapat diaktifkan kembali dengan Resume. Jika kemudian dibutuhkan lagi, pemulihan baru memerlukan keputusan, snapshot, resource, dan konfirmasi baru.
 
-Masuk sebagai administrator Pluton, buka **Database Restores**, lalu pilih entri yang benar pada **Database Restore Management**. Periksa **Restore**, **Exact snapshot**, **Backup**, **Archived database**, **Retained database**, mode, dan **Expires**.
+Masuk sebagai administrator GoRecover, buka **Database Restores**, lalu pilih entri yang benar pada **Database Restore Management**. Periksa **Restore**, **Exact snapshot**, **Backup**, **Archived database**, **Retained database**, mode, dan **Expires**.
 
 ## Langkah penghapusan
 

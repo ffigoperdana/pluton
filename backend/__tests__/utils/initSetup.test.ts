@@ -68,6 +68,7 @@ import { getRcloneVersion, getResticVersion } from '../../src/utils/versions';
 import { configService } from '../../src/services/ConfigService';
 import { appPaths } from '../../src/utils/AppPaths';
 import { securityKeyManager } from '../../src/managers/SecurityKeyManager';
+import { BRAND_NAME } from '../../src/utils/brand';
 
 describe('initSetup', () => {
 	let mockDb: any;
@@ -478,7 +479,7 @@ describe('runInitialSetup', () => {
 						monthly: { enabled: false },
 					},
 					title: 'Custom Title',
-					description: 'Pluton backup for your data.',
+					description: `${BRAND_NAME} backup for your data.`,
 				},
 			});
 		});
@@ -501,7 +502,7 @@ describe('runInitialSetup', () => {
 			expect(mockDb.values).toHaveBeenCalledWith(
 				expect.objectContaining({
 					settings: expect.objectContaining({
-						title: 'Pluton',
+						title: BRAND_NAME,
 					}),
 				})
 			);

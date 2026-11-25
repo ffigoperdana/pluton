@@ -1,4 +1,5 @@
 import type { PrimaryPromotion, PrimaryPromotionOverview } from '../@types/primaryPromotions';
+import { APP_NAME } from './brand.ts';
 
 const ACTIVE = ['catching-up', 'switching'];
 
@@ -39,9 +40,9 @@ export function promotionProgressText(promotion: PrimaryPromotion): string {
 
 const FAILURES: Record<string, string> = {
    'replication-uncertain': 'A replica copy of this plan is uncertain. Check it in the backup mirror details, then promote again.',
-   'repository-identity-mismatch': 'The replica is not the repository Pluton verified earlier.',
+   'repository-identity-mismatch': `The replica is not the repository ${APP_NAME} verified earlier.`,
    'snapshot-identity-mismatch': 'A snapshot in the replica does not match its verified receipt.',
-   'replica-unreachable': 'Pluton could not read the replica. Promote again when it is reachable.',
+   'replica-unreachable': `${APP_NAME} could not read the replica. Promote again when it is reachable.`,
    'verification-stopped': 'Verifying the replica took too long or the server stopped.',
    'binding-changed': 'The plan, its primary or its replica changed during the promotion.',
    'receipt-mismatch': 'A replica receipt no longer matches its backup.',
@@ -58,8 +59,8 @@ export function promotionFailureText(code?: string | null): string {
 export function promotionSteps(input: { replicaName: string; replicaType?: string; primaryName: string }): string[] {
    const replica = `${input.replicaName} (${storageKindLabel(input.replicaType)})`;
    return [
-      `Pluton copies every backup that ${replica} does not hold yet. Backups keep running meanwhile.`,
-      'The plan then pauses briefly: Pluton copies what finished meanwhile, checks the replica repository and every snapshot, and switches.',
+      `${APP_NAME} copies every backup that ${replica} does not hold yet. Backups keep running meanwhile.`,
+      `The plan then pauses briefly: ${APP_NAME} copies what finished meanwhile, checks the replica repository and every snapshot, and switches.`,
       `${replica} becomes the primary. ${input.primaryName} becomes the replica. Nothing is deleted.`,
       `The Agent writes the next backup to ${input.replicaName} and uploads only changed data.` +
          (storageKindLabel(input.replicaType) === 'S3' ? ' An S3 primary needs Agent 0.8.0 or later.' : ''),

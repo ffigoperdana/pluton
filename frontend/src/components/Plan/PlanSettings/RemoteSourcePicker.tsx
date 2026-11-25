@@ -18,6 +18,7 @@ import {
 } from '../../../utils/agentSourceAccess';
 import Button from '../../common/Button/Button';
 import classes from '../../Device/SourceAccess/SourceAccess.module.scss';
+import { APP_NAME } from '../../../utils/brand';
 
 type RemoteSourcePickerProps = {
    deviceId: string;
@@ -109,7 +110,7 @@ const RemoteSourcePicker = ({
          {access && !access.supported && (
             <p className={classes.notice}>
                This agent uses host-configured static roots. Enter an absolute source path; the agent's local preflight remains the final authority.
-               Upgrade the agent to use Source Access controls in Pluton.
+               Upgrade the agent to use Source Access controls in {APP_NAME}.
             </p>
          )}
          {access?.supported && (
@@ -120,7 +121,7 @@ const RemoteSourcePicker = ({
                {serverManaged && (
                   <div className={classes.notice}>
                      <p>
-                        Enable readable sources inside the host-delegated scope through Pluton after validation. No further SSH approval is needed
+                        Enable readable sources inside the host-delegated scope through {APP_NAME} after validation. No further SSH approval is needed
                         within this scope.
                      </p>
                      <ul>

@@ -10,6 +10,7 @@ import { Backup } from '../../..';
 import AgentHostTargetFields from '../AgentHostRestore/AgentHostTargetFields';
 import { useAgentHostRestoreOptions } from '../../../services/restores';
 import { agentHostRestoreNameProblem } from '../../../utils/agentHostRestore';
+import { APP_NAME } from '../../../utils/brand';
 
 interface RestoreSettingsStepProps {
    backupId: string;
@@ -69,7 +70,7 @@ const RestoreSettingsStep = ({
                   <Select
                      label="Restore destination"
                      options={[
-                        { label: 'Pluton server staging (browse or download afterwards)', value: 'server' },
+                        { label: `${APP_NAME} server staging (browse or download afterwards)`, value: 'server' },
                         {
                            label: hostname ? `Agent host ${hostname} (restore directly on the host)` : 'Agent host (restore directly on the host)',
                            value: 'agent-host',
@@ -97,7 +98,9 @@ const RestoreSettingsStep = ({
                   </div>
                ) : (
                   <>
-                     <p>Restore into a new private workspace on the Pluton server. This does not restore to the remote agent or original source.</p>
+                     <p>
+                        Restore into a new private workspace on the {APP_NAME} server. This does not restore to the remote agent or original source.
+                     </p>
                      <div className={classes.settingBlock}>
                         <Select
                            label="Staging destination"

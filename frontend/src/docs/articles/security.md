@@ -1,6 +1,6 @@
 # Melindungi akses, kredensial, dan data backup
 
-Pluton menghubungkan dashboard, server, Agent, repository, dan tujuan pemulihan. Siapkan batas akses setiap bagian sebelum pekerjaan pertama. Gunakan akun layanan dengan hak minimum, koneksi tepercaya, serta salinan privat konfigurasi/kunci yang dapat dipulihkan. Contoh `app-01` dan `/srv/example-app` di panduan ini adalah data fiktif.
+GoRecover menghubungkan dashboard, server, Agent, repository, dan tujuan pemulihan. Siapkan batas akses setiap bagian sebelum pekerjaan pertama. Gunakan akun layanan dengan hak minimum, koneksi tepercaya, serta salinan privat konfigurasi/kunci yang dapat dipulihkan. Contoh `app-01` dan `/srv/example-app` di panduan ini adalah data fiktif.
 
 ## Control plane
 

@@ -13,6 +13,7 @@ import { devices } from '../db/schema/devices';
 import { configService } from '../services/ConfigService';
 import { appPaths } from './AppPaths';
 import { securityKeyManager } from '../managers/SecurityKeyManager';
+import { BRAND_NAME } from './brand';
 
 export async function initSetup(db: BetterSQLite3Database) {
 	const setupCompletePath = path.join(appPaths.getDataDir(), '.setup_complete');
@@ -48,8 +49,8 @@ async function createDefaultSettings(db: BetterSQLite3Database) {
 				weekly: { enabled: false },
 				monthly: { enabled: false },
 			},
-			title: configService.config.APP_TITLE || 'Pluton',
-			description: 'Pluton backup for your data.',
+			title: configService.config.APP_TITLE || BRAND_NAME,
+			description: `${BRAND_NAME} backup for your data.`,
 		};
 		await db.insert(settings).values({ settings: defaultAppSettings });
 	}

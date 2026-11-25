@@ -2,7 +2,7 @@ import { NewPlanSettings } from '../@types/plans';
 
 export const DEV_MODE = import.meta.env.MODE !== 'production';
 export const API_URL = DEV_MODE ? `${import.meta.env.VITE_BACKEND_URL}/api` : `${window.location.origin}/api`;
-export const APP_NAME = import.meta.env.VITE_APP_NAME || 'Pluton';
+export { APP_NAME } from './brand';
 export const DEFAULT_PLAN_SETTINGS: NewPlanSettings = {
    title: 'New Backup',
    method: 'backup',

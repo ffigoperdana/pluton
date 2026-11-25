@@ -1,4 +1,5 @@
 import s3Options from './_s3Options';
+import { BRAND_NAME } from '../brand';
 
 const s3CompatibleSettings = [
 	{
@@ -7,8 +8,7 @@ const s3CompatibleSettings = [
 		fieldType: 'bool',
 		required: false,
 		default: false,
-		description:
-			'Use an operator-approved HTTPS S3 API endpoint and existing namespace/bucket. Pluton never provisions a bucket in this mode; use a dedicated repository prefix.',
+		description: `Use an operator-approved HTTPS S3 API endpoint and existing namespace/bucket. ${BRAND_NAME} never provisions a bucket in this mode; use a dedicated repository prefix.`,
 	},
 	{
 		label: 'Endpoint',

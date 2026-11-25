@@ -2,6 +2,7 @@ import ejs from 'ejs';
 import { configService } from '../../../../services/ConfigService';
 import { BaseNotification } from '../../../BaseNotification';
 import { loadBackupTemplate } from '../../../templateLoader';
+import { BRAND_NAME } from '../../../../utils/brand';
 
 export interface SelfBackupFailedNotificationPayload {
 	appTitle: string;
@@ -21,7 +22,7 @@ export class SelfBackupFailedNotification extends BaseNotification {
 	constructor(data: SelfBackupFailedNotificationPayload) {
 		super();
 		this.type = 'error';
-		this.subject = `${data.appTitle || 'Pluton'} Self-Backup Failed`;
+		this.subject = `${data.appTitle || BRAND_NAME} Self-Backup Failed`;
 		this.content = this.buildContent(data);
 	}
 
@@ -42,8 +43,8 @@ export class SelfBackupFailedNotification extends BaseNotification {
 		});
 
 		return this.applyEmailTemplate(renderedBody, {
-			appTitle: data.appTitle || configService.config.APP_TITLE || 'Pluton',
-			preHeader: `${data.appTitle || 'Pluton'} could not back up its own configuration.`,
+			appTitle: data.appTitle || configService.config.APP_TITLE || BRAND_NAME,
+			preHeader: `${data.appTitle || BRAND_NAME} could not back up its own configuration.`,
 			className: 'content--error',
 		});
 	}

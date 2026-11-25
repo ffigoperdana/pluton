@@ -14,7 +14,7 @@ Gunakan halaman ini ketika menentukan apakah sebuah fitur sesuai kebutuhan Anda.
 
 ## Pilih panduan sesuai tujuan
 
-1. Belum pernah memakai Pluton: ikuti [backup pertama](/docs/getting-started/quick-start).
+1. Belum pernah memakai GoRecover: ikuti [backup pertama](/docs/getting-started/quick-start).
 2. Menyiapkan server sumber: ikuti [Managed Agent](/docs/remote-agent).
 3. Perlu mengambil file: mulai dari [Browse dan Restore](/docs/restore).
 4. Perlu menguji database: baca [Recovery Testing](/docs/recovery-testing) atau [Persistent Restore](/docs/database-restores).

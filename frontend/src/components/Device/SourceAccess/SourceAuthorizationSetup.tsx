@@ -12,6 +12,7 @@ import {
 import { copyToClipboard } from '../../../utils/clipboard';
 import Button from '../../common/Button/Button';
 import classes from './SourceAccess.module.scss';
+import { APP_NAME } from '../../../utils/brand';
 
 /** A requested UI preference never substitutes for a locally authorized host policy. */
 const SourceAuthorizationSetup = ({ deviceId, agentId, access }: { deviceId: string; agentId: string; access: SourceAccessView }) => {
@@ -77,7 +78,7 @@ const SourceAuthorizationSetup = ({ deviceId, agentId, access }: { deviceId: str
                   }}
                />{' '}
                <strong>Server-Managed</strong>
-               <span>Manage backup source directories directly from Pluton after the host administrator delegates the allowed scope.</span>
+               <span>Manage backup source directories directly from {APP_NAME} after the host administrator delegates the allowed scope.</span>
             </label>
             <label>
                <input
@@ -116,7 +117,7 @@ const SourceAuthorizationSetup = ({ deviceId, agentId, access }: { deviceId: str
                   </p>
                )}
                <p>
-                  Every Pluton administrator can enable readable application directories inside this scope. Choose narrow canonical prefixes; the
+                  Every {APP_NAME} administrator can enable readable application directories inside this scope. Choose narrow canonical prefixes; the
                   server cannot expand them. Protected system paths, private agent state and known private credential directories are blocked.
                   Sensitive application files inside this scope can still be backed up. A host operator must deliberately authorize this trust boundary.
                </p>

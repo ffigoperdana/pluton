@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useLocation } from 'react-router';
+import { APP_NAME } from '../utils/brand';
 
 /** Cross the document boundary to the isolated React 19 docs, not the app's React 18 router. */
 export default function DocumentationRedirect() {
@@ -18,7 +19,7 @@ export default function DocumentationRedirect() {
    return (
       <main>
          <p>Documentation uses a separate static document. Refresh the installed assets if an older service worker is active.</p>
-         <a href={location.pathname + location.search + location.hash}>Open Pluton Documentation</a>
+         <a href={location.pathname + location.search + location.hash}>Open {APP_NAME} Documentation</a>
       </main>
    );
 }

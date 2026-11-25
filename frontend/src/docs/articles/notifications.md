@@ -26,7 +26,7 @@ Selain hasil backup dan recovery, tersedia tiga event operasional:
 - **Agent offline for 10 minutes** (`agent.offline`): Agent tidak mengirim heartbeat dan tidak sedang menjalankan perintah selama lebih dari 10 menit setelah batas offline. Backup terjadwalnya hanya menunggu di antrean dan tidak pernah tercatat gagal, jadi event ini satu-satunya peringatan.
 - **Agent back online** (`agent.online`): Agent yang tadi dilaporkan offline sudah kembali.
 
-Event Agent dikirim satu kali per channel ke channel yang dipilih oleh plan mana pun milik Agent itu. Restart singkat, upgrade Agent, dan downtime server Pluton sendiri tidak memicu peringatan. Channel dan kebijakan plan yang sudah ada tidak otomatis memilih event baru ini; centang di channel dan di setiap plan.
+Event Agent dikirim satu kali per channel ke channel yang dipilih oleh plan mana pun milik Agent itu. Restart singkat, upgrade Agent, dan downtime server GoRecover sendiri tidak memicu peringatan. Channel dan kebijakan plan yang sudah ada tidak otomatis memilih event baru ini; centang di channel dan di setiap plan.
 
 ## Delivery
 

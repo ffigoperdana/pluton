@@ -1,10 +1,10 @@
 # Memulihkan langsung ke host Agent
 
-Untuk backup Managed Agent, Pluton dapat meminta Agent yang membuat backup itu menjalankan `restic restore` **di host-nya sendiri**. Agent membaca repository plan (SFTP atau S3) secara langsung dan menulis ke folder baru di host tersebut. Data yang dipulihkan tidak pernah melewati server Pluton atau browser, sehingga filestore ratusan GB atau dump PostgreSQL berukuran beberapa GB tetap dapat dipulihkan walaupun server Pluton kecil. Contoh host app-01 dan folder /srv/pluton-restore pada halaman ini fiktif.
+Untuk backup Managed Agent, GoRecover dapat meminta Agent yang membuat backup itu menjalankan `restic restore` **di host-nya sendiri**. Agent membaca repository plan (SFTP atau S3) secara langsung dan menulis ke folder baru di host tersebut. Data yang dipulihkan tidak pernah melewati server GoRecover atau browser, sehingga filestore ratusan GB atau dump PostgreSQL berukuran beberapa GB tetap dapat dipulihkan walaupun server GoRecover kecil. Contoh host app-01 dan folder /srv/pluton-restore pada halaman ini fiktif.
 
 ## Syarat
 
-- Agent **0.9.0** atau lebih baru di Linux, berjalan sebagai akun `pluton-agent` dengan Restic dan Rclone privat milik root. Server Pluton harus diperbarui lebih dulu, baru kemudian Agent (lihat [memperbarui agent](/docs/remote-agent/updates)).
+- Agent **0.9.0** atau lebih baru di Linux, berjalan sebagai akun `pluton-agent` dengan Restic dan Rclone privat milik root. Server GoRecover harus diperbarui lebih dulu, baru kemudian Agent (lihat [memperbarui agent](/docs/remote-agent/updates)).
 - Administrator host (pemegang sudo) menyetujui satu **restore root**: folder kosong milik `pluton-agent` dengan mode `0700`, di luar setiap source backup, state Agent dan direktori sistem:
 
 ```sh
@@ -14,7 +14,7 @@ sudo /opt/pluton-agent/runtime/bin/node /opt/pluton-agent/app/dist/index.js \
   --agent-id <agent id> --root /srv/pluton-restore
 ```
 
-Tidak perlu restart service maupun drop-in systemd. Pluton hanya menawarkan root yang dilaporkan Agent sebagai **writable** pada heartbeat terakhir.
+Tidak perlu restart service maupun drop-in systemd. GoRecover hanya menawarkan root yang dilaporkan Agent sebagai **writable** pada heartbeat terakhir.
 
 ## Langkah di wizard Restore
 
@@ -34,7 +34,7 @@ Jika gagal atau dibatalkan setelah Restic mulai menulis, `<nama>.partial` tetap 
 
 ## Setelah selesai: kepemilikan dan pemindahan
 
-Semua berkas hasil restore dimiliki `pluton-agent:pluton-agent`, karena Agent berjalan tanpa hak root. Pluton tidak pernah memindahkan, mengubah owner, atau menghapus hasil restore. Administrator host melanjutkan, misalnya:
+Semua berkas hasil restore dimiliki `pluton-agent:pluton-agent`, karena Agent berjalan tanpa hak root. GoRecover tidak pernah memindahkan, mengubah owner, atau menghapus hasil restore. Administrator host melanjutkan, misalnya:
 
 ```sh
 sudo rsync -aH --chown=odoo:odoo /srv/pluton-restore/<nama>/srv/example-app/filestore/ /srv/example-app/filestore/

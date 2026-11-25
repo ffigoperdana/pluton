@@ -6,6 +6,7 @@ import {
 } from "../../frontend/src/docs/manifest.ts";
 import type { Root } from "fumadocs-core/page-tree";
 import { backupRecoveryTopics } from "../../frontend/src/docs/troubleshootingTopics.ts";
+import { APP_NAME } from "../../frontend/src/utils/brand.ts";
 
 export const collection = defineDocs({
   dir: "../frontend/src/docs/articles",
@@ -35,7 +36,7 @@ const item = (article: (typeof docArticles)[number]) => ({
   url: "/docs/" + article.slug,
 });
 export const tree: Root = {
-  name: "Pluton Documentation",
+  name: `${APP_NAME} Documentation`,
   children: [
     { type: "page", name: "Documentation", url: "/docs" },
     {

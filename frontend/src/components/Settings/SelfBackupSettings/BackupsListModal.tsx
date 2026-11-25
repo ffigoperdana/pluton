@@ -4,6 +4,7 @@ import Icon from '../../common/Icon/Icon';
 import { useGetSelfBackupBackups, useDownloadSelfBackup } from '../../../services/settings';
 import { formatBytes } from '../../../utils/helpers';
 import classes from './SelfBackupSettings.module.scss';
+import { APP_NAME } from '../../../utils/brand';
 
 interface BackupsListModalProps {
    settingsID: string;
@@ -30,7 +31,7 @@ const BackupsListModal = ({ settingsID, closeModal }: BackupsListModalProps) => 
    };
 
    return (
-      <Modal title="Pluton Backups" width="640px" closeModal={closeModal}>
+      <Modal title={`${APP_NAME} Backups`} width="640px" closeModal={closeModal}>
          <div className={classes.backupsModal}>
             {isLoading ? (
                <div className={classes.backupsEmpty}>

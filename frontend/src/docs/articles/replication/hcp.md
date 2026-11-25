@@ -1,6 +1,6 @@
 # Memakai HCP atau namespace S3 yang sudah ada
 
-Mode **HCP / pre-existing namespace mode** memakai endpoint S3 API HTTPS dan bucket/namespace yang sudah disiapkan operator. Pluton tidak membuat bucket dalam mode ini. Untuk Managed Agent, mode tersebut wajib pada setiap storage S3-compatible atau endpoint non-AWS, termasuk layanan yang bukan bermerek HCP.
+Mode **HCP / pre-existing namespace mode** memakai endpoint S3 API HTTPS dan bucket/namespace yang sudah disiapkan operator. GoRecover tidak membuat bucket dalam mode ini. Untuk Managed Agent, mode tersebut wajib pada setiap storage S3-compatible atau endpoint non-AWS, termasuk layanan yang bukan bermerek HCP.
 
 **Interoperabilitas dengan HCP nyata belum diuji.** Artikel ini menjelaskan kontrak konfigurasi dan langkah validasi yang harus dilakukan pada namespace uji yang disetujui. Fixture otomatis, storage berhasil disimpan, dan DNS berhasil tidak sama dengan bukti copy/restore pada appliance nyata.
 
@@ -8,12 +8,12 @@ Mode **HCP / pre-existing namespace mode** memakai endpoint S3 API HTTPS dan buc
 
 Gunakan [storage HCP](/docs/storage/hcp) sebagai referensi tunggal untuk
 Tenant/Namespace, S3 protocol, ACL, key, endpoint/path-style, region, TLS/CA,
-quota dan retention. Artikel ini berfokus pada acceptance replika Pluton agar
+quota dan retention. Artikel ini berfokus pada acceptance replika GoRecover agar
 prasyarat vendor tidak diduplikasi dengan instruksi yang berbeda.
 
 Minta administrator menyiapkan HTTPS S3 API endpoint, existing namespace/bucket, credential dengan scope minimum yang diperlukan, prefix kosong dedicated, trust CA, serta kebijakan quota/retention/Object Lock. Jangan memakai URL konsol pengelolaan. Contoh fiktif: endpoint `https://objects.example.internal`, bucket `example-backups`, dan prefix `app-01/replica-a`.
 
-Pastikan server Pluton dapat menjangkau endpoint dan mempercayai sertifikat. CA storage privat dikelola operator melalui `PLUTON_STORAGE_CA_FILE` sesuai [storage HCP](/docs/storage/hcp) dan [konfigurasi](/docs/reference/configuration). File CA harus memenuhi pemeriksaan keamanan server; jangan memasukkan arbitrary CA path/TLS flags melalui field storage atau menonaktifkan verifikasi sertifikat.
+Pastikan server GoRecover dapat menjangkau endpoint dan mempercayai sertifikat. CA storage privat dikelola operator melalui `PLUTON_STORAGE_CA_FILE` sesuai [storage HCP](/docs/storage/hcp) dan [konfigurasi](/docs/reference/configuration). File CA harus memenuhi pemeriksaan keamanan server; jangan memasukkan arbitrary CA path/TLS flags melalui field storage atau menonaktifkan verifikasi sertifikat.
 
 ## Konfigurasi melalui UI
 

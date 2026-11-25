@@ -1,4 +1,5 @@
 import type { PlanRelocation, PlanRelocationOverview } from '../@types/planRelocations';
+import { APP_NAME } from './brand.ts';
 
 const ACTIVE = ['copying', 'verifying', 'ready'];
 
@@ -69,13 +70,13 @@ const FAILURES: Record<string, string> = {
    'snapshot-set-mismatch': 'The copy does not list the same snapshots as the original.',
    'snapshot-missing': 'A snapshot recorded in backup history is missing from the repository.',
    'restic-check-failed': 'restic check reported a problem in the copy. The plan was not moved.',
-   'network-unavailable': 'An SFTP server could not be reached from the Pluton server.',
+   'network-unavailable': `An SFTP server could not be reached from the ${APP_NAME} server.`,
    'authentication-denied': 'An SFTP server rejected the stored credentials.',
    'host-verification-failed': 'SFTP host verification failed.',
    'wrong-password': 'The repository password was rejected.',
    timeout: 'The operation stopped making progress and was stopped.',
    cancelled: 'The operation was cancelled.',
-   'server-restarted': 'The Pluton server restarted during the copy. Start again; files already copied are reused.',
+   'server-restarted': `The ${APP_NAME} server restarted during the copy. Start again; files already copied are reused.`,
    'plan-busy': 'The plan became busy (backup, restore, replication or recovery). Try again when it is idle.',
    'source-delete-failed': 'Deleting the previous copy failed part-way. Try again; only repository files are removed.',
    'configuration-invalid': 'The Storage or path configuration is not valid for this operation.',

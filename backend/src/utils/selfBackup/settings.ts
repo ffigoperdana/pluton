@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { AppSettings, SelfBackupSettings } from '../../types/settings';
+import { BRAND_NAME } from '../brand';
 
 export const SELF_BACKUP_DEFAULTS: SelfBackupSettings = {
 	enabled: false,
@@ -28,7 +29,7 @@ export const selfBackupSettingsSchema = z
 	// Empty storage fields are valid while disabled (that is the default state), but an
 	// enabled config with no storage would only fail later, at run time.
 	.refine(v => !v.enabled || (v.storageId !== '' && v.storageName !== ''), {
-		message: 'A storage must be selected to enable Pluton self-backup.',
+		message: `A storage must be selected to enable ${BRAND_NAME} self-backup.`,
 		path: ['storageId'],
 	});
 

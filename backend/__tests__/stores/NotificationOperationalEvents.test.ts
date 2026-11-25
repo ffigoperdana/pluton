@@ -5,6 +5,7 @@ import { notificationFixture } from '../fixtures/notifications';
 import { fixture as fullFixture } from '../integration/persistentRestore.fixture';
 import { notificationEvents } from '../../src/types/notificationDelivery';
 import { notificationText } from '../../src/notifications/terminalPayload';
+import { BRAND_NAME } from '../../src/utils/brand';
 
 /** docs/OPERATIONAL_NOTIFICATIONS.md: replica copy failures and Agent availability. */
 const MINUTE = 60_000;
@@ -89,7 +90,7 @@ describe('operational notifications', () => {
 			});
 			expect(payload.error).toEqual({ category: 'destination-unavailable' });
 			expect(notificationText(payload).subject).toBe(
-				'[Pluton] Replica Copy Needs Attention — Example Application'
+				`[${BRAND_NAME}] Replica Copy Needs Attention — Example Application`
 			);
 			// A retry that fails again is the same outcome of the same copy: no second message.
 			setJob('job-01', 'pending');
@@ -154,7 +155,7 @@ describe('operational notifications', () => {
 			);
 			const offline = fixture.store.payload(deliveries[0].eventId);
 			expect(offline.agent).toEqual(expect.objectContaining({ id: 'agent-01', name: 'app-01' }));
-			expect(notificationText(offline).subject).toBe('[Pluton] Agent Offline — app-01');
+			expect(notificationText(offline).subject).toBe(`[${BRAND_NAME}] Agent Offline — app-01`);
 			expect(notificationText(offline).text).toContain('wait in the queue');
 			fixture.advance(MINUTE);
 			heartbeat();

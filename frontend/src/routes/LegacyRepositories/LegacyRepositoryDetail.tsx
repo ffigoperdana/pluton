@@ -20,6 +20,7 @@ import type {
 import { formatBytes, formatDateTime } from '../../utils/helpers';
 import classes from './LegacyRepositories.module.scss';
 import LegacySnapshotBrowser from './LegacySnapshotBrowser';
+import { APP_NAME } from '../../utils/brand';
 
 const LegacyRepositoryDetail = () => {
    const { id } = useParams();
@@ -257,7 +258,7 @@ const LegacyRepositoryDetail = () => {
          {showDelete && repository && (
             <ActionModal
                title="Remove legacy repository registration"
-               message={<>This removes only Pluton's local registration for <strong>{repository.displayName}</strong>. The repository and its snapshots will not be changed.</>}
+               message={<>This removes only {APP_NAME}'s local registration for <strong>{repository.displayName}</strong>. The repository and its snapshots will not be changed.</>}
                closeModal={() => setShowDelete(false)}
                primaryAction={{
                   title: 'Remove registration',

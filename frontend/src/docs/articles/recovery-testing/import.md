@@ -4,7 +4,7 @@ Pilih native import bila Anda ingin mengetahui apakah semua SQL native pada snap
 
 ## Prasyarat wajib
 
-DBA menyediakan endpoint recovery-only, pembatasan jaringan, akun berhak minimum, serta marker tujuan **pluton_recovery_guard** dengan purpose **pluton-phase6-recovery-only**. Untuk target remote, gunakan TLS terverifikasi. Klien import kompatibel harus tersedia pada Pluton Server; MySQL asli memerlukan worker Oracle yang disetujui.
+DBA menyediakan endpoint recovery-only, pembatasan jaringan, akun berhak minimum, serta marker tujuan **pluton_recovery_guard** dengan purpose **pluton-phase6-recovery-only**. Untuk target remote, gunakan TLS terverifikasi. Klien import kompatibel harus tersedia pada GoRecover Server; MySQL asli memerlukan worker Oracle yang disetujui.
 
 Checkbox pada UI tidak membuat endpoint menjadi aman. Aplikasi memeriksa marker, grant, atribut akun, dan katalog sebelum membuat database disposable. Provisioning target dilakukan melalui runbook administrator yang direview, tanpa memakai database sumber.
 

@@ -8,7 +8,7 @@ Contoh pada panduan ini sepenuhnya fiktif: plan app-01 mencadangkan database exa
 
 Siapkan backup managed agent berstatus **Complete** dengan full snapshot ID dan metadata database native. Metadata harus mencatat identitas database, engine, nama logical database, path SQL, ukuran, serta SHA-256. Berkas .sql biasa dalam folder sumber tidak cukup; engine tidak ditebak dari filename.
 
-Masuk sebagai administrator Pluton. Administrator host harus menyiapkan profile Internal atau target Custom yang disetujui, TLS, pembatasan resource, dan mekanisme ownership. Anda tidak memasukkan credential administrator database atau perintah host pada wizard ini.
+Masuk sebagai administrator GoRecover. Administrator host harus menyiapkan profile Internal atau target Custom yang disetujui, TLS, pembatasan resource, dan mekanisme ownership. Anda tidak memasukkan credential administrator database atau perintah host pada wizard ini.
 
 Pemulihan memakai repository **primary** managed. Mirror bukan sumber Persistent Restore yang didukung. Source agent tidak dihubungi untuk menulis kembali data.
 

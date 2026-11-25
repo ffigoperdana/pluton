@@ -1,5 +1,6 @@
 import type { AgentInfo } from '../@types/devices';
 import type { PlanReplicationSettings } from '../@types/plans';
+import { APP_NAME } from './brand.ts';
 
 /** UI gating for an S3 primary on Managed Agent plans (docs/S3_AGENT_REPOSITORY_DESIGN.md 6.4).
  * The server enforces the same rules; the UI only explains them early. */
@@ -52,8 +53,8 @@ export function replicationForAgentPrimary(
 
 export function managedDestinationNotice(s3Primary: boolean): string {
    return s3Primary
-      ? "The Agent writes this plan directly to S3. For each backup it receives this storage's S3 key in sealed form, and never any replica key. Use a dedicated prefix inside the bucket: the Agent refuses a prefix that already contains data. Optional SFTP replicas are copied by the Pluton server after snapshot verification. Database dumps and constrained hooks can be configured under Advanced → Database & Hooks. Agent prune and arbitrary scripts remain unavailable."
-      : 'Remote managed backups write to an SFTP or S3 primary repository; S3 needs an Agent that reports S3 support. Database dumps and constrained hooks can be configured under Advanced → Database & Hooks. Optional replicas (S3 for an SFTP primary, SFTP for an S3 primary) are copied by the Pluton server after snapshot verification, and replica credentials stay on the server. Native database recovery continues to use the trusted primary repository. Agent prune and arbitrary scripts remain unavailable.';
+      ? `The Agent writes this plan directly to S3. For each backup it receives this storage's S3 key in sealed form, and never any replica key. Use a dedicated prefix inside the bucket: the Agent refuses a prefix that already contains data. Optional SFTP replicas are copied by the ${APP_NAME} server after snapshot verification. Database dumps and constrained hooks can be configured under Advanced → Database & Hooks. Agent prune and arbitrary scripts remain unavailable.`
+      : `Remote managed backups write to an SFTP or S3 primary repository; S3 needs an Agent that reports S3 support. Database dumps and constrained hooks can be configured under Advanced → Database & Hooks. Optional replicas (S3 for an SFTP primary, SFTP for an S3 primary) are copied by the ${APP_NAME} server after snapshot verification, and replica credentials stay on the server. Native database recovery continues to use the trusted primary repository. Agent prune and arbitrary scripts remain unavailable.`;
 }
 
 /** Move Repository copies SFTP to SFTP only; the server refuses other primaries. */

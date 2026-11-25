@@ -1,5 +1,6 @@
 export type { Channel, ChannelInput, Subscription, Delivery, NotificationEventType } from '../../../backend/src/types/notificationDelivery.ts';
 import type { Channel, ChannelInput, Subscription, NotificationEventType } from '../../../backend/src/types/notificationDelivery.ts';
+import { APP_NAME } from './brand.ts';
 export const eventChoices: { value: NotificationEventType; label: string }[] = [
    { value: 'backup.completed', label: 'Backup successful' },
    { value: 'backup.completed_with_warning', label: 'Backup completed with warning' },
@@ -35,7 +36,7 @@ export function channelDraft(saved?: Channel, kind: 'webhook' | 'smtp' = 'webhoo
               security: 'starttls',
               username: '',
               senderEmail: '',
-              senderName: 'Pluton',
+              senderName: APP_NAME,
               recipients: [],
               timeoutMs: 15000,
               network: 'public',

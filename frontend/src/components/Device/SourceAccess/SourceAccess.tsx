@@ -25,6 +25,7 @@ import Button from '../../common/Button/Button';
 import classes from './SourceAccess.module.scss';
 import SourceAuthorizationSetup from './SourceAuthorizationSetup';
 import SourceAccessHistory from './SourceAccessHistory';
+import { APP_NAME } from '../../../utils/brand';
 
 const SourceAccess = ({ deviceId, agentId }: { deviceId: string; agentId: string }) => {
    const query = useSourceAccess(deviceId);
@@ -219,7 +220,7 @@ const SourceAccess = ({ deviceId, agentId }: { deviceId: string; agentId: string
                <div className={classes.warning}>
                   <p>
                      Pending paths cannot be backed up. A host administrator must review the canonical directories and grant read/traverse
-                     permissions. Pluton does not change ownership, ACLs or sudo access.
+                     permissions. {APP_NAME} does not change ownership, ACLs or sudo access.
                   </p>
                   {report && canonicalPending.length > 0 && (
                      <>
@@ -275,8 +276,8 @@ const SourceAccess = ({ deviceId, agentId }: { deviceId: string; agentId: string
          </p>
          <p>
             {serverManaged
-               ? 'Manage backup source directories in Pluton within the scope delegated by this host. Each path still needs validation, explicit Apply and Linux read permissions.'
-               : 'Host administrators approve the maximum access. Pluton enables a subset of those roots.'}{' '}
+               ? `Manage backup source directories in ${APP_NAME} within the scope delegated by this host. Each path still needs validation, explicit Apply and Linux read permissions.`
+               : `Host administrators approve the maximum access. ${APP_NAME} enables a subset of those roots.`}{' '}
             Validation reads only explicitly submitted paths and does not start a backup.
          </p>
          {view && <SourceAuthorizationSetup key={`${deviceId}:${report?.hostPolicyRevision}`} deviceId={deviceId} agentId={agentId} access={view} />}
@@ -337,15 +338,15 @@ const SourceAccess = ({ deviceId, agentId }: { deviceId: string; agentId: string
                               ))}
                            </ul>
                            <p>
-                              Pluton administrators can enable readable application directories within these prefixes without another host command.
-                              The server cannot expand this scope. Directories outside it require a separately reviewed host change.
+                              {APP_NAME} administrators can enable readable application directories within these prefixes without another host
+                              command. The server cannot expand this scope. Directories outside it require a separately reviewed host change.
                            </p>
                         </div>
                      )}
                      <div className={classes.grid}>
                         <div>
                            <h4>{serverManaged ? 'Selected backup directories' : 'Host-approved and enabled roots'}</h4>
-                           <p className={classes.muted}>Select the roots Pluton should enable.</p>
+                           <p className={classes.muted}>Select the roots {APP_NAME} should enable.</p>
                            <ul className={classes.rootList}>
                               {selectableRoots.map((root) => {
                                  const status = report.rootStatuses.find((item) => item.path === root);
@@ -382,7 +383,7 @@ const SourceAccess = ({ deviceId, agentId }: { deviceId: string; agentId: string
                            {report.approvedRoots.some((root) => sourcePathError(root)) && (
                               <p className={classes.warning}>
                                  This host has a broad or protected static root. Ask the host administrator to narrow the local configuration
-                                 manually; Pluton cannot add such roots.
+                                 manually; {APP_NAME} cannot add such roots.
                               </p>
                            )}
                         </div>

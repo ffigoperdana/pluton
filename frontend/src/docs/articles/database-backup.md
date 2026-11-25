@@ -1,6 +1,6 @@
 # Mencadangkan berkas aplikasi dan database bersama
 
-Gunakan pencadangan database ketika pemulihan aplikasi memerlukan berkas dan isi database dari satu pekerjaan backup. Pluton membuat dump SQL setiap database yang Anda daftarkan, kemudian menyimpannya bersama berkas aplikasi dalam satu snapshot. Contoh pada panduan ini sepenuhnya fiktif: app-01 mempunyai berkas di /srv/example-app dan database example_app.
+Gunakan pencadangan database ketika pemulihan aplikasi memerlukan berkas dan isi database dari satu pekerjaan backup. GoRecover membuat dump SQL setiap database yang Anda daftarkan, kemudian menyimpannya bersama berkas aplikasi dalam satu snapshot. Contoh pada panduan ini sepenuhnya fiktif: app-01 mempunyai berkas di /srv/example-app dan database example_app.
 
 ## Sebelum mulai
 

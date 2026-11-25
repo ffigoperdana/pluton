@@ -1,6 +1,7 @@
 import { configService } from '../../../../services/ConfigService';
 import { INTEGRATIONS_AVAILABLE, IntegrationTypes } from '../../../../types/settings';
 import { BaseNotification } from '../../../BaseNotification';
+import { BRAND_NAME } from '../../../../utils/brand';
 
 export class TestNtfyNotification extends BaseNotification {
 	integrationName = '';
@@ -12,6 +13,6 @@ export class TestNtfyNotification extends BaseNotification {
 		this.content = this.buildContent(data);
 	}
 	protected buildContent(data: { integrationType: IntegrationTypes; appTitle: string }): string {
-		return `${configService.config.APP_TITLE || 'Pluton'} can successfully send push notifications using ${this.integrationName}.`;
+		return `${configService.config.APP_TITLE || BRAND_NAME} can successfully send push notifications using ${this.integrationName}.`;
 	}
 }

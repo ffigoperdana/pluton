@@ -7,6 +7,7 @@ import UnremovedPathsNotice from './UnremovedPathsNotice';
 import { useDeletePlan } from '../../../services/plans';
 import Toggle from '../../common/form/Toggle/Toggle';
 import classes from './PlanRemoveModal.module.scss';
+import { APP_NAME } from '../../../utils/brand';
 
 interface PlanRemoveModalProps {
    planId: string;
@@ -65,7 +66,7 @@ const PlanRemoveModal = ({ planId, taskPending, actionInProgress, close }: PlanR
          title="Remove Backup Plan"
          message={
             <div>
-               Remove this plan and its history from Pluton? Backup data in storage is retained unless you select the option below. Remote managed
+               Remove this plan and its history from {APP_NAME}? Backup data in storage is retained unless you select the option below. Remote managed
                repositories are retained for manual cleanup.
                <Toggle
                   fieldValue={removeRemoteData}

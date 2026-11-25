@@ -4,9 +4,13 @@ import { createHmac } from 'node:crypto';
 import { isIP } from 'node:net';
 import nodemailer from 'nodemailer';
 import { pinnedAddress, webhookUrl, DestinationError, type ResolveHost } from './deliveryPolicy';
-import { notificationText } from './terminalPayload';
+import { notificationMessage } from './notificationMessage';
+import { fillEmailWrapper } from './BaseNotification';
+import { loadEmailWrapperTemplate } from './templateLoader';
+import { configService } from '../services/ConfigService';
 import { secureSmtpOptions } from './channels/secureSmtp';
 import type { Channel, DeliveryResult, NotificationPayload } from '../types/notificationDelivery';
+import { BRAND_NAME } from '../utils/brand';
 
 export function webhookSignature(
 	secret: string,
@@ -151,12 +155,16 @@ export async function deliverNotification(
 		);
 		let abort: (() => void) | undefined;
 		try {
-			const content = notificationText(payload);
+			const content = notificationMessage(payload, { appUrl: configService.config.APP_URL });
 			const message = {
-				from: { name: config.senderName || 'Pluton', address: config.senderEmail },
+				from: { name: config.senderName || BRAND_NAME, address: config.senderEmail },
 				to: config.recipients,
 				subject: content.subject,
 				text: content.text,
+				html: fillEmailWrapper(loadEmailWrapperTemplate(), content.html, {
+					appTitle: configService.config.APP_TITLE || BRAND_NAME,
+					preHeader: content.preHeader,
+				}),
 				disableFileAccess: true,
 				disableUrlAccess: true,
 				headers: { 'X-Pluton-Event-Id': payload.event_id },

@@ -12,13 +12,13 @@ export const supportLabels: Record<Support, string> = {
 export const docCategories: DocCategory[] = [
    {
       id: "getting-started",
-      title: "Memulai dengan Pluton",
+      title: "Memulai dengan GoRecover",
       evidence: ["frontend/src/routes/Setup/Setup.tsx","frontend/src/routes/Plans/Plans.tsx","backend/src/createApp.ts","agent/src/runtime.ts"],
       articles: [
-         page("getting-started", "Mengenal Pluton mandiri"),
+         page("getting-started", "Mengenal GoRecover mandiri"),
          page("getting-started/complete-backup-setup", "Complete Backup Setup — dari nol sampai recovery terverifikasi", "operator-setup"),
          page("getting-started/terms", "Memahami istilah pada backup dan pemulihan"),
-         page("architecture", "Cara kerja Pluton"),
+         page("architecture", "Cara kerja GoRecover"),
          page("getting-started/requirements", "Menyiapkan kebutuhan sebelum backup pertama"),
          page("getting-started/quick-start", "Menjalankan backup pertama dan memulihkan satu file", "operator-setup"),
          page("getting-started/dashboard", "Masuk dan menemukan pekerjaan di halaman utama"),
@@ -56,7 +56,7 @@ export const docCategories: DocCategory[] = [
       title: "Membuat dan Mengelola Backup Plan",
       evidence: ["frontend/src/components/Plan/PlanForm/PlanFormNav.tsx","backend/src/services/PlanService.ts","backend/src/stores/PlanStore.ts","agent/src/resticParent.ts"],
       articles: [
-         page("backup-plans", "Membuat Backup Plan untuk folder pada host Pluton"),
+         page("backup-plans", "Membuat Backup Plan untuk folder pada host GoRecover"),
          page("backup-plans/managed-agent", "Membuat plan Managed Agent dengan SFTP atau S3 primer", "operator-setup"),
          page("backup-plans/schedule-retention", "Mengatur jadwal, retensi, dan percobaan ulang backup"),
          page("backup-plans/history", "Menjalankan Backup Now dan membaca riwayat backup"),
@@ -155,11 +155,11 @@ export const docCategories: DocCategory[] = [
       title: "Instalasi, Upgrade, dan Pemeliharaan",
       evidence: ["deploy/compose.yml","Dockerfile.source","backend/src/utils/cliSelfRestore.ts","backend/src/services/SelfBackupService.ts","backend/src/routes/health.ts"],
       articles: [
-         page("deployment", "Menyiapkan instalasi Pluton", "operator-setup"),
+         page("deployment", "Menyiapkan instalasi GoRecover", "operator-setup"),
          page("deployment/docker", "Image Docker dan artefak rilis", "operator-setup"),
          page("deployment/configuration", "Compose dan konfigurasi privat", "operator-setup"),
-         page("deployment/persistence", "Menjaga data Pluton dan configuration backup"),
-         page("deployment/updates", "Memperbarui Pluton dengan aman"),
+         page("deployment/persistence", "Menjaga data GoRecover dan configuration backup"),
+         page("deployment/updates", "Memperbarui GoRecover dengan aman"),
          page("deployment/rollback", "Rollback tanpa kehilangan identitas dan data"),
          page("deployment/vm-logs", "Memeriksa layanan, resource, dan log"),
          page("operations", "Workflow operator harian"),
@@ -169,10 +169,10 @@ export const docCategories: DocCategory[] = [
    },
    {
       id: "migration",
-      title: "Migrasi SYS MON ke Pluton",
+      title: "Migrasi SYS MON ke GoRecover",
       evidence: ["backend/src/services/LegacyRepositoryService.ts","backend/src/services/RecoveryTestService.ts","docs/ROADMAP.md"],
       articles: [
-         page("migration", "Beralih dari SYS MON ke Pluton secara bertahap", "operator-setup"),
+         page("migration", "Beralih dari SYS MON ke GoRecover secara bertahap", "operator-setup"),
          page("migration/shadow", "Menjalankan SHADOW dan validasi sebelum cutover", "operator-setup"),
          page("legacy-repositories/migration", "Menjalankan backup baru paralel dengan sistem lama"),
          page("migration/cutover", "Melakukan CUTOVER dan menjaga rollback", "operator-setup"),
@@ -211,7 +211,7 @@ export const docCategories: DocCategory[] = [
          page("reference/limitations", "Batasan fitur dan validasi yang masih diperlukan"),
          page("reference/faq", "Pertanyaan umum operator"),
          page("reference/acknowledgements", "About dan Open Source Acknowledgements"),
-         page("reference/contributing", "Memelihara panduan Pluton"),
+         page("reference/contributing", "Memelihara panduan GoRecover"),
          page("changelog", "Perubahan fitur pada source fork"),
       ],
    },
