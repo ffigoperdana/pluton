@@ -249,7 +249,8 @@ const AgentEnrollmentModal = ({ close }: AgentEnrollmentProps) => {
                         Clone, pin, install and enroll the standalone Agent
                      </h4>
                      <p className={classes.help}>
-                        On a fresh Ubuntu 22.04 host with Bash, Git, Python 3 and sudo, run this complete block as your normal administrator. It
+                        On a fresh Ubuntu 22.04, Ubuntu 24.04 or Debian 13 host (x86_64, systemd) with Bash, Git, Python 3 and sudo, run this
+                        complete block as your normal administrator. It
                         checks the reviewed commit and Agent version before asking for sudo. The installer prompts privately for the token. For a
                         private repository, configure Git access separately; never put a Git password or token in these commands.
                      </p>
