@@ -28,6 +28,8 @@ export type SnapshotDetails = {
    comparisonAvailable: boolean;
    /** Set when the plan names its files from a paired database (Odoo attachments). */
    attachmentCatalog?: { adapter: 'odoo' } | null;
+   /** A Managed Agent snapshot; Browse asks the server whether it holds MinIO data folders. */
+   minioObjects?: boolean;
 };
 export type ComparisonStatus = {
    state: 'missing' | 'unavailable' | 'preparing' | 'ready' | 'failed' | 'cancelled';

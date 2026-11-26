@@ -1468,6 +1468,97 @@
   {
     "feature": "backups",
     "method": "GET",
+    "route": "/api/backups/:id/minio",
+    "handler": "BackupController.getMinioDataDirectories",
+    "services": [
+      "backupService.minioDataDirectories"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "backups",
+    "method": "GET",
+    "route": "/api/backups/:id/minio/objects",
+    "handler": "BackupController.getMinioObjects",
+    "services": [
+      "backupService.minioObjectPage"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "backups",
+    "method": "GET",
+    "route": "/api/backups/:id/minio/objects/:objectId/download",
+    "handler": "BackupController.downloadMinioObject",
+    "services": [
+      "backupService.downloadMinioObject"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "params.objectId",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "controller JSON or binary/stream contract; unversioned",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [
+      "backend/__tests__/controllers/BackupController.test.ts",
+      "backend/__tests__/routes/backups.test.ts",
+      "backend/__tests__/services/SnapshotDetails.test.ts"
+    ],
+    "source": "backend/src/controllers/BackupController.ts",
+    "routeSource": "backend/src/routes/backups.ts",
+    "security": "Sensitive paths/configuration/contents; retain administrator boundary; no MCP proxy."
+  },
+  {
+    "feature": "backups",
+    "method": "GET",
     "route": "/api/backups/:id/progress",
     "handler": "BackupController.getBackupProgress",
     "services": [
@@ -3516,6 +3607,126 @@
     ],
     "source": "backend/src/routes/notifications.ts",
     "routeSource": "backend/src/routes/notifications.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "primaryPromotions",
+    "method": "GET",
+    "route": "/api/plan-promotions",
+    "handler": "PrimaryPromotionController.handle",
+    "services": [
+      "service.overview",
+      "service.start",
+      "service.get",
+      "service.cancel"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "body",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [],
+    "source": "backend/src/controllers/PrimaryPromotionController.ts",
+    "routeSource": "backend/src/routes/primaryPromotions.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "primaryPromotions",
+    "method": "POST",
+    "route": "/api/plan-promotions",
+    "handler": "PrimaryPromotionController.handle",
+    "services": [
+      "service.overview",
+      "service.start",
+      "service.get",
+      "service.cancel"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "body",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [],
+    "source": "backend/src/controllers/PrimaryPromotionController.ts",
+    "routeSource": "backend/src/routes/primaryPromotions.ts",
+    "security": "Existing admission rules apply. No external write tools or approval bypass."
+  },
+  {
+    "feature": "primaryPromotions",
+    "method": "GET",
+    "route": "/api/plan-promotions/:id",
+    "handler": "PrimaryPromotionController.handle",
+    "services": [
+      "service.overview",
+      "service.start",
+      "service.get",
+      "service.cancel"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "read (may perform IO)",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "body",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [],
+    "source": "backend/src/controllers/PrimaryPromotionController.ts",
+    "routeSource": "backend/src/routes/primaryPromotions.ts",
+    "security": "Existing DTOs may contain operational details; use explicit v1 projection."
+  },
+  {
+    "feature": "primaryPromotions",
+    "method": "POST",
+    "route": "/api/plan-promotions/:id/cancel",
+    "handler": "PrimaryPromotionController.handle",
+    "services": [
+      "service.overview",
+      "service.start",
+      "service.get",
+      "service.cancel"
+    ],
+    "authentication": "administrator cookie JWT",
+    "authorization": "single local administrator; no tenant RBAC",
+    "classification": "mutating/privileged",
+    "support": "Supported but internal-only",
+    "request": [
+      "query",
+      "body",
+      "params.id"
+    ],
+    "requestSchemas": [],
+    "response": "handwritten controller JSON; no common versioned output schema",
+    "pagination": "no common pagination contract; see implementation",
+    "errors": "400",
+    "available": "session-only; unavailable with legacy key",
+    "testReferences": [],
+    "source": "backend/src/controllers/PrimaryPromotionController.ts",
+    "routeSource": "backend/src/routes/primaryPromotions.ts",
     "security": "Existing admission rules apply. No external write tools or approval bypass."
   },
   {

@@ -18,6 +18,45 @@ export type SelectedDownloadHeaders = {
 	/** Original UTF-8 name, sent as RFC 5987 filename* next to the ASCII fileName. */
 	utf8FileName?: string;
 };
+/**
+ * Streams the raw bytes of one regular snapshot file to `output`, waiting for
+ * each write to be acknowledged, and fails unless exactly the indexed size
+ * arrives. The caller holds the exact index lease and a verified session.
+ */
+export async function streamExactSnapshotFile(
+	index: ManagedSnapshotIndex,
+	session: ManagedRepositorySession,
+	snapshotId: string,
+	itemPath: string,
+	output: Writable,
+	signal: AbortSignal
+) {
+	signal.throwIfAborted();
+	managedSnapshotPath(itemPath);
+	const item = index.get(itemPath);
+	if (!item || item.type !== 'file') throw new AppError(404, 'Snapshot file not found.');
+	if (!session.dump) throw new AppError(501, 'Selected snapshot downloads are unavailable.');
+	let bytes = 0;
+	const sink = new Writable({
+		write(chunk: Buffer, _encoding, done) {
+			bytes += chunk.length;
+			if (!Number.isSafeInteger(bytes) || bytes > item.size)
+				return done(new ManagedExportError('archive-entry-mismatch'));
+			output.write(chunk, error => done(error ?? undefined));
+		},
+	});
+	sink.on('error', () => undefined);
+	try {
+		await session.dump(snapshotId, itemPath, sink);
+		sink.end();
+		await finished(sink);
+		signal.throwIfAborted();
+		if (bytes !== item.size) throw new ManagedExportError('archive-incomplete');
+	} finally {
+		sink.destroy();
+	}
+}
+
 /** No repository writes, staging restore or archive buffer. The caller holds the exact index lease. */
 export async function streamSelectedSnapshot(
 	index: ManagedSnapshotIndex,

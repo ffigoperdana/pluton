@@ -70,6 +70,7 @@ import { RestoreService } from './services/RestoreService';
 import { AgentHostRestoreService } from './services/AgentHostRestoreService';
 import { RemoteRepositoryRecoveryService } from './services/RemoteRepositoryRecoveryService';
 import { AttachmentCatalogService } from './services/AttachmentCatalogService';
+import { MinioObjectService } from './services/MinioObjectService';
 import { RestoreEventListener } from './services/listeners/RestoreEventListener';
 import { DownloadEventListener } from './services/listeners/DownloadEventListener';
 import { DeviceService } from './services/DeviceService';
@@ -354,6 +355,8 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	backupFailoverService.setPromotionGuard(
 		planId => !!primaryPromotionService.activeForPlan(planId)
 	);
+	// docs/MINIO_OBJECT_BROWSE.md: read-only object listing and verified downloads.
+	const minioObjectService = new MinioObjectService(remoteRecoveryService);
 	const backupService = new BackupService(
 		localBackupAgent,
 		localPlanAgent,
@@ -365,7 +368,8 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		remoteRecoveryService,
 		managedReplicationService,
 		recoveryTestStore,
-		new AttachmentCatalogService(planStore, backupStore, remoteRecoveryService)
+		new AttachmentCatalogService(planStore, backupStore, remoteRecoveryService),
+		minioObjectService
 	);
 	// docs/AGENT_HOST_RESTORE.md: the Agent restores on its own host; nothing passes through here.
 	const agentHostRestoreService = new AgentHostRestoreService(
@@ -684,6 +688,7 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 			await databaseRestoreService.shutdown();
 			await assistedRecoveryService.shutdown();
 			await relocationService.shutdown();
+			await minioObjectService.close();
 			await remoteRecoveryService.close();
 		},
 	};

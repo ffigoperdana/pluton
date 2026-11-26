@@ -2,6 +2,12 @@
 
 Halaman ini merangkum fitur yang ada pada source saat panduan ditulis. Halaman ini bukan feed rilis live atau bukti bahwa source tersebut sudah terpasang di suatu server.
 
+## Browse objek MinIO
+
+Browse pada snapshot Managed Agent kini mengenali folder data MinIO mode satu drive (`xl-single`) dan menampilkan tab **MinIO objects**: bucket, folder, key, ukuran, waktu ubah, ETag, versi, dan delete marker. Satu versi objek dapat diunduh sebagai file aslinya. Server membaca `xl.meta` dan part file langsung dari snapshot, membuka kompresi S2, lalu mencocokkan isi dengan ETag (MD5 atau MD5 multipart) sebelum potongan terakhir dikirim. Objek SSE, erasure multi-drive, tier remote, dan format lama ditampilkan beserta alasan tanpa dapat diunduh. Fitur ini hanya membaca dan tidak memerlukan perubahan Agent. Lihat [mengunduh satu objek MinIO](/docs/restore/minio-objects).
+
+Fitur ini diuji dengan data yang ditulis MinIO asli dalam container sekali pakai, tetapi belum divalidasi pada deployment produksi.
+
 ## Managed Agent replication
 
 Merge PR #34 pada `e2575cc` memasukkan server-side replication dari primer Managed Agent SFTP ke nol, satu, atau dua tujuan S3/S3-compatible. Ada state durable untuk job/tujuan, status replica tersendiri, dan setup HCP existing-bucket.

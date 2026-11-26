@@ -82,13 +82,14 @@ export const docCategories: DocCategory[] = [
    {
       id: "restore",
       title: "Browse, Download, dan File Restore",
-      evidence: ["backend/src/services/RemoteRepositoryRecoveryService.ts","backend/src/services/AgentHostRestoreService.ts","frontend/src/utils/restoreSelection.ts","frontend/src/components/Plan/PlanBackups/PlanBackups.tsx"],
+      evidence: ["backend/src/services/RemoteRepositoryRecoveryService.ts","backend/src/services/AgentHostRestoreService.ts","backend/src/services/MinioObjectService.ts","frontend/src/utils/restoreSelection.ts","frontend/src/components/Plan/PlanBackups/PlanBackups.tsx"],
       articles: [
          page("restore", "Memulihkan berkas dari snapshot yang dipilih"),
          page("restore/browse", "Menemukan dan mengunduh isi snapshot"),
          page("restore/selection", "Memilih berkas dan direktori untuk restore"),
          page("restore/staging", "Memulihkan ke staging dan memeriksa hasil"),
          page("restore/agent-host", "Memulihkan langsung ke host Agent", "operator-setup"),
+         page("restore/minio-objects", "Mengunduh satu objek MinIO dari snapshot", "unvalidated"),
       ],
    },
    {

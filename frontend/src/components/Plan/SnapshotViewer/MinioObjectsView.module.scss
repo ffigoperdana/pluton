@@ -1,0 +1,64 @@
+// MinIO object list inside Browse Snapshot; table, toolbar and pager come from
+// AttachmentCatalogView.module.scss. Theme tokens only.
+$mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+
+.crumbs {
+   display: flex;
+   flex-wrap: wrap;
+   align-items: center;
+   gap: 2px 4px;
+   padding: 8px 20px 0;
+   font-size: 0.8125rem;
+   button {
+      padding: 2px 4px;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--primary-color);
+      font-weight: 500;
+      &:hover {
+         background: var(--surface-hover);
+      }
+      &:disabled {
+         color: var(--content-title-color);
+         cursor: default;
+         background: transparent;
+      }
+   }
+   span {
+      color: var(--content-text-color-light);
+   }
+}
+.folder {
+   display: inline-flex;
+   align-items: center;
+   gap: 6px;
+   padding: 0;
+   background: transparent;
+   color: var(--content-title-color);
+   font-weight: 500;
+   text-align: left;
+   &:hover {
+      color: var(--primary-color);
+      text-decoration: underline;
+   }
+}
+.detail {
+   display: block;
+   margin-top: 2px;
+   font-family: $mono;
+   font-size: 0.6875rem;
+   color: var(--content-text-color-light);
+   overflow-wrap: anywhere;
+}
+.deleted {
+   color: var(--content-text-color-light);
+   text-decoration: line-through;
+}
+.unavailable {
+   color: var(--error-text-color);
+}
+.notice {
+   padding: 8px 20px;
+   font-size: 0.75rem;
+   color: var(--content-text-color-light);
+}

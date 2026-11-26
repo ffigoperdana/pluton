@@ -1,0 +1,19 @@
+[
+  {"file": "app.log", "size": 1550780, "md5": "f89267f2921a14fd747006a1a87785a6", "sha256": "6f8ee940e2a12ac4eea79f6e97db901b1ba21f208ccfbb04bc1145648d6cda21"},
+  {"file": "empty.txt", "size": 0, "md5": "d41d8cd98f00b204e9800998ecf8427e", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+  {"file": "erasure.bin", "size": 302100, "md5": "70b8133e9d9d37659eb4ccc6e0e54e81", "sha256": "0b89cb856cb640b8e38bd0d9f89e8832c1b721cbba9102f176289a5920143572"},
+  {"file": "hello.txt", "size": 18, "md5": "591819edd347e90960ba25d855a07f58", "sha256": "c9db0381bcf1d2402b54ffe3a5306d8779334c79e2b9058da78b994b88d663f2"},
+  {"file": "kept-v1.bin", "size": 201400, "md5": "48ca7c59c7c68b82b3a04d5e7f4423ea", "sha256": "00a36b74e53e4ca8c284edcf3cc75536864ae4f75669f20e492c896d8f66dbd7"},
+  {"file": "kept-v2.bin", "size": 302100, "md5": "13bb4aa0947e137f76b999dc0d72ac90", "sha256": "eef5e6f23cb916a03268a7ed1645b9db06bf59a6f8b3272bed37d148de190637"},
+  {"file": "laporan.txt", "size": 37, "md5": "fd9fa7adc619958cf59f4f98b8d2d29a", "sha256": "8d89f0fd7a639dbac89135fad3e0c397555f17c0c63cfa18a8deb37808e06bac"},
+  {"file": "large.bin", "size": 2658480, "md5": "1d9b136045f099e22ea2d31c8cc0bbcf", "sha256": "42bfa3fd9fd8eceb7da1ebb1f07e108944a538414876ef67bcabe9105f7f3e42"},
+  {"file": "legacy-v1.txt", "size": 26, "md5": "a50844f2281fc4cd99c4e10335e5878d", "sha256": "5ef8d68a9643f6e54045e99d5fd4dcac0ae8e22e2259c48926abfd5750dfc392"},
+  {"file": "legacy-v2.txt", "size": 25, "md5": "ad4c9fda4ccba773db427996c364f815", "sha256": "809f431bb8ca5c8949795366a43ee994afec710e1fec83a9fa566f37fc2468b3"},
+  {"file": "multipart.bin", "size": 11358960, "md5": "2640fbe4a37594c188facba633082655", "sha256": "4c36df436363a89220d7a3a1ba82a3f6f51a3461acb2869cd3303bd7bdb4de7e"},
+  {"file": "notes-v1.txt", "size": 14, "md5": "9f089b639127e2f5a79c4eda189678d6", "sha256": "0533c80dc85756cf8cd5181e68d6520f5ffc4585def452d26f59756a5c2548b1"},
+  {"file": "notes-v2.txt", "size": 28, "md5": "240c13b04670a81489534fa9fa15421f", "sha256": "6a56602108802f7fc02e68d5ea5531e72bf4d2d77a47fb418c21cbafe1bbad65"},
+  {"file": "report.bin", "size": 302100, "md5": "ed05a3b876e754c159a6fab87446a5a5", "sha256": "0fcf932a786d2401a14093cc81fb0f5ec3c86bf5046ffb7d118483f0b66fc24a"},
+  {"file": "small.log", "size": 20140, "md5": "d1ca488bf3354dd45bd36b6d64d701d6", "sha256": "4c3b7771a410e84068c40dd48d18fd76757f24ff1e796a79f39576eb5a281cc2"},
+  {"file": "sse.bin", "size": 10070, "md5": "0281f434eced10199db8a411a92265df", "sha256": "b3d06616c2a1ae075ed8e8b00b94f3a314fd4014c61d2cd7c7153e5e64873267"},
+  {"file": "table.csv", "size": 11358960, "md5": "a96565cf2552606859e106be81925517", "sha256": "2f85fdc83f2e58e7cf5d46c6357528ad4f9ac1db3d372151d45286500668f512"}
+]

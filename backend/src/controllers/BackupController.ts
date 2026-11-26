@@ -8,6 +8,7 @@ import { comparisonDiagnostic } from '../utils/restic/SnapshotComparisonPolicy';
 import { comparisonFailure } from '../utils/restic/SnapshotComparison';
 import { SNAPSHOT_INDEX_LIMITS, SnapshotIndexError } from '../utils/restic/ManagedSnapshotIndex';
 import { ATTACHMENT_CATALOG_LIMITS } from '../services/AttachmentCatalogService';
+import { MINIO_OBJECT_LIMITS } from '../services/MinioObjectService';
 import { ManagedRepositoryAccessError } from '../utils/restic/ManagedSftpRepositorySession';
 import { observeTransfer, transferReason } from '../utils/managedExport/TransferTelemetry';
 import {
@@ -62,6 +63,43 @@ const attachmentQuery = z.strictObject({
 		.regex(/^\d{1,3}$/)
 		.transform(Number)
 		.pipe(z.number().int().min(1).max(ATTACHMENT_CATALOG_LIMITS.maxPageSize))
+		.optional(),
+	retry: z
+		.enum(['true', 'false'])
+		.transform(value => value === 'true')
+		.optional(),
+});
+const controlFree = (value: string) =>
+	![...value].some(
+		character => character.charCodeAt(0) <= 0x1f || character.charCodeAt(0) === 0x7f
+	);
+const minioSource = {
+	dataDir: z.string().min(2).max(1025).startsWith('/').refine(controlFree),
+	bucket: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$/),
+};
+const minioObjectQuery = z.strictObject({
+	...minioSource,
+	prefix: z
+		.string()
+		.max(1024)
+		.refine(value => value === '' || value.endsWith('/'))
+		.refine(controlFree)
+		.optional(),
+	search: z.string().trim().max(128).refine(controlFree).optional(),
+	versions: z.enum(['latest', 'all']).optional(),
+	sort: z.enum(['key', 'size', 'modified']).optional(),
+	order: z.enum(['asc', 'desc']).optional(),
+	offset: z
+		.string()
+		.regex(/^\d{1,7}$/)
+		.transform(Number)
+		.pipe(z.number().int().min(0).max(MINIO_OBJECT_LIMITS.maxVersions))
+		.optional(),
+	limit: z
+		.string()
+		.regex(/^\d{1,3}$/)
+		.transform(Number)
+		.pipe(z.number().int().min(1).max(MINIO_OBJECT_LIMITS.maxPageSize))
 		.optional(),
 	retry: z
 		.enum(['true', 'false'])
@@ -210,6 +248,98 @@ export class BackupController {
 				error: error instanceof AppError ? error.message : 'Attachment list is unavailable.',
 				...failureCode(error),
 			});
+		}
+	}
+
+	async getMinioDataDirectories(req: Request, res: Response): Promise<void> {
+		const request = this.downloadRequest(req, res);
+		try {
+			const query = z
+				.strictObject({ retry: z.enum(['true', 'false']).optional() })
+				.safeParse(req.query);
+			if (!query.success) throw new AppError(400, 'MinIO data folder request is invalid.');
+			res.setHeader('Cache-Control', 'private, no-store');
+			const result = await this.backupService.minioDataDirectories(
+				req.params.id,
+				query.data.retry === 'true',
+				request.signal
+			);
+			if (result.status === 'indexing') res.setHeader('Retry-After', '2');
+			res.status(result.status === 'indexing' ? 202 : 200).json({ success: true, result });
+		} catch (error) {
+			res.status(error instanceof AppError ? error.statusCode : 500).json({
+				success: false,
+				error: error instanceof AppError ? error.message : 'MinIO data folders are unavailable.',
+				...failureCode(error),
+			});
+		} finally {
+			request.cleanup();
+		}
+	}
+
+	async getMinioObjects(req: Request, res: Response): Promise<void> {
+		try {
+			const query = minioObjectQuery.safeParse(req.query);
+			if (!query.success) throw new AppError(400, 'MinIO object list request is invalid.');
+			res.setHeader('Cache-Control', 'private, no-store');
+			const result = await this.backupService.minioObjectPage(req.params.id, query.data);
+			if (result.status === 'indexing') res.setHeader('Retry-After', '2');
+			res.status(result.status === 'indexing' ? 202 : 200).json({ success: true, result });
+		} catch (error) {
+			res.status(error instanceof AppError ? error.statusCode : 500).json({
+				success: false,
+				error: error instanceof AppError ? error.message : 'MinIO object list is unavailable.',
+				...failureCode(error),
+			});
+		}
+	}
+
+	async downloadMinioObject(req: Request, res: Response): Promise<void> {
+		const request = this.downloadRequest(req, res);
+		const transfer = observeTransfer(res, 'standard');
+		try {
+			const query = z.strictObject(minioSource).safeParse(req.query);
+			if (!query.success) throw new AppError(400, 'MinIO object download request is invalid.');
+			if (!/^[1-9]\d{0,8}$/.test(req.params.objectId || ''))
+				throw new AppError(400, 'Select one object.');
+			await this.backupService.downloadMinioObject(
+				req.params.id,
+				Number(req.params.objectId),
+				query.data,
+				transfer.output,
+				request.signal,
+				value => {
+					res.setHeader('Content-Type', value.contentType);
+					res.setHeader(
+						'Content-Disposition',
+						`attachment; filename="${value.fileName}"` +
+							(value.utf8FileName ? `; filename*=UTF-8''${rfc5987(value.utf8FileName)}` : '')
+					);
+					res.setHeader('Cache-Control', 'private, no-store');
+					res.setHeader('Accept-Ranges', 'none');
+					if (value.length !== undefined) res.setHeader('Content-Length', value.length);
+				},
+				req.method === 'HEAD'
+			);
+			if (!res.destroyed) res.end();
+			transfer.finish('origin-stream-complete');
+		} catch (error) {
+			transfer.finish(transferReason(error));
+			if (res.headersSent || res.destroyed) {
+				// Verification failed after streaming began: end short of Content-Length.
+				if (!res.destroyed) res.destroy();
+			} else {
+				res.removeHeader('Content-Type');
+				res.removeHeader('Content-Length');
+				res.removeHeader('Content-Disposition');
+				res.status(error instanceof AppError ? error.statusCode : 502).json({
+					success: false,
+					error: error instanceof AppError ? error.message : 'MinIO object download failed.',
+					...failureCode(error),
+				});
+			}
+		} finally {
+			request.cleanup();
 		}
 	}
 

@@ -60,6 +60,9 @@ describe('Backup Routes', () => {
 			downloadSnapshotItem: jest.fn(),
 			attachmentCatalogPage: jest.fn(),
 			downloadAttachment: jest.fn(),
+			minioDataDirectories: jest.fn(),
+			minioObjectPage: jest.fn(),
+			downloadMinioObject: jest.fn(),
 			getBackupProgress: jest.fn(),
 			cancelBackup: jest.fn(),
 			getBackupDownload: jest.fn(),
@@ -230,6 +233,134 @@ describe('Backup Routes', () => {
 				expect(mockBackupService.downloadAttachment).not.toHaveBeenCalled();
 			}
 		);
+	});
+
+	describe('MinIO objects', () => {
+		const source = 'dataDir=%2Fsrv%2Fexample-app%2Fminio&bucket=example-bucket';
+		it.each([
+			'/api/backups/backup-01/minio',
+			`/api/backups/backup-01/minio/objects?${source}`,
+			`/api/backups/backup-01/minio/objects/7/download?${source}`,
+		])('requires authentication for %s', async url => {
+			setupAuthMock(false);
+			expect((await request(app).get(url)).status).toBe(401);
+			expect(mockBackupService.minioDataDirectories).not.toHaveBeenCalled();
+			expect(mockBackupService.minioObjectPage).not.toHaveBeenCalled();
+			expect(mockBackupService.downloadMinioObject).not.toHaveBeenCalled();
+		});
+		it('answers 202 with Retry-After while the snapshot index builds, then the data folders', async () => {
+			mockBackupService.minioDataDirectories.mockResolvedValueOnce({ status: 'indexing', retryAfterMs: 2000 } as any);
+			const indexing = await request(app).get('/api/backups/backup-01/minio');
+			expect(indexing.status).toBe(202);
+			expect(indexing.headers['retry-after']).toBe('2');
+			mockBackupService.minioDataDirectories.mockResolvedValueOnce({ status: 'ready', dataDirs: [] } as any);
+			const ready = await request(app).get('/api/backups/backup-01/minio?retry=true');
+			expect(ready.status).toBe(200);
+			expect(ready.headers['cache-control']).toBe('private, no-store');
+			expect(mockBackupService.minioDataDirectories).toHaveBeenLastCalledWith('backup-01', true, expect.any(AbortSignal));
+			expect((await request(app).get('/api/backups/backup-01/minio?path=%2F')).status).toBe(400);
+		});
+		it('passes a validated object query', async () => {
+			mockBackupService.minioObjectPage.mockResolvedValue({ status: 'ready', items: [] } as any);
+			const result = await request(app).get(
+				`/api/backups/backup-01/minio/objects?${source}&prefix=dokumen%2F&search=laporan&versions=all&sort=size&order=desc&offset=100&limit=50`
+			);
+			expect(result.status).toBe(200);
+			expect(mockBackupService.minioObjectPage).toHaveBeenCalledWith('backup-01', {
+				dataDir: '/srv/example-app/minio',
+				bucket: 'example-bucket',
+				prefix: 'dokumen/',
+				search: 'laporan',
+				versions: 'all',
+				sort: 'size',
+				order: 'desc',
+				offset: 100,
+				limit: 50,
+			});
+		});
+		it.each([
+			'bucket=example-bucket',
+			'dataDir=srv&bucket=example-bucket',
+			`${source}&prefix=dokumen`,
+			`${source}&prefix=a%0A%2F`,
+			'dataDir=%2Fsrv&bucket=..',
+			`${source}&limit=501`,
+			`${source}&versions=deleted`,
+			`${source}&path=%2Fetc`,
+		])('refuses the object query %s before reading anything', async query => {
+			const result = await request(app).get('/api/backups/backup-01/minio/objects?' + query);
+			expect(result.status).toBe(400);
+			expect(mockBackupService.minioObjectPage).not.toHaveBeenCalled();
+		});
+		it('keeps the service status and message of a refusal', async () => {
+			mockBackupService.minioObjectPage.mockRejectedValue(
+				new AppError(409, 'This MinIO deployment spreads objects over 4 drives (erasure coding).')
+			);
+			const result = await request(app).get(`/api/backups/backup-01/minio/objects?${source}`);
+			expect(result.status).toBe(409);
+			expect(result.body.error).toMatch(/4 drives/);
+		});
+		it.each(['get', 'head'] as const)('downloads an object as its original file (%s)', async method => {
+			mockBackupService.downloadMinioObject.mockImplementation(
+				async (id, objectId, query, output, signal, headers, head) => {
+					expect([id, objectId, query, head]).toEqual([
+						'backup-01',
+						7,
+						{ dataDir: '/srv/example-app/minio', bucket: 'example-bucket' },
+						method === 'head',
+					]);
+					expect(signal).toBeInstanceOf(AbortSignal);
+					headers({
+						fileName: 'laporan akhir _.txt',
+						utf8FileName: 'laporan akhir é.txt',
+						contentType: 'application/octet-stream',
+						length: 5,
+					});
+					if (!head) output.write(Buffer.from('hello'));
+				}
+			);
+			const result = await request(app)[method](`/api/backups/backup-01/minio/objects/7/download?${source}`);
+			expect(result.status).toBe(200);
+			expect(result.headers['content-disposition']).toBe(
+				`attachment; filename="laporan akhir _.txt"; filename*=UTF-8''laporan%20akhir%20%C3%A9.txt`
+			);
+			expect(result.headers['content-length']).toBe('5');
+			if (method === 'get') expect(result.body).toEqual(Buffer.from('hello'));
+		});
+		it.each([
+			`/api/backups/backup-01/minio/objects/abc/download?${source}`,
+			`/api/backups/backup-01/minio/objects/0/download?${source}`,
+			'/api/backups/backup-01/minio/objects/7/download?bucket=example-bucket',
+			`/api/backups/backup-01/minio/objects/7/download?${source}&versionId=null`,
+		])('refuses %s before reading anything', async url => {
+			const result = await request(app).get(url);
+			expect(result.status).toBe(400);
+			expect(mockBackupService.downloadMinioObject).not.toHaveBeenCalled();
+		});
+		it('ends a download short of its length when verification fails after streaming began', async () => {
+			mockBackupService.downloadMinioObject.mockImplementation(async (_id, _objectId, _query, output, _signal, headers) => {
+				headers({ fileName: 'large.bin', contentType: 'application/octet-stream', length: 10 });
+				output.write(Buffer.from('hello'));
+				throw new AppError(422, 'The restored content does not match the object ETag.');
+			});
+			const server = http.createServer(app).listen(0);
+			try {
+				const { port } = server.address() as AddressInfo;
+				const outcome = await new Promise<{ status?: number; bytes: number; aborted: boolean }>(resolve => {
+					const req = http.get(`http://127.0.0.1:${port}/api/backups/backup-01/minio/objects/7/download?${source}`, res => {
+						let bytes = 0;
+						res.on('data', chunk => (bytes += chunk.length));
+						res.on('aborted', () => resolve({ status: res.statusCode, bytes, aborted: true }));
+						res.on('end', () => resolve({ status: res.statusCode, bytes, aborted: false }));
+					});
+					req.on('error', () => resolve({ bytes: 0, aborted: true }));
+				});
+				expect(outcome.aborted).toBe(true);
+				expect(outcome.bytes).toBeLessThan(10);
+			} finally {
+				server.close();
+			}
+		});
 	});
 
 	describe('mode-bound verified exports', () => {

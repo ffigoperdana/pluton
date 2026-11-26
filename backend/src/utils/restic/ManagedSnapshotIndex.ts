@@ -267,6 +267,57 @@ export class ManagedSnapshotIndex implements Iterable<SnapShotFile> {
 			.prepare('SELECT 1 FROM nodes WHERE path >= ? AND path < ? LIMIT 1')
 			.get(`${filePath}/`, `${filePath}0`);
 	}
+	/** Regular files with this exact name anywhere in the snapshot (a bounded scan). */
+	filesNamed(name: string, limit: number): SnapShotFile[] {
+		return (
+			this.db
+				.prepare("SELECT * FROM nodes WHERE name=? AND type='file' ORDER BY path LIMIT ?")
+				.all(name, limit) as Row[]
+		).map(asFile);
+	}
+	/** Direct child directories of a directory, by name. */
+	childDirectories(parent: string, limit: number): SnapShotFile[] {
+		return (
+			this.db
+				.prepare(
+					"SELECT * FROM nodes WHERE parent=? AND type='dir' ORDER BY name COLLATE NOCASE, path LIMIT ?"
+				)
+				.all(parent, limit) as Row[]
+		).map(asFile);
+	}
+	/** Entries named `name` anywhere below a directory, counted by type. */
+	namedBelow(directory: string, name: string) {
+		const rows = this.db
+			.prepare(
+				'SELECT type, count(*) AS n, coalesce(sum(size),0) AS bytes FROM nodes WHERE path >= ? AND path < ? AND name=? GROUP BY type'
+			)
+			.all(`${directory}/`, `${directory}0`, name) as { type: string; n: number; bytes: number }[];
+		const file = rows.find(row => row.type === 'file');
+		return {
+			files: file?.n || 0,
+			bytes: file?.bytes || 0,
+			other: rows.filter(row => row.type !== 'file').reduce((total, row) => total + row.n, 0),
+		};
+	}
+	/**
+	 * One page of regular files named `name` below a directory, in path order
+	 * after `after`. Pages keep no statement open between calls, so callers may
+	 * await in between while other readers use this index.
+	 */
+	filesNamedBelow(
+		directory: string,
+		name: string,
+		after: string | undefined,
+		limit: number
+	): SnapShotFile[] {
+		return (
+			this.db
+				.prepare(
+					"SELECT * FROM nodes WHERE path > ? AND path < ? AND name=? AND type='file' ORDER BY path LIMIT ?"
+				)
+				.all(after ?? `${directory}/`, `${directory}0`, name, limit) as Row[]
+		).map(asFile);
+	}
 	*[Symbol.iterator](): IterableIterator<SnapShotFile> {
 		for (const row of this.db.prepare('SELECT * FROM nodes ORDER BY path').iterate())
 			yield asFile(row as Row);
