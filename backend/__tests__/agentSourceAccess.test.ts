@@ -424,6 +424,63 @@ describe('Agent Source Access durable administration and policy', () => {
 		await expect(service.refresh(deviceId)).rejects.toThrow('online');
 	});
 
+	it('queues behind a live lease on the last healthy report but never relaxes materialization', async () => {
+		const queueing = { queueBehindLiveLease: true };
+		// The Agent executes a long command: no heartbeat, so its report is no longer fresh.
+		now = new Date(now.getTime() + 91_000);
+		const identity = (await agentStore.getAgentById(agentId))!;
+		await expect(service.assertPlanSource(identity, root, queueing)).rejects.toThrow(
+			'fresh healthy'
+		);
+		await agentStore.enqueueCommand({
+			id: 'command-busy',
+			agentId,
+			type: 'BACKUP_FILESYSTEM',
+			payload: {},
+			idempotencyKey: 'idem-busy',
+		});
+		await agentStore.leaseNext(agentId, 'busy-token', 60_000, now);
+		await expect(
+			service.assertPlanSource(identity, `${root}/uploads`, queueing)
+		).resolves.toBeUndefined();
+		// Plan validation and credential materialization still require a fresh report.
+		await expect(service.assertPlanSource(identity, root)).rejects.toThrow('fresh healthy');
+		// The last report still bounds the source.
+		await expect(service.assertPlanSource(identity, `${root}-sibling`, queueing)).rejects.toThrow(
+			'enabled, effective'
+		);
+		await expect(
+			service.assertPlanSource({ ...identity, revokedAt: now }, root, queueing)
+		).rejects.toThrow('fresh healthy');
+		// An expired lease is not live.
+		now = new Date(now.getTime() + 60_000);
+		await expect(service.assertPlanSource(identity, root, queueing)).rejects.toThrow(
+			'fresh healthy'
+		);
+	});
+
+	it('does not queue behind a live lease when the last report is unhealthy', async () => {
+		await service.recordHeartbeat(
+			agentId,
+			report({ policyError: 'source-policy-invalid', effectiveRoots: [] }),
+			now.getTime()
+		);
+		now = new Date(now.getTime() + 91_000);
+		await agentStore.enqueueCommand({
+			id: 'command-busy',
+			agentId,
+			type: 'BACKUP_FILESYSTEM',
+			payload: {},
+			idempotencyKey: 'idem-busy',
+		});
+		await agentStore.leaseNext(agentId, 'busy-token', 60_000, now);
+		await expect(
+			service.assertPlanSource((await agentStore.getAgentById(agentId))!, root, {
+				queueBehindLiveLease: true,
+			})
+		).rejects.toThrow('fresh healthy');
+	});
+
 	it('fails freshness safely when the server clock moves behind a received source report', async () => {
 		now = new Date(now.getTime() - 5000);
 		expect((await service.getView(deviceId)).reportFresh).toBe(false);

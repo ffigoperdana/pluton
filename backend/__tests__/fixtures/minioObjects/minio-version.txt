@@ -1,0 +1,1 @@
+minio version RELEASE.2026-11-23T00-10-37Z (commit-id=dd3f3fa63fc9195fcd5b4d6d7e6f8524bc33c2b8)

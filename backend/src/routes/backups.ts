@@ -21,6 +21,13 @@ export function createBackupRouter(
 		authM,
 		controller.downloadAttachment.bind(controller)
 	);
+	router.get('/:id/minio', authM, controller.getMinioDataDirectories.bind(controller));
+	router.get('/:id/minio/objects', authM, controller.getMinioObjects.bind(controller));
+	router.get(
+		'/:id/minio/objects/:objectId/download',
+		authM,
+		controller.downloadMinioObject.bind(controller)
+	);
 	router.get('/:id/progress', authM, controller.getBackupProgress.bind(controller));
 	router.post('/:id/action/cancel', authM, controller.cancelBackup.bind(controller));
 	router.get('/:id/action/download', authM, controller.getBackupDownload.bind(controller));

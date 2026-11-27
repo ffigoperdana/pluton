@@ -12,6 +12,8 @@ Gunakan **Browse** untuk memastikan backup berisi data yang dibutuhkan sebelum m
 
 Contoh fiktif: snapshot menyimpan /srv/example-app/uploads/example.txt. Hierarki srv/example-app dapat muncul utuh karena path sumber awal absolut. Dump native database berada pada /pluton/database, misalnya example-app.sql; bukan di folder kerja sementara agent.
 
+Bila snapshot memuat folder data MinIO, tab **MinIO objects** menampilkan bucket dan objeknya dengan nama key asli. Lihat [mengunduh satu objek MinIO](/docs/restore/minio-objects).
+
 Browser dan cache tampilan tidak mengubah metadata snapshot. Untuk managed remote, hanya regular file dan direktori yang didukung dalam staging; symlink atau node khusus dapat menyebabkan permintaan ditolak.
 
 ## Download

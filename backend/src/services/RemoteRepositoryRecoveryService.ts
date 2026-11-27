@@ -77,9 +77,19 @@ import {
 } from '../utils/restic/ManagedSnapshotIndex';
 
 import {
+	streamExactSnapshotFile,
 	streamSelectedSnapshot,
 	type SelectedDownloadHeaders,
 } from '../utils/restic/SelectedSnapshotDownload';
+import type { ManagedRestoreSummary } from '../utils/restic/ManagedSftpRepositorySession';
+
+export type ManagedSnapshotFiles = {
+	snapshotId: string;
+	index: ManagedSnapshotIndex;
+	readFile(itemPath: string, output: Writable): Promise<void>;
+	/** Includes are exact paths, optionally ending in `/**\/<name>`. */
+	restoreFiles(includes: string[], target: string): Promise<ManagedRestoreSummary>;
+};
 
 export type RecoveryContext = {
 	backupId: string;
@@ -991,6 +1001,98 @@ export class RemoteRepositoryRecoveryService {
 	): Promise<T> {
 		const context = await this.context(backupId);
 		return this.withIndex(context, consume, signal);
+	}
+	/**
+	 * Starts (never waits for) the verified metadata index of a managed snapshot,
+	 * like Browse paging does, and reports whether it is ready.
+	 */
+	async snapshotIndexStatus(backupId: string, retry = false) {
+		const context = await this.context(backupId);
+		const key = this.indexKey(context);
+		if (retry) await this.indexes.retry(key);
+		const failure = this.indexes.failure(key);
+		if (failure) throw failure;
+		const state = this.indexes.status(key);
+		if (state === 'missing' || state === 'indexing') {
+			await this.indexes.start(
+				key,
+				(append, buildSignal) => this.populateIndex(context, append, buildSignal),
+				true
+			);
+			return {
+				status: 'indexing' as const,
+				snapshotId: context.snapshotId,
+				entries: this.indexes.inspect(key)?.entries || 0,
+				elapsedMs: this.indexes.inspect(key)?.elapsedMs || 0,
+			};
+		}
+		return { status: 'ready' as const, snapshotId: context.snapshotId };
+	}
+
+	/**
+	 * Read-only access to exact files of a verified managed snapshot: the index,
+	 * raw file streams (`restic dump` of one regular file at its indexed size)
+	 * and a restore of include patterns into an empty caller-owned directory.
+	 * Snapshot identity and ownership are verified before and after `consume`;
+	 * nothing is written to the repository.
+	 */
+	async withSnapshotFiles<T>(
+		backupId: string,
+		consume: (files: ManagedSnapshotFiles) => Promise<T>,
+		signal: AbortSignal,
+		limits?: { restoreTimeoutMs: number; temporaryRoot?: string }
+	): Promise<T> {
+		const context = await this.context(backupId);
+		return this.withIndex(
+			context,
+			index =>
+				this.sessions.withSession(
+					context.access,
+					async session => {
+						await this.verifySnapshot(context, session);
+						await this.assertCurrentContext(context);
+						const result = await consume({
+							snapshotId: context.snapshotId,
+							index,
+							readFile: (itemPath, output) =>
+								streamExactSnapshotFile(
+									index,
+									session,
+									context.snapshotId,
+									itemPath,
+									output,
+									signal
+								),
+							restoreFiles: async (includes, target) => {
+								for (const include of includes) {
+									const literal = include.replace(/\/\*\*\/(?=[^/]+$)/, '/');
+									if (/[*?[\]\\]/.test(literal))
+										throw new AppError(400, 'Unsupported snapshot restore filter.');
+									managedSnapshotPath(literal);
+								}
+								const stat = await fs.lstat(target);
+								if (
+									!stat.isDirectory() ||
+									stat.isSymbolicLink() ||
+									(await fs.readdir(target)).length
+								)
+									throw new AppError(
+										409,
+										'The restore workspace must be an empty private directory.'
+									);
+								signal.throwIfAborted();
+								return session.restore(context.snapshotId, includes, target);
+							},
+						});
+						await this.verifySnapshot(context, session);
+						await this.assertCurrentContext(context);
+						return result;
+					},
+					signal,
+					limits
+				),
+			signal
+		);
 	}
 	async downloadManifest(
 		backupId: string,

@@ -254,6 +254,56 @@ describe('Phase 4 remote managed repository recovery', () => {
 		output.end();
 	});
 
+	it('reports the snapshot index without waiting for it, then reads exact files and filtered restores', async () => {
+		const first = await service.snapshotIndexStatus('backup-01');
+		expect(first).toMatchObject({ status: 'indexing', snapshotId });
+		let state = first;
+		for (let attempt = 0; attempt < 200 && state.status !== 'ready'; attempt++) {
+			await new Promise(resolve => setTimeout(resolve, 5));
+			state = await service.snapshotIndexStatus('backup-01');
+		}
+		expect(state).toEqual({ status: 'ready', snapshotId });
+
+		session.dump = jest.fn(async (_id, selected, sink) => {
+			sink.write(Buffer.from(selected.endsWith('index.txt') ? 'fixture' : 'too long for five'));
+		});
+		const target = path.join(scratch, 'filtered');
+		await fs.mkdir(target);
+		const chunks: Buffer[] = [];
+		const output = new Writable({
+			write(chunk, _encoding, done) {
+				chunks.push(Buffer.from(chunk));
+				done();
+			},
+		});
+		const result = await service.withSnapshotFiles(
+			'backup-01',
+			async files => {
+				expect(files.snapshotId).toBe(snapshotId);
+				await files.readFile('/srv/example-app/index.txt', output);
+				await expect(files.readFile('/srv/example-app/nested/data.txt', output)).rejects.toMatchObject({
+					reason: 'archive-entry-mismatch',
+				});
+				await expect(files.readFile('/srv/example-app/nested', output)).rejects.toMatchObject({ statusCode: 404 });
+				await expect(files.readFile('/srv/example-app/../etc', output)).rejects.toMatchObject({ statusCode: 400 });
+				for (const include of ['/srv/*/x', '/srv/[a]/x', '/srv/**/a/**/b', 'srv/**/xl.meta', '/srv/a\\b'])
+					await expect(files.restoreFiles([include], target)).rejects.toMatchObject({ statusCode: 400 });
+				await fs.writeFile(path.join(target, 'left-over'), 'x');
+				await expect(files.restoreFiles(['/srv/example-app/**/xl.meta'], target)).rejects.toMatchObject({
+					statusCode: 409,
+				});
+				await fs.rm(path.join(target, 'left-over'));
+				return files.restoreFiles(['/srv/example-app/**/xl.meta'], target);
+			},
+			new AbortController().signal
+		);
+		expect(Buffer.concat(chunks).toString()).toBe('fixture');
+		expect(session.restore).toHaveBeenCalledTimes(1);
+		expect(session.restore).toHaveBeenCalledWith(snapshotId, ['/srv/example-app/**/xl.meta'], target);
+		expect(result).toBeDefined();
+		output.end();
+	});
+
 	it('selected download HEAD reads no contents and admission remains bounded until live transfers release', async () => {
 		const outputs = Array.from(
 			{ length: 4 },

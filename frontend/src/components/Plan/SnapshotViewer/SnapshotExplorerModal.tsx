@@ -7,12 +7,14 @@ import { detailBackup, snapshotRequest, type SnapshotDetails, type ChangeFilter 
 import { formatBytes } from '../../../utils/helpers';
 import { formatHistoryDate } from '../../../utils/backupHistory';
 import AttachmentCatalogView from './AttachmentCatalogView';
+import MinioObjectsView from './MinioObjectsView';
+import { fetchMinioDataDirectories } from '../../../utils/minioObjects';
 import classes from './SnapshotReview.module.scss';
 import catalogClasses from './AttachmentCatalogView.module.scss';
 export default function SnapshotExplorerModal(props: SnapshotViewerProps & { initialFilter?: ChangeFilter }) {
    const [backup, setBackup] = useState(props.backup);
    const [navigationError, setNavigationError] = useState('');
-   const [view, setView] = useState<'files' | 'attachments'>('files');
+   const [view, setView] = useState<'files' | 'attachments' | 'minio'>('files');
    const details = useQuery({
       queryKey: ['snapshot-details', backup.id],
       queryFn: ({ signal }) => snapshotRequest<SnapshotDetails>(API_URL, backup.id, 'details', signal),
@@ -21,6 +23,18 @@ export default function SnapshotExplorerModal(props: SnapshotViewerProps & { ini
       refetchOnWindowFocus: false,
    });
    const value = details.data;
+   // Polls only while the snapshot index builds (the Files view builds the same index).
+   const minio = useQuery({
+      queryKey: ['minio-data-folders', backup.id],
+      queryFn: ({ signal }) => fetchMinioDataDirectories(API_URL, backup.id, false, signal),
+      enabled: !!value?.minioObjects,
+      retry: false,
+      gcTime: 0,
+      refetchOnWindowFocus: false,
+      refetchInterval: (state) => (state.state.data?.status === 'indexing' ? state.state.data.retryAfterMs : false),
+   });
+   const minioDataDirs = minio.data?.status === 'ready' ? minio.data.dataDirs : [];
+   const tabs = !!value?.attachmentCatalog || minioDataDirs.length > 0;
    const previous = async (id: string) => {
       setNavigationError('');
       const value = await snapshotRequest<SnapshotDetails>(API_URL, id, 'details');
@@ -58,19 +72,28 @@ export default function SnapshotExplorerModal(props: SnapshotViewerProps & { ini
                {navigationError}
             </p>
          )}
-         {value?.attachmentCatalog?.adapter === 'odoo' && (
+         {tabs && (
             <div className={catalogClasses.viewSwitch} role="tablist" aria-label="Snapshot view">
                <button type="button" role="tab" aria-selected={view === 'files'} onClick={() => setView('files')}>
                   Files
                </button>
-               <button type="button" role="tab" aria-selected={view === 'attachments'} onClick={() => setView('attachments')}>
-                  Odoo attachments
-               </button>
+               {value?.attachmentCatalog?.adapter === 'odoo' && (
+                  <button type="button" role="tab" aria-selected={view === 'attachments'} onClick={() => setView('attachments')}>
+                     Odoo attachments
+                  </button>
+               )}
+               {minioDataDirs.length > 0 && (
+                  <button type="button" role="tab" aria-selected={view === 'minio'} onClick={() => setView('minio')}>
+                     MinIO objects
+                  </button>
+               )}
             </div>
          )}
          <div className={classes.explorer}>
             {view === 'attachments' && value?.attachmentCatalog ? (
                <AttachmentCatalogView key={backup.id} backupId={backup.id} />
+            ) : view === 'minio' && minioDataDirs.length > 0 ? (
+               <MinioObjectsView key={backup.id} backupId={backup.id} dataDirs={minioDataDirs} />
             ) : (
                <SnapshotViewer
                   {...props}

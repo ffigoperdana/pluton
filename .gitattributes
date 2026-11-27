@@ -13,3 +13,6 @@ scripts/diagnostics/*.sh text eol=lf
 scripts/diagnostics/test/agent-s3-probe/* text eol=lf
 # Real pg_dump output: COPY framing is LF-only, as on the Linux Agent
 backend/__tests__/fixtures/attachmentCatalog/*.sql text eol=lf
+# Generated from real MinIO in Docker; the script runs under bash
+backend/__tests__/fixtures/minioObjects/*.sh text eol=lf
+backend/__tests__/fixtures/minioObjects/*.tar.gz binary

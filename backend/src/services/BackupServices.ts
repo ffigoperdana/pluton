@@ -28,6 +28,7 @@ import type { ManagedReplicationService } from './ManagedReplicationService';
 import type { RecoveryTestStore } from '../stores/RecoveryTestStore';
 import { managedSnapshotPath } from '../utils/managedSnapshotPath';
 import type { AttachmentCatalogQuery, AttachmentCatalogService } from './AttachmentCatalogService';
+import type { MinioObjectQuery, MinioObjectService } from './MinioObjectService';
 
 /**
  * A whole managed snapshot downloads as one archive through the Pluton server and
@@ -57,7 +58,8 @@ export class BackupService {
 		private readonly remoteRecovery?: RemoteRepositoryRecoveryService,
 		private readonly managedReplications?: ManagedReplicationService,
 		private readonly recoveryTests?: RecoveryTestStore,
-		private readonly attachmentCatalogs?: AttachmentCatalogService
+		private readonly attachmentCatalogs?: AttachmentCatalogService,
+		private readonly minioObjects?: MinioObjectService
 	) {}
 	async downloadSnapshotItem(...args: Parameters<RemoteRepositoryRecoveryService['downloadItem']>) {
 		if (!this.remoteRecovery)
@@ -92,6 +94,20 @@ export class BackupService {
 			value => headers({ ...value, fileName: names.ascii, utf8FileName: names.utf8 }),
 			headOnly
 		);
+	}
+	/** MinIO data folders found in a Managed Agent snapshot (docs/MINIO_OBJECT_BROWSE.md). */
+	async minioDataDirectories(backupId: string, retry = false, signal?: AbortSignal) {
+		if (!this.minioObjects) throw new AppError(501, 'MinIO object browsing is unavailable.');
+		return this.minioObjects.dataDirectories(backupId, retry, signal);
+	}
+	async minioObjectPage(backupId: string, query: MinioObjectQuery) {
+		if (!this.minioObjects) throw new AppError(501, 'MinIO object browsing is unavailable.');
+		return this.minioObjects.page(backupId, query);
+	}
+	/** Streams one verified MinIO object version as its original file. */
+	async downloadMinioObject(...args: Parameters<MinioObjectService['download']>) {
+		if (!this.minioObjects) throw new AppError(501, 'MinIO object browsing is unavailable.');
+		return this.minioObjects.download(...args);
 	}
 	async snapshotDetails(backupId: string) {
 		const backup = await this.backupStore.getById(backupId);
@@ -189,6 +205,13 @@ export class BackupService {
 				.slice(0, 16)
 				.map(w => ({ stage: w.stage, code: w.code })),
 			comparisonAvailable:
+				backup.method === 'backup' &&
+				RemoteBackupService.isRemoteFilesystemPlan(backup) &&
+				backup.status === 'completed' &&
+				!!snapshotId,
+			// The snapshot index decides whether it holds a MinIO data folder; Browse asks.
+			minioObjects:
+				!!this.minioObjects &&
 				backup.method === 'backup' &&
 				RemoteBackupService.isRemoteFilesystemPlan(backup) &&
 				backup.status === 'completed' &&
