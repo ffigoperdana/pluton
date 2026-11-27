@@ -8,7 +8,12 @@ import {
 } from '../../../src/utils/restic/ManagedMetadataCache';
 
 const sftp = {
-	options: { host: '192.0.2.10', port: '22', user: 'fixture-user', pass: 'synthetic-sftp-password' },
+	options: {
+		host: '192.0.2.10',
+		port: '22',
+		user: 'fixture-user',
+		pass: 'synthetic-sftp-password',
+	},
 	repositoryPath: 'repositories/app-01',
 	password: 'synthetic-repository-password',
 };
@@ -49,11 +54,18 @@ describe('ManagedMetadataCache', () => {
 		expect(
 			managedMetadataCacheKey({
 				...s3,
-				options: { ...s3.options, access_key_id: 'other', secret_access_key: 'other', session_token: 'x' },
+				options: {
+					...s3.options,
+					access_key_id: 'other',
+					secret_access_key: 'other',
+					session_token: 'x',
+				},
 			})
 		).toBe(managedMetadataCacheKey(s3));
 		// Another repository, host or endpoint never shares it.
-		expect(managedMetadataCacheKey({ ...sftp, repositoryPath: 'repositories/app-02' })).not.toBe(key);
+		expect(managedMetadataCacheKey({ ...sftp, repositoryPath: 'repositories/app-02' })).not.toBe(
+			key
+		);
 		expect(
 			managedMetadataCacheKey({ ...sftp, options: { ...sftp.options, host: '192.0.2.11' } })
 		).not.toBe(key);
@@ -87,18 +99,70 @@ describe('ManagedMetadataCache', () => {
 		expect(await cache.directory(s3)).not.toBe(directory);
 	});
 
-	it('falls back to no cache when the filesystem is short of space', async () => {
-		const cache = new ManagedMetadataCache(root, {
-			...MANAGED_METADATA_CACHE_LIMITS,
-			minFreeBytes: Number.MAX_SAFE_INTEGER,
-		});
+	it('falls back to no cache when the filesystem is short of space, and reports it', async () => {
+		const report = jest.fn();
+		const cache = new ManagedMetadataCache(
+			root,
+			{ ...MANAGED_METADATA_CACHE_LIMITS, minFreeBytes: Number.MAX_SAFE_INTEGER },
+			undefined,
+			report
+		);
 		await expect(cache.directory(sftp)).resolves.toBeUndefined();
 		expect(await fs.readdir(root)).toEqual([]);
+		expect(report).toHaveBeenCalledTimes(1);
+		expect(report).toHaveBeenCalledWith({
+			event: 'managed_restic_cache',
+			stage: 'unavailable',
+			reason: 'disk-capacity',
+			availableBytes: expect.any(Number),
+		});
 	});
 
-	it('refuses a file planted in place of the binding directory', async () => {
+	it('refuses a file planted in place of the binding directory, and reports it', async () => {
+		const report = jest.fn();
 		await fs.writeFile(path.join(root, managedMetadataCacheKey(sftp)), 'not a directory');
-		await expect(new ManagedMetadataCache(root).directory(sftp)).resolves.toBeUndefined();
+		await expect(
+			new ManagedMetadataCache(root, undefined, undefined, report).directory(sftp)
+		).resolves.toBeUndefined();
+		expect(report).toHaveBeenCalledWith({
+			event: 'managed_restic_cache',
+			stage: 'unavailable',
+			reason: 'not-directory',
+		});
+	});
+
+	it('reports a filesystem failure with only its errno code', async () => {
+		// A file where the cache root should be: mkdir fails.
+		const blocked = path.join(root, 'blocked-root');
+		await fs.writeFile(blocked, 'not a directory');
+		const report = jest.fn();
+		await expect(
+			new ManagedMetadataCache(blocked, undefined, undefined, report).directory(sftp)
+		).resolves.toBeUndefined();
+		expect(report).toHaveBeenCalledTimes(1);
+		const [record] = report.mock.calls[0];
+		expect(record).toEqual({
+			event: 'managed_restic_cache',
+			stage: 'unavailable',
+			reason: 'filesystem',
+			code: expect.stringMatching(/^E[A-Z]+$/),
+		});
+		// No path, binding or credential reaches the log record.
+		const text = JSON.stringify(record);
+		for (const secret of [root, managedMetadataCacheKey(sftp), sftp.password, sftp.options.pass])
+			expect(text).not.toContain(secret);
+	});
+
+	it('still falls back when the report itself throws', async () => {
+		const cache = new ManagedMetadataCache(
+			root,
+			{ ...MANAGED_METADATA_CACHE_LIMITS, minFreeBytes: Number.MAX_SAFE_INTEGER },
+			undefined,
+			() => {
+				throw new Error('logger down');
+			}
+		);
+		await expect(cache.directory(sftp)).resolves.toBeUndefined();
 	});
 
 	it('removes only stale binding directories it created, at most once per interval', async () => {

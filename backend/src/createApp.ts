@@ -247,7 +247,18 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		agentStore,
 		new ManagedRepositorySessionRouter(
 			managedRepositorySessionFactory({
-				metadataCache: new ManagedMetadataCache(path.join(appPaths.getCacheDir(), 'managed-restic')),
+				// The data directory, not the temp directory: under Docker the temp directory
+				// is a 64 MiB tmpfs (deploy/compose.yml), which always forced --no-cache.
+				metadataCache: new ManagedMetadataCache(
+					path.join(appPaths.getDataDir(), 'managed-restic-cache'),
+					undefined,
+					undefined,
+					record =>
+						planLogger('managed-restic-cache').warn(
+							record,
+							'Restic metadata cache unavailable; reading with --no-cache.'
+						)
+				),
 			})
 		)
 	);

@@ -180,6 +180,62 @@ describe('bounded managed snapshot metadata index', () => {
 			);
 		}
 	);
+	it('breaks sort ties in path order whatever order the entries arrive in', async () => {
+		const entry = (value: string, size: number, mtime: string, type: 'file' | 'dir' = 'file') => ({
+			...node(0),
+			path: value,
+			name: path.posix.basename(value),
+			type,
+			size,
+			mtime,
+		});
+		const same = '2026-01-01T00:00:00Z';
+		await cache.use(
+			key,
+			async append => {
+				append(dir('/srv'));
+				append(dir('/srv/b-dir'));
+				// Deliberately not in path order, with equal sizes, times and case-folded names.
+				for (const name of ['delta.txt', 'Alpha.txt', 'charlie.txt', 'alpha.txt', 'bravo.txt'])
+					append(entry(`/srv/${name}`, 7, same));
+				append(entry('/srv/a-dir', 0, same, 'dir'));
+				append(entry('/srv/a-dir/nested.txt', 7, same));
+				// An entry whose parent directory node never appears keeps its own parent.
+				append(entry('/srv/missing-dir/orphan', 0, same, 'dir'));
+			},
+			index => {
+				const names = (query: Parameters<typeof index.page>[0]) =>
+					index.page(query).files.map(file => file.name);
+				const files = ['Alpha.txt', 'alpha.txt', 'bravo.txt', 'charlie.txt', 'delta.txt'];
+				expect(names({ path: '/srv' })).toEqual(['a-dir', 'b-dir', ...files]);
+				expect(names({ path: '/srv', order: 'desc' })).toEqual([
+					'b-dir',
+					'a-dir',
+					'delta.txt',
+					'charlie.txt',
+					'bravo.txt',
+					// Case-folded equal names keep path order in both directions.
+					'Alpha.txt',
+					'alpha.txt',
+				]);
+				for (const sort of ['size', 'modifiedAt'] as const)
+					for (const order of ['asc', 'desc'] as const)
+						expect(names({ path: '/srv', sort, order })).toEqual(['a-dir', 'b-dir', ...files]);
+				expect(names({ path: '/srv', directoriesOnly: true })).toEqual(['a-dir', 'b-dir']);
+				expect(names({ path: '/srv/a-dir' })).toEqual(['nested.txt']);
+				expect(index.page({ path: '/srv/b-dir' })).toMatchObject({ total: 0, files: [] });
+				expect(names({ path: '' })).toEqual(['srv']);
+				expect(index.childDirectories('/srv', 10).map(file => file.name)).toEqual([
+					'a-dir',
+					'b-dir',
+				]);
+				expect(index.childDirectories('/srv/missing-dir', 10).map(file => file.path)).toEqual([
+					'/srv/missing-dir/orphan',
+				]);
+				expect(index.childDirectories('/srv/none', 10)).toEqual([]);
+			}
+		);
+	});
 	it.each(['job:2026.txt', '100%complete.txt', '%2e%2e.txt', 'café-文件.txt'])(
 		'preserves exact valid POSIX filename %s without URL decoding',
 		async name => {

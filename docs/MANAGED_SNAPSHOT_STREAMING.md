@@ -61,16 +61,17 @@ bounds; the listing no longer uses that whole-output limit.
 | --- | --- |
 | Simultaneous metadata constructions | 1 per server process |
 | Managed recovery repository sessions | 2 per server process, including archive/restore sessions |
-| Completed/building/failed cache reservations | 2, at most 2 GiB of index files combined |
-| One index | 1 GiB SQLite page limit; 1,000,000 nodes |
+| Completed/building/failed cache reservations | 2, at most 8 GiB of index files combined |
+| One index | 4 GiB SQLite page limit; 2,000,000 nodes |
 | Listing record / complete input | 256 KiB / 1 GiB; exceeding either fails closed |
 | Listing construction process (`ls`, `diff`) | Stops after 10 minutes without a record (`metadata-stream-idle`) or after 2 hours in total (`metadata-stream-deadline`) |
-| Restic metadata cache (Browse, downloads, restores) | One private directory per repository binding; used only while at least 2 GiB stay free; unused directories removed after 30 days |
+| Restic metadata cache (Browse, downloads, restores) | One private directory per repository binding under `<application-data>/managed-restic-cache`; used only while at least 2 GiB stay free; unused directories removed after 30 days |
 | SQLite page cache | 8 MiB per index; prepared indexed scans avoid full result sorts |
-| Free disk before construction | At least 320 MiB (256 MiB to start + 64 MiB reserve); a large index then grows up to 1 GiB while space remains |
+| Free disk before construction | At least 320 MiB (256 MiB to start + 64 MiB reserve); a large index then grows up to 4 GiB while space remains |
+| Free disk while an index grows | Sampled every 4,096 entries; below the 64 MiB reserve the build stops with `disk-capacity` |
 | Idle cache lifetime | 15 minutes, swept every minute and on requests |
 | Page size | 200 by default; maximum 500 |
-| Offset / filename search | 0–1,000,000 / at most 128 characters |
+| Offset / filename search | 0–2,000,000 / at most 128 characters |
 | Unpaginated compatibility response | At most 5,000 entries |
 | Preview/result displayed paths | At most 5,000, explicitly marked truncated; totals remain complete |
 | Granular restore | Existing 1,024 regular-file/include limits; additionally 8,192 selected nodes/ancestors |
@@ -80,11 +81,16 @@ Admission is serialized with at most 16 pending admissions. An idle completed or
 failed index is evicted in least-recently-used order when slots or free space are
 needed. Readers and unfinished builds remain pinned. Native SQLite handles close
 before generated files are removed; failed cleanup retains its reservation.
-These are safety limits, not a promise that every 1,000,000-entry snapshot fits the
-disk limit. Long names and paths make indexes larger: one entry with its six
-child-order indexes takes about 0.6 to 2 KiB, so a content-addressed tree with
-long paths (such as an application filestore) fits about 500,000 entries in
-1 GiB. The earlier 256 MiB limit filled at about 150,000 such entries. Resource exhaustion returns
+These are safety limits, not a promise that every 2,000,000-entry snapshot fits the
+disk limit. Long names and paths make indexes larger. The six child-order indexes
+key on an integer parent and the entry name; only the row and the unique path index
+hold the full path. One entry then takes about 0.5 to 1.5 KiB. The former layout
+indexed the full parent path and path six times. A snapshot with about 650,000 files
+and paths of about 170 characters took 2.7 KiB per entry there and filled the former
+1 GiB cap at about 400,000 entries. On synthetic trees with an average path of 160
+characters the former layout took 2,582 bytes per entry and the current one 1,066,
+and the build took about half the time. The earlier 256 MiB limit filled at about
+150,000 filestore entries. Resource exhaustion returns
 a precise closed error, never an incomplete listing. Hard entry/database limits
 are HTTP 413 and are not fixed by repeatedly polling. Recovery still needs enough
 disk for its selected restored content plus the existing 512 MiB reserve and its
@@ -94,7 +100,10 @@ The cache is `<application-data>/managed-snapshot-indexes`, using private 0700
 directories and 0600 SQLite files on Linux. It contains paths, sizes, timestamps,
 types and permissions, with no decrypted SQL/data or repository credentials. Six
 directory/sort indexes support both directions without an unbounded Node result
-array or an in-memory SQLite sort. File modification sorting uses parsed time,
+array or an in-memory SQLite sort. Each one ends with the binary entry name, so
+siblings with equal sort keys keep path order whatever order Restic emitted them in.
+A `parents` table maps every parent path, including a parent without its own
+directory entry, to the integer key the indexes use. File modification sorting uses parsed time,
 including time-zone offsets, while preserving the original display timestamp.
 Windows inherits the data directory's ACL; chmod is not an ACL substitute.
 
@@ -132,12 +141,19 @@ old index files and never touches the application DB or restore content.
 ### Restic metadata cache
 
 Browse, downloads and restores of managed snapshots (`RemoteRepositoryRecoveryService`)
-run Restic with `--cache-dir <temp>/pluton/cache/managed-restic/<binding>` instead of
-`--no-cache`. Under Docker that is the data volume. Without a cache, `restic ls` of a
-large snapshot downloaded the whole index again on every attempt and read every tree
-blob with its own request. A snapshot with about 650,000 files on a remote SFTP
-repository did not finish in the former fixed 15 minutes, and every retry started
-from nothing.
+run Restic with `--cache-dir <application-data>/managed-restic-cache/<binding>` instead
+of `--no-cache`. Under Docker that is `/data/managed-restic-cache` on the data volume.
+Without a cache, `restic ls` of a large snapshot downloaded the whole index again on
+every attempt and read every tree blob with its own request. A snapshot with about
+650,000 files on a remote SFTP repository indexed about 75 entries per second, did
+not finish in the former fixed 15 minutes, and every retry started from nothing.
+
+The first release put the cache in the temporary directory. Under Docker that is
+the container's 64 MiB `/tmp` tmpfs (`deploy/compose.yml`), so the 2 GiB free-space
+check always failed and every session silently ran with `--no-cache`. The
+temporary cache directory is also emptied of entries older than 96 hours by
+`CleanDownloadsTask`. The cache therefore lives in the data directory, next to
+`managed-snapshot-indexes`.
 
 - Restic caches only index, snapshot and tree-pack files, all encrypted and
   authenticated with the repository key. Data packs are never cached, so the cache
@@ -150,6 +166,10 @@ from nothing.
   Otherwise, and on any setup error, a planted file instead of the directory, or a
   filesystem error, the session runs with `--no-cache` as before. Restic itself falls
   back to the repository when a cache write fails.
+- Every fallback is logged as a warning with `module=managed-restic-cache`,
+  `event=managed_restic_cache`, `stage=unavailable` and a closed `reason`
+  (`disk-capacity` with `availableBytes`, `not-directory`, or `filesystem` with only
+  an errno `code` such as `EACCES`). No path, binding or credential is logged.
 - Binding directories unused for 30 days are removed, checked at most hourly.
 - Reads keep `--no-lock`, so the repository is still never written. Replica
   verification, failover and promotion sessions, and Legacy repositories, keep
@@ -259,10 +279,10 @@ introduced.
 | `index-resource-limit`, `reason=cache-active` / 429 | Both slots are consumed by active readers; finish/cancel those operations and retry. Idle indexes are evicted automatically. |
 | `index-resource-limit`, `reason=build-busy` / 429 | One metadata build is already running; retry after it completes. |
 | `index-resource-limit`, `reason=admission-busy` / 429 | The bounded admission queue is full; retry shortly. Busy index responses include `Retry-After: 2`. |
-| `index-resource-limit`, `reason=disk-capacity` / 507 | Fewer than 320 MiB remain after safe idle eviction, or the cache filesystem filled (under 64 MiB left) while a large index grew. Check available cache filesystem capacity. |
-| `index-resource-limit`, `reason=database-size` / 413 | SQLite reached its 1 GiB hard page limit. Within 16 MiB of the cap the allocation is sampled after every row, so a FULL there is attributed to the cap even though SQLite rolls the build back. Repeating unchanged indexing does not help. |
+| `index-resource-limit`, `reason=disk-capacity` / 507 | Fewer than 320 MiB remain after safe idle eviction, or free space fell under 64 MiB while a large index grew (sampled every 4,096 entries, or SQLite FULL). Check available cache filesystem capacity. |
+| `index-resource-limit`, `reason=database-size` / 413 | SQLite reached its 4 GiB hard page limit. Within 16 MiB of the cap the allocation is sampled after every row, so a FULL there is attributed to the cap even though SQLite rolls the build back. Repeating unchanged indexing does not help. |
 | `index-resource-limit`, `reason=storage-full` / 507 | SQLite reported FULL more than 1 MiB below the configured page cap. Inspect filesystem capacity/quota; do not assume snapshot corruption or a full disk. |
-| `index-resource-limit`, `reason=entry-count` / 413 | More than 1,000,000 metadata nodes. No partial manifest is published. |
+| `index-resource-limit`, `reason=entry-count` / 413 | More than 2,000,000 metadata nodes. No partial manifest is published. |
 | `repository-busy` / 429 | Two recovery repository sessions already active; retry after one finishes. |
 | `index-unavailable`, `reason=unavailable` or `cleanup-failed` / 503 | Private cache unavailable or cleanup failed; check disk/ownership and explicitly retry. |
 | `index-unavailable`, `reason=timeout` / 504 | Restic wrote no record for 10 minutes, or the listing ran for 2 hours. Inspect storage latency and explicitly retry; the retry reuses the Restic metadata cache. A reverse proxy that replaces 5xx responses with its own page (for example BunkerWeb's intercepted error codes) makes Browse show "Snapshot service is temporarily unavailable" instead. |
