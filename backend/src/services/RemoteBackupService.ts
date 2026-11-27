@@ -59,6 +59,7 @@ import {
 import type { DatabaseArtifact, LifecycleWarning } from '../types/remoteLifecycle';
 import { serverLogger } from '../utils/logger';
 import type { ManagedReplicationCompletionHook } from './ManagedReplicationService';
+import type { PreparedIndexHook } from './PreparedSnapshotIndexService';
 import type { AgentSourceAccessService } from './AgentSourceAccessService';
 import {
 	RemoteCommandPreparationError,
@@ -223,6 +224,7 @@ export class RemoteBackupService {
 	private replicationService?: ManagedReplicationCompletionHook;
 	private failoverService?: BackupFailoverHook;
 	private sourceAccessService?: AgentSourceAccessService;
+	private preparedIndexHook?: PreparedIndexHook;
 
 	constructor(
 		private readonly repositories: RemoteManagedRepositoryStore,
@@ -248,6 +250,11 @@ export class RemoteBackupService {
 
 	setFailoverService(service: BackupFailoverHook): void {
 		this.failoverService = service;
+	}
+
+	/** Background Browse index preparation after a completed primary backup. */
+	setPreparedIndexHook(hook: PreparedIndexHook): void {
+		this.preparedIndexHook = hook;
 	}
 
 	setSourceAccessService(service: AgentSourceAccessService): void {
@@ -999,6 +1006,12 @@ export class RemoteBackupService {
 					'Replica admission needs reconciliation.'
 				);
 			});
+		}
+		// Queued only; the preparation waits until no backup or replication runs.
+		try {
+			this.preparedIndexHook?.enqueue(reference.backupId);
+		} catch {
+			/* Preparation is optional; it never affects the backup result. */
 		}
 	}
 

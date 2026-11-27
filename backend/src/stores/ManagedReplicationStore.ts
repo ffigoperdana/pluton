@@ -87,6 +87,12 @@ const fullId = (value: string) => /^[a-f0-9]{64}$/.test(value);
 /** SQLite CAS, immutable bindings and an execution slot shared by every process. No timed lease takeover. */
 export class ManagedReplicationStore {
 	constructor(private readonly sqlite: Database.Database) {}
+	/** A replication transfer is executing now (pending jobs waiting to retry do not count). */
+	hasRunningJob(): boolean {
+		return !!this.sqlite
+			.prepare("SELECT 1 FROM managed_replication_jobs WHERE status='running' LIMIT 1")
+			.get();
+	}
 	getById(id: string) {
 		return decode<ManagedReplicationJob>(
 			this.sqlite.prepare('SELECT * FROM managed_replication_jobs WHERE id=?').get(id)

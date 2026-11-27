@@ -73,6 +73,7 @@ import {
 	ManagedSnapshotIndexCache,
 	SNAPSHOT_INDEX_LIMITS,
 	SnapshotIndexError,
+	type PreparedIndexResult,
 	type SnapshotPageQuery,
 } from '../utils/restic/ManagedSnapshotIndex';
 
@@ -122,12 +123,39 @@ export function indexingRetryAfterMs(elapsedMs: number) {
 	return elapsedMs < 30_000 ? 1000 : elapsedMs < 5 * 60_000 ? 3000 : 5000;
 }
 
+/** Snapshots smaller than this index quickly on demand and are not prepared. */
+export const PREPARED_INDEX_MIN_ENTRIES = 100_000;
+
+/** Files plus directories Restic recorded for a completed backup, or null if unknown. */
+export function recordedSnapshotEntries(stats: unknown): number | null {
+	const value = (key: string) => {
+		const number = (stats as Record<string, unknown> | null | undefined)?.[key];
+		return typeof number === 'number' && Number.isSafeInteger(number) && number >= 0
+			? number
+			: null;
+	};
+	const files = value('total_files_processed');
+	if (files === null) return null;
+	return ['dirs_new', 'dirs_changed', 'dirs_unmodified'].reduce(
+		(total, key) => total + (value(key) ?? 0),
+		files
+	);
+}
+
+export type PreparedIndexAdmission =
+	| { status: 'skipped'; reason: 'not-recoverable' | 'superseded' | 'small' | 'unrecorded' }
+	| { status: 'busy' }
+	| { status: 'failed' }
+	| { status: 'started'; key: string; result: Promise<PreparedIndexResult> };
+
 /**
  * Consumes managed Phase 4 metadata; never registers a Legacy repository, uses
  * the backup lifecycle executor, or issues commands to a source agent.
  */
 export class RemoteRepositoryRecoveryService {
 	private readonly jobs = new Map<string, { controller: AbortController; done: Promise<void> }>();
+	/** Plan ID to the key of its prepared index; in memory, like the indexes themselves. */
+	private readonly preparedByPlan = new Map<string, string>();
 	private readonly preparing = new Set<string>();
 	private selectedDownloads = 0;
 	private readonly downloads = new ManagedDownloadPreparation();
@@ -1037,6 +1065,57 @@ export class RemoteRepositoryRecoveryService {
 			};
 		}
 		return { status: 'ready' as const, snapshotId: context.snapshotId };
+	}
+
+	/**
+	 * Background preparation after a backup (PreparedSnapshotIndexService): only the
+	 * latest completed backup of its plan, and only a snapshot large enough to be slow
+	 * on demand. Uses the same verified context and key as Browse, so Browse finds the
+	 * prepared index. Never waits for the build; the queue awaits `result`.
+	 */
+	async prepareSnapshotIndex(backupId: string): Promise<PreparedIndexAdmission> {
+		let context: RecoveryContext;
+		try {
+			context = await this.context(backupId);
+		} catch {
+			return { status: 'skipped', reason: 'not-recoverable' };
+		}
+		const backup = await this.backups.getById(backupId);
+		const planId = backup?.planId;
+		if (!backup || !planId) return { status: 'skipped', reason: 'not-recoverable' };
+		const [latest] = await this.backups.completedNear(planId, new Date(), 1);
+		if (latest && latest.id !== backupId) return { status: 'skipped', reason: 'superseded' };
+		const entries = recordedSnapshotEntries(backup.completionStats);
+		if (entries === null) return { status: 'skipped', reason: 'unrecorded' };
+		if (entries < PREPARED_INDEX_MIN_ENTRIES) return { status: 'skipped', reason: 'small' };
+		const key = this.indexKey(context);
+		let admission: Awaited<ReturnType<ManagedSnapshotIndexCache['prepare']>>;
+		try {
+			admission = await this.indexes.prepare(key, (append, signal) =>
+				this.populateIndex(context, append, signal)
+			);
+		} catch (error) {
+			return error instanceof SnapshotIndexError &&
+				(error.reason === 'build-busy' || error.reason === 'cache-active')
+				? { status: 'busy' }
+				: { status: 'failed' };
+		}
+		const result = admission.result.then(async outcome => {
+			if (outcome === 'ready') {
+				// The plan's previous prepared snapshot gives up its slot once this one is ready.
+				const previous = this.preparedByPlan.get(planId);
+				this.preparedByPlan.set(planId, key);
+				if (previous && previous !== key)
+					await this.indexes.release(previous).catch(() => undefined);
+			}
+			return outcome;
+		});
+		return { status: 'started', key, result };
+	}
+
+	/** Stops a prepared build nobody has asked for, for example when a backup starts. */
+	async preemptPreparedIndex(key: string) {
+		return this.indexes.preempt(key).catch(() => false);
 	}
 
 	/**

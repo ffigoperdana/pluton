@@ -70,6 +70,10 @@ import { RestoreService } from './services/RestoreService';
 import { AgentHostRestoreService } from './services/AgentHostRestoreService';
 import { RemoteRepositoryRecoveryService } from './services/RemoteRepositoryRecoveryService';
 import {
+	PREPARED_INDEX_QUEUE_LIMITS,
+	PreparedSnapshotIndexService,
+} from './services/PreparedSnapshotIndexService';
+import {
 	ManagedRepositorySessionRouter,
 	managedRepositorySessionFactory,
 } from './utils/restic/ManagedRepositorySessionRouter';
@@ -262,6 +266,15 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 			})
 		)
 	);
+	// Large snapshots get their Browse index prepared after a backup, once no backup or
+	// replication transfer runs (docs/MANAGED_SNAPSHOT_STREAMING.md, "Prepared indexes").
+	const preparedSnapshotIndexService = new PreparedSnapshotIndexService(remoteRecoveryService, {
+		busy: async () =>
+			(await backupStore.hasActiveBackup(new Date(Date.now() - 24 * 60 * 60_000))) ||
+			managedReplicationStore.hasRunningJob(),
+		latestBackups: () => backupStore.latestCompletedBackupIds(),
+	});
+	remoteBackupService.setPreparedIndexHook(preparedSnapshotIndexService);
 	const replicaRecoveryService = new VerifiedReplicaRecoveryService(
 		managedReplicationStore,
 		backupStore,
@@ -692,6 +705,15 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 		void primaryPromotionService.tick();
 	}, 30000);
 	replicationReconcile.unref();
+	const preparedIndexTick = setInterval(() => {
+		void preparedSnapshotIndexService.tick().catch(() => {});
+	}, PREPARED_INDEX_QUEUE_LIMITS.tickMs);
+	preparedIndexTick.unref();
+	// Indexes are never trusted across a restart: queue the latest backups again.
+	const preparedIndexReconcile = setTimeout(() => {
+		void preparedSnapshotIndexService.reconcile().catch(() => {});
+	}, PREPARED_INDEX_QUEUE_LIMITS.startupDelayMs);
+	preparedIndexReconcile.unref();
 	jobQueue.add('RecoveryTest', undefined, 1);
 
 	jobProcessor.start();
@@ -703,6 +725,9 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 			await notificationManager.shutdown();
 			clearInterval(recoveryTick);
 			clearInterval(replicationReconcile);
+			clearInterval(preparedIndexTick);
+			clearTimeout(preparedIndexReconcile);
+			preparedSnapshotIndexService.close();
 			await primaryPromotionService.shutdown();
 			await backupFailoverService.shutdown();
 			await managedReplicationService.shutdown();

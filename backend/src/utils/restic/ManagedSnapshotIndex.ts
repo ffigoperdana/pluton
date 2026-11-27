@@ -111,8 +111,16 @@ export const SNAPSHOT_INDEX_LIMITS = Object.freeze({
 	 * refuse even small snapshots on a modest cache filesystem.
 	 */
 	startBytes: 256 * 1024 ** 2,
+	/** Indexes opened on demand (Browse, downloads, restores). */
 	maxIndexes: 2,
 	ttlMs: 15 * 60_000,
+	/**
+	 * Indexes prepared in the background after a backup, in their own slots. A
+	 * prepared index outlives the idle lifetime until it is released for a newer
+	 * snapshot of its plan or this retention ends.
+	 */
+	maxPrepared: 3,
+	preparedRetainMs: 36 * 60 * 60_000,
 	maxBuilds: 1,
 	pageSize: 200,
 	maxPageSize: 500,
@@ -459,12 +467,20 @@ type Entry = {
 	bytes: number;
 	started: number;
 	idle?: () => void;
+	/** Held in a prepared slot; retained while ready until `retainUntil`. */
+	prepared?: boolean;
+	retainUntil?: number;
+	/** Requested by Browse, a download or a restore, so never preempted. */
+	claimed?: boolean;
 };
+/** Outcome of a background preparation, as its queue needs it. */
+export type PreparedIndexResult = 'ready' | 'failed' | 'cancelled';
 export type SnapshotIndexDiagnostic = {
 	event: 'snapshot_index';
-	stage: 'building' | 'ready' | 'failed' | 'evicted' | 'refused';
+	stage: 'building' | 'ready' | 'failed' | 'evicted' | 'refused' | 'prepared' | 'preempted';
 	reason?: SnapshotIndexReason;
 	indexes: number;
+	prepared: number;
 	builds: number;
 	readers: number;
 	entries: number;
@@ -508,12 +524,22 @@ export class ManagedSnapshotIndexCache {
 	failure(key: string) {
 		return this.entries.get(key)?.error;
 	}
+	private preparedCount() {
+		return [...this.entries.values()].filter(entry => entry.prepared).length;
+	}
+	/** A ready prepared index within its retention is kept past the idle lifetime. */
+	private retained(entry: Entry, now = Date.now()) {
+		return !!(entry.prepared && entry.index && entry.retainUntil && now < entry.retainUntil);
+	}
 	/** Read-only telemetry: polling neither touches TTL/LRU nor starts work. */
 	inspect(key: string) {
 		const entry = this.entries.get(key);
 		const live =
 			entry &&
-			(entry.readers > 0 || !entry.settled || Date.now() - entry.updated < this.limits.ttlMs);
+			(entry.readers > 0 ||
+				!entry.settled ||
+				this.retained(entry) ||
+				Date.now() - entry.updated < this.limits.ttlMs);
 		return live
 			? {
 					state: this.status(key),
@@ -559,6 +585,7 @@ export class ManagedSnapshotIndexCache {
 				stage,
 				reason,
 				indexes: this.entries.size,
+				prepared: this.preparedCount(),
 				builds: this.builds,
 				readers: [...this.entries.values()].reduce((n, value) => n + value.readers, 0),
 				entries: entry?.count || 0,
@@ -605,70 +632,24 @@ export class ManagedSnapshotIndexCache {
 				}
 				if (entry?.error) throw entry.error;
 				if (!entry) {
+					// A request from Browse, a download or a restore comes before background
+					// preparation: an unclaimed prepared build yields its build slot.
+					if (this.builds >= this.limits.maxBuilds) await this.yieldPreparedBuild();
 					if (this.builds >= this.limits.maxBuilds)
 						throw new SnapshotIndexError('index-resource-limit', 'build-busy');
-					if (this.entries.size >= this.limits.maxIndexes) {
+					const onDemand = [...this.entries].filter(([, value]) => !value.prepared);
+					if (onDemand.length >= this.limits.maxIndexes) {
 						// Wall clocks can tie or move backwards. Use access order for LRU;
 						// wall time is only for TTL. Readers and builds remain pinned.
-						const victim = [...this.entries]
+						const victim = onDemand
 							.filter(([, value]) => value.settled && !value.readers)
 							.sort((a, b) => a[1].used - b[1].used)[0];
 						if (!victim) throw new SnapshotIndexError('index-resource-limit', 'cache-active');
 						await this.remove(...victim);
 					}
-					await this.initialize();
-					let disk = await fs.statfs(this.root);
-					this.availableBytes = disk.bavail * disk.bsize;
-					while (disk.bavail * disk.bsize < this.requiredFreeBytes()) {
-						const victim = [...this.entries]
-							.filter(([, value]) => value.settled && !value.readers)
-							.sort((a, b) => a[1].used - b[1].used)[0];
-						if (!victim) throw new SnapshotIndexError('index-resource-limit', 'disk-capacity');
-						await this.remove(...victim);
-						disk = await fs.statfs(this.root);
-						this.availableBytes = disk.bavail * disk.bsize;
-					}
-					entry = {
-						generation: crypto.randomUUID(),
-						promise: undefined!,
-						controller: new AbortController(),
-						background,
-						updated: Date.now(),
-						used: ++this.sequence,
-						started: Date.now(),
-						readers: 0,
-						settled: false,
-						count: 0,
-						bytes: 0,
-					};
-					this.entries.set(key, entry);
-					this.builds++;
-					const owned = entry;
-					owned.promise = this.build(key, owned, populate)
-						.then(index => {
-							owned.index = index;
-							this.report('ready', owned);
-							return index;
-						})
-						.catch(error => {
-							owned.error =
-								error instanceof AppError ? error : new SnapshotIndexError('index-unavailable');
-							this.report(
-								'failed',
-								owned,
-								error instanceof SnapshotIndexError ? error.reason : 'unavailable'
-							);
-							throw owned.error;
-						})
-						.finally(() => {
-							owned.settled = true;
-							owned.updated = Date.now();
-							owned.used = ++this.sequence;
-							this.builds--;
-						});
-					void owned.promise.catch(() => undefined);
-					this.report('building', owned);
+					entry = await this.admit(key, populate, background);
 				}
+				entry.claimed = true;
 				entry.background ||= background;
 				entry.updated = Date.now();
 				entry.used = ++this.sequence;
@@ -681,6 +662,152 @@ export class ManagedSnapshotIndexCache {
 					this.report('refused', undefined, failure.reason);
 				throw failure;
 			}
+		});
+	}
+	/** Disk admission and construction of a new entry. Callers hold the admission lock. */
+	private async admit(key: string, populate: Populate, background: boolean) {
+		await this.initialize();
+		let disk = await fs.statfs(this.root);
+		this.availableBytes = disk.bavail * disk.bsize;
+		while (disk.bavail * disk.bsize < this.requiredFreeBytes()) {
+			// Idle on-demand indexes go first; prepared ones only when nothing else frees space.
+			const victim = [...this.entries]
+				.filter(([, value]) => value.settled && !value.readers)
+				.sort(
+					(a, b) => Number(!!a[1].prepared) - Number(!!b[1].prepared) || a[1].used - b[1].used
+				)[0];
+			if (!victim) throw new SnapshotIndexError('index-resource-limit', 'disk-capacity');
+			await this.remove(...victim);
+			disk = await fs.statfs(this.root);
+			this.availableBytes = disk.bavail * disk.bsize;
+		}
+		const entry: Entry = {
+			generation: crypto.randomUUID(),
+			promise: undefined!,
+			controller: new AbortController(),
+			background,
+			updated: Date.now(),
+			used: ++this.sequence,
+			started: Date.now(),
+			readers: 0,
+			settled: false,
+			count: 0,
+			bytes: 0,
+		};
+		this.entries.set(key, entry);
+		this.builds++;
+		entry.promise = this.build(key, entry, populate)
+			.then(index => {
+				entry.index = index;
+				this.report('ready', entry);
+				return index;
+			})
+			.catch(error => {
+				entry.error =
+					error instanceof AppError ? error : new SnapshotIndexError('index-unavailable');
+				this.report(
+					'failed',
+					entry,
+					error instanceof SnapshotIndexError ? error.reason : 'unavailable'
+				);
+				throw entry.error;
+			})
+			.finally(() => {
+				entry.settled = true;
+				entry.updated = Date.now();
+				entry.used = ++this.sequence;
+				this.builds--;
+			});
+		void entry.promise.catch(() => undefined);
+		this.report('building', entry);
+		return entry;
+	}
+	/** Stops an unclaimed prepared build and discards it. Callers hold the admission lock. */
+	private async stopPrepared(key: string, entry: Entry) {
+		if (!entry.prepared || entry.claimed || entry.settled || entry.readers) return false;
+		entry.controller.abort();
+		await entry.promise.catch(() => undefined);
+		this.report('preempted', entry);
+		if (this.entries.get(key) === entry && !entry.readers) await this.remove(key, entry);
+		return true;
+	}
+	private async yieldPreparedBuild() {
+		for (const [key, entry] of [...this.entries]) if (await this.stopPrepared(key, entry)) return;
+	}
+	/**
+	 * Starts (never waits for) a background index in a prepared slot, or marks an
+	 * existing one prepared, and extends its retention. A failed attempt is retried.
+	 * Returns the construction outcome for the caller's queue.
+	 */
+	async prepare(
+		key: string,
+		populate: Populate
+	): Promise<{ result: Promise<PreparedIndexResult> }> {
+		return this.exclusive(async () => {
+			if (!/^[a-f0-9]{64}$/.test(key)) throw new SnapshotIndexError('index-unavailable');
+			try {
+				await this.expire();
+				let entry = this.entries.get(key);
+				if (entry?.error && !entry.readers && entry.settled) {
+					await this.remove(key, entry);
+					entry = undefined;
+				}
+				if (entry?.error) throw entry.error;
+				if (!entry?.prepared) {
+					const prepared = [...this.entries].filter(([, value]) => value.prepared);
+					if (prepared.length >= this.limits.maxPrepared) {
+						const victim = prepared
+							.filter(([, value]) => value.settled && !value.readers)
+							.sort((a, b) => (a[1].retainUntil || 0) - (b[1].retainUntil || 0))[0];
+						if (!victim) throw new SnapshotIndexError('index-resource-limit', 'cache-active');
+						await this.remove(...victim);
+					}
+				}
+				if (!entry) {
+					if (this.builds >= this.limits.maxBuilds)
+						throw new SnapshotIndexError('index-resource-limit', 'build-busy');
+					entry = await this.admit(key, populate, true);
+				}
+				entry.prepared = true;
+				entry.background = true;
+				entry.retainUntil = Date.now() + this.limits.preparedRetainMs;
+				entry.updated = Date.now();
+				this.report('prepared', entry);
+				const owned = entry;
+				return {
+					result: owned.promise.then(
+						(): PreparedIndexResult => 'ready',
+						(error): PreparedIndexResult =>
+							(error as { code?: string })?.code === 'cancelled' ? 'cancelled' : 'failed'
+					),
+				};
+			} catch (error) {
+				const failure =
+					error instanceof AppError ? error : new SnapshotIndexError('index-unavailable');
+				if (failure instanceof SnapshotIndexError)
+					this.report('refused', undefined, failure.reason);
+				throw failure;
+			}
+		});
+	}
+	/**
+	 * Gives up a prepared slot (a newer snapshot of the plan is prepared). An idle
+	 * index is removed at once; one in use falls back to the idle lifetime.
+	 */
+	async release(key: string) {
+		await this.exclusive(async () => {
+			const entry = this.entries.get(key);
+			if (!entry?.prepared) return;
+			entry.prepared = false;
+			entry.retainUntil = undefined;
+			if (entry.settled && !entry.readers) await this.remove(key, entry);
+		});
+	}
+	/** Stops a prepared build nobody has asked for (a backup started). */
+	async preempt(key: string) {
+		return this.exclusive(async () => {
+			const entry = this.entries.get(key);
+			return entry ? this.stopPrepared(key, entry) : false;
 		});
 	}
 	async retry(key: string) {
@@ -991,8 +1118,14 @@ export class ManagedSnapshotIndexCache {
 		this.report('evicted', entry);
 	}
 	private async expire() {
+		const now = Date.now();
 		for (const [key, entry] of this.entries) {
-			if (!entry.readers && entry.settled && Date.now() - entry.updated >= this.limits.ttlMs)
+			if (
+				!entry.readers &&
+				entry.settled &&
+				!this.retained(entry, now) &&
+				now - Math.max(entry.updated, entry.retainUntil || 0) >= this.limits.ttlMs
+			)
 				await this.remove(key, entry);
 		}
 	}

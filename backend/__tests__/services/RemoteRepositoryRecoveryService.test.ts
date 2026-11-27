@@ -12,6 +12,7 @@ import {
 	indexingRetryAfterMs,
 } from '../../src/services/RemoteRepositoryRecoveryService';
 import { ManagedRepositoryAccessError } from '../../src/utils/restic/ManagedSftpRepositorySession';
+import { SnapshotIndexError } from '../../src/utils/restic/ManagedSnapshotIndex';
 import type {
 	ManagedRepositorySession,
 	ManagedSftpAccess,
@@ -305,6 +306,90 @@ describe('Phase 4 remote managed repository recovery', () => {
 		expect(session.restore).toHaveBeenCalledWith(snapshotId, ['/srv/example-app/**/xl.meta'], target);
 		expect(result).toBeDefined();
 		output.end();
+	});
+
+	const large = (stats: Record<string, unknown> = {}) => ({
+		snapshot_id: snapshotId,
+		total_files_processed: 99_000,
+		dirs_new: 400,
+		dirs_changed: 100,
+		dirs_unmodified: 600,
+		...stats,
+	});
+	it('prepares a large latest snapshot in the background as the same index Browse opens', async () => {
+		backup.completionStats = large();
+		(stores.backups as any).completedNear = jest.fn(async () => [backup]);
+		const admission = await service.prepareSnapshotIndex('backup-01');
+		expect(admission).toMatchObject({ status: 'started', key: expect.stringMatching(/^[a-f0-9]{64}$/) });
+		await expect((admission as any).result).resolves.toBe('ready');
+		const listings = session.files.mock.calls.length;
+		expect(listings).toBe(1);
+		// Browse finds the prepared index and lists nothing again.
+		await expect(service.snapshotIndexStatus('backup-01')).resolves.toEqual({
+			status: 'ready',
+			snapshotId,
+		});
+		expect(session.files.mock.calls.length).toBe(listings);
+		await expect(service.preemptPreparedIndex((admission as any).key)).resolves.toBe(false);
+	});
+
+	it('skips small, unrecorded, superseded and unrecoverable backups without listing them', async () => {
+		(stores.backups as any).completedNear = jest.fn(async () => [backup]);
+		backup.completionStats = large({ total_files_processed: 98_899 });
+		await expect(service.prepareSnapshotIndex('backup-01')).resolves.toEqual({
+			status: 'skipped',
+			reason: 'small',
+		});
+		backup.completionStats = { snapshot_id: snapshotId, total_files_processed: 'many' };
+		await expect(service.prepareSnapshotIndex('backup-01')).resolves.toEqual({
+			status: 'skipped',
+			reason: 'unrecorded',
+		});
+		backup.completionStats = large();
+		(stores.backups as any).completedNear = jest.fn(async () => [{ ...backup, id: 'backup-02' }]);
+		await expect(service.prepareSnapshotIndex('backup-01')).resolves.toEqual({
+			status: 'skipped',
+			reason: 'superseded',
+		});
+		backup.status = 'failed';
+		await expect(service.prepareSnapshotIndex('backup-01')).resolves.toEqual({
+			status: 'skipped',
+			reason: 'not-recoverable',
+		});
+		expect(withSession).not.toHaveBeenCalled();
+	});
+
+	it('maps a refused preparation to retry-later or failed without detail', async () => {
+		backup.completionStats = large();
+		(stores.backups as any).completedNear = jest.fn(async () => [backup]);
+		const prepare = jest.spyOn((service as any).indexes, 'prepare');
+		prepare.mockRejectedValueOnce(new SnapshotIndexError('index-resource-limit', 'build-busy'));
+		await expect(service.prepareSnapshotIndex('backup-01')).resolves.toEqual({ status: 'busy' });
+		prepare.mockRejectedValueOnce(new SnapshotIndexError('index-resource-limit', 'cache-active'));
+		await expect(service.prepareSnapshotIndex('backup-01')).resolves.toEqual({ status: 'busy' });
+		prepare.mockRejectedValueOnce(new SnapshotIndexError('index-resource-limit', 'disk-capacity'));
+		await expect(service.prepareSnapshotIndex('backup-01')).resolves.toEqual({ status: 'failed' });
+	});
+
+	it("releases the plan's previous prepared index once a newer snapshot is ready", async () => {
+		const newerId = 'b'.repeat(64);
+		const newer = { ...backup, id: 'backup-02', completionStats: large({ snapshot_id: newerId }) };
+		backup.completionStats = large();
+		stores.backups.getById = jest.fn(async (id: string) => (id === 'backup-02' ? newer : backup));
+		session.snapshot = jest.fn(async (id: string) => ({
+			id,
+			tags: ['pluton-plan-plan-01', id === newerId ? 'pluton-backup-backup-02' : 'pluton-backup-backup-01'],
+			paths: ['/srv/example-app'],
+		}));
+		(stores.backups as any).completedNear = jest.fn(async () => [backup]);
+		const first = (await service.prepareSnapshotIndex('backup-01')) as any;
+		await expect(first.result).resolves.toBe('ready');
+		(stores.backups as any).completedNear = jest.fn(async () => [newer]);
+		const second = (await service.prepareSnapshotIndex('backup-02')) as any;
+		await expect(second.result).resolves.toBe('ready');
+		expect(second.key).not.toBe(first.key);
+		expect((service as any).indexes.status(first.key)).toBe('missing');
+		expect((service as any).indexes.status(second.key)).toBe('ready');
 	});
 
 	it('selected download HEAD reads no contents and admission remains bounded until live transfers release', async () => {
