@@ -7,7 +7,10 @@ import { PassThrough, Writable } from 'stream';
 import { killProcessTree } from '../../../src/utils/processTree';
 import { processManager } from '../../../src/managers/ProcessManager';
 import { getBinaryPath } from '../../../src/utils/binaryPathResolver';
-import { ManagedSftpRepositorySession } from '../../../src/utils/restic/ManagedSftpRepositorySession';
+import {
+	ManagedSftpRepositorySession,
+	METADATA_STREAM_LIMITS,
+} from '../../../src/utils/restic/ManagedSftpRepositorySession';
 
 jest.mock('child_process');
 jest.mock('../../../src/utils/binaryPathResolver');
@@ -489,6 +492,52 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 		);
 		expect(records).toHaveLength(2);
 	});
+	it('uses the binding metadata cache for every read when one is configured, and --no-cache otherwise', async () => {
+		const cacheDirectory = path.resolve('synthetic-cache', 'b'.repeat(64));
+		const directory = jest.fn().mockResolvedValue(cacheDirectory);
+		responses.push(
+			{ stdout: JSON.stringify([snapshot]) },
+			{
+				stdout: `${JSON.stringify({ struct_type: 'snapshot', ...snapshot })}\n${JSON.stringify(node)}\n`,
+			},
+			{ stdout: 'tar' }
+		);
+		const sink = new Writable({
+			write(_chunk, _encoding, done) {
+				done();
+			},
+		});
+		await new ManagedSftpRepositorySession({ metadataCache: { directory } }).withSession(
+			access,
+			async session => {
+				await session.snapshot(id);
+				await session.streamFiles(id, () => undefined);
+				await session.dump!(id, '/srv/example-app/index.txt', sink);
+			}
+		);
+		expect(directory).toHaveBeenCalledTimes(1);
+		expect(directory).toHaveBeenCalledWith(access);
+		for (const call of (spawn as jest.Mock).mock.calls.slice(1)) {
+			const args: string[] = call[1];
+			expect(args).not.toContain('--no-cache');
+			expect(args.slice(args.indexOf('--cache-dir'), args.indexOf('--cache-dir') + 2)).toEqual([
+				'--cache-dir',
+				cacheDirectory,
+			]);
+			expect(args).toContain('--no-lock');
+		}
+
+		jest.clearAllMocks();
+		responses = [{ stdout: 'Obscured_synthetic-value\n', code: 0 }, { stdout: JSON.stringify([snapshot]) }];
+		directory.mockResolvedValue(undefined);
+		await new ManagedSftpRepositorySession({ metadataCache: { directory } }).withSession(
+			access,
+			session => session.snapshot(id)
+		);
+		const args: string[] = (spawn as jest.Mock).mock.calls[1][1];
+		expect(args).toEqual(expect.arrayContaining(['--no-lock', '--no-cache']));
+		expect(args).not.toContain('--cache-dir');
+	});
 	it.each([
 		'not-json\n',
 		`${JSON.stringify(node)}\n`,
@@ -556,6 +605,49 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 			fs.stat((spawn as jest.Mock).mock.calls[1][2].env.RCLONE_CONFIG)
 		).rejects.toMatchObject({ code: 'ENOENT' });
 	});
+	it('stops a listing that writes no record for a whole idle window, never one that keeps listing', async () => {
+		responses.push({ held: true });
+		const original = setTimeout;
+		const windows: Array<() => void> = [];
+		const timer = jest.spyOn(global, 'setTimeout').mockImplementation(((
+			callback: any,
+			ms: number,
+			...args: any[]
+		) => {
+			if (ms === METADATA_STREAM_LIMITS.idleMs) windows.push(callback);
+			return original(callback, ms, ...args);
+		}) as any);
+		const listed: unknown[] = [];
+		try {
+			const transfer = new ManagedSftpRepositorySession().withSession(access, session =>
+				session.streamFiles(id, entry => {
+					listed.push(entry);
+				})
+			);
+			const failed = expect(transfer).rejects.toMatchObject({
+				code: 'timeout',
+				diagnostic: { operation: 'snapshot-index', timeoutCategory: 'metadata-stream-idle' },
+			});
+			while (!windows.length) await new Promise<void>(resolve => setImmediate(resolve));
+			children[1].stdout.write(
+				`${JSON.stringify({ struct_type: 'snapshot', ...snapshot })}\n${JSON.stringify(node)}\n`
+			);
+			while (listed.length < 1) await new Promise<void>(resolve => setImmediate(resolve));
+			// Records arrived in the first window: the listing continues and a new window starts.
+			windows[0]();
+			expect(killProcessTree).not.toHaveBeenCalled();
+			expect(windows).toHaveLength(2);
+			// Nothing in the second window: stalled.
+			windows[1]();
+			await failed;
+			expect(killProcessTree).toHaveBeenCalledWith(children[1], 'SIGKILL');
+			await expect(
+				fs.stat((spawn as jest.Mock).mock.calls[1][2].env.RCLONE_CONFIG)
+			).rejects.toMatchObject({ code: 'ENOENT' });
+		} finally {
+			timer.mockRestore();
+		}
+	});
 	it('times out listing construction and cleans credentials after the process tree closes', async () => {
 		responses.push({ held: true });
 		const original = setTimeout;
@@ -565,7 +657,7 @@ describe('ManagedSftpRepositorySession credential/operation boundary', () => {
 			ms: number,
 			...args: any[]
 		) => {
-			if (ms === 15 * 60_000) timeout = callback;
+			if (ms === METADATA_STREAM_LIMITS.deadlineMs) timeout = callback;
 			return original(callback, ms, ...args);
 		}) as any);
 		try {

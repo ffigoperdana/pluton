@@ -3,6 +3,7 @@ import { httpsS3Endpoint } from '../storageSecurity';
 import {
 	ManagedSftpRepositorySession,
 	ManagedRepositoryAccessError,
+	type ManagedRepositorySessionOptions,
 	type ManagedSftpAccess,
 } from './ManagedSftpRepositorySession';
 
@@ -38,8 +39,11 @@ export const MANAGED_S3_ACCESS_OPTION_KEYS: ReadonlySet<string> = new Set([
 /** Read/staging-only operations inherited from the fixed repository session.
  * No init/copy/tag/unlock/forget/prune/delete command is exposed. */
 export class ManagedS3RecoverySession extends ManagedSftpRepositorySession {
-	constructor(private readonly trust: Record<string, string> = {}) {
-		super();
+	constructor(
+		private readonly trust: Record<string, string> = {},
+		options: ManagedRepositorySessionOptions = {}
+	) {
+		super(options);
 	}
 	protected validateAccess(access: ManagedSftpAccess) {
 		const allowed = MANAGED_S3_ACCESS_OPTION_KEYS;

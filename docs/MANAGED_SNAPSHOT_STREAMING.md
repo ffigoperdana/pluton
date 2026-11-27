@@ -64,7 +64,8 @@ bounds; the listing no longer uses that whole-output limit.
 | Completed/building/failed cache reservations | 2, at most 2 GiB of index files combined |
 | One index | 1 GiB SQLite page limit; 1,000,000 nodes |
 | Listing record / complete input | 256 KiB / 1 GiB; exceeding either fails closed |
-| Listing construction process deadline | 15 minutes |
+| Listing construction process (`ls`, `diff`) | Stops after 10 minutes without a record (`metadata-stream-idle`) or after 2 hours in total (`metadata-stream-deadline`) |
+| Restic metadata cache (Browse, downloads, restores) | One private directory per repository binding; used only while at least 2 GiB stay free; unused directories removed after 30 days |
 | SQLite page cache | 8 MiB per index; prepared indexed scans avoid full result sorts |
 | Free disk before construction | At least 320 MiB (256 MiB to start + 64 MiB reserve); a large index then grows up to 1 GiB while space remains |
 | Idle cache lifetime | 15 minutes, swept every minute and on requests |
@@ -128,6 +129,36 @@ waits for active consumers, and closes
 indexes. Startup discards only exact generated cache-directory names, never trusts
 old index files and never touches the application DB or restore content.
 
+### Restic metadata cache
+
+Browse, downloads and restores of managed snapshots (`RemoteRepositoryRecoveryService`)
+run Restic with `--cache-dir <temp>/pluton/cache/managed-restic/<binding>` instead of
+`--no-cache`. Under Docker that is the data volume. Without a cache, `restic ls` of a
+large snapshot downloaded the whole index again on every attempt and read every tree
+blob with its own request. A snapshot with about 650,000 files on a remote SFTP
+repository did not finish in the former fixed 15 minutes, and every retry started
+from nothing.
+
+- Restic caches only index, snapshot and tree-pack files, all encrypted and
+  authenticated with the repository key. Data packs are never cached, so the cache
+  stays a small fraction of the repository. It holds no repository password, no
+  storage credentials and no decrypted content.
+- `<binding>` is a SHA-256 of the repository path and the storage options without
+  credentials. Two repositories never share files, even with a forged Restic
+  repository ID. Rotated credentials keep the cache.
+- The directory is used only while the cache filesystem keeps at least 2 GiB free.
+  Otherwise, and on any setup error, a planted file instead of the directory, or a
+  filesystem error, the session runs with `--no-cache` as before. Restic itself falls
+  back to the repository when a cache write fails.
+- Binding directories unused for 30 days are removed, checked at most hourly.
+- Reads keep `--no-lock`, so the repository is still never written. Replica
+  verification, failover and promotion sessions, and Legacy repositories, keep
+  `--no-cache`.
+
+A retry after a failed or expired index reuses what is already cached, so it is
+much faster than the first build. The SQLite index itself is still built from the
+start, because a listing is published only after Restic exits successfully.
+
 Run one Pluton server process per data directory. The in-memory concurrency and
 cache ownership contract does not support multiple independent server processes
 sharing this cache. Cache cleanup failure is fail-closed and may require operator
@@ -149,8 +180,10 @@ duplicate, nested, traversal or alternate-storage arguments are refused. Index
 queries also enforce their own size/offset bounds.
 
 During construction the response is HTTP 202 with
-`{success:true,result:{status:"indexing",retryAfterMs:1000}}`, no file rows, and
-`Retry-After: 1`. A ready HTTP 200 response contains `files`, `total` (matching
+`{success:true,result:{status:"indexing",retryAfterMs}}`, no file rows, and a
+matching `Retry-After`. `retryAfterMs` is 1000 for the first 30 seconds of a build,
+3000 until 5 minutes and 5000 afterwards, so a long build stays well inside the
+global limit of 1,000 requests per 15 minutes. A ready HTTP 200 response contains `files`, `total` (matching
 directory entries), `entries` (complete snapshot nodes), `offset`, `limit`,
 `nextOffset` and the full `snapshotId`. Both use `Cache-Control: private, no-store`.
 Indexes are complete before any ready page is returned. Pagination is for display,
@@ -232,7 +265,7 @@ introduced.
 | `index-resource-limit`, `reason=entry-count` / 413 | More than 1,000,000 metadata nodes. No partial manifest is published. |
 | `repository-busy` / 429 | Two recovery repository sessions already active; retry after one finishes. |
 | `index-unavailable`, `reason=unavailable` or `cleanup-failed` / 503 | Private cache unavailable or cleanup failed; check disk/ownership and explicitly retry. |
-| `index-unavailable`, `reason=timeout` / 504 | Indexing deadline expired. Inspect storage latency and explicitly retry. |
+| `index-unavailable`, `reason=timeout` / 504 | Restic wrote no record for 10 minutes, or the listing ran for 2 hours. Inspect storage latency and explicitly retry; the retry reuses the Restic metadata cache. A reverse proxy that replaces 5xx responses with its own page (for example BunkerWeb's intercepted error codes) makes Browse show "Snapshot service is temporarily unavailable" instead. |
 | `metadata-invalid` / 422 | Unsafe, duplicate, inconsistent path/size/time metadata; investigate the snapshot, never skip the record. |
 | `unsupported-snapshot-file` / 409 | Archive/full restore contains symlinks or special/unsafe entries; select safe regular paths for staged recovery if appropriate. |
 | `credentials-unavailable` / 502 | Stored credentials cannot be resolved; verify existing configuration privately. |

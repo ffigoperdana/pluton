@@ -83,6 +83,17 @@ describe('BackupController', () => {
 			);
 			expect(mockStatus).toHaveBeenCalledWith(202);
 		});
+		it('sends Retry-After from the slowed indexing poll interval', async () => {
+			mockRequest.params = { id: 'backup-01' };
+			mockRequest.query = {};
+			mockBackupService.getSnapshotPage.mockResolvedValue({
+				status: 'indexing',
+				retryAfterMs: 5000,
+			});
+			await backupController.getSnapshotPage(mockRequest as Request, mockResponse as Response);
+			expect(mockResponse.setHeader).toHaveBeenCalledWith('Retry-After', '5');
+			expect(mockStatus).toHaveBeenCalledWith(202);
+		});
 		it.each([
 			{ directoriesOnly: 'yes' },
 			{ retry: '1' },

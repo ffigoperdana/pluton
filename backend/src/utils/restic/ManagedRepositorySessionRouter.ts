@@ -3,6 +3,7 @@ import { ManagedS3RecoverySession } from './ManagedS3RecoverySession';
 import {
 	ManagedSftpRepositorySession,
 	type ManagedRepositorySession,
+	type ManagedRepositorySessionOptions,
 	type ManagedRepositorySessionProvider,
 	type ManagedSftpAccess,
 } from './ManagedSftpRepositorySession';
@@ -23,10 +24,15 @@ export function managedRepositoryAccessType(access: ManagedSftpAccess): ManagedR
 }
 
 /** Operator trust is read per session, as the replica resolver reads it per resolution. */
-export const defaultManagedRepositorySessionFactory: ManagedRepositorySessionFactory = type =>
-	type === 's3'
-		? new ManagedS3RecoverySession(trustEnvironment())
-		: new ManagedSftpRepositorySession();
+export const managedRepositorySessionFactory =
+	(options: ManagedRepositorySessionOptions = {}): ManagedRepositorySessionFactory =>
+	type =>
+		type === 's3'
+			? new ManagedS3RecoverySession(trustEnvironment(), options)
+			: new ManagedSftpRepositorySession(options);
+
+export const defaultManagedRepositorySessionFactory: ManagedRepositorySessionFactory =
+	managedRepositorySessionFactory();
 
 export class ManagedRepositorySessionRouter implements ManagedRepositorySessionProvider {
 	constructor(

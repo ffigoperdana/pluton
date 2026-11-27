@@ -7,7 +7,10 @@ import { Writable } from 'stream';
 import { pipeline } from 'stream/promises';
 import tar from 'tar-stream';
 import { planLogger } from '../../src/utils/logger';
-import { RemoteRepositoryRecoveryService } from '../../src/services/RemoteRepositoryRecoveryService';
+import {
+	RemoteRepositoryRecoveryService,
+	indexingRetryAfterMs,
+} from '../../src/services/RemoteRepositoryRecoveryService';
 import { ManagedRepositoryAccessError } from '../../src/utils/restic/ManagedSftpRepositorySession';
 import type {
 	ManagedRepositorySession,
@@ -1183,6 +1186,16 @@ describe('Phase 4 remote managed repository recovery', () => {
 			files: [expect.objectContaining({ path: '/srv/example-app/nested', type: 'dir' })],
 		});
 		expect(session.streamFiles).toHaveBeenCalledTimes(2);
+	});
+	it('slows Browse polling as a snapshot index keeps building', async () => {
+		expect([0, 29_999, 30_000, 299_999, 300_000, 2 * 60 * 60_000].map(indexingRetryAfterMs)).toEqual([
+			1000, 1000, 3000, 3000, 5000, 5000,
+		]);
+		await expect(service.browsePage('backup-01', {})).resolves.toMatchObject({
+			status: 'indexing',
+			retryAfterMs: 1000,
+		});
+		await prepareReady('backup-01');
 	});
 	it('pages and downloads a 100,000-file snapshot without invoking the array listing helper', async () => {
 		session.files.mockImplementation(async () => {

@@ -69,6 +69,11 @@ import { BaseSnapshotManager } from './managers/BaseSnapshotManager';
 import { RestoreService } from './services/RestoreService';
 import { AgentHostRestoreService } from './services/AgentHostRestoreService';
 import { RemoteRepositoryRecoveryService } from './services/RemoteRepositoryRecoveryService';
+import {
+	ManagedRepositorySessionRouter,
+	managedRepositorySessionFactory,
+} from './utils/restic/ManagedRepositorySessionRouter';
+import { ManagedMetadataCache } from './utils/restic/ManagedMetadataCache';
 import { AttachmentCatalogService } from './services/AttachmentCatalogService';
 import { MinioObjectService } from './services/MinioObjectService';
 import { RestoreEventListener } from './services/listeners/RestoreEventListener';
@@ -231,13 +236,20 @@ export async function createApp(): Promise<{ app: Express; shutdown: () => Promi
 	);
 	remoteBackupService.setFailoverService(backupFailoverService);
 	managedReplicationService.setFailoverGuard(backupFailoverService);
+	// Browse, downloads and restores of managed snapshots keep Restic's encrypted
+	// metadata cache per repository (docs/MANAGED_SNAPSHOT_STREAMING.md).
 	const remoteRecoveryService = new RemoteRepositoryRecoveryService(
 		remoteManagedRepositoryStore,
 		backupStore,
 		planStore,
 		restoreStore,
 		remoteBackupService,
-		agentStore
+		agentStore,
+		new ManagedRepositorySessionRouter(
+			managedRepositorySessionFactory({
+				metadataCache: new ManagedMetadataCache(path.join(appPaths.getCacheDir(), 'managed-restic')),
+			})
+		)
 	);
 	const replicaRecoveryService = new VerifiedReplicaRecoveryService(
 		managedReplicationStore,

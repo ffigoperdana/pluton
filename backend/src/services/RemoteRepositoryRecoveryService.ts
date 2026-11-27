@@ -114,6 +114,15 @@ export type ManagedArchiveDownload = {
 };
 
 /**
+ * Browse polls while a snapshot index builds. A large snapshot can index for longer
+ * than the 15-minute window of the global request limiter, so later polls slow down:
+ * once a second for 30 seconds, every 3 seconds until 5 minutes, then every 5 seconds.
+ */
+export function indexingRetryAfterMs(elapsedMs: number) {
+	return elapsedMs < 30_000 ? 1000 : elapsedMs < 5 * 60_000 ? 3000 : 5000;
+}
+
+/**
  * Consumes managed Phase 4 metadata; never registers a Legacy repository, uses
  * the backup lifecycle executor, or issues commands to a source agent.
  */
@@ -758,11 +767,12 @@ export class RemoteRepositoryRecoveryService {
 				(append, buildSignal) => this.populateIndex(context, append, buildSignal),
 				true
 			);
+			const elapsedMs = this.indexes.inspect(key)?.elapsedMs || 0;
 			return {
 				status: 'indexing' as const,
-				retryAfterMs: 1000,
+				retryAfterMs: indexingRetryAfterMs(elapsedMs),
 				indexedEntries: this.indexes.inspect(key)?.entries || 0,
-				elapsedMs: this.indexes.inspect(key)?.elapsedMs || 0,
+				elapsedMs,
 			};
 		}
 		return this.withIndex(
