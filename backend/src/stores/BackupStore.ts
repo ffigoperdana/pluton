@@ -111,6 +111,46 @@ export class BackupStore {
 		return [...before, ...after];
 	}
 
+	/**
+	 * Whether any backup started at or after `since` is still in progress. Rows left
+	 * in progress before `since` (an interrupted process) do not count.
+	 */
+	async hasActiveBackup(since: Date): Promise<boolean> {
+		const seconds = Math.floor(since.getTime() / 1000);
+		const rows = await this.db
+			.select({ id: backups.id })
+			.from(backups)
+			.where(
+				and(
+					sql`coalesce(${backups.inProgress},0)=1`,
+					sql`coalesce(${backups.started}, ${backups.createdAt})>=${seconds}`
+				)
+			)
+			.limit(1);
+		return rows.length > 0;
+	}
+
+	/** The latest completed backup of each plan, for at most `maxPlans` plans. */
+	async latestCompletedBackupIds(maxPlans = 200): Promise<string[]> {
+		const plans = await this.db
+			.selectDistinct({ planId: backups.planId })
+			.from(backups)
+			.where(
+				and(
+					eq(backups.method, 'backup'),
+					eq(backups.status, 'completed'),
+					sql`${backups.planId} IS NOT NULL`
+				)
+			)
+			.limit(maxPlans);
+		const latest: string[] = [];
+		for (const { planId } of plans) {
+			const [backup] = await this.completedNear(planId!, new Date(), 1);
+			if (backup) latest.push(backup.id);
+		}
+		return latest;
+	}
+
 	async getHistoryPage(planId: string, query: BackupHistoryQuery) {
 		const where = and(
 			eq(backups.planId, planId),

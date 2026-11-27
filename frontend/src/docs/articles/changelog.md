@@ -2,6 +2,12 @@
 
 Halaman ini merangkum fitur yang ada pada source saat panduan ditulis. Halaman ini bukan feed rilis live atau bukti bahwa source tersebut sudah terpasang di suatu server.
 
+## Index Browse disiapkan setelah backup
+
+Snapshot besar (minimal 100.000 file dan folder) kini di-index otomatis setelah backup-nya selesai, sehingga Browse langsung siap tanpa menunggu indexing. Index hanya disiapkan saat tidak ada backup yang berjalan dan tidak ada replikasi yang sedang mentransfer, dan dikerjakan satu per satu. Jika backup atau replikasi dimulai, pembangunan index dihentikan dan diantrekan ulang. Jika seseorang membuka Browse snapshot lain, permintaan itu didahulukan. Data yang sudah diunduh ke cache restic tetap tersimpan, jadi percobaan berikutnya cepat.
+
+Index yang disiapkan bertahan 36 jam, bukan 15 menit, sampai digantikan index dari backup berikutnya pada plan yang sama. Server menyimpan paling banyak 3 index seperti ini, terpisah dari slot Browse biasa. Setelah server restart atau redeploy, backup terakhir setiap plan otomatis diantrekan ulang.
+
 ## Browse snapshot sangat besar
 
 Cache metadata restic dari perubahan sebelumnya ternyata tidak pernah terpakai pada deployment Docker. Folder sementara container hanya 64 MiB, sehingga syarat ruang kosong 2 GiB selalu gagal dan restic tetap berjalan dengan `--no-cache`. Cache kini disimpan di folder data (`/data/managed-restic-cache`). Jika cache tetap tidak bisa dipakai, server mencatat peringatan `managed_restic_cache` beserta alasannya.

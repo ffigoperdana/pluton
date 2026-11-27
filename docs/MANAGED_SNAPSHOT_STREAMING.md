@@ -61,7 +61,7 @@ bounds; the listing no longer uses that whole-output limit.
 | --- | --- |
 | Simultaneous metadata constructions | 1 per server process |
 | Managed recovery repository sessions | 2 per server process, including archive/restore sessions |
-| Completed/building/failed cache reservations | 2, at most 8 GiB of index files combined |
+| Completed/building/failed cache reservations | 2 on demand plus 3 prepared, at most 20 GiB of index files combined |
 | One index | 4 GiB SQLite page limit; 2,000,000 nodes |
 | Listing record / complete input | 256 KiB / 1 GiB; exceeding either fails closed |
 | Listing construction process (`ls`, `diff`) | Stops after 10 minutes without a record (`metadata-stream-idle`) or after 2 hours in total (`metadata-stream-deadline`) |
@@ -69,7 +69,8 @@ bounds; the listing no longer uses that whole-output limit.
 | SQLite page cache | 8 MiB per index; prepared indexed scans avoid full result sorts |
 | Free disk before construction | At least 320 MiB (256 MiB to start + 64 MiB reserve); a large index then grows up to 4 GiB while space remains |
 | Free disk while an index grows | Sampled every 4,096 entries; below the 64 MiB reserve the build stops with `disk-capacity` |
-| Idle cache lifetime | 15 minutes, swept every minute and on requests |
+| Idle cache lifetime | 15 minutes, swept every minute and on requests; a ready prepared index stays 36 hours or until a newer snapshot of its plan is prepared |
+| Background preparation | Snapshots with at least 100,000 recorded entries; one at a time; only while no backup or replication transfer runs; at most 64 queued |
 | Page size | 200 by default; maximum 500 |
 | Offset / filename search | 0–2,000,000 / at most 128 characters |
 | Unpaginated compatibility response | At most 5,000 entries |
@@ -178,6 +179,53 @@ temporary cache directory is also emptied of entries older than 96 hours by
 A retry after a failed or expired index reuses what is already cached, so it is
 much faster than the first build. The SQLite index itself is still built from the
 start, because a listing is published only after Restic exits successfully.
+
+### Prepared indexes
+
+A large snapshot takes a long time to index on demand. `PreparedSnapshotIndexService`
+therefore builds the Browse index of large managed snapshots in the background after
+their backup, so Browse opens a ready index.
+
+- **Admission.** `RemoteBackupService` queues every completed primary backup;
+  failover runs are not queued. `RemoteRepositoryRecoveryService.prepareSnapshotIndex`
+  then prepares a backup only when it is still the latest completed backup of its
+  plan and Restic recorded at least 100,000 entries (files plus directories). Smaller
+  snapshots index quickly on demand. A backup that is not recoverable, superseded,
+  small or without recorded counts is skipped.
+- **Same index as Browse.** Preparation uses the verified recovery context and index
+  key of Browse, so binding, ownership-tag and snapshot checks are unchanged, and a
+  changed binding still cannot reuse it.
+- **Backups first.** Preparation reads with `--no-lock` and shares no lock or
+  repository session with a backup, which runs on the Agent. It does share the
+  storage server and this server. A preparation starts only while no backup is in
+  progress (rows started more than 24 hours ago are ignored, so an interrupted run
+  cannot hold the queue) and no replication transfer runs (a job waiting for its
+  retry does not count). A running preparation is stopped and queued again when a
+  backup or replication starts, checked every 30 seconds. An unknown activity state
+  counts as busy.
+- **Users first.** A request from Browse, a download or a restore for another
+  snapshot takes the single build slot: an unclaimed prepared build is stopped and
+  queued again. A prepared build that Browse already polls is claimed and never
+  stopped. A stopped build keeps what Restic downloaded into its cache, so the next
+  attempt is quick.
+- **One at a time.** At most 64 backups wait; each is queued once, and the oldest is
+  dropped when the queue is full. A failed preparation is not retried until the next
+  backup queues it.
+- **Retention.** A prepared index has its own slots (3), apart from the 2 on-demand
+  slots and their least-recently-used eviction. It stays for 36 hours while ready,
+  instead of the 15-minute idle lifetime, until a newer snapshot of its plan is
+  prepared; the older one is then released and removed when idle. When prepared slots
+  are full, the index whose retention ends first is removed. Under disk pressure,
+  idle on-demand indexes are removed before prepared ones. Free space is sampled while
+  any index grows (see the limits table).
+- **Restart.** Index files are never trusted across a restart. Two minutes after
+  start-up the latest completed backup of each plan is queued again; with a warm
+  Restic cache it is rebuilt quickly.
+- **Logs.** Each step logs `module=prepared-snapshot-index`,
+  `event=prepared_snapshot_index`, a `stage` (`queued`, `started`, `ready`, `failed`,
+  `skipped`, `requeued`, `dropped`), the backup ID and a closed `reason`. The cache's
+  `snapshot_index` events add `prepared` and `preempted` stages and a `prepared`
+  count. No path, key, binding or credential is logged.
 
 Run one Pluton server process per data directory. The in-memory concurrency and
 cache ownership contract does not support multiple independent server processes

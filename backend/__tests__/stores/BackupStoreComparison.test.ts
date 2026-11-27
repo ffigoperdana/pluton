@@ -83,4 +83,45 @@ describe('bounded chronological comparison history query', () => {
 		expect(result[0].id).toBe('older-0');
 		expect(result[31].id).toBe('older-31');
 	});
+	test('an in-progress backup counts as active only when it started after the cut-off', async () => {
+		const since = new Date(at.getTime() - 60_000);
+		db.insert(backups)
+			.values([base('done')])
+			.run();
+		await expect(store.hasActiveBackup(since)).resolves.toBe(false);
+		// Left in progress by an interrupted process long ago: ignored.
+		db.insert(backups)
+			.values([
+				{
+					...base('stale'),
+					status: 'started',
+					inProgress: true,
+					started: new Date(since.getTime() - 1000),
+				},
+			])
+			.run();
+		await expect(store.hasActiveBackup(since)).resolves.toBe(false);
+		db.insert(backups)
+			.values([
+				{ ...base('running'), status: 'started', inProgress: true, started: at, ended: null },
+			])
+			.run();
+		await expect(store.hasActiveBackup(since)).resolves.toBe(true);
+	});
+	test('lists the latest completed backup of each plan', async () => {
+		db.insert(backups)
+			.values([
+				{ ...base('plan-01-old'), ended: new Date(at.getTime() - 2000) },
+				{ ...base('plan-01-new'), ended: new Date(at.getTime() - 1000) },
+				{ ...base('plan-01-failed'), success: false },
+				{ ...base('plan-01-running'), inProgress: true },
+				{ ...base('plan-other-only'), planId: 'plan-other' },
+			])
+			.run();
+		expect((await store.latestCompletedBackupIds()).sort()).toEqual([
+			'plan-01-new',
+			'plan-other-only',
+		]);
+		expect(await store.latestCompletedBackupIds(1)).toHaveLength(1);
+	});
 });

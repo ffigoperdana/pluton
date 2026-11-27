@@ -161,6 +161,19 @@ describe('managed replication durable source, destination and execution fences',
 		expect(store.finalizeInitialization('f'.repeat(64), token, 'c'.repeat(64))).toBe(true);
 		expect(store.getDestination('f'.repeat(64))?.actualRepositoryId).toBe('c'.repeat(64));
 	});
+	it('reports a running transfer only while a job executes, not while it waits', () => {
+		expect(store.hasRunningJob()).toBe(false);
+		store.enqueue(input());
+		expect(store.hasRunningJob()).toBe(false);
+		const token = 'a'.repeat(64);
+		store.claim('job-01', token);
+		expect(store.hasRunningJob()).toBe(true);
+		store.finish('job-01', token, { status: 'failed', failureCode: 'retention-denied' });
+		expect(store.hasRunningJob()).toBe(false);
+		// A job waiting for its retry is pending, so it does not hold preparation back.
+		store.retry('job-01');
+		expect(store.hasRunningJob()).toBe(false);
+	});
 	it('completed receipt is owner-bound, full-snapshot verified, and never changes primary success', () => {
 		store.enqueue(input());
 		const token = 'a'.repeat(64);

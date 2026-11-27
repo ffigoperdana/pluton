@@ -926,6 +926,54 @@ describe('RemoteBackupService', () => {
 			errorMsg: expect.stringContaining('post-backup/hook-failed'),
 		});
 	});
+	it('queues a completed primary backup for Browse index preparation, never a failover one', async () => {
+		backupStore.update = jest.fn();
+		planStore.update = jest.fn();
+		const hook = { enqueue: jest.fn() };
+		service.setPreparedIndexHook(hook);
+		const id = 'c'.repeat(64);
+		const summary = { message_type: 'summary', snapshot_id: id, total_bytes_processed: 1024 } as any;
+		await service.completeCommand(backupCommand(), {
+			success: true,
+			result: { snapshotId: id, summary },
+		});
+		expect(hook.enqueue).toHaveBeenCalledWith('backup-example-01');
+
+		// An unavailable queue never changes the backup result.
+		hook.enqueue.mockImplementation(() => {
+			throw new Error('queue unavailable');
+		});
+		await expect(
+			service.completeCommand(backupCommand(), { success: true, result: { snapshotId: id, summary } })
+		).resolves.toBeUndefined();
+
+		// A failover run wrote into the replica; it is not prepared from the primary.
+		hook.enqueue.mockReset();
+		service.setFailoverService({
+			failoverTarget: jest.fn(async () => undefined),
+			isFailoverBackup: jest.fn(() => true),
+			afterFailure: jest.fn(async () => undefined),
+			afterSuccess: jest.fn(async () => undefined),
+		} as any);
+		await service.completeCommand(backupCommand(), {
+			success: true,
+			result: { snapshotId: id, summary },
+		});
+		expect(hook.enqueue).not.toHaveBeenCalled();
+
+		// A failed backup is never queued.
+		service.setFailoverService({
+			failoverTarget: jest.fn(async () => undefined),
+			isFailoverBackup: jest.fn(() => false),
+			afterFailure: jest.fn(async () => undefined),
+			afterSuccess: jest.fn(async () => undefined),
+		} as any);
+		await service.completeCommand(backupCommand(), {
+			success: false,
+			error: 'synthetic failure',
+		} as any);
+		expect(hook.enqueue).not.toHaveBeenCalled();
+	});
 	it('a snapshot without vanished source entries stays completed and says how many are missing', async () => {
 		backupStore.update = jest.fn();
 		planStore.update = jest.fn();
