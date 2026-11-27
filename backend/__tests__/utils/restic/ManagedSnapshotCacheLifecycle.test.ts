@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import {
+	DISK_SAMPLE_ROWS,
 	ManagedSnapshotIndexCache,
 	SNAPSHOT_INDEX_LIMITS,
 	SnapshotIndexError,
@@ -326,7 +327,7 @@ describe('managed index cache lifecycle and bounded admission', () => {
 		disk.mockRestore();
 	});
 	it('starts an index with less free space than the full page cap', async () => {
-		// 500 MiB free: above the 320 MiB start requirement, below the 1 GiB cap plus reserve.
+		// 500 MiB free: above the 320 MiB start requirement, below the 4 GiB cap plus reserve.
 		const disk = jest
 			.spyOn(fs, 'statfs')
 			.mockResolvedValue({ bavail: (500 * 1024 ** 2) / 4096, bsize: 4096 } as any);
@@ -379,13 +380,72 @@ describe('managed index cache lifecycle and bounded admission', () => {
 		).rejects.toMatchObject({ reason: 'database-size', statusCode: 413 });
 	});
 	it('names the default bounds in its client messages', () => {
-		expect(SNAPSHOT_INDEX_LIMITS).toMatchObject({ maxEntries: 1_000_000, maxBytes: 1024 ** 3 });
+		expect(SNAPSHOT_INDEX_LIMITS).toMatchObject({ maxEntries: 2_000_000, maxBytes: 4 * 1024 ** 3 });
 		const message = (reason: 'disk-capacity' | 'database-size' | 'entry-count') =>
 			new SnapshotIndexError('index-resource-limit', reason).message;
 		expect(message('disk-capacity')).toContain('320 MiB');
-		expect(message('disk-capacity')).toContain('grows up to 1,024 MiB');
-		expect(message('database-size')).toContain('1,024 MiB');
-		expect(message('entry-count')).toContain('1,000,000');
+		expect(message('disk-capacity')).toContain('grows up to 4,096 MiB');
+		expect(message('database-size')).toContain('4,096 MiB');
+		expect(message('entry-count')).toContain('2,000,000');
+	});
+	it('stops a growing index before it takes the last free space of its filesystem', async () => {
+		let free = 10 * 1024 ** 3;
+		jest
+			.spyOn(fs, 'statfs')
+			.mockImplementation(async () => ({ bavail: free / 4096, bsize: 4096 }) as any);
+		await expect(
+			cache.use(
+				key('grow'),
+				async append => {
+					append(node('/srv'));
+					for (let n = 1; n < DISK_SAMPLE_ROWS - 1; n++) append(node(`/srv/f${n}`, 'file'));
+					// The filesystem fills from elsewhere while the index grows.
+					free = 32 * 1024 ** 2;
+					append(node('/srv/sampled', 'file'));
+					await new Promise(resolve => setImmediate(resolve));
+					append(node('/srv/after-sample', 'file'));
+				},
+				index => index.count
+			)
+		).rejects.toMatchObject({ reason: 'disk-capacity', statusCode: 507 });
+		// The partial index is removed, and a retry with space succeeds.
+		expect(
+			(await fs.readdir(path.join(root, 'indexes'))).filter(name => name.startsWith('index-'))
+		).toEqual([]);
+		free = 10 * 1024 ** 3;
+		await expect(cache.use(key('grow'), populate, index => index.count)).resolves.toBe(2);
+	});
+	it('keeps a long-path index well below the former full-path layout', async () => {
+		await cache.close();
+		const records: { stage: string; entries: number; databaseBytes: number }[] = [];
+		cache = new ManagedSnapshotIndexCache(
+			path.join(root, 'indexes'),
+			SNAPSHOT_INDEX_LIMITS,
+			record => records.push(record as any)
+		);
+		const base = '/srv/example-app/storage/app/public/uploads/employee-documents';
+		let entries = 0;
+		await cache.use(
+			key('size'),
+			async append => {
+				const parts = base.split('/').filter(Boolean);
+				for (let n = 1; n <= parts.length; n++) append(node('/' + parts.slice(0, n).join('/')));
+				for (let dir = 0; dir < 1000; dir++) {
+					const directory = `${base}/employee-${String(100000 + dir)}/certificates`;
+					append(node(directory.slice(0, directory.lastIndexOf('/'))));
+					append(node(directory));
+					for (let file = 0; file < 18; file++)
+						append(
+							node(`${directory}/${String(file).padStart(2, '0')}-scanned-document.pdf`, 'file')
+						);
+				}
+			},
+			index => (entries = index.count)
+		);
+		const ready = records.find(record => record.stage === 'ready')!;
+		// About 120-character paths: the former layout needed about 2 KiB per entry.
+		expect(entries).toBe(20_007);
+		expect(ready.databaseBytes / entries).toBeLessThan(1200);
 	});
 	it('emits only bounded structured diagnostics and tolerates an unavailable logger', async () => {
 		await cache.close();

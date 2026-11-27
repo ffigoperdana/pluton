@@ -41,25 +41,41 @@ export function managedMetadataCacheKey(access: ManagedSftpAccess): string {
 		.digest('hex');
 }
 
+/**
+ * Closed projection of why a session runs with `--no-cache`: no path, binding or
+ * credential, and at most an errno code such as EACCES or EROFS.
+ */
+export type ManagedMetadataCacheDiagnostic = {
+	event: 'managed_restic_cache';
+	stage: 'unavailable';
+	reason: 'disk-capacity' | 'not-directory' | 'filesystem';
+	code?: string;
+	availableBytes?: number;
+};
+
 export class ManagedMetadataCache {
 	private lastPrune = -Infinity;
 
 	constructor(
 		private readonly root: string,
 		private readonly limits: typeof MANAGED_METADATA_CACHE_LIMITS = MANAGED_METADATA_CACHE_LIMITS,
-		private readonly now: () => number = () => Date.now()
+		private readonly now: () => number = () => Date.now(),
+		private readonly report: (record: ManagedMetadataCacheDiagnostic) => void = () => undefined
 	) {}
 
 	/**
 	 * The binding's private cache directory, or undefined when it cannot be used (low
 	 * disk, unexpected file type, any filesystem error). The caller then passes
-	 * `--no-cache`: slower, never less safe.
+	 * `--no-cache`: slower, never less safe. Every fallback is reported, because a
+	 * silent `--no-cache` makes a large Browse many times slower.
 	 */
 	async directory(access: ManagedSftpAccess): Promise<string | undefined> {
 		try {
 			await fs.mkdir(this.root, { recursive: true, mode: 0o700 });
 			const disk = await fs.statfs(this.root);
-			if (disk.bavail * disk.bsize < this.limits.minFreeBytes) return undefined;
+			const availableBytes = disk.bavail * disk.bsize;
+			if (availableBytes < this.limits.minFreeBytes)
+				return this.unavailable({ reason: 'disk-capacity', availableBytes });
 			const directory = path.join(this.root, managedMetadataCacheKey(access));
 			try {
 				await fs.mkdir(directory, { mode: 0o700 });
@@ -67,14 +83,28 @@ export class ManagedMetadataCache {
 				if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
 			}
 			// Never follow a link planted in place of the binding directory.
-			if (!(await fs.lstat(directory)).isDirectory()) return undefined;
+			if (!(await fs.lstat(directory)).isDirectory())
+				return this.unavailable({ reason: 'not-directory' });
 			const touched = new Date(this.now());
 			await fs.utimes(directory, touched, touched);
 			await this.prune(directory);
 			return directory;
-		} catch {
-			return undefined;
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException | undefined)?.code;
+			return this.unavailable({
+				reason: 'filesystem',
+				...(typeof code === 'string' && /^E[A-Z]{2,15}$/.test(code) ? { code } : {}),
+			});
 		}
+	}
+
+	private unavailable(detail: Omit<ManagedMetadataCacheDiagnostic, 'event' | 'stage'>) {
+		try {
+			this.report({ event: 'managed_restic_cache', stage: 'unavailable', ...detail });
+		} catch {
+			/* Observability never fails a read; the session still runs with --no-cache. */
+		}
+		return undefined;
 	}
 
 	/** Removes binding directories unused for `staleMs`; only names this cache creates. */
@@ -84,7 +114,8 @@ export class ManagedMetadataCache {
 		this.lastPrune = now;
 		for (const entry of await fs.readdir(this.root, { withFileTypes: true })) {
 			const directory = path.join(this.root, entry.name);
-			if (!entry.isDirectory() || !BINDING_DIRECTORY.test(entry.name) || directory === keep) continue;
+			if (!entry.isDirectory() || !BINDING_DIRECTORY.test(entry.name) || directory === keep)
+				continue;
 			try {
 				if (now - (await fs.lstat(directory)).mtimeMs >= this.limits.staleMs)
 					await fs.rm(directory, { recursive: true, force: true });

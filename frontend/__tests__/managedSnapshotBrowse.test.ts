@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { fetchManagedSnapshotPage, managedSnapshotPageUrl, snapshotParent } from '../src/utils/managedSnapshotBrowse.ts';
+import { fetchManagedSnapshotPage, managedSnapshotPageUrl, MAX_SNAPSHOT_INDEX_ENTRIES, snapshotParent } from '../src/utils/managedSnapshotBrowse.ts';
 
 const query = { path: '/srv/example-app', search: 'report & data', offset: 200, limit: 200, sort: 'name' as const, order: 'asc' as const };
 test('snapshot page URL binds exact historical backup, encoded directory/search and bounded page size', () => {
@@ -30,6 +30,29 @@ test('page fetch sends authentication and cancellation; indexing and sanitized r
       });
       globalThis.fetch = async () => Response.json({ success: false, error: 'Snapshot index resource limit reached.' }, { status: 429 });
       await assert.rejects(fetchManagedSnapshotPage('https://example.internal/api', 'backup-01', query), /resource limit/);
+   } finally {
+      globalThis.fetch = previous;
+   }
+});
+
+test('a ready page of a snapshot above one million entries is accepted up to the server bound', async () => {
+   const previous = globalThis.fetch;
+   const page = (entries: number, nextOffset: number | null) => ({
+      status: 'ready',
+      files: [],
+      total: 0,
+      offset: query.offset,
+      limit: query.limit,
+      nextOffset,
+      entries,
+      snapshotId: 'a'.repeat(64),
+   });
+   try {
+      globalThis.fetch = async () => Response.json({ success: true, result: page(1_500_000, 1_500_000) });
+      assert.equal(((await fetchManagedSnapshotPage('https://example.internal/api', 'backup-01', query)) as any).entries, 1_500_000);
+      assert.equal(MAX_SNAPSHOT_INDEX_ENTRIES, 2_000_000);
+      globalThis.fetch = async () => Response.json({ success: true, result: page(2_000_001, null) });
+      await assert.rejects(fetchManagedSnapshotPage('https://example.internal/api', 'backup-01', query), /unavailable/);
    } finally {
       globalThis.fetch = previous;
    }

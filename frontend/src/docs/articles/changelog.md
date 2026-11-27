@@ -2,6 +2,12 @@
 
 Halaman ini merangkum fitur yang ada pada source saat panduan ditulis. Halaman ini bukan feed rilis live atau bukti bahwa source tersebut sudah terpasang di suatu server.
 
+## Browse snapshot sangat besar
+
+Cache metadata restic dari perubahan sebelumnya ternyata tidak pernah terpakai pada deployment Docker. Folder sementara container hanya 64 MiB, sehingga syarat ruang kosong 2 GiB selalu gagal dan restic tetap berjalan dengan `--no-cache`. Cache kini disimpan di folder data (`/data/managed-restic-cache`). Jika cache tetap tidak bisa dipakai, server mencatat peringatan `managed_restic_cache` beserta alasannya.
+
+Index Browse kini kira-kira setengah ukuran sebelumnya untuk path yang panjang. Batasnya dinaikkan dari 1 GiB dan 1.000.000 entri menjadi 4 GiB dan 2.000.000 entri, sehingga snapshot ratusan GB dengan ratusan ribu file tidak lagi gagal karena `database-size`. Selama index dibangun, ruang kosong diperiksa berkala, dan pembangunan dihentikan sebelum disk server penuh. Urutan file di Browse tidak berubah.
+
 ## Browse snapshot besar
 
 Browse pada snapshot Managed Agent yang besar tidak lagi berhenti di menit ke-15. Indexing kini hanya dihentikan jika restic tidak mengirim data selama 10 menit, atau jika total waktunya mencapai 2 jam. Server juga menyimpan cache metadata restic per repository (index, daftar snapshot, dan pack struktur folder, semuanya tetap terenkripsi). Isi file tidak ikut disimpan. Hasilnya, indexing berikutnya dan **Retry indexing** jauh lebih cepat dan tidak lagi mengunduh ulang semuanya dari storage. Cache hanya dipakai bila ruang kosong minimal 2 GiB dan dihapus otomatis setelah 30 hari tidak dipakai. Selama indexing berjalan lama, Browse memeriksa status makin jarang (1, 3, lalu 5 detik).

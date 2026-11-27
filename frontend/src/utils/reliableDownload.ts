@@ -1,6 +1,7 @@
 import type { DownloadMode, VerifiedExport } from './downloadPreparation';
 import { responseFailure, DownloadFailure } from './downloadFailure.ts';
 import { exportFailureDiagnostic, type ExportFailureDiagnostic } from './exportFailureDiagnostics.ts';
+import { MAX_SNAPSHOT_INDEX_ENTRIES } from './managedSnapshotBrowse.ts';
 export type ReliableJob = {
    id: string;
    state: 'queued' | 'validating' | 'exporting' | 'uploading' | 'verifying' | 'ready' | 'failed' | 'cancelled' | 'expired';
@@ -165,7 +166,9 @@ export function validateReliableJob(value: unknown, backupId: string, mode: Down
                  ? telemetry.phase
                  : undefined,
               indexedEntries:
-                 Number.isSafeInteger(telemetry.indexedEntries) && Number(telemetry.indexedEntries) >= 0 && Number(telemetry.indexedEntries) <= 1_000_000
+                 Number.isSafeInteger(telemetry.indexedEntries) &&
+                 Number(telemetry.indexedEntries) >= 0 &&
+                 Number(telemetry.indexedEntries) <= MAX_SNAPSHOT_INDEX_ENTRIES
                     ? telemetry.indexedEntries
                     : undefined,
               lastProgressAgeMs:

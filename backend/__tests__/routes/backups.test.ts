@@ -597,7 +597,7 @@ describe('Backup Routes', () => {
 			'limit=0',
 			'offset=-1',
 			// The page offset follows the index entry bound (SNAPSHOT_INDEX_LIMITS.maxEntries).
-			'offset=1000001',
+			'offset=2000001',
 			'offset=10000000',
 			'offset=1.5',
 			'sort=command',
@@ -640,6 +640,24 @@ describe('Backup Routes', () => {
 				{ path: '/srv', limit: 20, offset: 40, sort: 'size', order: 'desc' },
 				expect.any(AbortSignal)
 			);
+		});
+		it('accepts a page offset above one million up to the index entry bound', async () => {
+			mockBackupService.getSnapshotPage.mockResolvedValue({
+				status: 'ready',
+				files: [],
+				total: 0,
+			} as any);
+			for (const offset of [1_500_000, 2_000_000]) {
+				const response = await request(app).get(
+					`/api/backups/backup-01/files/page?path=%2Fsrv&offset=${offset}`
+				);
+				expect(response.status).toBe(200);
+				expect(mockBackupService.getSnapshotPage).toHaveBeenLastCalledWith(
+					'backup-01',
+					expect.objectContaining({ offset }),
+					expect.any(AbortSignal)
+				);
+			}
 		});
 		it.each([
 			['index-resource-limit', 429],

@@ -46,7 +46,7 @@ function retryAt(response: Response, now: number) {
    return Number.isFinite(at) && at > now ? at : 0;
 }
 /** Mirrors the server snapshot index entry bound (SNAPSHOT_INDEX_LIMITS.maxEntries). */
-export const MAX_SNAPSHOT_INDEX_ENTRIES = 1_000_000;
+export const MAX_SNAPSHOT_INDEX_ENTRIES = 2_000_000;
 const unavailable = 'Snapshot metadata is unavailable. Retry shortly.';
 const proxyMessage = (status: number) =>
    status === 429

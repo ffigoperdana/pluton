@@ -324,3 +324,18 @@ for (const status of [200, 206, 303, 401, 403, 405, 409, 416, 429, 503])
       try { await assert.rejects(checkReliableContent('https://example.internal/api/content', 'c'.repeat(64), 2048)); }
       finally { globalThis.fetch = before; }
    });
+test('indexing telemetry keeps counts above one million up to the snapshot index bound', async () => {
+   const before = fetch;
+   const telemetry = async (indexedEntries: number) => {
+      globalThis.fetch = async () =>
+         Response.json({ success: true, result: { ...job(), performance: { phase: 'indexing', indexedEntries } } });
+      return (await reliableRequest('https://example.internal/api', 'backup-01', 'full', id)).performance?.indexedEntries;
+   };
+   try {
+      assert.equal(await telemetry(1_500_000), 1_500_000);
+      assert.equal(await telemetry(2_000_000), 2_000_000);
+      assert.equal(await telemetry(2_000_001), undefined);
+   } finally {
+      globalThis.fetch = before;
+   }
+});

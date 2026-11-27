@@ -94,14 +94,16 @@ export type SnapshotIndexReason =
 	| 'symlink-target-unverified'
 	| 'host-path-unsupported';
 /**
- * One index row with its six child-order indexes takes about 0.6 to 2 KiB,
- * depending on path length (a content-addressed tree such as an Odoo filestore
- * is at the top of that range). 1 GiB holds a 500,000-entry snapshot with long
- * paths; the entry bound keeps short-path snapshots within the same budget.
+ * One entry with its six child-order indexes takes about 0.5 to 1.5 KiB, depending
+ * on path and name length: the indexes key on an integer parent and the name, and
+ * only the row and the path index hold the full path. A 650,000-file snapshot whose
+ * paths averaged about 170 characters needed 2.7 KiB per entry with the former
+ * full-path indexes and ran out of the former 1 GiB cap at about 400,000 entries.
+ * 4 GiB holds 2,000,000 long-path entries; free space is sampled while it grows.
  */
 export const SNAPSHOT_INDEX_LIMITS = Object.freeze({
-	maxEntries: 1_000_000,
-	maxBytes: 1024 ** 3,
+	maxEntries: 2_000_000,
+	maxBytes: 4 * 1024 ** 3,
 	/**
 	 * Free space an index needs before it starts (plus the reserve). An index only
 	 * grows as large as its snapshot needs, up to maxBytes; running out of disk on
@@ -118,6 +120,8 @@ export const SNAPSHOT_INDEX_LIMITS = Object.freeze({
 });
 /** Free space kept on the cache filesystem in addition to one index reservation. */
 const SNAPSHOT_INDEX_DISK_RESERVE = 64 * 1024 ** 2;
+/** A growing index samples free space every this many entries (a few MiB of index). */
+export const DISK_SAMPLE_ROWS = 4096;
 /** Within this distance of the page cap the allocation is sampled after every row. */
 const PAGE_CAP_SAMPLING_WINDOW = 16 * 1024 ** 2;
 /**
@@ -275,14 +279,28 @@ export class ManagedSnapshotIndex implements Iterable<SnapShotFile> {
 				.all(name, limit) as Row[]
 		).map(asFile);
 	}
+	/**
+	 * Integer key of a parent path ('' is the snapshot root), or -1 when no entry has
+	 * that parent. Child-order indexes store this key instead of the full parent path.
+	 */
+	private parentKey(parent: string): number {
+		return (
+			(
+				this.db.prepare('SELECT id FROM parents WHERE path=?').get(parent) as
+					| { id: number }
+					| undefined
+			)?.id ?? -1
+		);
+	}
 	/** Direct child directories of a directory, by name. */
 	childDirectories(parent: string, limit: number): SnapShotFile[] {
+		// Within one parent, name order (binary) is exactly path order.
 		return (
 			this.db
 				.prepare(
-					"SELECT * FROM nodes WHERE parent=? AND type='dir' ORDER BY name COLLATE NOCASE, path LIMIT ?"
+					"SELECT * FROM nodes WHERE parentId=? AND type='dir' ORDER BY name COLLATE NOCASE, name LIMIT ?"
 				)
-				.all(parent, limit) as Row[]
+				.all(this.parentKey(parent), limit) as Row[]
 		).map(asFile);
 	}
 	/** Entries named `name` anywhere below a directory, counted by type. */
@@ -377,9 +395,9 @@ export class ManagedSnapshotIndex implements Iterable<SnapShotFile> {
 		if (directory && this.get(directory)?.type !== 'dir')
 			throw new AppError(404, 'Snapshot directory not found.');
 		const where =
-			'parent=? AND instr(lower(name),lower(?))>0' +
+			'parentId=? AND instr(lower(name),lower(?))>0' +
 			(query.directoriesOnly ? " AND type='dir'" : '');
-		const params = [directory, query.search || ''];
+		const params = [this.parentKey(directory), query.search || ''];
 		const total = (
 			this.db.prepare(`SELECT count(*) AS n FROM nodes WHERE ${where}`).get(...params) as {
 				n: number;
@@ -403,7 +421,8 @@ export class ManagedSnapshotIndex implements Iterable<SnapShotFile> {
 		const files = (
 			this.db
 				.prepare(
-					`SELECT * FROM nodes INDEXED BY ${scan} WHERE ${where} ORDER BY isDirectory DESC, ${sort} ${order}, path ASC LIMIT ? OFFSET ?`
+					// Siblings share the parent, so the binary name tie-break is the path order.
+					`SELECT * FROM nodes INDEXED BY ${scan} WHERE ${where} ORDER BY isDirectory DESC, ${sort} ${order}, name ASC LIMIT ? OFFSET ?`
 				)
 				.all(...params, limit, offset) as Row[]
 		).map(asFile);
@@ -750,23 +769,63 @@ export class ManagedSnapshotIndexCache {
 			// Even one non-empty SQLite table needs the schema and a table page.
 			if (this.limits.maxBytes < 2 * 4096)
 				throw new SnapshotIndexError('index-resource-limit', 'database-size');
-			db.exec(`CREATE TABLE nodes(path TEXT PRIMARY KEY, parent TEXT NOT NULL, name TEXT NOT NULL,
-				type TEXT NOT NULL, size INTEGER NOT NULL, modifiedAt TEXT NOT NULL, permissions TEXT NOT NULL, modifiedTime INTEGER NOT NULL,
-				isDirectory INTEGER NOT NULL) WITHOUT ROWID;
+			// The six child-order indexes key on an integer parent and the short name, not
+			// on the full parent path and path: a long-path snapshot needs about half the
+			// space it did, and siblings still sort exactly in path order (name, binary).
+			db.exec(`CREATE TABLE parents(path TEXT PRIMARY KEY, id INTEGER NOT NULL) WITHOUT ROWID;
+				CREATE TABLE nodes(id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, parentId INTEGER NOT NULL,
+				name TEXT NOT NULL, type TEXT NOT NULL, size INTEGER NOT NULL, modifiedAt TEXT NOT NULL, permissions TEXT NOT NULL,
+				modifiedTime INTEGER NOT NULL, isDirectory INTEGER NOT NULL);
 				CREATE TABLE ancestors(path TEXT PRIMARY KEY) WITHOUT ROWID;
-				CREATE INDEX children ON nodes(parent,isDirectory DESC,name COLLATE NOCASE,path);
-				CREATE INDEX childSize ON nodes(parent,isDirectory DESC,size,path);
-				CREATE INDEX childTime ON nodes(parent,isDirectory DESC,modifiedTime,path);
-				CREATE INDEX childrenDesc ON nodes(parent,isDirectory DESC,name COLLATE NOCASE DESC,path);
-				CREATE INDEX childSizeDesc ON nodes(parent,isDirectory DESC,size DESC,path);
-				CREATE INDEX childTimeDesc ON nodes(parent,isDirectory DESC,modifiedTime DESC,path);
+				CREATE INDEX children ON nodes(parentId,isDirectory DESC,name COLLATE NOCASE,name);
+				CREATE INDEX childSize ON nodes(parentId,isDirectory DESC,size,name);
+				CREATE INDEX childTime ON nodes(parentId,isDirectory DESC,modifiedTime,name);
+				CREATE INDEX childrenDesc ON nodes(parentId,isDirectory DESC,name COLLATE NOCASE DESC,name);
+				CREATE INDEX childSizeDesc ON nodes(parentId,isDirectory DESC,size DESC,name);
+				CREATE INDEX childTimeDesc ON nodes(parentId,isDirectory DESC,modifiedTime DESC,name);
 				BEGIN;`);
-			const insert = db.prepare('INSERT INTO nodes VALUES (?,?,?,?,?,?,?,?,?)');
+			const insert = db.prepare(
+				'INSERT INTO nodes(path,parentId,name,type,size,modifiedAt,permissions,modifiedTime,isDirectory) VALUES (?,?,?,?,?,?,?,?,?)'
+			);
 			const ancestor = db.prepare('INSERT OR IGNORE INTO ancestors VALUES (?)');
+			const findParent = db.prepare('SELECT id FROM parents WHERE path=?');
+			const addParent = db.prepare('INSERT INTO parents VALUES (?,?)');
+			// Siblings arrive together, so one remembered parent avoids most lookups.
+			let lastParent: { path: string; id: number } | undefined,
+				parents = 0;
+			const parentKey = (parent: string) => {
+				if (lastParent?.path !== parent) {
+					const row = findParent.get(parent) as { id: number } | undefined;
+					const id = row?.id ?? ++parents;
+					if (!row) addParent.run(parent, id);
+					lastParent = { path: parent, id };
+				}
+				return lastParent.id;
+			};
+			// The page cap bounds one index, not the filesystem. Sample free space while
+			// the index grows, so a build stops before it takes the disk the application
+			// database and logs share with it.
+			let diskLow = false,
+				diskSample: Promise<void> | undefined;
+			const sampleDisk = () => {
+				diskSample ||= fs
+					.statfs(this.root)
+					.then(
+						disk => {
+							this.availableBytes = disk.bavail * disk.bsize;
+							if (this.availableBytes < SNAPSHOT_INDEX_DISK_RESERVE) diskLow = true;
+						},
+						() => undefined
+					)
+					.finally(() => {
+						diskSample = undefined;
+					});
+			};
 			let count = 0,
 				logicalBytes = 0;
 			const appendNode = (node: ManagedSnapshotNode) => {
 				if (entry.controller.signal.aborted) throw new SnapshotIndexError('cancelled');
+				if (diskLow) throw new SnapshotIndexError('index-resource-limit', 'disk-capacity');
 				if (entry.bytes >= this.limits.maxBytes)
 					throw new SnapshotIndexError('index-resource-limit', 'database-size');
 				entry.count = ++count;
@@ -797,7 +856,7 @@ export class ManagedSnapshotIndexCache {
 				try {
 					insert.run(
 						exactPath,
-						parent === '/' ? '' : parent,
+						parentKey(parent === '/' ? '' : parent),
 						node.name,
 						node.type,
 						node.size,
@@ -807,15 +866,16 @@ export class ManagedSnapshotIndexCache {
 						Number(node.type === 'dir')
 					);
 				} catch (error) {
-					if ((error as { code?: string }).code === 'SQLITE_CONSTRAINT_PRIMARYKEY')
+					const code = (error as { code?: string }).code;
+					if (code === 'SQLITE_CONSTRAINT_UNIQUE' || code === 'SQLITE_CONSTRAINT_PRIMARYKEY')
 						throw new SnapshotIndexError('metadata-invalid', 'duplicate-entry');
 					throw error;
 				}
+				// An ancestor already recorded has its own ancestors recorded too.
 				let parentPath = parent;
-				while (parentPath !== '/') {
-					ancestor.run(parentPath);
+				while (parentPath !== '/' && ancestor.run(parentPath).changes > 0)
 					parentPath = path.posix.dirname(parentPath);
-				}
+				if (count % DISK_SAMPLE_ROWS === 0) sampleDisk();
 				// Preserve a bounded allocation sample before SQLite can roll back on FULL.
 				// Near the page cap every row is sampled, so the last sample is one row
 				// below the cap when SQLite reports FULL there.
