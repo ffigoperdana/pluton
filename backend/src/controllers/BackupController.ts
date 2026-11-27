@@ -661,7 +661,8 @@ export class BackupController {
 				throw new AppError(400, 'Invalid filename search.');
 			const result = await this.backupService.getSnapshotPage(req.params.id, query, request.signal);
 			res.setHeader('Cache-Control', 'private, no-store');
-			if (result.status === 'indexing') res.setHeader('Retry-After', '1');
+			if (result.status === 'indexing')
+				res.setHeader('Retry-After', String(Math.max(1, Math.ceil((result.retryAfterMs || 1000) / 1000))));
 			if (!res.destroyed)
 				res.status(result.status === 'indexing' ? 202 : 200).json({ success: true, result });
 		} catch (error) {

@@ -19,6 +19,7 @@ import {
 	type ArchiveProcessWindow,
 } from './archiveProcessObservation';
 import { ArchiveBackendRetries, type ArchiveBackendRetrySummary } from './archiveBackendRetries';
+import type { ManagedMetadataCache } from './ManagedMetadataCache';
 
 export type RecoveryFailureCode =
 	| 'network-unavailable'
@@ -52,6 +53,7 @@ export type RepositoryTimeoutCategory =
 	| 'connection-timeout'
 	| 'repository-io-timeout'
 	| 'command-deadline'
+	| 'metadata-stream-idle'
 	| 'metadata-stream-deadline'
 	| 'native-restore-deadline'
 	| 'archive-first-output'
@@ -170,6 +172,18 @@ export type ManagedSftpAccess = {
 	repositoryPath: string;
 	password: string;
 };
+export type ManagedRepositorySessionOptions = {
+	metadataCache?: Pick<ManagedMetadataCache, 'directory'>;
+};
+/**
+ * docs/MANAGED_SNAPSHOT_STREAMING.md: a metadata stream (`ls`, `diff`) ends when Restic
+ * writes no record for a full idle window, or at the overall deadline. Restic writes
+ * nothing while it loads the index, so the idle window covers that load.
+ */
+export const METADATA_STREAM_LIMITS = Object.freeze({
+	idleMs: 10 * 60_000,
+	deadlineMs: 2 * 60 * 60_000,
+});
 export interface ManagedRepositorySessionProvider {
 	withSession<T>(
 		access: ManagedSftpAccess,
@@ -202,6 +216,12 @@ function hasControlCharacters(value: string): boolean {
  */
 export class ManagedSftpRepositorySession implements ManagedRepositorySessionProvider {
 	private static active = 0;
+	/**
+	 * Without `metadataCache` every operation runs with `--no-cache` (replica checks,
+	 * failover, promotion). With it, Restic keeps encrypted index/tree files per
+	 * repository binding (ManagedMetadataCache).
+	 */
+	constructor(private readonly options: ManagedRepositorySessionOptions = {}) {}
 	/** Bound Restic/Rclone memory as well as index construction concurrency. */
 	async withSession<T>(
 		access: ManagedSftpAccess,
@@ -290,9 +310,10 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 				RCLONE_CONFIG: configPath,
 				RESTIC_PASSWORD: access.password,
 			};
+			const cacheDirectory = await this.options.metadataCache?.directory(access);
 			const prefix = [
 				'--no-lock',
-				'--no-cache',
+				...(cacheDirectory ? ['--cache-dir', cacheDirectory] : ['--no-cache']),
 				'--json',
 				'--repo',
 				`rclone:pluton:${access.repositoryPath}`,
@@ -592,13 +613,30 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 						diagnostic('metadata-stream-deadline')
 					)
 				),
-			15 * 60_000
+			METADATA_STREAM_LIMITS.deadlineMs
 		);
 		timer.unref();
+		// A large snapshot lists for longer than any fixed bound; a stalled one stops
+		// producing records. One timer per window, not per record.
+		let records = 0;
+		let idle: ReturnType<typeof setTimeout>;
+		const watchIdle = () => {
+			const seen = records;
+			idle = setTimeout(() => {
+				if (records === seen)
+					stop(
+						new ManagedRepositoryAccessError('timeout', undefined, diagnostic('metadata-stream-idle'))
+					);
+				else watchIdle();
+			}, METADATA_STREAM_LIMITS.idleMs);
+			idle.unref();
+		};
+		watchIdle();
 		try {
 			if (!child.stdout) throw new ManagedRepositoryAccessError('execution-failed');
 			await consumeMetadataLines(child.stdout, async line => {
 				if (failure) throw failure;
+				records++;
 				await consume(line);
 			});
 			await closed;
@@ -611,6 +649,7 @@ export class ManagedSftpRepositorySession implements ManagedRepositorySessionPro
 				: new ManagedRepositoryAccessError('invalid-output');
 		} finally {
 			clearTimeout(timer);
+			clearTimeout(idle!);
 			signal?.removeEventListener('abort', abort);
 			if (process.platform !== 'win32' && child.pid) {
 				try {
