@@ -210,15 +210,48 @@ describe('RemoteBackupService', () => {
 			capabilities: { ...capableAgent.capabilities, sourceAccessVersion: 1 },
 		});
 		await service.validatePlanCreation(plan);
-		expect(sourceAccess.assertPlanSource).toHaveBeenCalledWith(
+		// Plan validation never relaxes freshness.
+		expect(sourceAccess.assertPlanSource).toHaveBeenLastCalledWith(
 			expect.objectContaining({ agentId: capableAgent.agentId }),
-			'/srv/example-app'
+			'/srv/example-app',
+			{}
 		);
 		sourceAccess.assertPlanSource.mockRejectedValue(
 			new Error('Source Access needs a fresh healthy report.')
 		);
 		await expect(service.queuePlanBackup(plan.id)).rejects.toThrow('fresh healthy');
+		// Queueing may wait behind a live lease; materialization re-checks a fresh report.
+		expect(sourceAccess.assertPlanSource).toHaveBeenLastCalledWith(
+			expect.objectContaining({ agentId: capableAgent.agentId }),
+			'/srv/example-app',
+			{ queueBehindLiveLease: true }
+		);
 		expect(repositories.createBackupAndCommand).not.toHaveBeenCalled();
+	});
+
+	it('requires a fresh Source Access report when the Agent materializes a queued backup', async () => {
+		const sourceAccess = {
+			assertPlanSource: jest.fn().mockResolvedValue(undefined),
+			assertModeChangeIdle: jest.fn().mockResolvedValue(undefined),
+		};
+		service.setSourceAccessService(sourceAccess as any);
+		agentStore.getAgentByDeviceId.mockResolvedValue({
+			...capableAgent,
+			lastSeen: new Date(),
+			capabilities: { ...capableAgent.capabilities, sourceAccessVersion: 1 },
+		});
+		await service.materializeCommand(capableAgent.agentId, backupCommand());
+		expect(sourceAccess.assertPlanSource).toHaveBeenLastCalledWith(
+			expect.objectContaining({ agentId: capableAgent.agentId }),
+			'/srv/example-app',
+			{}
+		);
+		sourceAccess.assertPlanSource.mockRejectedValue(
+			new AppError(409, 'Source Access needs a fresh healthy report from the remote agent.')
+		);
+		await expect(
+			service.materializeCommand(capableAgent.agentId, backupCommand())
+		).rejects.toBeInstanceOf(RemoteCommandPreparationError);
 	});
 
 	it('refuses normal plan Resume while a guarded authorization mode setup is pending', async () => {

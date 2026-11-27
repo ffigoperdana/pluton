@@ -8,6 +8,10 @@ Browse pada snapshot Managed Agent kini mengenali folder data MinIO mode satu dr
 
 Fitur ini diuji dengan data yang ditulis MinIO asli dalam container sekali pakai, tetapi belum divalidasi pada deployment produksi.
 
+## Jadwal saat Agent sibuk
+
+Jadwal plan Managed Agent yang jatuh saat Agent masih menjalankan backup plan lain kini masuk antrean dan berjalan setelah backup itu selesai. Sebelumnya, pada Agent dengan Source Access, laporan Source Access terakhir dianggap kedaluwarsa selama backup lain berjalan sehingga jadwal ditolak: tidak ada baris riwayat, hanya log `remote_backup_not_queued`. Antrean kini memakai laporan sehat terakhir hanya selama Agent memegang lease yang masih berlaku. Saat dijalankan, Agent tetap wajib mengirim laporan baru yang sehat. Perubahan ini hanya pada server dan tidak memerlukan pembaruan Agent.
+
 ## Managed Agent replication
 
 Merge PR #34 pada `e2575cc` memasukkan server-side replication dari primer Managed Agent SFTP ke nol, satu, atau dua tujuan S3/S3-compatible. Ada state durable untuk job/tujuan, status replica tersendiri, dan setup HCP existing-bucket.

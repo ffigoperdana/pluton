@@ -354,8 +354,19 @@ export class AgentSourceAccessService {
 			});
 	}
 
-	/** Used at plan creation, changes, queueing and credential materialization. Old agents preserve their existing policy. */
-	async assertPlanSource(agent: AgentIdentity, source: string): Promise<void> {
+	/**
+	 * Used at plan creation, changes, queueing and credential materialization. Old agents preserve their existing policy.
+	 *
+	 * `queueBehindLiveLease` is for queueing only (docs/AGENT_LONG_BACKUPS.md). An Agent that executes
+	 * another command sends no heartbeat, so its last report ages while it renews that command's lease.
+	 * Queueing behind that live lease then relies on the last healthy report. Queueing grants nothing:
+	 * credential materialization runs after the Agent's next heartbeat and still requires a fresh report.
+	 */
+	async assertPlanSource(
+		agent: AgentIdentity,
+		source: string,
+		options: { queueBehindLiveLease?: boolean } = {}
+	): Promise<void> {
 		if (await this.store.getOpenModeSetup(agent.agentId, this.now()))
 			throw new AppError(
 				409,
@@ -371,12 +382,20 @@ export class AgentSourceAccessService {
 				400,
 				'Private credential directories cannot be backup sources in Server-Managed mode.'
 			);
+		const fresh =
+			!!state &&
+			this.online(agent) &&
+			this.now().getTime() - state.receivedAt.getTime() <= this.freshnessMs();
 		if (
-			!this.online(agent) ||
 			!state ||
 			state.receivedAt > this.now() ||
-			this.now().getTime() - state.receivedAt.getTime() > this.freshnessMs() ||
-			!sourceReportHealthy(state.report)
+			!sourceReportHealthy(state.report) ||
+			(!fresh &&
+				!(
+					options.queueBehindLiveLease === true &&
+					!agent.revokedAt &&
+					(await this.agentStore.hasLiveCommand(agent.agentId, this.now()))
+				))
 		)
 			throw new AppError(409, 'Source Access needs a fresh healthy report from the remote agent.');
 		if (

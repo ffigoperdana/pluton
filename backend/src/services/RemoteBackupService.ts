@@ -359,7 +359,8 @@ export class RemoteBackupService {
 	): Promise<string> {
 		const plan = await this.planStore.getById(planId);
 		if (!plan) throw new NotFoundError('Plan not found.');
-		await this.assertSupportedPlan(plan, undefined, false);
+		// A busy Agent (live lease) gets the run queued behind its current command, like getCapableAgent.
+		await this.assertSupportedPlan(plan, undefined, false, { queueBehindLiveLease: true });
 		if (options.scheduled && !plan.isActive) return 'Remote backup plan is paused.';
 		if (await this.planStore.hasActiveBackups(planId)) {
 			throw new AppError(409, 'A backup is already in progress for this plan.');
@@ -1068,7 +1069,8 @@ export class RemoteBackupService {
 	private async assertSupportedPlan(
 		plan: Plan | NewPlan,
 		setPreparationStage?: SetPreparationStage,
-		validateReplicaConfiguration = true
+		validateReplicaConfiguration = true,
+		sourceAccess: { queueBehindLiveLease?: boolean } = {}
 	): Promise<void> {
 		setPreparationStage?.('plan-shape');
 		if (!RemoteBackupService.isRemoteFilesystemPlan(plan) || plan.method !== 'backup') {
@@ -1120,7 +1122,7 @@ export class RemoteBackupService {
 			setPreparationStage?.('source-validation');
 			if (!this.sourceAccessService)
 				throw new AppError(409, 'Source Access validation is unavailable.');
-			await this.sourceAccessService.assertPlanSource(sourceAgent, sourcePath);
+			await this.sourceAccessService.assertPlanSource(sourceAgent, sourcePath, sourceAccess);
 		}
 		if (plan.settings.remoteLifecycle !== undefined) {
 			setPreparationStage?.('lifecycle-configuration');
